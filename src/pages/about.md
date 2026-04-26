@@ -7,21 +7,33 @@ title: "About"
 
 **Presales / Solution Architect** — Riyadh, KSA
 
-📧 [pentest101@protonmail.com](mailto:pentest101@protonmail.com) · 🔗 [LinkedIn](https://www.linkedin.com/in/kader-m-1a6023a6/) · 💻 [GitHub](https://github.com/kader-xai)
+📧 [pentest101@protonmail.com](mailto:pentest101@protonmail.com) · 🔗 [LinkedIn](https://www.linkedin.com/in/kader-m-1a6023a6/) · 💻 [GitHub](https://github.com/kader-xai) · 🌐 [kader-xai.github.io](https://kader-xai.github.io)
 
-## Professional Summary
+## About Me
+
+I'm a **CISSP-certified Presales Consultant and Solution Architect** with **9+ years** in cybersecurity across the GCC/MENA region, currently based in Riyadh.
+
+My day-to-day is architecting multi-vendor security solutions and running the full presales lifecycle — from BOQs and RFPs through POCs, technical demos, and C-level presentations — for enterprise customers across Saudi Arabia. Over the last five consecutive years I've consistently exceeded **200% of my Gross Profit KPIs** and closed mega deals with names like **BSF, CST, and SEC**. Along the way I've been recognized as **Infoblox Expert Club Champion (2023)** and **Zscaler ACE (Oct 2024)**.
+
+Before going into presales, I spent years in the trenches as a **penetration tester** (ICICI Bank, SBI, NCA compromise assessments) and **professional services consultant** (DDI migrations, datacenter, endpoint, and database security deployments for banking and government clients). That hands-on background is what shapes how I architect solutions today.
+
+I'm now bridging that cybersecurity foundation with **AI/ML and Data Science** — pursuing an MBA in AI & Data Science at SRM University and an AI/ML certificate from IIT Madras Pravartak. My long-term goal is architecting **AI-driven security and automation** systems. This site is where I share notes, research, and projects from that journey.
+
+## Resume
+
+### Professional Summary
 
 CISSP-certified Presales Consultant and Solution Architect with **9+ years of experience** delivering cybersecurity excellence across GCC/MENA. Proven track record of achieving **200%+ of GP KPIs** while closing mega deals with enterprise clients in the last 5 consecutive years. Currently bridging deep cybersecurity expertise with **AI/ML and Data Science**, pursuing dual academic programs, with a long-term goal of architecting AI-driven security and automation solutions.
 
-## Education
+### Education
 
 - **MBA in Artificial Intelligence & Data Science** *(In Progress)* — SRM University, Chennai · 2026 – Present
 - **M.Sc Cloud & Enterprise Computing** — Nottingham Trent University, UK · 2014 – 2016
 - **B.Tech in Information Technology** — Anna University, Chennai · 2010 – 2014
 
-## Professional Experience
+### Professional Experience
 
-### Presales Consultant / Solution Architect
+#### Presales Consultant / Solution Architect
 **Starlink** · Riyadh, KSA · *Jan 2021 – Present*
 
 - Directed presales for Infoblox, Zscaler, Forcepoint, Trend Micro, Rapid7, OPSWAT, KeySight, and OpenText across the KSA enterprise market.
@@ -30,31 +42,31 @@ CISSP-certified Presales Consultant and Solution Architect with **9+ years of ex
 - Delivered full presales lifecycle support: BOQs, RFP responses, POCs, technical demos, workshops, and C-level presentations.
 - Led strategic account mapping and solution positioning across the channel partner ecosystem.
 
-### Professional Services Consultant
+#### Professional Services Consultant
 **Starlink** · Riyadh, KSA · *Jan 2019 – Dec 2020*
 
 - Deployed enterprise solutions across Datacenter (Citrix ADC, SD-WAN), Endpoint (Trend Micro), Network Security (Infoblox, Forcepoint), and Database Security (IBM Guardium).
 - Led DDI migrations (DNS/DHCP/IPAM) for banking and government clients, improving infrastructure reliability.
 - Represented the company at Black Hat and industry events; ran partner workshops to drive channel growth.
 
-### Cybersecurity Subject Matter Expert
+#### Cybersecurity Subject Matter Expert
 **Confidential Government Entity** · Riyadh, KSA · *Jan 2018 – Dec 2019*
 
 - Advised Cyber Security Directorate on multi-vendor architecture, vulnerability management, and risk registry maintenance.
 - Managed SIEM monitoring and compliance reporting aligned to NCA frameworks.
 
-### Senior Penetration Tester
+#### Senior Penetration Tester
 **Confidential** · Riyadh, KSA · *May 2017 – Dec 2017*
 
 - Executed application, network, and infrastructure penetration testing using Burp Suite, IBM AppScan, and Core Impact.
 - Performed NCA compromise assessments using YARA rules and IOC/CVE threat intelligence.
 
-### Penetration Tester (Level 2)
+#### Penetration Tester (Level 2)
 **Paladion** · Mumbai, India · *Feb 2016 – Apr 2017*
 
 - Led application security assessments for ICICI Bank and SBI; conducted configuration audits and web/mobile/network vulnerability management.
 
-## Certifications
+### Certifications
 
 - **CISSP** — ISC2
 - **CCSP** — ISC2
@@ -66,12 +78,12 @@ CISSP-certified Presales Consultant and Solution Architect with **9+ years of ex
 - **MetaDefender Core, Kiosk & Email Security** — OPSWAT
 - **ITOM-Universal Discovery CMDB (MFCPE)** — Microfocus
 
-## Awards
+### Awards
 
 - 🏆 **Infoblox Expert Club Champion** — Infoblox Exchange 2023
 - 🏆 **Zscaler ACE** — October 2024
 
-## Core Competencies
+### Core Competencies
 
 | | | |
 |---|---|---|
@@ -80,6 +92,6 @@ CISSP-certified Presales Consultant and Solution Architect with **9+ years of ex
 | AI / ML Fundamentals | Data Science & Analytics | Machine Learning *(In Progress)* |
 | NIST / NCA Compliance | Green Field Datacenter Design | Project Management |
 
-## Tools & Tech
+### Tools & Tech
 
 Infoblox DDI · Zscaler ZIA/ZPA · Forcepoint DLP · Keysight / Ixia · Rapid7 / Tenable · Cloudflare · OPSWAT · Python *(Learning)* · Machine Learning · Data Science
