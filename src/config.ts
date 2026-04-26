@@ -1,9 +1,9 @@
 export const SITE = {
   website: "https://kader-xai.github.io/",
-  author: "Kader",
+  author: "Kader Mohideen",
   profile: "https://github.com/kader-xai",
-  desc: "Notes, projects, and updates on machine learning and AI.",
-  title: "Kader",
+  desc: "Cybersecurity research, AI in security, and notes on emerging defensive technologies.",
+  title: "Kader Mohideen",
   ogImage: "astropaper-og.jpg",
   lightAndDarkMode: true,
   postPerIndex: 4,
