@@ -1,0 +1,23 @@
+export const SITE = {
+  website: "https://kader-xai.github.io/",
+  author: "Kader",
+  profile: "https://github.com/kader-xai",
+  desc: "Notes, projects, and updates on machine learning and AI.",
+  title: "Kader",
+  ogImage: "astropaper-og.jpg",
+  lightAndDarkMode: true,
+  postPerIndex: 4,
+  postPerPage: 6,
+  scheduledPostMargin: 15 * 60 * 1000,
+  showArchives: true,
+  showBackButton: true,
+  editPost: {
+    enabled: false,
+    text: "Edit page",
+    url: "https://github.com/kader-xai/kader-xai.github.io/edit/main/",
+  },
+  dynamicOgImage: true,
+  dir: "ltr",
+  lang: "en",
+  timezone: "America/Los_Angeles",
+} as const;
