@@ -1,0 +1,337 @@
+---
+title: "Employee Recall — Capturing a Departing Employee's Writing Style and Memory in an AI Successor"
+description: "A reproducible methodology and synthetic dataset for building a persona-continuity LoRA + RAG system. LoRA bakes the writing style; RAG holds the memory; system prompt anchors the identity. Trains in 30 minutes for ~$0.25 on Colab and runs locally on a Mac."
+author: "Kader Mohideen"
+date: "2026-05-01"
+categories: [AI, LLM, LoRA, RAG, Fine-tuning, Knowledge Management]
+toc: true
+---
+
+
+When a senior employee leaves a company, two things go with them:
+
+1. **Writing style.** How they wrote to customers, peers, executives. Their tone, their hedging, their decision register, their opening and closing patterns — the things that make a reply *sound like them*.
+2. **Historical knowledge.** *Why* did we pick Postgres in 2023? *Why* did Acme get a $4,200 credit? Who is Mike Reyes and how should I handle him?
+
+The successor inherits an inbox and a Confluence dump. Neither captures **why**.
+
+Onboarding documents tell you what the role does. They do not tell you why six months ago we agreed to give a customer an account credit, what tone the previous CSM used to push back on a procurement team, or which old engineering decisions are settled vs ripe to revisit.
+
+That is the gap **Employee Recall** addresses — an open-source methodology and reference implementation for capturing a departing employee's writing style and memory as a small, locally-runnable AI model.
+
+> Repo: [github.com/kader-xai/EmployeeRecall](https://github.com/kader-xai/EmployeeRecall)
+
+## Table of contents
+
+## The thesis: writing style and knowledge need different machinery
+
+The single most important architectural decision in this project is to **separate the two**:
+
+- **Writing style** is *parametric*. It lives in the model's weights. Bake it in via LoRA fine-tuning on the persona's reply pairs.
+- **Knowledge** is *retrieval*. Don't try to memorise it; embed every document into a vector index and look it up at inference time.
+
+People often try to fine-tune for both style and facts at once. It is a bad idea. It bloats the model, it makes facts hard to update, and it costs more compute. Worse, you can't tell after the fact whether a given answer was in the training data or hallucinated.
+
+By contrast, style is genuinely a low-rank perturbation of the base model — that is exactly what LoRA is for. Facts belong in a vector index that you can rebuild every night. Two cheap pieces, glued together at inference time.
+
+> **LoRA gives you the style. RAG gives you the receipts.**
+
+## Architecture
+
+Four ingredients, recombined at query time:
+
+```
+Base model (Qwen2.5-7B, frozen)
+  + LoRA adapter (~150 MB, trained on ~1,300 reply pairs)
+  + FAISS index (~50 MB, ~17,000 chunks, BGE-base embeddings)
+  + System prompt (a short text fingerprint of the persona)
+  = persona-continuity model
+```
+
+A useful analogy: think of the persona as a person.
+
+| Layer | Person |
+|---|---|
+| Base model | The brain — language, reasoning, general knowledge |
+| LoRA adapter | The personality — tone, default mood, mannerisms |
+| System prompt | Self-awareness — "I am Priya. I am at work. Here are my rules." |
+| RAG index | The notes they brought to this meeting |
+
+Pull any one of the four out and the model breaks differently:
+
+- Without the LoRA: a generic AI flavour with the persona's notes.
+- Without the RAG: the persona's writing style with no specific knowledge — confident hallucinations.
+- Without the system prompt: the model writes in the right style but doesn't know it's the persona; introduces itself as "an AI assistant".
+- Without the base model: nothing to fine-tune in the first place.
+
+## The synthetic dataset
+
+To make the methodology reproducible and shareable without privacy risk, the repo ships with **a fully synthetic corpus**: 18,978 documents across 4 simulated years, generated deterministically (`random.seed(42)` — same output on every run).
+
+Two demo personas:
+
+| Persona | Role | What's in the corpus |
+|---|---|---|
+| **Priya Sharma** | Senior CSM at Northwind SaaS, 40 customer accounts, $4.2M ARR | Emails, meeting notes (QBRs, 1:1s), customer storylines |
+| **Rohan Iyer** | Staff Engineer on Platform team | Emails, meeting notes, RFCs, ADRs, postmortems |
+
+The corpus has three tiers of content:
+
+| Layer | Purpose | Volume |
+|---|---|---|
+| **Hand-written storylines** | Demo material — the questions that need to land cleanly | 8 threads, ~50 docs |
+| **Dense per-account / per-project** | Realism — frequent cadence with named entities | ~150 docs/year |
+| **Bulk routine** | Ambient volume — generic emails, weekly syncs | ~16,000 total |
+
+The mistake first-time builders make is generating only bulk content. The model trains fine but the demo falls flat — every answer is generic. The fix is to invest scarce hand-authoring time in 5–8 specific narratives that the demo will actually walk through. The bulk corpus then provides realistic background volume.
+
+We measured this directly: the eval scores 1.0 on hand-written storyline questions and ~0.0 on the same-topic questions whose answers exist only in templated bulk content.
+
+> **Hand-write the demo. Generate the rest.**
+
+The corpus is also available as **multi-format extraction** — the same content rendered as `.eml` / `.html` / `.ics` / `.vtt` / `.md` / `.txt` (54,927 files in total). This lets a video demo show real `.eml` files in Mail.app and real `.ics` files in Calendar.app — proving the methodology applies to a production extraction pipeline, not just a custom JSON format.
+
+## The training pipeline
+
+Five scripts run in order:
+
+```
+prep_training_data.py  →  build_rag_index.py  →  train_lora.py  →  inference.py
+                                                                        ↓
+                                                                     eval.py
+```
+
+### 1. Prep
+
+`prep_training_data.py` takes the JSONL corpus and produces two things:
+
+- **SFT pairs** — every email thread is walked, and any case where the persona replied to a prior message becomes an `(incoming → reply)` chat-format pair. ~1,287 pairs for Priya, 95/5 train/eval split.
+- **RAG chunks** — every document is broken into retrievable text chunks with metadata. Type-aware: emails kept whole, meetings split by section (decisions and action_items get a retrieval boost), RFCs split by markdown heading.
+
+### 2. Index
+
+`build_rag_index.py` embeds every chunk with **BGE-base-en-v1.5** (768-dim, L2-normalised) and writes a FAISS `IndexFlatIP`. Exact cosine search. Sub-5 ms per query for ~17k chunks.
+
+The same embedder must be used at query time. This is the single biggest footgun with RAG: a different embedder produces vectors in a different space and similarity scores become meaningless.
+
+### 3. Train
+
+`train_lora.py` fine-tunes Qwen2.5-7B with LoRA via Unsloth + PEFT + TRL.
+
+```python
+model = FastLanguageModel.get_peft_model(
+    model,
+    r=16,
+    lora_alpha=32,
+    lora_dropout=0.05,
+    target_modules=["q_proj","k_proj","v_proj","o_proj",
+                    "gate_proj","up_proj","down_proj"],
+)
+```
+
+Rank-16 LoRA on **all attention and MLP linear layers**. Targeting attention only would be enough for a task; for *writing style* you need the MLP layers too. With 4-bit base loading via bitsandbytes, the whole thing fits in ~14 GB VRAM.
+
+Three epochs is the sweet spot. One epoch underfits the writing style; five overfits to specific phrasings. Cosine LR with a 3% warmup. Boring, reliable.
+
+Cost: ~$0.25 and ~30 minutes on an A100 spot instance.
+
+### 4. Inference
+
+`inference.py` does three steps per query:
+
+```python
+# 1. retrieve
+q_emb = embedder.encode([q], normalize_embeddings=True).astype("float32")
+scores, ids = index.search(q_emb, k=8)
+
+# 2. compose prompt with [Source N] labels
+sources = "\n\n".join(f"[Source {i+1}] {chunk['text']}" for i, chunk in retrieved)
+messages = [
+    {"role": "system", "content": persona_system_prompt},
+    {"role": "user",   "content": f"...QUESTION: {q}\n\nSOURCES:\n{sources}"},
+]
+
+# 3. generate
+out = model.generate(**inputs, max_new_tokens=800, temperature=0.4)
+```
+
+Citations come from the prompt instruction. The model is told to cite `[Source N]` inline. Temperature 0.4 keeps the writing style consistent without making it stiff.
+
+### 5. Eval
+
+`eval.py` runs two automated metrics:
+
+- **History recall** — keyword overlap with gold answers from `eval_questions.json`.
+- **Style cosine** — cosine similarity of the model's reply versus the persona's actual reply on held-out incoming emails.
+
+Live numbers from a real Priya run:
+
+```
+History keyword score: 0.30   strong on hand-written storylines, weak elsewhere
+Style cosine:          0.735  solid style match
+```
+
+The 0.30 history score reflects the corpus shape: questions whose answers exist only in templated bulk content can't be answered correctly because the bulk content doesn't actually contain those facts.
+
+## Sample output
+
+This is the model answering *"What happened with Acme Corp?"*:
+
+> Thanks for the patience while I dug into this. The seat-count on Acme's Q1 invoice came in 31 seats over (388 vs 357), about $14k. **Mike Reyes (CFO)** pushed on this in a working session on March 4 [Source 1]. We landed on a partial credit (**$4.2k**) and Sarah Lin's team agreed to run quarterly seat-deactivation reviews going forward [Source 2]. The renewal is mid-April; Mike was clear that the credit conversation and the renewal conversation are linked from his side.
+
+```
+SOURCES:
+  [1] meeting-acme-001     2025-03-04   score=0.74
+  [2] email-acme-003       2025-03-03   score=0.71
+  [3] meeting-acme-1on1    2025-10-16   score=0.70
+```
+
+Three things to notice:
+
+1. **Writing style** — *"Thanks for the patience while I dug into this"* is a Priya opener. The soft connection of the credit to the renewal is her register.
+2. **Facts** — specific dollar amount (`$4.2k`), specific seat-count delta (`31 seats over`), named people from the cast file.
+3. **Citations** — the source IDs are real corpus filenames you can `cat` to verify. Nothing was hallucinated.
+
+The killer demo moment: ask **both personas** the same cross-cutting question.
+
+```
+/ask-priya What was the May 2025 Hooli incident from the customer side?
+/ask-rohan What was the May 2025 Hooli incident? Walk me through the root cause.
+```
+
+Priya answers from the customer-comms angle: SLA credit, exec sponsor, advocate-program protection. Rohan answers from the engineering angle: misconfigured per-tenant limit, circuit breaker, hardening work in the postmortem.
+
+Same event. Two grounded perspectives. No model in the world can do that without per-person training data — but a small LoRA + RAG can, for a quarter.
+
+## Local deployment
+
+The whole stack runs on a Mac:
+
+```bash
+brew install ollama
+ollama serve &
+
+cd local_inference
+ollama create priya -f Modelfile.priya
+ollama run priya
+```
+
+For the cited-answer experience, three options ship in the repo:
+
+- **Jupyter notebook** (`local_inference/ask.ipynb`) — load the embedder + FAISS index once, then `ask("...")` per question.
+- **REST API** (`local_inference/api.py`) — FastAPI on port 8000 with auto-generated Swagger docs at `/docs`.
+- **Telegram bot** (`local_inference/telegram_bot.py`) — one self-contained script, no tunnel needed.
+
+For a Slack demo, an importable n8n workflow + Cloudflare tunnel setup is documented in [SLACK_N8N_SETUP.md](https://github.com/kader-xai/EmployeeRecall/blob/main/local_inference/SLACK_N8N_SETUP.md). The full pipeline:
+
+```
+Slack → cloudflared → n8n :5678 → api.py :8000 → Ollama :11434 → cited reply in Slack
+```
+
+## Cost and time
+
+| Step | Where | Time | Cost |
+|---|---|---|---|
+| Generate corpus | local laptop | ~30 sec | $0 |
+| Prep training data | local laptop | ~5 sec | $0 |
+| Build FAISS index | local laptop | ~30 sec | $0 |
+| LoRA fine-tune | Colab A100 | ~30 min | ~$0.25 |
+| Merge + GGUF + quantise | Colab A100 | ~10 min | ~$0.10 |
+| Daily inference | Mac | — | $0 |
+
+**Total per persona: under $1.**
+
+Total compute budget for both demo personas (Priya + Rohan): about $0.70. The cost that dominates is the human time spent hand-authoring the storylines, which is the right cost ratio.
+
+## Beyond the demo: the real use-case spectrum
+
+The exact same pipeline supports a range of deployments. Pick by how personal the training data is:
+
+| Pattern | LoRA on | RAG on | Risk |
+|---|---|---|---|
+| Pure company RAG | nothing (use base model) | all internal docs | low — safest first deployment |
+| Onboarding tutor | company brand style | onboarding handbook | low |
+| Role persona | aggregate of all CSMs | new hire's accounts | medium — depersonalised |
+| **Departing employee twin** *(this demo)* | one specific person | their corpus | **high — needs full consent** |
+| Public digital twin | one public figure | their published work | very high — heavy legal review |
+
+The technique is the same across all five rows. What scales is the *governance, consent, and audit requirements*. A "pure company RAG" can ship in a week with low risk. A "departing employee twin" needs a privacy programme around it before it ships at all.
+
+## Privacy: the part that actually matters
+
+The synthetic corpus in the repo is safe because nothing about it is real. For real deployment with real employees, the technical pipeline is the easy part. The governance is the work:
+
+- **Explicit, written consent** from the persona, scoped to specific corpora and successor users.
+- **Sunset clause** — model retires on a date or on the persona's request. Re-training is the only true erasure for parametric memorisation.
+- **PII redaction at ingest** — Microsoft Presidio or similar, applied at chunk-write time. Don't put email addresses, phone numbers, customer IDs into FAISS in the clear.
+- **Access tiers** — tag every doc with a clearance level; filter retrieval per asker. The model should not see what the asker can't legitimately read.
+- **Audit log** — every query, every retrieval, every output, retained per regulatory requirement.
+- **Memorisation audit** — sample 100 outputs, n-gram-check against training. Refuse to ship if leakage rate exceeds a threshold.
+- **Citation enforcement** — refuse to answer if no source crosses a similarity threshold. *"I don't have a source for that"* beats a confident guess.
+- **Mandatory disclaimer** on every output: *"Drafted in the writing style of X by an AI; not authored by X."*
+- **Memorisation versus retrieval** — RAG is recoverable (delete a doc, re-index, fact gone). LoRA-baked content is harder to remove. Plan accordingly.
+
+The technique is real. The risks are real. Synthetic-data demos are safe; real-data deployment is a privacy programme, not a code project.
+
+## Stack
+
+The whole project is built on open tools:
+
+| Layer | Tool |
+|---|---|
+| Base model | [Qwen2.5-7B-Instruct](https://huggingface.co/Qwen/Qwen2.5-7B-Instruct) |
+| LoRA training | [Unsloth](https://github.com/unslothai/unsloth) + [PEFT](https://github.com/huggingface/peft) + [TRL](https://github.com/huggingface/trl) |
+| 4-bit base loading | [bitsandbytes](https://github.com/bitsandbytes-foundation/bitsandbytes) |
+| Embeddings | [BGE-base-en-v1.5](https://huggingface.co/BAAI/bge-base-en-v1.5) |
+| Vector index | [FAISS](https://github.com/facebookresearch/faiss) |
+| GGUF conversion | [llama.cpp](https://github.com/ggerganov/llama.cpp) |
+| Local inference | [Ollama](https://ollama.com) |
+| API wrapper | [FastAPI](https://fastapi.tiangolo.com) |
+| Workflow / Slack | [n8n](https://n8n.io) |
+
+Apache or MIT-licensed throughout. No proprietary tooling needed at any step.
+
+## Try it
+
+Three paths into the repo, ranked by effort:
+
+### 1. Run the demo personas
+
+```bash
+git clone https://github.com/kader-xai/EmployeeRecall.git
+```
+
+Open `training/Persona_Continuity_Colab.ipynb` in Google Colab. Set runtime to A100. Run All. Thirty minutes later you have a working LoRA + RAG system answering questions about Priya's accounts.
+
+### 2. Train on your own persona
+
+The system is fully parameterised. Copy `personas/priya.json` to `personas/yourname.json`, edit the fingerprint fields (`tone_profile`, `vocab_fingerprint`, etc.), drop your corpus into `corpus/yourname/` as JSONL, and re-run the same four scripts.
+
+### 3. Pure RAG only — skip the LoRA
+
+If you only need the *memory* part — citations, document Q&A — and don't want to deal with style cloning at all, skip `train_lora.py` entirely. The inference script will retrieve and cite using the base model. This is the **safest deployment pattern** for sensitive corpora since there's no parametric memorisation risk.
+
+## What's open-sourced
+
+Everything:
+
+- The code (MIT)
+- The 18,978-document synthetic corpus and persona JSON (CC0 — public domain)
+- The full training pipeline + Colab notebook
+- The local-inference stack (notebook, FastAPI, Telegram bot)
+- The n8n workflow for Slack
+- Methodology docs, lecture deck, technical detail walkthrough
+
+> **Repo:** [github.com/kader-xai/EmployeeRecall](https://github.com/kader-xai/EmployeeRecall)
+
+If you build something on top of this — especially with real (consented) employee data — please open an issue with what you learned. The hard parts of this project are not in the code; they are in the deployment governance, and we are all figuring that out together.
+
+## TL;DR
+
+- A senior employee's writing style and historical knowledge are the most valuable things they take when they leave.
+- The architecture is simple: **LoRA for writing style** (parametric, distilled), **RAG for knowledge** (retrieval, updateable), **system prompt for identity** (text, swappable).
+- A complete reproduction recipe — including a fully synthetic 19k-document corpus with two demo personas — is open-source under [github.com/kader-xai/EmployeeRecall](https://github.com/kader-xai/EmployeeRecall).
+- Trains in 30 minutes on an A100 for ~$0.25. Runs on a Mac via Ollama for free.
+- Same pipeline supports a spectrum of deployments from "pure company RAG" through "public digital twin." The technique scales; the governance work is what changes.
+
+If you want to talk about this — building it, deploying it, or the privacy programme around it — find me on [LinkedIn](https://linkedin.com/in/kader-m-1a6023a6) or open an issue on the repo.
