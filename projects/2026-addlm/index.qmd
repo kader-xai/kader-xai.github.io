@@ -1,0 +1,108 @@
+---
+title: "AddLM — a multiplication-free language model"
+description: "An open experiment in training transformer language models without real-number matrix multiplication — ternary weights plus tropical (additive) attention. At 25 M parameters, it beats the matched float baseline on tinyshakespeare."
+author: "Kader Mohideen"
+date: "2026-05-07"
+categories: [AI, LLM, Quantization, Transformers, Research]
+image: ../banners/addlm.png
+---
+
+![](../banners/addlm.png){fig-align="center" width="100%"}
+
+## Summary
+
+An open experiment in training transformer language models **without real-number matrix multiplication**. AddLM combines two ideas:
+
+- **Ternary weights** `{−1, 0, +1}` — BitNet-1.58 style, straight-through estimator at train time.
+- **Tropical attention** — scores computed as `−L1(q, k)` instead of `q · k`, with top-k routing instead of dense softmax.
+
+At inference, every linear projection becomes a signed sum and every attention score is a sum of absolute differences. **No real-number multiplications anywhere in the forward pass.**
+
+## Key result
+
+| Model size | Float baseline (val loss) | AddLM (val loss) | Gap |
+|---|---:|---:|---:|
+| 0.82 M params | 1.88 | 2.11 | +13.0% |
+| 4.8 M params  | 1.56 | 1.63 | +4.4% |
+| **25 M params** | **1.68** | **1.60** | **−4.3%** ✓ |
+
+At 25 M parameters AddLM beats the matched float transformer on validation loss. The ternary weight constraint acts as a regularizer that prevents the overfitting the float model suffers at this scale.
+
+## Why it matters
+
+The original transformer spends ~99% of its compute on multiplications inside `Q K^T`, the output projections, and the FFN. On modern hardware these multiplications dominate energy use. If language models can be trained with the AddLM algebra, then on dedicated silicon (FPGAs, ASICs, or future low-bit accelerators) inference becomes:
+
+- **~30× cheaper per operation** — signed adders vs floating-point multipliers
+- **~16× smaller weight storage** — 1.6 bits per weight vs 32
+- **No multiplier circuitry needed at all** for the main matmul-heavy paths
+
+This extends the BitNet b1.58 direction by also removing multiplication from attention scoring.
+
+## Architecture at a glance
+
+| Component | Original transformer | AddLM |
+|---|---|---|
+| Linear projections (Q, K, V, output, FFN) | `nn.Linear` (float) | `TernaryLinear` |
+| Attention score | `Q K^T / √d` | `−L1(Q, K)` |
+| Attention norm | softmax over all positions | softmax over top-k (k = 16) |
+| FFN activation | GELU | ReLU |
+| Embeddings & final head | float | float (kept as-is) |
+| LayerNorm | float | float (kept as-is) |
+
+The forward pass uses only `+`, `−`, `max`, and sign-flips.
+
+## Ablation — which change costs what
+
+At 4.8 M params, 2 500 steps on tinyshakespeare:
+
+| Variant | Val loss | Cost vs Float |
+|---|---:|---:|
+| Float baseline | 1.595 | — |
+| Tropical attention only | 1.626 | +0.031 |
+| Ternary weights only | 1.726 | +0.131 |
+| Full AddLM | 1.776 | +0.181 |
+
+**Removing multiplication from attention scoring is essentially free.** Almost all of AddLM's training-loss cost is in the ternary weight constraint, not the attention rewrite — useful signal for accelerator design.
+
+## What's in the repo
+
+```
+addlm/
+├── src/addlm.py                  # standalone library: TernaryLinear, TropicalAttention, HybridGPT
+├── notebooks/
+│   ├── 01_float_baseline.ipynb         # original transformer reference
+│   ├── 02_addlm_vs_float_small.ipynb   # 0.8 M head-to-head
+│   ├── 03_addlm_scaled.ipynb           # 4.8 M, 5 k steps
+│   └── 04_experiments.ipynb            # 25 M run + ablations + top-k sweep
+└── results/                       # per-experiment writeups
+```
+
+Four Colab-runnable notebooks reproducing every number in the paper. No setup required — `Runtime → Run all`.
+
+## Caveats
+
+- **No real wall-clock speedup yet.** PyTorch runs everything through matmul kernels with weights constrained to ternary. Capturing the speedup needs a custom CUDA / Triton kernel.
+- **One dataset.** Char-level tinyshakespeare. Regularization advantage may not transfer identically to larger corpora or BPE tokenization.
+- **Embeddings and final head are still float.** Easy follow-up.
+- **Short context (T = 128).** The regime where top-k routing should pay off most isn't exercised here.
+
+## Open questions
+
+1. **50 M – 200 M parameters.** Does the AddLM lead widen at scale?
+2. **A real ternary Triton kernel.** Predicted speedup: 10–30× on inference.
+3. **Long-context tropical attention.** At T = 4 096+, top-8 routing should drastically beat dense softmax.
+4. **Better tropical scores.** The true tropical inner product `max_i (q_i + k_i)` is even cheaper than `−L1` — does it train?
+5. **Different corpora.** Wikipedia, code, conversation.
+
+## Tech stack
+
+- **Framework:** PyTorch 2.0+
+- **Hardware:** A100 (Colab), single GPU
+- **Dataset:** Karpathy's tinyshakespeare (1.1 M chars, char-level)
+- **Inspiration:** Microsoft's [BitNet b1.58](https://arxiv.org/abs/2402.17764)
+
+## Links
+
+- 💻 **Repo:** [github.com/kader-xai/addlm](https://github.com/kader-xai/addlm)
+- 📝 **Blog write-up:** [AddLM — training a transformer without multiplication](../../blog/2026-05-07-addlm/)
+- 📜 **License:** see repo
