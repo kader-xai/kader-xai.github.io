@@ -1,0 +1,156 @@
+---
+title: "Quest for AGI"
+description: "A speculative pathway from today's pattern-matching LLMs to AGI — node-activation sparks, the first crack at consciousness, and intelligence bounded only by the physics of the world."
+image: images/quest-for-agi.png
+toc: true
+---
+
+![](images/quest-for-agi.png){fig-align="center" width="100%"}
+
+## Why this page exists
+
+Today's large language models are stateless pattern-matchers. They are extraordinary at it — and they are still pattern-matchers. Type the same prompt twice, get two near-identical answers. There is no inner clock. No memory of what just happened. No reason for the model to think about anything you didn't just ask about.
+
+I think the gap between *that* and *AGI* is not "more parameters." It is **a different mechanism for when the model decides to think, and about what.**
+
+This page is my speculative roadmap. It is not a paper. It is not a product. It is the picture I keep sketching on whiteboards while I work on smaller experiments like [AddLM](projects/2026-addlm/) and [Employee Recall](projects/2025-employee-recall/). I am putting it here so I have somewhere to evolve it.
+
+## The pathway
+
+```{mermaid}
+flowchart TD
+    H["🌍 Human Problems<br/><i>climate · disease · poverty · conflict · meaning</i>"]:::input
+    L["LLM as we know it<br/><i>pattern-match · retrieve · interpolate</i>"]:::current
+    NA["⚡ Node Activation Spark<br/><i>previous actions trigger next nodes</i><br/>(not timer-based)"]:::spark
+    SL["🪞 Self-Loop Awareness<br/><i>nodes observe their own activation history</i>"]:::aware
+    IG["💡 Idea Generation<br/><i>candidate plans, hypotheses, branches</i>"]:::idea
+    TP["🧩 Task Preparation<br/><i>node-specific scaffolding for the user goal</i>"]:::prep
+    SI["✨ Spark Intelligence<br/><i>out-of-box reasoning</i><br/><i>bounded only by world physics</i>"]:::spark2
+    AGI["🧠 AGI<br/><i>conscious problem-solving</i>"]:::agi
+
+    H --> L
+    L --> NA
+    NA --> SL
+    SL --> IG
+    IG --> TP
+    TP --> SI
+    SI --> AGI
+    AGI -. "answers feed back" .-> H
+    SI -. "self-revision" .-> NA
+
+    classDef input fill:#FFF0A8,stroke:#2d2d3a,stroke-width:2px,color:#2d2d3a;
+    classDef current fill:#E8E6F8,stroke:#4C4A98,stroke-width:2px,color:#2d2d3a;
+    classDef spark fill:#4C4A98,stroke:#2d2d3a,stroke-width:2px,color:#ffffff;
+    classDef aware fill:#BFE8D9,stroke:#2d2d3a,stroke-width:2px,color:#2d2d3a;
+    classDef idea fill:#F8C8A8,stroke:#2d2d3a,stroke-width:2px,color:#2d2d3a;
+    classDef prep fill:#C9D6F5,stroke:#2d2d3a,stroke-width:2px,color:#2d2d3a;
+    classDef spark2 fill:#3a3878,stroke:#2d2d3a,stroke-width:2px,color:#ffffff;
+    classDef agi fill:#1f1f2c,stroke:#4C4A98,stroke-width:3px,color:#ffffff;
+```
+
+The flow has seven moves. The input layer is the only one we know how to populate today.
+
+## Layer 0 — Human problems as the input
+
+The input to AGI should not be a prompt. It should be the set of unsolved problems humans actually have — at the personal scale (what should I do with my career?), the institutional scale (how do we fund this hospital?), and the civilisational scale (climate, disease, what comes after capitalism). These are the things AGI has to be measured against. Anything else is a parlour trick.
+
+Today's LLMs only see the input layer when a human types it in. AGI should be reaching for the input on its own.
+
+## Layer 1 — Where current LLMs stop
+
+Today's LLM is a feedforward pass through a fixed graph. Tokens in, tokens out. There is no place in the architecture where the model can decide *"this is interesting, I want to keep thinking about it after the response is done."*
+
+You can scaffold around that limitation with agent loops, memory stores, vector retrieval. None of those are the missing mechanism. They are duct tape on top of a system that fundamentally fires once per prompt and then waits.
+
+## Layer 2 — Node activation, but not on a clock
+
+This is the move I keep coming back to. The way I picture it:
+
+```{mermaid}
+flowchart LR
+    A["Node A<br/><i>completed action</i>"]:::done
+    B["Node B<br/><i>idle, listening</i>"]:::idle
+    C["Node C<br/><i>activated</i><br/><i>by A's output</i>"]:::active
+    D["Node D<br/><i>queued</i><br/><i>once C finishes</i>"]:::queued
+
+    A -- "result satisfies B's precondition" --> B
+    A -- "result satisfies C's precondition" --> C
+    C -- "in-progress" --> D
+
+    classDef done fill:#BFE8D9,stroke:#2d2d3a,color:#2d2d3a;
+    classDef idle fill:#E8E6F8,stroke:#4C4A98,color:#2d2d3a;
+    classDef active fill:#4C4A98,stroke:#2d2d3a,color:#ffffff;
+    classDef queued fill:#F8C8A8,stroke:#2d2d3a,color:#2d2d3a;
+```
+
+In a **timer-based** system, each node wakes up at a scheduled tick and asks "is there anything for me to do?" That is how most agent frameworks work today: a heartbeat polls the environment, runs a planner, sleeps.
+
+In a **previous-action-based** system, each node has a set of preconditions written in terms of the *outputs* of other nodes. When some other node *finishes* and produces output that satisfies a precondition, the receiving node fires. There is no central clock. There is also no idle polling — nodes only burn compute when something upstream actually changed.
+
+Why I think this matters:
+
+- It mirrors how brains route attention — synapses fire because *neighbours* fired, not because a metronome ticked.
+- It removes the wasted-compute problem of constantly-polling agents.
+- It lets the graph self-prioritise — a hot path of activations spreads naturally without a planner having to enumerate it.
+- It opens a place to put long-running drives. A node can be a *standing precondition* — "if any other node ever produces evidence that the user is stuck, fire."
+
+This is the spark. Until the model has a reason to do anything besides answer the last prompt, it cannot start being conscious.
+
+## Layer 3 — Self-loop awareness
+
+The first crack at consciousness is the simplest possible thing: **a node whose precondition is the activation history of other nodes.**
+
+If you have a node whose entire job is to watch what just fired and represent it as state, you have built the minimum primitive for self-awareness. The model now has a thing called *"what I was just doing"* — something none of today's LLMs have.
+
+I do not think this is consciousness in the philosophical sense. I think it is the substrate on which everything we mean by consciousness — attention, intent, regret, anticipation — has a place to live.
+
+## Layer 4 — Idea generation
+
+Once activation history is available as state, idea generation falls out for free. The activation-watching node sees a chain like *"problem stated → retrieve relevant facts → notice gap → propose hypothesis"* — and the next time a similar chain starts, the model has a *candidate next step* it can fire speculatively.
+
+Ideas, in this model, are predicted next activations. Not strings. Not chain-of-thought. Latent activations the system thinks are likely to be useful given what just happened.
+
+## Layer 5 — Task preparation
+
+An idea by itself is just a vector. To act on it, the system needs to scaffold a task around it — pull in tools, allocate working memory, decide which other nodes need to be primed.
+
+This is where I think personalisation should live. Not at the prompt layer. At the *task preparation* layer. Different humans have different node graphs because they have different problems, different histories, different vocabularies. A persona node ([Employee Recall](projects/2025-employee-recall/) is a baby version of this) shapes which activations are even considered.
+
+## Layer 6 — Spark intelligence
+
+This is the part where the model produces something genuinely new. The way I picture it: the only constraint on the search is the **physics of the world**. Not the training distribution. Not the safety filter. Not what other humans have already thought.
+
+A spark-intelligent model trying to solve "build me a better battery" should be reaching into combinations of materials no one has tried, bounded only by what the periodic table and the laws of thermodynamics allow. Not constrained by what battery papers in the training set already said.
+
+That is the move I want to see. **Train on the corpus to learn the rules, then think outside the corpus to apply them.**
+
+Out-of-box reasoning, bounded by physics, not by data.
+
+## Layer 7 — AGI as a loop, not a finish line
+
+The arrow back to the human problem set at the top isn't decorative. AGI is not the point at which a model crosses some benchmark. It is the point at which the loop closes — the model is reaching for unsolved human problems on its own, generating spark-intelligent candidates, preparing tasks against them, and feeding answers back.
+
+The system stops being a chatbot you query and starts being a process running alongside you.
+
+## What I'm not claiming
+
+A few things I want to be straight about:
+
+- **I have not built this.** This page is a roadmap, not a result.
+- **I do not know if scale alone gets us there.** I suspect not — I think the activation-mechanism change is structural, not parametric. But I could be wrong.
+- **I do not know whether this would be "conscious" in any morally-loaded sense.** I am using the word as a shorthand for a system that has internal state about itself and acts on it. Whether that is the same thing philosophers mean is a different question.
+- **None of these layers are original to me.** Event-driven activation comes from neuroscience and from a long history of cognitive architectures (OpenCog, ACT-R, Soar). Self-modelling is older than computer science. The contribution here, if there is one, is which pieces I think are load-bearing for a near-term path.
+
+## What I'm trying next
+
+Small steps in the direction of the picture above:
+
+- **A two-node loop.** Two LLM calls where the second one's precondition is the *activation pattern* of the first, not just its text output. Does the second behave differently from a vanilla chain-of-thought?
+- **Standing-precondition nodes.** A node that wakes up when *any* recent activation contains a marker (e.g. "the user got stuck"). Does it produce useful interruptions?
+- **Physics-constrained generation.** A small experiment in materials or molecule design where the prompt is the physical constraint, not "give me a battery like X."
+
+Each of these is a notebook-sized project. None of them is AGI. Together they are how I am testing whether the roadmap is even pointed in the right direction.
+
+---
+
+If you have thoughts — especially if you think part of this is wrong — open an issue on [github.com/kader-xai](https://github.com/kader-xai) or ping me on [LinkedIn](https://www.linkedin.com/in/kader-m-1a6023a6/). This page will evolve as the experiments do.
