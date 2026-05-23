@@ -1,0 +1,80 @@
+---
+title: "Learning AI Papers"
+description: "A paragraph-by-paragraph walkthrough of 11 landmark AI papers — each explanation sits next to a screenshot of the actual PDF page, with interactive visualizations for the core ideas. Built as a reusable template for studying any paper."
+author: "Kader Mohideen"
+date: "2026-05-23"
+categories: [AI, Education, LLM, Open Source, Transformers, Diffusion, GAN, VAE, ViT, BERT, LoRA, RAG]
+---
+
+[Open the live site →](https://kader-xai.github.io/LearningAIPapers/){.btn .btn-primary}
+
+## What it is
+
+A local-first, GitHub-Pages-published site that breaks landmark AI papers down section by section, paragraph by paragraph. Each explanation page has three layers stacked top-to-bottom:
+
+1. **A PDF screenshot** of the exact page(s) from the original paper — styled like a macOS window so it reads as "from the paper itself."
+2. **A learner-friendly explanation** of just that paragraph or idea — the *why* behind the *what*, formulas typeset in KaTeX, key terms surfaced.
+3. **An interactive visualization** (where relevant) — sliders for $d_k$ to watch softmax saturate, the LoRA rank decomposition, a forward-diffusion noise schedule, ViT patchification, GAN minimax dynamics, etc.
+
+The point is to make papers feel like *something you can poke at* rather than something you read once and forget.
+
+**Live:** [kader-xai.github.io/LearningAIPapers](https://kader-xai.github.io/LearningAIPapers/) · **Repo:** [github.com/kader-xai/LearningAIPapers](https://github.com/kader-xai/LearningAIPapers) · **License:** MIT · **Co-AI Developed**
+
+::: {.callout-note}
+## Co-AI Developed
+
+This site was built in collaboration with Claude. Curriculum direction, paper selection, and the structural choice of "PDF screenshot + paragraph-scale explanation + interactive visualization per page" are mine. AI accelerated the SPA shell, the per-paper JSON schema, the visualizations in vanilla SVG, and the paragraph-by-paragraph paraphrasing. I read every page before publishing.
+:::
+
+## Papers included
+
+| # | Paper | arXiv |
+|---|---|---|
+| 1 | Attention Is All You Need (Transformers) | [1706.03762](https://arxiv.org/abs/1706.03762) |
+| 2 | BERT | [1810.04805](https://arxiv.org/abs/1810.04805) |
+| 3 | GPT-1 (Improving Language Understanding by Generative Pre-Training) | [OpenAI report](https://cdn.openai.com/research-covers/language-unsupervised/language_understanding_paper.pdf) |
+| 4 | Vision Transformer (ViT) | [2010.11929](https://arxiv.org/abs/2010.11929) |
+| 5 | Variational Autoencoder (VAE) | [1312.6114](https://arxiv.org/abs/1312.6114) |
+| 6 | Generative Adversarial Networks (GANs) | [1406.2661](https://arxiv.org/abs/1406.2661) |
+| 7 | Denoising Diffusion Probabilistic Models (DDPM) | [2006.11239](https://arxiv.org/abs/2006.11239) |
+| 8 | LoRA | [2106.09685](https://arxiv.org/abs/2106.09685) |
+| 9 | QLoRA | [2305.14314](https://arxiv.org/abs/2305.14314) |
+| 10 | RAG (Retrieval-Augmented Generation) | [2005.11401](https://arxiv.org/abs/2005.11401) |
+| 11 | PRIMUS (Trend Micro — Cybersecurity LLM datasets) | [2502.11191](https://arxiv.org/abs/2502.11191) |
+
+## Built-in visualizations
+
+- **`scaled-dot-product-attention`** — slide $d_k$, toggle the $\sqrt{d_k}$ scale, watch softmax saturate.
+- **`multi-head-attention`** — slide $h$, see $d_k = d_{\text{model}}/h$ update live.
+- **`positional-encoding`** — sinusoidal PE heatmap, drag max position and dimensionality.
+- **`transformer-architecture`** — encoder/decoder SVG with cross-attention arrow.
+- **`attention-heatmap`** — hover-driven token-to-token attention on a toy sentence.
+- **`lora-decomposition`** — $W + BA$ rank-decomposition visualizer, live parameter count.
+- **`vit-patchify`** — image-to-tokens pipeline at different patch sizes.
+- **`vae-reparameterize`** — the reparameterization trick made visible.
+- **`diffusion-forward-reverse`** — noising schedule over $T$ steps.
+- **`rag-pipeline`** — retriever + generator with marginalization equation.
+- **`gan-game`** — step the minimax game forward and watch $G$ chase the real distribution.
+- **`bert-mlm`** — masked input visualization for the 80/10/10 corruption recipe.
+
+## Template, not a one-off
+
+Every paper is one JSON file in `content/<slug>/paper.json` with sections → pages, plus a folder of rendered PDF page PNGs. To add a new paper:
+
+```bash
+pdftoppm -png -r 140 paper.pdf content/<slug>/pdf-pages/page
+# then write paper.json or copy content/_template/paper.json and edit
+```
+
+The same SPA shell, sidebar TOC, paragraph pager, KaTeX math rendering, and visualization registry get reused — so adding a paper is a content task, not an engineering task.
+
+## Why I built it
+
+Reading dense papers cover-to-cover is hard. Re-reading them later to extract a single idea is harder. I wanted a study format that:
+
+- Stays anchored to the source (the PDF screenshot is right there — no "wait, where did they say that?")
+- Breaks the wall of text into one-screen units the way I'd actually study them.
+- Lets me *play with* the math instead of just staring at it.
+- Lives as a static site so it's trivially shareable and forkable.
+
+If it's useful for you too, fork it and add your own papers — the template is the point.
