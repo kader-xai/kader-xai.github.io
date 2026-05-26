@@ -6,19 +6,19 @@ tags:
   - gyroscope
   - sensors
 created: 2026-05-16
-breadcrumb: "Science > Physics > Mechanical — motion, force, acoustic waves > Angular rate / rotation"
+breadcrumb: "Physics > Mechanical > Angular rate / rotation"
 ---
 
 # Angular rate / rotation
 
 > **Mechanism:** Coriolis & Sagnac effects
 
-## Detectors
+## Items
 
 - **MEMS gyroscope** — Vibrating proof mass plus Coriolis effect; the gyro in every phone.
-- **Fibre-optic gyro (FOG)** — Two laser beams travel a long fibre loop in opposite directions; rotation produces a phase shift (Sagnac effect).
-- **Ring laser gyro (RLG)** — Counter-propagating lasers in a closed ring cavity; rotation changes the beat frequency between them. Aircraft-grade gyro.
-- **Spinning-rotor gyro** — A rapidly spinning gimballed rotor preserves orientation. Legacy aerospace inertial reference.
+- **Fibre-optic gyro** — Two laser beams in a fibre loop in opposite directions; rotation gives a phase shift (Sagnac).
+- **Ring laser gyro** — Counter-propagating lasers in a closed ring; rotation changes the beat frequency.
+- **Spinning-rotor gyro** — Gimballed spinning rotor preserves orientation. Legacy aerospace.
 
 ## Related
 
