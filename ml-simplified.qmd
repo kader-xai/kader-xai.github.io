@@ -1,0 +1,2854 @@
+---
+title: "ML Simplified"
+description: "The math behind machine learning, explained four ways — the formula, the plain-English idea, examples, and how it shows up in real systems. A static OneNote-style reference."
+toc: true
+toc-location: left
+toc-title: "Topics"
+toc-depth: 4
+page-layout: full
+---
+
+::: {.callout-note appearance="simple" icon=false}
+### 📓 How to read this page
+
+Pick a **subject** (the pill tabs), then a **topic** (the inner tabs). Each topic is explained four ways:
+
+**🧮 Mathematical** &nbsp;·&nbsp; **💡 Simplified** &nbsp;·&nbsp; **📘 Examples & References** &nbsp;·&nbsp; **⚙️ Real-World Values & Applications**
+
+Everything is static reference material — nothing here is editable.
+:::
+
+
+# ∑ Linear Algebra
+
+::: {.panel-tabset .nav-pills}
+
+## Vectors
+
+::: {.panel-tabset}
+
+#### Vector Addition
+
+::: {.grid}
+
+::: {.g-col-12 .g-col-lg-6}
+::: {.callout-note appearance="minimal"}
+**🧮 Mathematical**
+
+Add component-wise: $\mathbf{a}+\mathbf{b}=[a_1+b_1,\dots,a_n+b_n]$. Geometrically it is the tip-to-tail diagonal of the parallelogram the two vectors span.
+:::
+:::
+
+::: {.g-col-12 .g-col-lg-6}
+::: {.callout-tip appearance="minimal"}
+**💡 Simplified**
+
+Stack two arrows: walk along the first, then the second; where you end up is the sum. Order doesn't matter.
+:::
+:::
+
+::: {.g-col-12 .g-col-lg-6}
+::: {.callout-important appearance="minimal"}
+**📘 Examples & References**
+
+$[1,2]+[3,1]=[4,3]$. Reference: 3Blue1Brown *Essence of Linear Algebra* Ch.1.
+:::
+:::
+
+::: {.g-col-12 .g-col-lg-6}
+::: {.callout-warning appearance="minimal"}
+**⚙️ Real-World Values & Applications**
+
+Combining feature deltas, summing gradient contributions across a batch, moving an embedding by a 'direction' vector (king − man + woman ≈ queen).
+:::
+:::
+
+:::
+
+#### Vector Subtraction
+
+::: {.grid}
+
+::: {.g-col-12 .g-col-lg-6}
+::: {.callout-note appearance="minimal"}
+**🧮 Mathematical**
+
+$\mathbf{a}-\mathbf{b}=[a_1-b_1,\dots,a_n-b_n]$. The result points from $\mathbf{b}$ to $\mathbf{a}$.
+:::
+:::
+
+::: {.g-col-12 .g-col-lg-6}
+::: {.callout-tip appearance="minimal"}
+**💡 Simplified**
+
+It's the arrow that takes you from one point to another — 'where you are minus where you were'.
+:::
+:::
+
+::: {.g-col-12 .g-col-lg-6}
+::: {.callout-important appearance="minimal"}
+**📘 Examples & References**
+
+$[4,3]-[3,1]=[1,2]$.
+:::
+:::
+
+::: {.g-col-12 .g-col-lg-6}
+::: {.callout-warning appearance="minimal"}
+**⚙️ Real-World Values & Applications**
+
+Computing error vectors (prediction − target), displacement between two GPS points, difference of word embeddings to capture relationships.
+:::
+:::
+
+:::
+
+#### Dot Product
+
+::: {.grid}
+
+::: {.g-col-12 .g-col-lg-6}
+::: {.callout-note appearance="minimal"}
+**🧮 Mathematical**
+
+$\mathbf{a}\cdot\mathbf{b}=\sum_i a_i b_i=\lVert\mathbf{a}\rVert\,\lVert\mathbf{b}\rVert\cos\theta$. Zero ⇔ perpendicular.
+:::
+:::
+
+::: {.g-col-12 .g-col-lg-6}
+::: {.callout-tip appearance="minimal"}
+**💡 Simplified**
+
+A single number measuring how much two vectors point the same way. Big positive = aligned, 0 = unrelated, negative = opposite.
+:::
+:::
+
+::: {.g-col-12 .g-col-lg-6}
+::: {.callout-important appearance="minimal"}
+**📘 Examples & References**
+
+$[1,2]\cdot[3,1]=1\cdot3+2\cdot1=5$. Cosine similarity is the normalised dot product.
+:::
+:::
+
+::: {.g-col-12 .g-col-lg-6}
+::: {.callout-warning appearance="minimal"}
+**⚙️ Real-World Values & Applications**
+
+Every neuron computes a dot product of weights and inputs; attention scores in transformers are dot products of queries and keys; recommender similarity.
+:::
+:::
+
+:::
+
+#### Cross Product
+
+::: {.grid}
+
+::: {.g-col-12 .g-col-lg-6}
+::: {.callout-note appearance="minimal"}
+**🧮 Mathematical**
+
+In $\mathbb{R}^3$, $\mathbf{a}\times\mathbf{b}$ is perpendicular to both, with magnitude $\lVert\mathbf{a}\rVert\lVert\mathbf{b}\rVert\sin\theta$ (area of the parallelogram).
+:::
+:::
+
+::: {.g-col-12 .g-col-lg-6}
+::: {.callout-tip appearance="minimal"}
+**💡 Simplified**
+
+Multiply two 3D arrows to get a third arrow at right angles to both — the 'normal' to the plane they form.
+:::
+:::
+
+::: {.g-col-12 .g-col-lg-6}
+::: {.callout-important appearance="minimal"}
+**📘 Examples & References**
+
+$[1,0,0]	imes[0,1,0]=[0,0,1]$.
+:::
+:::
+
+::: {.g-col-12 .g-col-lg-6}
+::: {.callout-warning appearance="minimal"}
+**⚙️ Real-World Values & Applications**
+
+Surface normals in 3D graphics and robotics, torque and angular momentum in physics engines, computing camera orientation.
+:::
+:::
+
+:::
+
+#### L1 Norm
+
+::: {.grid}
+
+::: {.g-col-12 .g-col-lg-6}
+::: {.callout-note appearance="minimal"}
+**🧮 Mathematical**
+
+$\lVert\mathbf{x}\rVert_1=\sum_i |x_i|$ — sum of absolute values (Manhattan distance).
+:::
+:::
+
+::: {.g-col-12 .g-col-lg-6}
+::: {.callout-tip appearance="minimal"}
+**💡 Simplified**
+
+Total distance if you can only move along grid streets, not diagonally.
+:::
+:::
+
+::: {.g-col-12 .g-col-lg-6}
+::: {.callout-important appearance="minimal"}
+**📘 Examples & References**
+
+$\lVert[3,-4]Vert_1=7$.
+:::
+:::
+
+::: {.g-col-12 .g-col-lg-6}
+::: {.callout-warning appearance="minimal"}
+**⚙️ Real-World Values & Applications**
+
+L1 (Lasso) regularisation drives weights to exactly zero → feature selection / sparse models; robust error metrics (MAE).
+:::
+:::
+
+:::
+
+#### L2 Norm
+
+::: {.grid}
+
+::: {.g-col-12 .g-col-lg-6}
+::: {.callout-note appearance="minimal"}
+**🧮 Mathematical**
+
+$\lVert\mathbf{x}\rVert_2=\sqrt{\sum_i x_i^2}$ — straight-line (Euclidean) length.
+:::
+:::
+
+::: {.g-col-12 .g-col-lg-6}
+::: {.callout-tip appearance="minimal"}
+**💡 Simplified**
+
+The 'as-the-crow-flies' length of the arrow.
+:::
+:::
+
+::: {.g-col-12 .g-col-lg-6}
+::: {.callout-important appearance="minimal"}
+**📘 Examples & References**
+
+$\lVert[3,-4]Vert_2=5$.
+:::
+:::
+
+::: {.g-col-12 .g-col-lg-6}
+::: {.callout-warning appearance="minimal"}
+**⚙️ Real-World Values & Applications**
+
+L2 (Ridge / weight decay) keeps weights small and smooth; normalising embeddings to unit length; gradient-clipping by norm to stabilise training.
+:::
+:::
+
+:::
+
+#### Projection
+
+::: {.grid}
+
+::: {.g-col-12 .g-col-lg-6}
+::: {.callout-note appearance="minimal"}
+**🧮 Mathematical**
+
+Projection of $\mathbf{a}$ onto $\mathbf{b}$: $\dfrac{\mathbf{a}\cdot\mathbf{b}}{\lVert\mathbf{b}\rVert^2}\mathbf{b}$.
+:::
+:::
+
+::: {.g-col-12 .g-col-lg-6}
+::: {.callout-tip appearance="minimal"}
+**💡 Simplified**
+
+The shadow one arrow casts on another when light shines straight down.
+:::
+:::
+
+::: {.g-col-12 .g-col-lg-6}
+::: {.callout-important appearance="minimal"}
+**📘 Examples & References**
+
+Projecting $[2,2]$ onto the x-axis $[1,0]$ gives $[2,0]$.
+:::
+:::
+
+::: {.g-col-12 .g-col-lg-6}
+::: {.callout-warning appearance="minimal"}
+**⚙️ Real-World Values & Applications**
+
+PCA projects data onto principal directions; least-squares regression projects targets onto the column space of features.
+:::
+:::
+
+:::
+
+#### Orthogonality
+
+::: {.grid}
+
+::: {.g-col-12 .g-col-lg-6}
+::: {.callout-note appearance="minimal"}
+**🧮 Mathematical**
+
+$\mathbf{a}\perp\mathbf{b}\iff \mathbf{a}\cdot\mathbf{b}=0$. Orthonormal sets are perpendicular and unit length.
+:::
+:::
+
+::: {.g-col-12 .g-col-lg-6}
+::: {.callout-tip appearance="minimal"}
+**💡 Simplified**
+
+Two directions that share no overlap — knowing one tells you nothing about the other.
+:::
+:::
+
+::: {.g-col-12 .g-col-lg-6}
+::: {.callout-important appearance="minimal"}
+**📘 Examples & References**
+
+$[1,0]\cdot[0,1]=0$ → the axes are orthogonal.
+:::
+:::
+
+::: {.g-col-12 .g-col-lg-6}
+::: {.callout-warning appearance="minimal"}
+**⚙️ Real-World Values & Applications**
+
+Orthogonal weight initialisation prevents signal blow-up in deep nets; orthogonal basis (Fourier, wavelets) for compression; decorrelated features.
+:::
+:::
+
+:::
+
+:::
+
+## Matrices
+
+::: {.panel-tabset}
+
+#### Matrix Multiplication
+
+::: {.grid}
+
+::: {.g-col-12 .g-col-lg-6}
+::: {.callout-note appearance="minimal"}
+**🧮 Mathematical**
+
+$(AB)_{ij}=\sum_k A_{ik}B_{kj}$. Defined only when inner dimensions match ($m\times n$ by $n\times p$).
+:::
+:::
+
+::: {.g-col-12 .g-col-lg-6}
+::: {.callout-tip appearance="minimal"}
+**💡 Simplified**
+
+Each output cell is the dot product of a row from the first matrix and a column from the second. It chains two linear transformations into one.
+:::
+:::
+
+::: {.g-col-12 .g-col-lg-6}
+::: {.callout-important appearance="minimal"}
+**📘 Examples & References**
+
+$egin{bmatrix}1&2\3&4\end{bmatrix}egin{bmatrix}1\1\end{bmatrix}=egin{bmatrix}3\7\end{bmatrix}$.
+:::
+:::
+
+::: {.g-col-12 .g-col-lg-6}
+::: {.callout-warning appearance="minimal"}
+**⚙️ Real-World Values & Applications**
+
+It IS the core of deep learning — every dense layer is $Wx+b$; ~99% of training FLOPs are matmuls, which is why GPUs/TPUs exist.
+:::
+:::
+
+:::
+
+#### Transpose
+
+::: {.grid}
+
+::: {.g-col-12 .g-col-lg-6}
+::: {.callout-note appearance="minimal"}
+**🧮 Mathematical**
+
+$(A^\top)_{ij}=A_{ji}$ — flip across the diagonal. $(AB)^\top=B^\top A^\top$.
+:::
+:::
+
+::: {.g-col-12 .g-col-lg-6}
+::: {.callout-tip appearance="minimal"}
+**💡 Simplified**
+
+Turn rows into columns and columns into rows.
+:::
+:::
+
+::: {.g-col-12 .g-col-lg-6}
+::: {.callout-important appearance="minimal"}
+**📘 Examples & References**
+
+$egin{bmatrix}1&2\3&4\end{bmatrix}^	op=egin{bmatrix}1&3\2&4\end{bmatrix}$.
+:::
+:::
+
+::: {.g-col-12 .g-col-lg-6}
+::: {.callout-warning appearance="minimal"}
+**⚙️ Real-World Values & Applications**
+
+Backpropagation multiplies by $W^	op$ to push gradients backward; computing Gram matrices $X^	op X$ for covariance and style transfer.
+:::
+:::
+
+:::
+
+#### Inverse
+
+::: {.grid}
+
+::: {.g-col-12 .g-col-lg-6}
+::: {.callout-note appearance="minimal"}
+**🧮 Mathematical**
+
+$A^{-1}A=I$. Exists only if $\det(A)\neq0$ (square, full-rank).
+:::
+:::
+
+::: {.g-col-12 .g-col-lg-6}
+::: {.callout-tip appearance="minimal"}
+**💡 Simplified**
+
+The 'undo' matrix — apply it to reverse what $A$ did.
+:::
+:::
+
+::: {.g-col-12 .g-col-lg-6}
+::: {.callout-important appearance="minimal"}
+**📘 Examples & References**
+
+$egin{bmatrix}2&0\0&2\end{bmatrix}^{-1}=egin{bmatrix}0.5&0\0&0.5\end{bmatrix}$.
+:::
+:::
+
+::: {.g-col-12 .g-col-lg-6}
+::: {.callout-warning appearance="minimal"}
+**⚙️ Real-World Values & Applications**
+
+Closed-form linear regression $\hateta=(X^	op X)^{-1}X^	op y$; Kalman filters; though in practice we solve systems rather than invert directly (faster, stabler).
+:::
+:::
+
+:::
+
+#### Determinant
+
+::: {.grid}
+
+::: {.g-col-12 .g-col-lg-6}
+::: {.callout-note appearance="minimal"}
+**🧮 Mathematical**
+
+Scalar $\det(A)$; for $2\times2$, $ad-bc$. It is the signed volume-scaling factor of the transformation.
+:::
+:::
+
+::: {.g-col-12 .g-col-lg-6}
+::: {.callout-tip appearance="minimal"}
+**💡 Simplified**
+
+How much the transformation stretches or shrinks area/volume. Zero means it squashes space flat (information lost).
+:::
+:::
+
+::: {.g-col-12 .g-col-lg-6}
+::: {.callout-important appearance="minimal"}
+**📘 Examples & References**
+
+$\detegin{bmatrix}1&2\3&4\end{bmatrix}=1\cdot4-2\cdot3=-2$.
+:::
+:::
+
+::: {.g-col-12 .g-col-lg-6}
+::: {.callout-warning appearance="minimal"}
+**⚙️ Real-World Values & Applications**
+
+Change-of-variables in normalising flows uses $\log|\det|$ of the Jacobian; checking invertibility; computing Gaussian densities.
+:::
+:::
+
+:::
+
+#### Rank
+
+::: {.grid}
+
+::: {.g-col-12 .g-col-lg-6}
+::: {.callout-note appearance="minimal"}
+**🧮 Mathematical**
+
+Number of linearly independent rows/columns = dimension of the column space.
+:::
+:::
+
+::: {.g-col-12 .g-col-lg-6}
+::: {.callout-tip appearance="minimal"}
+**💡 Simplified**
+
+How many genuinely different directions the matrix can reach. Low rank = redundancy.
+:::
+:::
+
+::: {.g-col-12 .g-col-lg-6}
+::: {.callout-important appearance="minimal"}
+**📘 Examples & References**
+
+$egin{bmatrix}1&2\2&4\end{bmatrix}$ has rank 1 (row 2 = 2×row 1).
+:::
+:::
+
+::: {.g-col-12 .g-col-lg-6}
+::: {.callout-warning appearance="minimal"}
+**⚙️ Real-World Values & Applications**
+
+Low-rank factorisation (LoRA!) fine-tunes LLMs with tiny matrices; recommender systems factor the ratings matrix; PCA keeps the top-rank structure.
+:::
+:::
+
+:::
+
+#### Trace
+
+::: {.grid}
+
+::: {.g-col-12 .g-col-lg-6}
+::: {.callout-note appearance="minimal"}
+**🧮 Mathematical**
+
+$\operatorname{tr}(A)=\sum_i A_{ii}$ — sum of the diagonal. Equals the sum of eigenvalues. $\operatorname{tr}(AB)=\operatorname{tr}(BA)$.
+:::
+:::
+
+::: {.g-col-12 .g-col-lg-6}
+::: {.callout-tip appearance="minimal"}
+**💡 Simplified**
+
+Just add up the diagonal entries.
+:::
+:::
+
+::: {.g-col-12 .g-col-lg-6}
+::: {.callout-important appearance="minimal"}
+**📘 Examples & References**
+
+$\operatorname{tr}egin{bmatrix}1&2\3&4\end{bmatrix}=5$.
+:::
+:::
+
+::: {.g-col-12 .g-col-lg-6}
+::: {.callout-warning appearance="minimal"}
+**⚙️ Real-World Values & Applications**
+
+Appears in the cyclic identities that simplify gradient derivations; trace of covariance = total variance; regularisers and information measures.
+:::
+:::
+
+:::
+
+:::
+
+## Core Concepts
+
+::: {.panel-tabset}
+
+#### Linear Independence
+
+::: {.grid}
+
+::: {.g-col-12 .g-col-lg-6}
+::: {.callout-note appearance="minimal"}
+**🧮 Mathematical**
+
+Vectors $\{\mathbf{v}_i\}$ are independent if $\sum c_i\mathbf{v}_i=0$ only when all $c_i=0$.
+:::
+:::
+
+::: {.g-col-12 .g-col-lg-6}
+::: {.callout-tip appearance="minimal"}
+**💡 Simplified**
+
+No vector in the set can be built from the others — none is redundant.
+:::
+:::
+
+::: {.g-col-12 .g-col-lg-6}
+::: {.callout-important appearance="minimal"}
+**📘 Examples & References**
+
+$[1,0]$ and $[0,1]$ are independent; $[1,0]$ and $[2,0]$ are not.
+:::
+:::
+
+::: {.g-col-12 .g-col-lg-6}
+::: {.callout-warning appearance="minimal"}
+**⚙️ Real-World Values & Applications**
+
+Independent features avoid multicollinearity (unstable regression coefficients); independent columns guarantee a unique least-squares solution.
+:::
+:::
+
+:::
+
+#### Basis
+
+::: {.grid}
+
+::: {.g-col-12 .g-col-lg-6}
+::: {.callout-note appearance="minimal"}
+**🧮 Mathematical**
+
+A minimal independent set that spans the whole space. Any vector has unique coordinates in a basis.
+:::
+:::
+
+::: {.g-col-12 .g-col-lg-6}
+::: {.callout-tip appearance="minimal"}
+**💡 Simplified**
+
+The smallest set of building-block directions from which you can construct everything else.
+:::
+:::
+
+::: {.g-col-12 .g-col-lg-6}
+::: {.callout-important appearance="minimal"}
+**📘 Examples & References**
+
+The standard basis of $\mathbb{R}^3$ is $\{[1,0,0],[0,1,0],[0,0,1]\}$.
+:::
+:::
+
+::: {.g-col-12 .g-col-lg-6}
+::: {.callout-warning appearance="minimal"}
+**⚙️ Real-World Values & Applications**
+
+Embedding dimensions are a learned basis for meaning; Fourier/wavelet bases for signal compression; choosing a good basis = good features.
+:::
+:::
+
+:::
+
+#### Subspaces
+
+::: {.grid}
+
+::: {.g-col-12 .g-col-lg-6}
+::: {.callout-note appearance="minimal"}
+**🧮 Mathematical**
+
+A subset closed under addition and scalar multiplication (always contains $\mathbf{0}$). Examples: column space, null space.
+:::
+:::
+
+::: {.g-col-12 .g-col-lg-6}
+::: {.callout-tip appearance="minimal"}
+**💡 Simplified**
+
+A flat 'slice' of the space — a line or plane through the origin — that stays inside itself under the allowed operations.
+:::
+:::
+
+::: {.g-col-12 .g-col-lg-6}
+::: {.callout-important appearance="minimal"}
+**📘 Examples & References**
+
+The x–y plane is a 2D subspace of $\mathbb{R}^3$.
+:::
+:::
+
+::: {.g-col-12 .g-col-lg-6}
+::: {.callout-warning appearance="minimal"}
+**⚙️ Real-World Values & Applications**
+
+Data often lives on a low-dimensional subspace (manifold) inside high-dim space — the premise of dimensionality reduction and autoencoders.
+:::
+:::
+
+:::
+
+#### Eigenvalues
+
+::: {.grid}
+
+::: {.g-col-12 .g-col-lg-6}
+::: {.callout-note appearance="minimal"}
+**🧮 Mathematical**
+
+$\lambda$ with $A\mathbf{v}=\lambda\mathbf{v}$ for some $\mathbf{v}\neq0$. Found via $\det(A-\lambda I)=0$.
+:::
+:::
+
+::: {.g-col-12 .g-col-lg-6}
+::: {.callout-tip appearance="minimal"}
+**💡 Simplified**
+
+The scaling factors along the special directions a matrix doesn't rotate.
+:::
+:::
+
+::: {.g-col-12 .g-col-lg-6}
+::: {.callout-important appearance="minimal"}
+**📘 Examples & References**
+
+$egin{bmatrix}2&0\0&3\end{bmatrix}$ has eigenvalues 2 and 3.
+:::
+:::
+
+::: {.g-col-12 .g-col-lg-6}
+::: {.callout-warning appearance="minimal"}
+**⚙️ Real-World Values & Applications**
+
+PCA's eigenvalues = variance per component; PageRank is the top eigenvector; spectral norm (largest eigenvalue) bounds training stability.
+:::
+:::
+
+:::
+
+#### Eigenvectors
+
+::: {.grid}
+
+::: {.g-col-12 .g-col-lg-6}
+::: {.callout-note appearance="minimal"}
+**🧮 Mathematical**
+
+Nonzero $\mathbf{v}$ with $A\mathbf{v}=\lambda\mathbf{v}$ — direction preserved (only scaled) by $A$.
+:::
+:::
+
+::: {.g-col-12 .g-col-lg-6}
+::: {.callout-tip appearance="minimal"}
+**💡 Simplified**
+
+The directions a transformation merely stretches without turning.
+:::
+:::
+
+::: {.g-col-12 .g-col-lg-6}
+::: {.callout-important appearance="minimal"}
+**📘 Examples & References**
+
+For the matrix above, $[1,0]$ and $[0,1]$ are eigenvectors.
+:::
+:::
+
+::: {.g-col-12 .g-col-lg-6}
+::: {.callout-warning appearance="minimal"}
+**⚙️ Real-World Values & Applications**
+
+Principal components are eigenvectors of the covariance matrix; eigenfaces for face recognition; vibration/mode analysis.
+:::
+:::
+
+:::
+
+#### Spectral Decomposition
+
+::: {.grid}
+
+::: {.g-col-12 .g-col-lg-6}
+::: {.callout-note appearance="minimal"}
+**🧮 Mathematical**
+
+For symmetric $A$: $A=Q\Lambda Q^\top$, $Q$ orthonormal eigenvectors, $\Lambda$ diagonal eigenvalues.
+:::
+:::
+
+::: {.g-col-12 .g-col-lg-6}
+::: {.callout-tip appearance="minimal"}
+**💡 Simplified**
+
+Rewrite a (symmetric) matrix as: rotate → scale each axis → rotate back.
+:::
+:::
+
+::: {.g-col-12 .g-col-lg-6}
+::: {.callout-important appearance="minimal"}
+**📘 Examples & References**
+
+Covariance matrices are symmetric, so they always decompose this way.
+:::
+:::
+
+::: {.g-col-12 .g-col-lg-6}
+::: {.callout-warning appearance="minimal"}
+**⚙️ Real-World Values & Applications**
+
+Whitening / decorrelating data; computing matrix square-roots and powers; the math behind PCA and Gaussian processes.
+:::
+:::
+
+:::
+
+#### SVD
+
+::: {.grid}
+
+::: {.g-col-12 .g-col-lg-6}
+::: {.callout-note appearance="minimal"}
+**🧮 Mathematical**
+
+Any $A=U\Sigma V^\top$: orthonormal $U,V$ and non-negative singular values $\Sigma$. Works for non-square matrices.
+:::
+:::
+
+::: {.g-col-12 .g-col-lg-6}
+::: {.callout-tip appearance="minimal"}
+**💡 Simplified**
+
+The universal decomposition: rotate, stretch along axes, rotate again — for ANY matrix.
+:::
+:::
+
+::: {.g-col-12 .g-col-lg-6}
+::: {.callout-important appearance="minimal"}
+**📘 Examples & References**
+
+Truncating to the top-$k$ singular values gives the best rank-$k$ approximation (Eckart–Young).
+:::
+:::
+
+::: {.g-col-12 .g-col-lg-6}
+::: {.callout-warning appearance="minimal"}
+**⚙️ Real-World Values & Applications**
+
+Latent semantic analysis, image compression, recommender systems (Netflix prize), and the theory behind low-rank LLM adapters.
+:::
+:::
+
+:::
+
+#### QR Decomposition
+
+::: {.grid}
+
+::: {.g-col-12 .g-col-lg-6}
+::: {.callout-note appearance="minimal"}
+**🧮 Mathematical**
+
+$A=QR$: $Q$ orthonormal columns, $R$ upper-triangular (via Gram–Schmidt / Householder).
+:::
+:::
+
+::: {.g-col-12 .g-col-lg-6}
+::: {.callout-tip appearance="minimal"}
+**💡 Simplified**
+
+Split a matrix into a clean rotation part and a triangular 'bookkeeping' part.
+:::
+:::
+
+::: {.g-col-12 .g-col-lg-6}
+::: {.callout-important appearance="minimal"}
+**📘 Examples & References**
+
+Used to solve $A\mathbf{x}=\mathbf{b}$ stably without forming $A^{-1}$.
+:::
+:::
+
+::: {.g-col-12 .g-col-lg-6}
+::: {.callout-warning appearance="minimal"}
+**⚙️ Real-World Values & Applications**
+
+Numerically stable least-squares; the QR algorithm computes eigenvalues; orthogonalising layers in deep nets.
+:::
+:::
+
+:::
+
+#### Positive Definite Matrices
+
+::: {.grid}
+
+::: {.g-col-12 .g-col-lg-6}
+::: {.callout-note appearance="minimal"}
+**🧮 Mathematical**
+
+Symmetric $A$ with $\mathbf{x}^\top A\mathbf{x}>0$ for all $\mathbf{x}\neq0$ ⇔ all eigenvalues $>0$.
+:::
+:::
+
+::: {.g-col-12 .g-col-lg-6}
+::: {.callout-tip appearance="minimal"}
+**💡 Simplified**
+
+A matrix that always 'curves upward' — like a perfect bowl with a single lowest point.
+:::
+:::
+
+::: {.g-col-12 .g-col-lg-6}
+::: {.callout-important appearance="minimal"}
+**📘 Examples & References**
+
+The identity matrix is positive definite; any covariance matrix is at least positive semi-definite.
+:::
+:::
+
+::: {.g-col-12 .g-col-lg-6}
+::: {.callout-warning appearance="minimal"}
+**⚙️ Real-World Values & Applications**
+
+Guarantees a unique optimum in convex problems; required for Cholesky factorisation; covariance matrices and kernel (Gram) matrices in SVMs/GPs.
+:::
+:::
+
+:::
+
+#### Tensor Algebra
+
+::: {.grid}
+
+::: {.g-col-12 .g-col-lg-6}
+::: {.callout-note appearance="minimal"}
+**🧮 Mathematical**
+
+Tensors generalise scalars/vectors/matrices to $n$ dimensions; operations include contraction (Einstein summation) and outer products.
+:::
+:::
+
+::: {.g-col-12 .g-col-lg-6}
+::: {.callout-tip appearance="minimal"}
+**💡 Simplified**
+
+Arrays with more than two axes — e.g. a batch of colour images is a 4D tensor (batch × height × width × channels).
+:::
+:::
+
+::: {.g-col-12 .g-col-lg-6}
+::: {.callout-important appearance="minimal"}
+**📘 Examples & References**
+
+A 224×224 RGB image batch of 32 is shape $(32,224,224,3)$.
+:::
+:::
+
+::: {.g-col-12 .g-col-lg-6}
+::: {.callout-warning appearance="minimal"}
+**⚙️ Real-World Values & Applications**
+
+Every deep-learning framework (PyTorch, TensorFlow) is a tensor engine; attention works on 4D tensors; `einsum` expresses complex contractions concisely.
+:::
+:::
+
+:::
+
+:::
+
+:::
+
+# ∂ Calculus & Numerical Methods
+
+::: {.panel-tabset .nav-pills}
+
+## Foundations
+
+::: {.panel-tabset}
+
+#### Limits
+
+::: {.grid}
+
+::: {.g-col-12 .g-col-lg-6}
+::: {.callout-note appearance="minimal"}
+**🧮 Mathematical**
+
+$\lim_{x\to a}f(x)=L$ — $f$ gets arbitrarily close to $L$ as $x\to a$. Basis of continuity and derivatives.
+:::
+:::
+
+::: {.g-col-12 .g-col-lg-6}
+::: {.callout-tip appearance="minimal"}
+**💡 Simplified**
+
+What value a function is heading toward as the input approaches a point — even if it never quite arrives.
+:::
+:::
+
+::: {.g-col-12 .g-col-lg-6}
+::: {.callout-important appearance="minimal"}
+**📘 Examples & References**
+
+$\lim_{x	o0}rac{\sin x}{x}=1$.
+:::
+:::
+
+::: {.g-col-12 .g-col-lg-6}
+::: {.callout-warning appearance="minimal"}
+**⚙️ Real-World Values & Applications**
+
+Underlies why gradient descent steps work; learning-rate decay 'in the limit'; defining derivatives that power backprop.
+:::
+:::
+
+:::
+
+#### Derivatives
+
+::: {.grid}
+
+::: {.g-col-12 .g-col-lg-6}
+::: {.callout-note appearance="minimal"}
+**🧮 Mathematical**
+
+$f'(x)=\lim_{h\to0}\frac{f(x+h)-f(x)}{h}$ — instantaneous rate of change / slope of the tangent.
+:::
+:::
+
+::: {.g-col-12 .g-col-lg-6}
+::: {.callout-tip appearance="minimal"}
+**💡 Simplified**
+
+How fast the output changes when you nudge the input — the steepness right here.
+:::
+:::
+
+::: {.g-col-12 .g-col-lg-6}
+::: {.callout-important appearance="minimal"}
+**📘 Examples & References**
+
+$rac{d}{dx}x^2=2x$; at $x=3$ slope is 6.
+:::
+:::
+
+::: {.g-col-12 .g-col-lg-6}
+::: {.callout-warning appearance="minimal"}
+**⚙️ Real-World Values & Applications**
+
+The gradient (vector of derivatives) tells each weight which way and how much to move to reduce loss.
+:::
+:::
+
+:::
+
+#### Partial Derivatives
+
+::: {.grid}
+
+::: {.g-col-12 .g-col-lg-6}
+::: {.callout-note appearance="minimal"}
+**🧮 Mathematical**
+
+$\frac{\partial f}{\partial x_i}$ — derivative w.r.t. one variable, holding the others fixed.
+:::
+:::
+
+::: {.g-col-12 .g-col-lg-6}
+::: {.callout-tip appearance="minimal"}
+**💡 Simplified**
+
+Change in the output when you wiggle just one input and freeze the rest.
+:::
+:::
+
+::: {.g-col-12 .g-col-lg-6}
+::: {.callout-important appearance="minimal"}
+**📘 Examples & References**
+
+For $f=x^2y$: $rac{\partial f}{\partial x}=2xy$, $rac{\partial f}{\partial y}=x^2$.
+:::
+:::
+
+::: {.g-col-12 .g-col-lg-6}
+::: {.callout-warning appearance="minimal"}
+**⚙️ Real-World Values & Applications**
+
+Neural nets have millions of parameters; each weight update uses the partial derivative of the loss w.r.t. that weight.
+:::
+:::
+
+:::
+
+#### Chain Rule
+
+::: {.grid}
+
+::: {.g-col-12 .g-col-lg-6}
+::: {.callout-note appearance="minimal"}
+**🧮 Mathematical**
+
+$\frac{d}{dx}f(g(x))=f'(g(x))\,g'(x)$. Generalises to compositions of many functions.
+:::
+:::
+
+::: {.g-col-12 .g-col-lg-6}
+::: {.callout-tip appearance="minimal"}
+**💡 Simplified**
+
+To differentiate nested functions, multiply the slopes of each layer together, outside-in.
+:::
+:::
+
+::: {.g-col-12 .g-col-lg-6}
+::: {.callout-important appearance="minimal"}
+**📘 Examples & References**
+
+$rac{d}{dx}\sin(x^2)=\cos(x^2)\cdot2x$.
+:::
+:::
+
+::: {.g-col-12 .g-col-lg-6}
+::: {.callout-warning appearance="minimal"}
+**⚙️ Real-World Values & Applications**
+
+Backpropagation IS the chain rule applied layer by layer through a deep network — the single most important formula in deep learning.
+:::
+:::
+
+:::
+
+#### Gradients
+
+::: {.grid}
+
+::: {.g-col-12 .g-col-lg-6}
+::: {.callout-note appearance="minimal"}
+**🧮 Mathematical**
+
+$\nabla f=\left[\frac{\partial f}{\partial x_1},\dots,\frac{\partial f}{\partial x_n}\right]$ — points in the direction of steepest ascent.
+:::
+:::
+
+::: {.g-col-12 .g-col-lg-6}
+::: {.callout-tip appearance="minimal"}
+**💡 Simplified**
+
+An arrow pointing toward the fastest increase; step the opposite way to go downhill.
+:::
+:::
+
+::: {.g-col-12 .g-col-lg-6}
+::: {.callout-important appearance="minimal"}
+**📘 Examples & References**
+
+For $f=x^2+y^2$, $
+abla f=[2x,2y]$.
+:::
+:::
+
+::: {.g-col-12 .g-col-lg-6}
+::: {.callout-warning appearance="minimal"}
+**⚙️ Real-World Values & Applications**
+
+Gradient descent moves parameters along $-
+abla\!\mathcal L$; the whole training loop is 'compute gradient, take a step'.
+:::
+:::
+
+:::
+
+#### Jacobian
+
+::: {.grid}
+
+::: {.g-col-12 .g-col-lg-6}
+::: {.callout-note appearance="minimal"}
+**🧮 Mathematical**
+
+Matrix of all first-order partials of a vector-valued function: $J_{ij}=\frac{\partial f_i}{\partial x_j}$.
+:::
+:::
+
+::: {.g-col-12 .g-col-lg-6}
+::: {.callout-tip appearance="minimal"}
+**💡 Simplified**
+
+A table of how every output reacts to every input — the gradient generalised to many outputs.
+:::
+:::
+
+::: {.g-col-12 .g-col-lg-6}
+::: {.callout-important appearance="minimal"}
+**📘 Examples & References**
+
+For $f(x,y)=[x^2,\,xy]$, $J=egin{bmatrix}2x&0\y&x\end{bmatrix}$.
+:::
+:::
+
+::: {.g-col-12 .g-col-lg-6}
+::: {.callout-warning appearance="minimal"}
+**⚙️ Real-World Values & Applications**
+
+Normalising flows use $\log|\det J|$; sensitivity analysis; vector-Jacobian products are how autodiff frameworks run backprop efficiently.
+:::
+:::
+
+:::
+
+#### Hessian
+
+::: {.grid}
+
+::: {.g-col-12 .g-col-lg-6}
+::: {.callout-note appearance="minimal"}
+**🧮 Mathematical**
+
+Matrix of second-order partials $H_{ij}=\frac{\partial^2 f}{\partial x_i\partial x_j}$ — describes curvature.
+:::
+:::
+
+::: {.g-col-12 .g-col-lg-6}
+::: {.callout-tip appearance="minimal"}
+**💡 Simplified**
+
+Tells you how the slope itself is changing — whether you're in a bowl, a dome, or a saddle.
+:::
+:::
+
+::: {.g-col-12 .g-col-lg-6}
+::: {.callout-important appearance="minimal"}
+**📘 Examples & References**
+
+For $f=x^2+y^2$, $H=egin{bmatrix}2&0\0&2\end{bmatrix}$ (positive definite → a bowl).
+:::
+:::
+
+::: {.g-col-12 .g-col-lg-6}
+::: {.callout-warning appearance="minimal"}
+**⚙️ Real-World Values & Applications**
+
+Second-order optimisers (Newton, L-BFGS) use it; its eigenvalues diagnose saddle points that slow deep-net training.
+:::
+:::
+
+:::
+
+#### Taylor Series
+
+::: {.grid}
+
+::: {.g-col-12 .g-col-lg-6}
+::: {.callout-note appearance="minimal"}
+**🧮 Mathematical**
+
+$f(x)\approx f(a)+f'(a)(x-a)+\frac{f''(a)}{2}(x-a)^2+\dots$
+:::
+:::
+
+::: {.g-col-12 .g-col-lg-6}
+::: {.callout-tip appearance="minimal"}
+**💡 Simplified**
+
+Approximate any smooth curve near a point using a polynomial built from its derivatives.
+:::
+:::
+
+::: {.g-col-12 .g-col-lg-6}
+::: {.callout-important appearance="minimal"}
+**📘 Examples & References**
+
+$e^xpprox1+x+rac{x^2}{2}$ near 0.
+:::
+:::
+
+::: {.g-col-12 .g-col-lg-6}
+::: {.callout-warning appearance="minimal"}
+**⚙️ Real-World Values & Applications**
+
+Justifies gradient descent (first-order) and Newton's method (second-order); approximations in numerical solvers and physics-informed nets.
+:::
+:::
+
+:::
+
+#### Integration
+
+::: {.grid}
+
+::: {.g-col-12 .g-col-lg-6}
+::: {.callout-note appearance="minimal"}
+**🧮 Mathematical**
+
+$\int_a^b f(x)\,dx$ — signed area under the curve; inverse of differentiation (FTC).
+:::
+:::
+
+::: {.g-col-12 .g-col-lg-6}
+::: {.callout-tip appearance="minimal"}
+**💡 Simplified**
+
+Add up infinitely many thin slices to get a total — area, accumulated quantity, or probability mass.
+:::
+:::
+
+::: {.g-col-12 .g-col-lg-6}
+::: {.callout-important appearance="minimal"}
+**📘 Examples & References**
+
+$\int_0^1 x\,dx=	frac12$.
+:::
+:::
+
+::: {.g-col-12 .g-col-lg-6}
+::: {.callout-warning appearance="minimal"}
+**⚙️ Real-World Values & Applications**
+
+Expected values and probabilities are integrals; ELBO in variational autoencoders; diffusion models integrate an SDE to generate images.
+:::
+:::
+
+:::
+
+#### Numerical Differentiation
+
+::: {.grid}
+
+::: {.g-col-12 .g-col-lg-6}
+::: {.callout-note appearance="minimal"}
+**🧮 Mathematical**
+
+Approximate derivatives from samples: forward $\frac{f(x+h)-f(x)}{h}$ or central $\frac{f(x+h)-f(x-h)}{2h}$ (more accurate).
+:::
+:::
+
+::: {.g-col-12 .g-col-lg-6}
+::: {.callout-tip appearance="minimal"}
+**💡 Simplified**
+
+Estimate a slope by measuring the function at nearby points — no formula needed.
+:::
+:::
+
+::: {.g-col-12 .g-col-lg-6}
+::: {.callout-important appearance="minimal"}
+**📘 Examples & References**
+
+With $h=0.01$, central difference of $x^2$ at 3 ≈ 6.00.
+:::
+:::
+
+::: {.g-col-12 .g-col-lg-6}
+::: {.callout-warning appearance="minimal"}
+**⚙️ Real-World Values & Applications**
+
+Gradient-checking to verify hand-written backprop; finite-difference sensitivities when analytic gradients are unavailable.
+:::
+:::
+
+:::
+
+#### Numerical Optimization
+
+::: {.grid}
+
+::: {.g-col-12 .g-col-lg-6}
+::: {.callout-note appearance="minimal"}
+**🧮 Mathematical**
+
+Iterative methods to minimise $f$ without closed form: gradient descent, Newton, quasi-Newton (BFGS), trust-region.
+:::
+:::
+
+::: {.g-col-12 .g-col-lg-6}
+::: {.callout-tip appearance="minimal"}
+**💡 Simplified**
+
+When you can't solve for the best answer directly, you search for it step by step, improving each iteration.
+:::
+:::
+
+::: {.g-col-12 .g-col-lg-6}
+::: {.callout-important appearance="minimal"}
+**📘 Examples & References**
+
+Minimising a non-linear least-squares loss with Levenberg–Marquardt.
+:::
+:::
+
+::: {.g-col-12 .g-col-lg-6}
+::: {.callout-warning appearance="minimal"}
+**⚙️ Real-World Values & Applications**
+
+Training every neural network; calibrating physics models; portfolio optimisation; hyperparameter search.
+:::
+:::
+
+:::
+
+:::
+
+:::
+
+# ⤵ Optimization
+
+::: {.panel-tabset .nav-pills}
+
+## Objectives
+
+::: {.panel-tabset}
+
+#### Objective Functions
+
+::: {.grid}
+
+::: {.g-col-12 .g-col-lg-6}
+::: {.callout-note appearance="minimal"}
+**🧮 Mathematical**
+
+The scalar $f(\theta)$ being minimised or maximised over parameters $\theta$.
+:::
+:::
+
+::: {.g-col-12 .g-col-lg-6}
+::: {.callout-tip appearance="minimal"}
+**💡 Simplified**
+
+The single 'score' you're trying to make as good as possible — the goal the whole search aims at.
+:::
+:::
+
+::: {.g-col-12 .g-col-lg-6}
+::: {.callout-important appearance="minimal"}
+**📘 Examples & References**
+
+Maximise reward in RL; minimise prediction error in supervised learning.
+:::
+:::
+
+::: {.g-col-12 .g-col-lg-6}
+::: {.callout-warning appearance="minimal"}
+**⚙️ Real-World Values & Applications**
+
+Defines what 'good' means for a model — choosing it wrong (e.g. optimising clicks not satisfaction) causes misaligned systems.
+:::
+:::
+
+:::
+
+#### Loss Functions
+
+::: {.grid}
+
+::: {.g-col-12 .g-col-lg-6}
+::: {.callout-note appearance="minimal"}
+**🧮 Mathematical**
+
+Objective measuring error. MSE $\frac1n\sum(y-\hat y)^2$; cross-entropy $-\sum y\log\hat y$.
+:::
+:::
+
+::: {.g-col-12 .g-col-lg-6}
+::: {.callout-tip appearance="minimal"}
+**💡 Simplified**
+
+A number that's big when the model is wrong and small when it's right; training pushes it down.
+:::
+:::
+
+::: {.g-col-12 .g-col-lg-6}
+::: {.callout-important appearance="minimal"}
+**📘 Examples & References**
+
+Cross-entropy for classification, MSE for regression, contrastive loss for embeddings.
+:::
+:::
+
+::: {.g-col-12 .g-col-lg-6}
+::: {.callout-warning appearance="minimal"}
+**⚙️ Real-World Values & Applications**
+
+Choice of loss shapes behaviour: MSE punishes outliers hard; cross-entropy suits probabilities; focal loss handles class imbalance in detection.
+:::
+:::
+
+:::
+
+#### Convex Optimization
+
+::: {.grid}
+
+::: {.g-col-12 .g-col-lg-6}
+::: {.callout-note appearance="minimal"}
+**🧮 Mathematical**
+
+Objective where any local minimum is global; the function lies below its chords ($f''\geq0$).
+:::
+:::
+
+::: {.g-col-12 .g-col-lg-6}
+::: {.callout-tip appearance="minimal"}
+**💡 Simplified**
+
+A single smooth valley — wherever you start rolling downhill you reach the one true bottom.
+:::
+:::
+
+::: {.g-col-12 .g-col-lg-6}
+::: {.callout-important appearance="minimal"}
+**📘 Examples & References**
+
+Linear/logistic regression and SVMs are convex.
+:::
+:::
+
+::: {.g-col-12 .g-col-lg-6}
+::: {.callout-warning appearance="minimal"}
+**⚙️ Real-World Values & Applications**
+
+Convex problems solve reliably and provably — used in finance, control, and as the well-behaved core inside larger ML systems.
+:::
+:::
+
+:::
+
+#### Non-Convex Optimization
+
+::: {.grid}
+
+::: {.g-col-12 .g-col-lg-6}
+::: {.callout-note appearance="minimal"}
+**🧮 Mathematical**
+
+Multiple local minima, saddle points, plateaus. No global-optimum guarantee.
+:::
+:::
+
+::: {.g-col-12 .g-col-lg-6}
+::: {.callout-tip appearance="minimal"}
+**💡 Simplified**
+
+A bumpy mountain range full of dips — you might settle in a 'good enough' valley, not the deepest one.
+:::
+:::
+
+::: {.g-col-12 .g-col-lg-6}
+::: {.callout-important appearance="minimal"}
+**📘 Examples & References**
+
+Every deep neural network loss surface is non-convex.
+:::
+:::
+
+::: {.g-col-12 .g-col-lg-6}
+::: {.callout-warning appearance="minimal"}
+**⚙️ Real-World Values & Applications**
+
+Deep learning works anyway because in high dimensions most local minima are nearly as good as the global one — and SGD's noise escapes bad spots.
+:::
+:::
+
+:::
+
+:::
+
+## Gradient Descent
+
+::: {.panel-tabset}
+
+#### Batch Gradient Descent
+
+::: {.grid}
+
+::: {.g-col-12 .g-col-lg-6}
+::: {.callout-note appearance="minimal"}
+**🧮 Mathematical**
+
+$\theta\leftarrow\theta-\eta\,\nabla_\theta\mathcal L(\text{whole dataset})$.
+:::
+:::
+
+::: {.g-col-12 .g-col-lg-6}
+::: {.callout-tip appearance="minimal"}
+**💡 Simplified**
+
+Look at every example, average the advice, then take one careful step. Accurate but slow.
+:::
+:::
+
+::: {.g-col-12 .g-col-lg-6}
+::: {.callout-important appearance="minimal"}
+**📘 Examples & References**
+
+Used when datasets fit in memory and a smooth path matters.
+:::
+:::
+
+::: {.g-col-12 .g-col-lg-6}
+::: {.callout-warning appearance="minimal"}
+**⚙️ Real-World Values & Applications**
+
+Rare for large data (one step needs a full pass); used in classical ML and as a baseline.
+:::
+:::
+
+:::
+
+#### SGD
+
+::: {.grid}
+
+::: {.g-col-12 .g-col-lg-6}
+::: {.callout-note appearance="minimal"}
+**🧮 Mathematical**
+
+Update from one random example: $\theta\leftarrow\theta-\eta\,\nabla_\theta\mathcal L(x_i)$.
+:::
+:::
+
+::: {.g-col-12 .g-col-lg-6}
+::: {.callout-tip appearance="minimal"}
+**💡 Simplified**
+
+Take a step after every single example — noisy and jittery, but fast and able to escape traps.
+:::
+:::
+
+::: {.g-col-12 .g-col-lg-6}
+::: {.callout-important appearance="minimal"}
+**📘 Examples & References**
+
+Robbins–Monro stochastic approximation (1951).
+:::
+:::
+
+::: {.g-col-12 .g-col-lg-6}
+::: {.callout-warning appearance="minimal"}
+**⚙️ Real-World Values & Applications**
+
+The noise acts as a regulariser; foundation of modern training, though pure single-sample SGD is now usually replaced by mini-batches.
+:::
+:::
+
+:::
+
+#### Mini-Batch SGD
+
+::: {.grid}
+
+::: {.g-col-12 .g-col-lg-6}
+::: {.callout-note appearance="minimal"}
+**🧮 Mathematical**
+
+Average the gradient over a batch of $B$ examples (typ. 32–1024), then step.
+:::
+:::
+
+::: {.g-col-12 .g-col-lg-6}
+::: {.callout-tip appearance="minimal"}
+**💡 Simplified**
+
+Compromise: look at a small handful each step — stable enough, and perfectly suited to GPU parallelism.
+:::
+:::
+
+::: {.g-col-12 .g-col-lg-6}
+::: {.callout-important appearance="minimal"}
+**📘 Examples & References**
+
+Batch size 256 is a common default.
+:::
+:::
+
+::: {.g-col-12 .g-col-lg-6}
+::: {.callout-warning appearance="minimal"}
+**⚙️ Real-World Values & Applications**
+
+The actual workhorse of deep learning; batch size trades gradient noise vs hardware throughput and interacts with learning rate.
+:::
+:::
+
+:::
+
+:::
+
+## Optimizers
+
+::: {.panel-tabset}
+
+#### Momentum
+
+::: {.grid}
+
+::: {.g-col-12 .g-col-lg-6}
+::: {.callout-note appearance="minimal"}
+**🧮 Mathematical**
+
+$v\leftarrow\beta v+\nabla\mathcal L;\;\theta\leftarrow\theta-\eta v$, $\beta\approx0.9$.
+:::
+:::
+
+::: {.g-col-12 .g-col-lg-6}
+::: {.callout-tip appearance="minimal"}
+**💡 Simplified**
+
+Build up speed downhill like a rolling ball — push through small bumps and flat spots.
+:::
+:::
+
+::: {.g-col-12 .g-col-lg-6}
+::: {.callout-important appearance="minimal"}
+**📘 Examples & References**
+
+Polyak's heavy-ball method.
+:::
+:::
+
+::: {.g-col-12 .g-col-lg-6}
+::: {.callout-warning appearance="minimal"}
+**⚙️ Real-World Values & Applications**
+
+Speeds convergence in ravines; standard in training CNNs (SGD+momentum often beats fancier optimisers for vision).
+:::
+:::
+
+:::
+
+#### Nesterov Momentum
+
+::: {.grid}
+
+::: {.g-col-12 .g-col-lg-6}
+::: {.callout-note appearance="minimal"}
+**🧮 Mathematical**
+
+Look ahead: evaluate the gradient at $\theta-\eta\beta v$ before updating.
+:::
+:::
+
+::: {.g-col-12 .g-col-lg-6}
+::: {.callout-tip appearance="minimal"}
+**💡 Simplified**
+
+Peek where momentum is about to carry you and correct early — a smarter, anticipatory ball.
+:::
+:::
+
+::: {.g-col-12 .g-col-lg-6}
+::: {.callout-important appearance="minimal"}
+**📘 Examples & References**
+
+Nesterov accelerated gradient (1983).
+:::
+:::
+
+::: {.g-col-12 .g-col-lg-6}
+::: {.callout-warning appearance="minimal"}
+**⚙️ Real-World Values & Applications**
+
+Slightly faster, more stable convergence than plain momentum; available in every framework as a flag.
+:::
+:::
+
+:::
+
+#### AdaGrad
+
+::: {.grid}
+
+::: {.g-col-12 .g-col-lg-6}
+::: {.callout-note appearance="minimal"}
+**🧮 Mathematical**
+
+Per-parameter LR scaled by $1/\sqrt{\sum g^2}$ — accumulates squared gradients.
+:::
+:::
+
+::: {.g-col-12 .g-col-lg-6}
+::: {.callout-tip appearance="minimal"}
+**💡 Simplified**
+
+Give rarely-updated parameters bigger steps and frequently-updated ones smaller steps.
+:::
+:::
+
+::: {.g-col-12 .g-col-lg-6}
+::: {.callout-important appearance="minimal"}
+**📘 Examples & References**
+
+Great for sparse features (text, recommendations).
+:::
+:::
+
+::: {.g-col-12 .g-col-lg-6}
+::: {.callout-warning appearance="minimal"}
+**⚙️ Real-World Values & Applications**
+
+Strong early, but the ever-growing denominator shrinks the LR to zero — which motivated RMSProp/Adam.
+:::
+:::
+
+:::
+
+#### RMSProp
+
+::: {.grid}
+
+::: {.g-col-12 .g-col-lg-6}
+::: {.callout-note appearance="minimal"}
+**🧮 Mathematical**
+
+Exponential moving average of squared gradients: $E[g^2]\leftarrow\gamma E[g^2]+(1-\gamma)g^2$; LR $\propto 1/\sqrt{E[g^2]}$.
+:::
+:::
+
+::: {.g-col-12 .g-col-lg-6}
+::: {.callout-tip appearance="minimal"}
+**💡 Simplified**
+
+Like AdaGrad but forgets old gradients, so the step size doesn't die out.
+:::
+:::
+
+::: {.g-col-12 .g-col-lg-6}
+::: {.callout-important appearance="minimal"}
+**📘 Examples & References**
+
+Proposed by Hinton in a Coursera lecture.
+:::
+:::
+
+::: {.g-col-12 .g-col-lg-6}
+::: {.callout-warning appearance="minimal"}
+**⚙️ Real-World Values & Applications**
+
+Default for RNNs and reinforcement learning; handles non-stationary objectives well.
+:::
+:::
+
+:::
+
+#### Adam
+
+::: {.grid}
+
+::: {.g-col-12 .g-col-lg-6}
+::: {.callout-note appearance="minimal"}
+**🧮 Mathematical**
+
+Combines momentum ($m$) and RMSProp ($v$) with bias correction: $\theta\leftarrow\theta-\eta\,\hat m/(\sqrt{\hat v}+\epsilon)$.
+:::
+:::
+
+::: {.g-col-12 .g-col-lg-6}
+::: {.callout-tip appearance="minimal"}
+**💡 Simplified**
+
+Adaptive step size AND momentum together — robust defaults that 'just work' on most problems.
+:::
+:::
+
+::: {.g-col-12 .g-col-lg-6}
+::: {.callout-important appearance="minimal"}
+**📘 Examples & References**
+
+Kingma & Ba 2014; defaults $eta_1=0.9,eta_2=0.999,\eta=10^{-3}$.
+:::
+:::
+
+::: {.g-col-12 .g-col-lg-6}
+::: {.callout-warning appearance="minimal"}
+**⚙️ Real-World Values & Applications**
+
+The most widely used optimiser in deep learning; trains transformers, GANs, and most published models.
+:::
+:::
+
+:::
+
+#### AdamW
+
+::: {.grid}
+
+::: {.g-col-12 .g-col-lg-6}
+::: {.callout-note appearance="minimal"}
+**🧮 Mathematical**
+
+Adam with *decoupled* weight decay: regularisation applied directly to weights, not folded into the gradient.
+:::
+:::
+
+::: {.g-col-12 .g-col-lg-6}
+::: {.callout-tip appearance="minimal"}
+**💡 Simplified**
+
+Adam done right — keeps the 'shrink the weights' penalty separate so it actually works as intended.
+:::
+:::
+
+::: {.g-col-12 .g-col-lg-6}
+::: {.callout-important appearance="minimal"}
+**📘 Examples & References**
+
+Loshchilov & Hutter 2017.
+:::
+:::
+
+::: {.g-col-12 .g-col-lg-6}
+::: {.callout-warning appearance="minimal"}
+**⚙️ Real-World Values & Applications**
+
+The standard optimiser for training large language models (BERT, GPT, LLaMA) — better generalisation than vanilla Adam.
+:::
+:::
+
+:::
+
+#### Learning Rate Scheduling
+
+::: {.grid}
+
+::: {.g-col-12 .g-col-lg-6}
+::: {.callout-note appearance="minimal"}
+**🧮 Mathematical**
+
+Vary $\eta$ over training: step decay, cosine annealing $\eta_t=\tfrac12\eta_0(1+\cos(\pi t/T))$, warmup.
+:::
+:::
+
+::: {.g-col-12 .g-col-lg-6}
+::: {.callout-tip appearance="minimal"}
+**💡 Simplified**
+
+Start cautious, go fast, then slow down to settle — like easing off the gas near your destination.
+:::
+:::
+
+::: {.g-col-12 .g-col-lg-6}
+::: {.callout-important appearance="minimal"}
+**📘 Examples & References**
+
+Warmup + cosine decay is standard for transformers.
+:::
+:::
+
+::: {.g-col-12 .g-col-lg-6}
+::: {.callout-warning appearance="minimal"}
+**⚙️ Real-World Values & Applications**
+
+Critical for LLM training stability; warmup prevents early divergence; cosine decay squeezes out final accuracy.
+:::
+:::
+
+:::
+
+#### Weight Decay
+
+::: {.grid}
+
+::: {.g-col-12 .g-col-lg-6}
+::: {.callout-note appearance="minimal"}
+**🧮 Mathematical**
+
+Add $\frac{\lambda}{2}\lVert\theta\rVert^2$ to the loss (L2) → gradient gains $\lambda\theta$, shrinking weights.
+:::
+:::
+
+::: {.g-col-12 .g-col-lg-6}
+::: {.callout-tip appearance="minimal"}
+**💡 Simplified**
+
+Gently pull every weight toward zero so the model stays simple and generalises.
+:::
+:::
+
+::: {.g-col-12 .g-col-lg-6}
+::: {.callout-important appearance="minimal"}
+**📘 Examples & References**
+
+$\lambda=0.01$ is a common value.
+:::
+:::
+
+::: {.g-col-12 .g-col-lg-6}
+::: {.callout-warning appearance="minimal"}
+**⚙️ Real-World Values & Applications**
+
+Reduces overfitting in nearly every trained model; in AdamW it's the main regulariser for LLMs.
+:::
+:::
+
+:::
+
+#### Early Stopping
+
+::: {.grid}
+
+::: {.g-col-12 .g-col-lg-6}
+::: {.callout-note appearance="minimal"}
+**🧮 Mathematical**
+
+Halt training when validation loss stops improving for $p$ epochs (patience).
+:::
+:::
+
+::: {.g-col-12 .g-col-lg-6}
+::: {.callout-tip appearance="minimal"}
+**💡 Simplified**
+
+Quit while you're ahead — stop before the model starts memorising the training set.
+:::
+:::
+
+::: {.g-col-12 .g-col-lg-6}
+::: {.callout-important appearance="minimal"}
+**📘 Examples & References**
+
+Patience of 5–10 epochs is typical.
+:::
+:::
+
+::: {.g-col-12 .g-col-lg-6}
+::: {.callout-warning appearance="minimal"}
+**⚙️ Real-World Values & Applications**
+
+Cheap, effective overfitting guard; saves compute; used everywhere from Kaggle to production pipelines.
+:::
+:::
+
+:::
+
+:::
+
+## Tuning
+
+::: {.panel-tabset}
+
+#### Hyperparameter Optimization
+
+::: {.grid}
+
+::: {.g-col-12 .g-col-lg-6}
+::: {.callout-note appearance="minimal"}
+**🧮 Mathematical**
+
+Search over non-learned settings (LR, depth, batch size) using grid, random, or model-based search.
+:::
+:::
+
+::: {.g-col-12 .g-col-lg-6}
+::: {.callout-tip appearance="minimal"}
+**💡 Simplified**
+
+Tune the 'knobs' you set by hand (not learned by gradient) to get the best model.
+:::
+:::
+
+::: {.g-col-12 .g-col-lg-6}
+::: {.callout-important appearance="minimal"}
+**📘 Examples & References**
+
+Random search often beats grid search (Bergstra & Bengio 2012).
+:::
+:::
+
+::: {.g-col-12 .g-col-lg-6}
+::: {.callout-warning appearance="minimal"}
+**⚙️ Real-World Values & Applications**
+
+Optuna/Ray Tune in practice; can change accuracy by several points; the difference between a mediocre and a winning model.
+:::
+:::
+
+:::
+
+#### Bayesian Optimization
+
+::: {.grid}
+
+::: {.g-col-12 .g-col-lg-6}
+::: {.callout-note appearance="minimal"}
+**🧮 Mathematical**
+
+Model the objective with a surrogate (Gaussian process); pick next trial by maximising an acquisition function (e.g. expected improvement).
+:::
+:::
+
+::: {.g-col-12 .g-col-lg-6}
+::: {.callout-tip appearance="minimal"}
+**💡 Simplified**
+
+Learn a cheap guess of how settings perform, then test the most promising one next — smart, sample-efficient search.
+:::
+:::
+
+::: {.g-col-12 .g-col-lg-6}
+::: {.callout-important appearance="minimal"}
+**📘 Examples & References**
+
+GPyOpt, Optuna's TPE, Google Vizier.
+:::
+:::
+
+::: {.g-col-12 .g-col-lg-6}
+::: {.callout-warning appearance="minimal"}
+**⚙️ Real-World Values & Applications**
+
+Tunes expensive models (each trial = hours of GPU) with few trials; used for AutoML and even hardware/chemistry design.
+:::
+:::
+
+:::
+
+:::
+
+:::
+
+# 📊 Probability & Statistics
+
+::: {.panel-tabset .nav-pills}
+
+## Foundations
+
+::: {.panel-tabset}
+
+#### Random Variables
+
+::: {.grid}
+
+::: {.g-col-12 .g-col-lg-6}
+::: {.callout-note appearance="minimal"}
+**🧮 Mathematical**
+
+A function mapping outcomes to numbers. Discrete (PMF $p(x)$) or continuous (PDF $f(x)$, with $\int f=1$).
+:::
+:::
+
+::: {.g-col-12 .g-col-lg-6}
+::: {.callout-tip appearance="minimal"}
+**💡 Simplified**
+
+A number whose value depends on chance — like the result of a die roll or tomorrow's temperature.
+:::
+:::
+
+::: {.g-col-12 .g-col-lg-6}
+::: {.callout-important appearance="minimal"}
+**📘 Examples & References**
+
+$X$ = sum of two dice, ranging 2–12.
+:::
+:::
+
+::: {.g-col-12 .g-col-lg-6}
+::: {.callout-warning appearance="minimal"}
+**⚙️ Real-World Values & Applications**
+
+Model inputs, labels, and predictions as random variables; uncertainty estimates; sampling in generative models.
+:::
+:::
+
+:::
+
+:::
+
+## Probability Distributions
+
+::: {.panel-tabset}
+
+#### Bernoulli
+
+::: {.grid}
+
+::: {.g-col-12 .g-col-lg-6}
+::: {.callout-note appearance="minimal"}
+**🧮 Mathematical**
+
+Single yes/no trial: $P(X=1)=p,\;P(X=0)=1-p$. Mean $p$, variance $p(1-p)$.
+:::
+:::
+
+::: {.g-col-12 .g-col-lg-6}
+::: {.callout-tip appearance="minimal"}
+**💡 Simplified**
+
+One coin flip with a possibly-biased coin.
+:::
+:::
+
+::: {.g-col-12 .g-col-lg-6}
+::: {.callout-important appearance="minimal"}
+**📘 Examples & References**
+
+$p=0.5$ for a fair coin.
+:::
+:::
+
+::: {.g-col-12 .g-col-lg-6}
+::: {.callout-warning appearance="minimal"}
+**⚙️ Real-World Values & Applications**
+
+Binary classification output (spam/not-spam); each pixel of a binarised image; click/no-click modelling.
+:::
+:::
+
+:::
+
+#### Binomial
+
+::: {.grid}
+
+::: {.g-col-12 .g-col-lg-6}
+::: {.callout-note appearance="minimal"}
+**🧮 Mathematical**
+
+$P(X=k)=\binom{n}{k}p^k(1-p)^{n-k}$ — successes in $n$ Bernoulli trials. Mean $np$.
+:::
+:::
+
+::: {.g-col-12 .g-col-lg-6}
+::: {.callout-tip appearance="minimal"}
+**💡 Simplified**
+
+How many heads in $n$ coin flips.
+:::
+:::
+
+::: {.g-col-12 .g-col-lg-6}
+::: {.callout-important appearance="minimal"}
+**📘 Examples & References**
+
+10 flips, $p=0.5$: expect 5 heads.
+:::
+:::
+
+::: {.g-col-12 .g-col-lg-6}
+::: {.callout-warning appearance="minimal"}
+**⚙️ Real-World Values & Applications**
+
+Conversion counts in A/B tests; defect counts in QA; number of correct predictions out of $n$.
+:::
+:::
+
+:::
+
+#### Poisson
+
+::: {.grid}
+
+::: {.g-col-12 .g-col-lg-6}
+::: {.callout-note appearance="minimal"}
+**🧮 Mathematical**
+
+$P(X=k)=\frac{\lambda^k e^{-\lambda}}{k!}$ — rare events in a fixed interval. Mean = variance = $\lambda$.
+:::
+:::
+
+::: {.g-col-12 .g-col-lg-6}
+::: {.callout-tip appearance="minimal"}
+**💡 Simplified**
+
+How many rare things happen in a window — calls per hour, typos per page.
+:::
+:::
+
+::: {.g-col-12 .g-col-lg-6}
+::: {.callout-important appearance="minimal"}
+**📘 Examples & References**
+
+$\lambda=3$ emails/hour.
+:::
+:::
+
+::: {.g-col-12 .g-col-lg-6}
+::: {.callout-warning appearance="minimal"}
+**⚙️ Real-World Values & Applications**
+
+Modelling arrival rates (web traffic, network packets), count data in NLP, queueing systems.
+:::
+:::
+
+:::
+
+#### Uniform
+
+::: {.grid}
+
+::: {.g-col-12 .g-col-lg-6}
+::: {.callout-note appearance="minimal"}
+**🧮 Mathematical**
+
+All outcomes equally likely. Continuous on $[a,b]$: $f(x)=\frac{1}{b-a}$.
+:::
+:::
+
+::: {.g-col-12 .g-col-lg-6}
+::: {.callout-tip appearance="minimal"}
+**💡 Simplified**
+
+Total fairness — every value in the range is just as probable.
+:::
+:::
+
+::: {.g-col-12 .g-col-lg-6}
+::: {.callout-important appearance="minimal"}
+**📘 Examples & References**
+
+A random float in $[0,1)$.
+:::
+:::
+
+::: {.g-col-12 .g-col-lg-6}
+::: {.callout-warning appearance="minimal"}
+**⚙️ Real-World Values & Applications**
+
+Random weight initialisation, dropout masks, random seeds, sampling for Monte-Carlo estimates.
+:::
+:::
+
+:::
+
+#### Gaussian
+
+::: {.grid}
+
+::: {.g-col-12 .g-col-lg-6}
+::: {.callout-note appearance="minimal"}
+**🧮 Mathematical**
+
+$f(x)=\frac{1}{\sqrt{2\pi\sigma^2}}e^{-(x-\mu)^2/2\sigma^2}$. The bell curve; CLT makes it ubiquitous.
+:::
+:::
+
+::: {.g-col-12 .g-col-lg-6}
+::: {.callout-tip appearance="minimal"}
+**💡 Simplified**
+
+The classic bell curve — most values cluster near the average, few are far out.
+:::
+:::
+
+::: {.g-col-12 .g-col-lg-6}
+::: {.callout-important appearance="minimal"}
+**📘 Examples & References**
+
+Heights, measurement noise; 68% within $\pm1\sigma$.
+:::
+:::
+
+::: {.g-col-12 .g-col-lg-6}
+::: {.callout-warning appearance="minimal"}
+**⚙️ Real-World Values & Applications**
+
+Weight init, noise models, VAss latent priors, diffusion noise, Gaussian processes — the most important distribution in ML.
+:::
+:::
+
+:::
+
+:::
+
+## Moments & Relationships
+
+::: {.panel-tabset}
+
+#### Central Limit Theorem
+
+::: {.grid}
+
+::: {.g-col-12 .g-col-lg-6}
+::: {.callout-note appearance="minimal"}
+**🧮 Mathematical**
+
+Sum/mean of many i.i.d. variables → Gaussian as $n\to\infty$, regardless of original distribution.
+:::
+:::
+
+::: {.g-col-12 .g-col-lg-6}
+::: {.callout-tip appearance="minimal"}
+**💡 Simplified**
+
+Average enough random things together and the result looks like a bell curve — no matter what you started with.
+:::
+:::
+
+::: {.g-col-12 .g-col-lg-6}
+::: {.callout-important appearance="minimal"}
+**📘 Examples & References**
+
+Average of 30+ dice rolls is approximately normal.
+:::
+:::
+
+::: {.g-col-12 .g-col-lg-6}
+::: {.callout-warning appearance="minimal"}
+**⚙️ Real-World Values & Applications**
+
+Why Gaussian assumptions work so often; basis of confidence intervals and many statistical tests.
+:::
+:::
+
+:::
+
+#### Expectation
+
+::: {.grid}
+
+::: {.g-col-12 .g-col-lg-6}
+::: {.callout-note appearance="minimal"}
+**🧮 Mathematical**
+
+$E[X]=\sum x\,p(x)$ or $\int x f(x)\,dx$ — the long-run average. Linear: $E[aX+b]=aE[X]+b$.
+:::
+:::
+
+::: {.g-col-12 .g-col-lg-6}
+::: {.callout-tip appearance="minimal"}
+**💡 Simplified**
+
+The average value you'd get if you repeated the experiment forever.
+:::
+:::
+
+::: {.g-col-12 .g-col-lg-6}
+::: {.callout-important appearance="minimal"}
+**📘 Examples & References**
+
+Fair die: $E[X]=3.5$.
+:::
+:::
+
+::: {.g-col-12 .g-col-lg-6}
+::: {.callout-warning appearance="minimal"}
+**⚙️ Real-World Values & Applications**
+
+Expected loss is what training minimises; expected reward in RL; expected value drives every risk/decision calculation.
+:::
+:::
+
+:::
+
+#### Variance
+
+::: {.grid}
+
+::: {.g-col-12 .g-col-lg-6}
+::: {.callout-note appearance="minimal"}
+**🧮 Mathematical**
+
+$\operatorname{Var}(X)=E[(X-\mu)^2]=E[X^2]-\mu^2$. Spread squared; std dev $=\sqrt{\operatorname{Var}}$.
+:::
+:::
+
+::: {.g-col-12 .g-col-lg-6}
+::: {.callout-tip appearance="minimal"}
+**💡 Simplified**
+
+How spread out the values are around the average — small = consistent, large = erratic.
+:::
+:::
+
+::: {.g-col-12 .g-col-lg-6}
+::: {.callout-important appearance="minimal"}
+**📘 Examples & References**
+
+Fair die variance ≈ 2.92.
+:::
+:::
+
+::: {.g-col-12 .g-col-lg-6}
+::: {.callout-warning appearance="minimal"}
+**⚙️ Real-World Values & Applications**
+
+Bias–variance tradeoff governs over/underfitting; variance of gradients affects training stability; risk measures in finance.
+:::
+:::
+
+:::
+
+#### Covariance
+
+::: {.grid}
+
+::: {.g-col-12 .g-col-lg-6}
+::: {.callout-note appearance="minimal"}
+**🧮 Mathematical**
+
+$\operatorname{Cov}(X,Y)=E[(X-\mu_X)(Y-\mu_Y)]$ — sign shows joint direction.
+:::
+:::
+
+::: {.g-col-12 .g-col-lg-6}
+::: {.callout-tip appearance="minimal"}
+**💡 Simplified**
+
+Do two quantities tend to rise and fall together (positive) or oppositely (negative)?
+:::
+:::
+
+::: {.g-col-12 .g-col-lg-6}
+::: {.callout-important appearance="minimal"}
+**📘 Examples & References**
+
+Height and weight have positive covariance.
+:::
+:::
+
+::: {.g-col-12 .g-col-lg-6}
+::: {.callout-warning appearance="minimal"}
+**⚙️ Real-World Values & Applications**
+
+Covariance matrix drives PCA; portfolio risk; feature decorrelation and whitening.
+:::
+:::
+
+:::
+
+#### Correlation
+
+::: {.grid}
+
+::: {.g-col-12 .g-col-lg-6}
+::: {.callout-note appearance="minimal"}
+**🧮 Mathematical**
+
+$\rho=\frac{\operatorname{Cov}(X,Y)}{\sigma_X\sigma_Y}\in[-1,1]$ — scale-free strength of linear relationship.
+:::
+:::
+
+::: {.g-col-12 .g-col-lg-6}
+::: {.callout-tip appearance="minimal"}
+**💡 Simplified**
+
+Covariance normalised to a clean −1…+1 score; ±1 = perfect line, 0 = no linear link.
+:::
+:::
+
+::: {.g-col-12 .g-col-lg-6}
+::: {.callout-important appearance="minimal"}
+**📘 Examples & References**
+
+$ho=0.9$ is a strong positive relationship.
+:::
+:::
+
+::: {.g-col-12 .g-col-lg-6}
+::: {.callout-warning appearance="minimal"}
+**⚙️ Real-World Values & Applications**
+
+Feature selection, detecting redundancy/leakage, exploratory analysis — but remember correlation ≠ causation.
+:::
+:::
+
+:::
+
+:::
+
+## Inference
+
+::: {.panel-tabset}
+
+#### Sampling
+
+::: {.grid}
+
+::: {.g-col-12 .g-col-lg-6}
+::: {.callout-note appearance="minimal"}
+**🧮 Mathematical**
+
+Drawing observations from a distribution; methods include inverse-CDF, rejection, MCMC.
+:::
+:::
+
+::: {.g-col-12 .g-col-lg-6}
+::: {.callout-tip appearance="minimal"}
+**💡 Simplified**
+
+Generating example values that follow a chosen probability pattern.
+:::
+:::
+
+::: {.g-col-12 .g-col-lg-6}
+::: {.callout-important appearance="minimal"}
+**📘 Examples & References**
+
+Sampling from $\mathcal N(0,1)$ with `np.random.randn`.
+:::
+:::
+
+::: {.g-col-12 .g-col-lg-6}
+::: {.callout-warning appearance="minimal"}
+**⚙️ Real-World Values & Applications**
+
+Bootstrapping for uncertainty, mini-batch selection, generating text/images from a model's distribution.
+:::
+:::
+
+:::
+
+#### Confidence Intervals
+
+::: {.grid}
+
+::: {.g-col-12 .g-col-lg-6}
+::: {.callout-note appearance="minimal"}
+**🧮 Mathematical**
+
+Range $\bar x\pm z\frac{\sigma}{\sqrt n}$ that contains the true parameter with stated confidence (e.g. 95%).
+:::
+:::
+
+::: {.g-col-12 .g-col-lg-6}
+::: {.callout-tip appearance="minimal"}
+**💡 Simplified**
+
+A plausible range for the true value, with a stated level of trust.
+:::
+:::
+
+::: {.g-col-12 .g-col-lg-6}
+::: {.callout-important appearance="minimal"}
+**📘 Examples & References**
+
+95% CI uses $zpprox1.96$.
+:::
+:::
+
+::: {.g-col-12 .g-col-lg-6}
+::: {.callout-warning appearance="minimal"}
+**⚙️ Real-World Values & Applications**
+
+Reporting metric uncertainty (accuracy ± CI), A/B-test result ranges, scientific reproducibility.
+:::
+:::
+
+:::
+
+#### Hypothesis Testing
+
+::: {.grid}
+
+::: {.g-col-12 .g-col-lg-6}
+::: {.callout-note appearance="minimal"}
+**🧮 Mathematical**
+
+Compare null $H_0$ vs alternative $H_1$ using a test statistic; reject $H_0$ if evidence is strong enough.
+:::
+:::
+
+::: {.g-col-12 .g-col-lg-6}
+::: {.callout-tip appearance="minimal"}
+**💡 Simplified**
+
+A formal way to decide whether an observed effect is real or just luck.
+:::
+:::
+
+::: {.g-col-12 .g-col-lg-6}
+::: {.callout-important appearance="minimal"}
+**📘 Examples & References**
+
+t-test, chi-square test, z-test.
+:::
+:::
+
+::: {.g-col-12 .g-col-lg-6}
+::: {.callout-warning appearance="minimal"}
+**⚙️ Real-World Values & Applications**
+
+Deciding if model B truly beats model A, if a feature matters, if an A/B variant won.
+:::
+:::
+
+:::
+
+#### p-values
+
+::: {.grid}
+
+::: {.g-col-12 .g-col-lg-6}
+::: {.callout-note appearance="minimal"}
+**🧮 Mathematical**
+
+$P(\text{data this extreme}\mid H_0)$. Small $p$ (e.g. <0.05) ⇒ evidence against $H_0$.
+:::
+:::
+
+::: {.g-col-12 .g-col-lg-6}
+::: {.callout-tip appearance="minimal"}
+**💡 Simplified**
+
+The chance of seeing your result if nothing were really going on — small means 'probably a real effect'.
+:::
+:::
+
+::: {.g-col-12 .g-col-lg-6}
+::: {.callout-important appearance="minimal"}
+**📘 Examples & References**
+
+$p=0.03 < 0.05$ → statistically significant.
+:::
+:::
+
+::: {.g-col-12 .g-col-lg-6}
+::: {.callout-warning appearance="minimal"}
+**⚙️ Real-World Values & Applications**
+
+Gatekeeper for A/B-test decisions; widely misused (p-hacking) — significance ≠ practical importance.
+:::
+:::
+
+:::
+
+#### A/B Testing
+
+::: {.grid}
+
+::: {.g-col-12 .g-col-lg-6}
+::: {.callout-note appearance="minimal"}
+**🧮 Mathematical**
+
+Randomised controlled experiment comparing two variants; test difference in a metric for significance and effect size.
+:::
+:::
+
+::: {.g-col-12 .g-col-lg-6}
+::: {.callout-tip appearance="minimal"}
+**💡 Simplified**
+
+Show version A to half your users and B to the other half, then measure which performs better — fairly.
+:::
+:::
+
+::: {.g-col-12 .g-col-lg-6}
+::: {.callout-important appearance="minimal"}
+**📘 Examples & References**
+
+Testing a new recommendation model against the current one.
+:::
+:::
+
+::: {.g-col-12 .g-col-lg-6}
+::: {.callout-warning appearance="minimal"}
+**⚙️ Real-World Values & Applications**
+
+How tech companies ship product and ML changes; needs proper sample size, randomisation, and guarding against peeking.
+:::
+:::
+
+:::
+
+#### MLE
+
+::: {.grid}
+
+::: {.g-col-12 .g-col-lg-6}
+::: {.callout-note appearance="minimal"}
+**🧮 Mathematical**
+
+$\hat\theta=\arg\max_\theta\prod_i p(x_i\mid\theta)$ (usually maximise the log-likelihood).
+:::
+:::
+
+::: {.g-col-12 .g-col-lg-6}
+::: {.callout-tip appearance="minimal"}
+**💡 Simplified**
+
+Pick the parameters that make the data you actually observed most probable.
+:::
+:::
+
+::: {.g-col-12 .g-col-lg-6}
+::: {.callout-important appearance="minimal"}
+**📘 Examples & References**
+
+MLE of a Gaussian's mean is the sample average.
+:::
+:::
+
+::: {.g-col-12 .g-col-lg-6}
+::: {.callout-warning appearance="minimal"}
+**⚙️ Real-World Values & Applications**
+
+Training many models IS maximum likelihood — minimising cross-entropy = maximising likelihood of the labels.
+:::
+:::
+
+:::
+
+#### MAP
+
+::: {.grid}
+
+::: {.g-col-12 .g-col-lg-6}
+::: {.callout-note appearance="minimal"}
+**🧮 Mathematical**
+
+$\hat\theta=\arg\max_\theta p(x\mid\theta)p(\theta)$ — MLE plus a prior. Equivalent to regularised MLE.
+:::
+:::
+
+::: {.g-col-12 .g-col-lg-6}
+::: {.callout-tip appearance="minimal"}
+**💡 Simplified**
+
+Like MLE, but you also bring in prior beliefs about reasonable parameter values.
+:::
+:::
+
+::: {.g-col-12 .g-col-lg-6}
+::: {.callout-important appearance="minimal"}
+**📘 Examples & References**
+
+A Gaussian prior on weights ⇔ L2 regularisation.
+:::
+:::
+
+::: {.g-col-12 .g-col-lg-6}
+::: {.callout-warning appearance="minimal"}
+**⚙️ Real-World Values & Applications**
+
+Explains why weight decay works; injecting domain knowledge; small-data regimes where priors stabilise estimates.
+:::
+:::
+
+:::
+
+#### Bayesian Statistics
+
+::: {.grid}
+
+::: {.g-col-12 .g-col-lg-6}
+::: {.callout-note appearance="minimal"}
+**🧮 Mathematical**
+
+Update beliefs with data: $p(\theta\mid x)=\frac{p(x\mid\theta)p(\theta)}{p(x)}$ (posterior ∝ likelihood × prior).
+:::
+:::
+
+::: {.g-col-12 .g-col-lg-6}
+::: {.callout-tip appearance="minimal"}
+**💡 Simplified**
+
+Start with a belief, see evidence, revise the belief — and keep a full distribution, not just one number.
+:::
+:::
+
+::: {.g-col-12 .g-col-lg-6}
+::: {.callout-important appearance="minimal"}
+**📘 Examples & References**
+
+Bayesian A/B testing, Bayesian neural nets.
+:::
+:::
+
+::: {.g-col-12 .g-col-lg-6}
+::: {.callout-warning appearance="minimal"}
+**⚙️ Real-World Values & Applications**
+
+Uncertainty-aware predictions (medicine, autonomy), Bayesian optimisation for tuning, spam filters (naive Bayes).
+:::
+:::
+
+:::
+
+:::
+
+:::
