@@ -21,7 +21,7 @@
   function btn(label, on) { const b = el("button", "mlv-btn", label); b.addEventListener("click", on); return b; }
 
   function isDark() { return document.body.classList.contains("quarto-dark"); }
-  function colBg() { return isDark() ? "#1c1c26" : "#fbfbff"; }
+  function colBg() { return isDark() ? "rgba(26,25,42,0.35)" : "rgba(255,255,255,0.3)"; }
   function colGrid() { return isDark() ? "rgba(255,255,255,.08)" : "rgba(0,0,0,.07)"; }
   function colAxis() { return isDark() ? "rgba(255,255,255,.25)" : "rgba(0,0,0,.25)"; }
   function colTxt() { return isDark() ? "#d8d8e0" : "#33333f"; }
