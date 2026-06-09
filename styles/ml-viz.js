@@ -3,7 +3,7 @@
    becomes a small interactive canvas demo. */
 (function () {
   "use strict";
-  const P = "#4C4A98", P2 = "#9b8bf0", TEAL = "#1f7a8c", GOLD = "#b8860b", ROSE = "#9b3b6a";
+  const P = "#8a3324", P2 = "#c08552", TEAL = "#3f5d52", GOLD = "#b8860b", ROSE = "#2f4858";
   const reg = {};
   function register(t, fn) { reg[t] = fn; }
 
@@ -21,10 +21,10 @@
   function btn(label, on) { const b = el("button", "mlv-btn", label); b.addEventListener("click", on); return b; }
 
   function isDark() { return document.body.classList.contains("quarto-dark"); }
-  function colBg() { return isDark() ? "#1c1c26" : "#fbfbff"; }
+  function colBg() { return isDark() ? "#1f1b15" : "#f9f3e6"; }
   function colGrid() { return isDark() ? "rgba(255,255,255,.08)" : "rgba(0,0,0,.07)"; }
   function colAxis() { return isDark() ? "rgba(255,255,255,.25)" : "rgba(0,0,0,.25)"; }
-  function colTxt() { return isDark() ? "#d8d8e0" : "#33333f"; }
+  function colTxt() { return isDark() ? "#d8cdb8" : "#2b2620"; }
 
   // ---------- canvas with math<->pixel mapping ----------
   function makeCanvas(host, w, h, xmin, xmax, ymin, ymax) {
@@ -88,8 +88,8 @@
       arrow(C, 0, 0, b[0], b[1], TEAL); label(C, b[0], b[1], "b", TEAL);
       if (mode === "add") {
         const s = [a[0] + b[0], a[1] + b[1]];
-        C.ctx.setLineDash([4, 4]); arrow(C, a[0], a[1], s[0], s[1], "rgba(155,139,240,.7)", 1.5);
-        arrow(C, b[0], b[1], s[0], s[1], "rgba(155,139,240,.7)", 1.5); C.ctx.setLineDash([]);
+        C.ctx.setLineDash([4, 4]); arrow(C, a[0], a[1], s[0], s[1], "rgba(192,133,82,.7)", 1.5);
+        arrow(C, b[0], b[1], s[0], s[1], "rgba(192,133,82,.7)", 1.5); C.ctx.setLineDash([]);
         arrow(C, 0, 0, s[0], s[1], ROSE, 3); label(C, s[0], s[1], "a+b", ROSE);
         out.innerHTML = `a+b = [${a[0].toFixed(1)}+${b[0].toFixed(1)}, ${a[1].toFixed(1)}+${b[1].toFixed(1)}] = <b>[${s[0].toFixed(1)}, ${s[1].toFixed(1)}]</b>`;
       } else if (mode === "sub") {
@@ -110,7 +110,7 @@
       } else if (mode === "ortho") {
         const d = a[0] * b[0] + a[1] * b[1];
         const perp = Math.abs(d) < .15;
-        out.innerHTML = `a·b = <b>${d.toFixed(2)}</b> → ${perp ? "<b style='color:#1f7a8c'>⟂ orthogonal (90°)</b>" : "not perpendicular — drag to make a·b = 0"}`;
+        out.innerHTML = `a·b = <b>${d.toFixed(2)}</b> → ${perp ? "<b style='color:#3f5d52'>⟂ orthogonal (90°)</b>" : "not perpendicular — drag to make a·b = 0"}`;
       }
     }
     draggable(C, () => [a, b], (i, x, y) => { const v = [Math.round(x * 2) / 2, Math.round(y * 2) / 2]; if (i === 0) a = v; else b = v; draw(); });
@@ -135,7 +135,7 @@
         C.ctx.beginPath(); C.ctx.moveTo(C.sx(0), C.sy(0)); C.ctx.lineTo(C.sx(v[0]), C.sy(0)); C.ctx.lineTo(C.sx(v[0]), C.sy(v[1])); C.ctx.stroke(); C.ctx.setLineDash([]);
         out.innerHTML = `‖x‖₁ = |${v[0].toFixed(1)}| + |${v[1].toFixed(1)}| = <b>${(Math.abs(v[0]) + Math.abs(v[1])).toFixed(1)}</b> (grid path, in rose)`;
       } else {
-        C.ctx.strokeStyle = "rgba(155,139,240,.5)"; C.ctx.lineWidth = 1.5;
+        C.ctx.strokeStyle = "rgba(192,133,82,.5)"; C.ctx.lineWidth = 1.5;
         C.ctx.beginPath(); C.ctx.arc(C.sx(0), C.sy(0), Math.hypot(C.sx(v[0]) - C.sx(0), C.sy(v[1]) - C.sy(0)), 0, 7); C.ctx.stroke();
         out.innerHTML = `‖x‖₂ = √(${v[0].toFixed(1)}² + ${v[1].toFixed(1)}²) = <b>${Math.hypot(v[0], v[1]).toFixed(2)}</b> (straight-line radius)`;
       }
@@ -151,7 +151,7 @@
     function draw() {
       clear(C); grid(C);
       // parallelogram area = |cross|
-      C.ctx.fillStyle = "rgba(76,74,152,.15)";
+      C.ctx.fillStyle = "rgba(138,51,36,.15)";
       C.ctx.beginPath(); C.ctx.moveTo(C.sx(0), C.sy(0)); C.ctx.lineTo(C.sx(a[0]), C.sy(a[1]));
       C.ctx.lineTo(C.sx(a[0] + b[0]), C.sy(a[1] + b[1])); C.ctx.lineTo(C.sx(b[0]), C.sy(b[1])); C.ctx.closePath(); C.ctx.fill();
       arrow(C, 0, 0, a[0], a[1], P); label(C, a[0], a[1], "a", P);
@@ -177,7 +177,7 @@
       clear(C); grid(C);
       // transformed unit square
       const e1 = [m[0], m[2]], e2 = [m[1], m[3]];
-      C.ctx.fillStyle = "rgba(76,74,152,.16)";
+      C.ctx.fillStyle = "rgba(138,51,36,.16)";
       C.ctx.beginPath(); C.ctx.moveTo(C.sx(0), C.sy(0)); C.ctx.lineTo(C.sx(e1[0]), C.sy(e1[1]));
       C.ctx.lineTo(C.sx(e1[0] + e2[0]), C.sy(e1[1] + e2[1])); C.ctx.lineTo(C.sx(e2[0]), C.sy(e2[1])); C.ctx.closePath(); C.ctx.fill();
       arrow(C, 0, 0, e1[0], e1[1], P, 3); label(C, e1[0], e1[1], "î", P);
@@ -289,7 +289,7 @@
     const out = readout(host, "");
     function draw() {
       clear(C);
-      for (let r = 0.5; r <= 3; r += 0.5) { C.ctx.strokeStyle = "rgba(76,74,152,.25)"; C.ctx.beginPath(); C.ctx.arc(C.sx(0), C.sy(0), Math.abs(C.sx(r) - C.sx(0)), 0, 7); C.ctx.stroke(); }
+      for (let r = 0.5; r <= 3; r += 0.5) { C.ctx.strokeStyle = "rgba(138,51,36,.25)"; C.ctx.beginPath(); C.ctx.arc(C.sx(0), C.sy(0), Math.abs(C.sx(r) - C.sx(0)), 0, 7); C.ctx.stroke(); }
       grid(C, 1);
       arrow(C, pt[0], pt[1], pt[0] + 2 * pt[0] * .3, pt[1] + 2 * pt[1] * .3, ROSE, 3);
       dot(C, pt[0], pt[1], P, 6);
@@ -360,7 +360,7 @@
     const f = x => 1.8 * Math.exp(-(x - 0.8) * (x - 0.8)) + 0.7 * Math.exp(-(x + 1.5) * (x + 1.5) * 2);
     let best = -9, trials = [];
     const ctrls = controls(host); const out = readout(host, "");
-    function draw() { clear(C); grid(C, 1); plotFn(C, f, "rgba(76,74,152,.4)", 1.6); trials.forEach(t => dot(C, t, f(t), t === best ? ROSE : P, t === best ? 7 : 4)); out.innerHTML = `trials: <b>${trials.length}</b> &nbsp; best score: <b>${best > -9 ? f(best).toFixed(2) : "—"}</b>`; }
+    function draw() { clear(C); grid(C, 1); plotFn(C, f, "rgba(138,51,36,.4)", 1.6); trials.forEach(t => dot(C, t, f(t), t === best ? ROSE : P, t === best ? 7 : 4)); out.innerHTML = `trials: <b>${trials.length}</b> &nbsp; best score: <b>${best > -9 ? f(best).toFixed(2) : "—"}</b>`; }
     ctrls.appendChild(btn("Try a config", () => { const x = (Math.random() * 6 - 3); trials.push(x); if (best < -8 || f(x) > f(best)) best = x; draw(); }));
     ctrls.appendChild(btn("Reset", () => { trials = []; best = -9; draw(); }));
     draw(); host.appendChild(hint("Each click samples a setting; rose = best so far"));
@@ -416,7 +416,7 @@
     const ctrls = controls(host); const out = readout(host, "");
     function draw() {
       clear(C); grid(C, 1);
-      for (let i = 0; i < 140; i++) { const z1 = gauss(), z2 = gauss(); const x = z1, y = rho * z1 + Math.sqrt(1 - rho * rho) * z2; dot(C, x, y, "rgba(76,74,152,.55)", 3); }
+      for (let i = 0; i < 140; i++) { const z1 = gauss(), z2 = gauss(); const x = z1, y = rho * z1 + Math.sqrt(1 - rho * rho) * z2; dot(C, x, y, "rgba(138,51,36,.55)", 3); }
       out.innerHTML = `correlation ρ = <b>${rho.toFixed(2)}</b> — ${Math.abs(rho) > .8 ? "tight line" : Math.abs(rho) < .2 ? "no linear link (cloud)" : "loose trend"}`;
     }
     function gauss() { let u = 0, v = 0; while (!u) u = Math.random(); while (!v) v = Math.random(); return Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * v); }
@@ -505,7 +505,7 @@
     const ctrls = controls(host); const out = readout(host, "");
     function draw() {
       clear(C); grid(C, 1);
-      plotFn(C, x => Math.exp(-x * x / 2) / Math.sqrt(2 * Math.PI), "rgba(76,74,152,.7)", 2.2);       // H0
+      plotFn(C, x => Math.exp(-x * x / 2) / Math.sqrt(2 * Math.PI), "rgba(138,51,36,.7)", 2.2);       // H0
       plotFn(C, x => Math.exp(-((x - shift) ** 2) / 2) / Math.sqrt(2 * Math.PI), ROSE, 2.2);            // H1
       C.ctx.setLineDash([4, 4]); C.ctx.strokeStyle = GOLD; C.ctx.beginPath(); C.ctx.moveTo(C.sx(1.64), 0); C.ctx.lineTo(C.sx(1.64), C.h); C.ctx.stroke(); C.ctx.setLineDash([]);
       out.innerHTML = `Purple = H₀ (no effect), Rose = H₁ (effect of ${shift.toFixed(1)}σ). Gold line = significance threshold. More separation → easier to reject H₀.`;
@@ -522,7 +522,7 @@
       C.ctx.fillStyle = "rgba(155,59,106,.35)";
       [[z, 6], [-6, -z]].forEach(([a, b]) => { C.ctx.beginPath(); C.ctx.moveTo(C.sx(a), C.sy(0)); for (let x = a; x <= b; x += 0.02) C.ctx.lineTo(C.sx(x), C.sy(phi(x))); C.ctx.lineTo(C.sx(b), C.sy(0)); C.ctx.closePath(); C.ctx.fill(); });
       const pp = tail(z);
-      out.innerHTML = `z = <b>${z.toFixed(2)}</b> → p ≈ <b>${pp.toFixed(3)}</b> (rose tail area). ${pp < 0.05 ? "<b style='color:#1f7a8c'>significant (p<0.05)</b>" : "not significant"}`;
+      out.innerHTML = `z = <b>${z.toFixed(2)}</b> → p ≈ <b>${pp.toFixed(3)}</b> (rose tail area). ${pp < 0.05 ? "<b style='color:#3f5d52'>significant (p<0.05)</b>" : "not significant"}`;
     }
     ctrls.appendChild(slider("z-score", 0, 3.5, .05, z, v => { z = v; draw(); })); draw();
   });
@@ -532,7 +532,7 @@
     const ctrls = controls(host); const out = readout(host, "");
     function gauss() { let u = Math.random(), v = Math.random(); return Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * v); }
     function draw() {
-      clear(C); grid(C, 1); plotFn(C, x => Math.exp(-x * x / 2) / Math.sqrt(2 * Math.PI), "rgba(76,74,152,.5)", 2);
+      clear(C); grid(C, 1); plotFn(C, x => Math.exp(-x * x / 2) / Math.sqrt(2 * Math.PI), "rgba(138,51,36,.5)", 2);
       pts.forEach(x => dot(C, x, 0.02 + 0.01 * Math.random(), GOLD, 3));
       out.innerHTML = `<b>${pts.length}</b> samples drawn from N(0,1). They pile up where the curve is tall.`;
     }
