@@ -49,6 +49,41 @@ include-in-header:
         @media (max-width: 820px) {
           .acsd-collage { grid-template-columns: 1fr; gap: 12px; }
         }
+
+        /* full-screen lightbox */
+        .acsd-lb {
+          position: fixed; inset: 0; z-index: 99999;
+          display: none;
+          align-items: center; justify-content: center;
+          background: rgba(8, 7, 18, 0.94);
+          backdrop-filter: blur(6px);
+          padding: 2.5rem;
+        }
+        .acsd-lb.open { display: flex; }
+        .acsd-lb img {
+          max-width: 96vw; max-height: 90vh;
+          object-fit: contain;
+          border-radius: 12px;
+          box-shadow: 0 20px 60px rgba(0,0,0,0.6);
+        }
+        .acsd-lb-close {
+          position: fixed; top: 18px; right: 22px;
+          width: 46px; height: 46px;
+          border: none; border-radius: 50%;
+          background: rgba(255,255,255,0.14);
+          color: #fff; font-size: 1.6rem; line-height: 1;
+          cursor: pointer;
+          display: flex; align-items: center; justify-content: center;
+          transition: background .15s ease, transform .15s ease;
+        }
+        .acsd-lb-close:hover { background: rgba(255,255,255,0.28); transform: scale(1.08); }
+        .acsd-lb-cap {
+          position: fixed; left: 0; right: 0; bottom: 16px;
+          text-align: center; color: #fff; font-size: .95rem;
+          opacity: .9; pointer-events: none;
+          padding: 0 1rem;
+        }
+        body.acsd-lb-on { overflow: hidden; }
       </style>
 ---
 
@@ -135,6 +170,50 @@ A collection of **animated architecture diagrams** — each a single, detailed p
   </a>
 
 </div>
+
+<div class="acsd-lb" id="acsdLightbox" role="dialog" aria-modal="true" aria-label="Diagram viewer">
+  <button class="acsd-lb-close" id="acsdLbClose" aria-label="Close">&times;</button>
+  <img id="acsdLbImg" src="" alt="">
+  <div class="acsd-lb-cap" id="acsdLbCap"></div>
+</div>
+
+<script>
+(function () {
+  var lb    = document.getElementById('acsdLightbox');
+  var lbImg = document.getElementById('acsdLbImg');
+  var lbCap = document.getElementById('acsdLbCap');
+  var btn   = document.getElementById('acsdLbClose');
+  if (!lb) return;
+
+  function open(src, caption, alt) {
+    lbImg.src = src;
+    lbImg.alt = alt || '';
+    lbCap.textContent = caption || '';
+    lb.classList.add('open');
+    document.body.classList.add('acsd-lb-on');
+  }
+  function close() {
+    lb.classList.remove('open');
+    document.body.classList.remove('acsd-lb-on');
+    lbImg.src = '';
+  }
+
+  document.querySelectorAll('.acsd-tile').forEach(function (tile) {
+    tile.addEventListener('click', function (e) {
+      e.preventDefault();
+      var img = tile.querySelector('img');
+      var capEl = tile.querySelector('.acsd-cap b');
+      open(tile.getAttribute('href'), capEl ? capEl.textContent : '', img ? img.alt : '');
+    });
+  });
+
+  btn.addEventListener('click', close);
+  lb.addEventListener('click', function (e) { if (e.target === lb) close(); });
+  document.addEventListener('keydown', function (e) {
+    if (e.key === 'Escape' && lb.classList.contains('open')) close();
+  });
+})();
+</script>
 ```
 
 ::: {.acsd-intro}
