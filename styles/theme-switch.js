@@ -10,7 +10,7 @@
   var savedMode  = localStorage.getItem("kx-mode");
   var prefersDark = window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches;
   var qs = new URLSearchParams(location.search);
-  var theme = qs.get("kxtheme") || savedTheme || "glass";
+  var theme = "glass"; // Heritage retired from UI; Glass is the sole family
   var mode  = qs.get("kxmode")  || savedMode  || (prefersDark ? "dark" : "light");
   apply();
 
@@ -106,14 +106,8 @@
     var box = document.createElement("div");
     box.id = "theme-switch"; box.setAttribute("role","group"); box.setAttribute("aria-label","Theme");
     box.innerHTML =
-      '<button data-fam="glass" title="Liquid Glass">Glass</button>'+
-      '<button data-fam="heritage" title="Heritage / Ornamental">Heritage</button>'+
-      '<span class="ts-sep"></span>'+
-      '<button class="ts-mode" data-mode-toggle title="Light / Dark">☾</button>';
+      '<button class="ts-mode" data-mode-toggle title="Toggle light / dark"><span class="ts-ic">☾</span><span class="ts-lbl">Dark</span></button>';
     document.body.appendChild(box);
-    box.querySelectorAll("[data-fam]").forEach(function(b){
-      b.addEventListener("click", function(){ theme = b.getAttribute("data-fam"); apply(); });
-    });
     box.querySelector("[data-mode-toggle]").addEventListener("click", function(){
       mode = (mode === "dark") ? "light" : "dark"; apply();
     });
@@ -121,11 +115,9 @@
 
   function syncUI(){
     var box = document.getElementById("theme-switch"); if(!box) return;
-    box.querySelectorAll("[data-fam]").forEach(function(b){
-      b.classList.toggle("active", b.getAttribute("data-fam") === theme);
-    });
-    var m = box.querySelector("[data-mode-toggle]");
-    if(m) m.textContent = (mode === "dark") ? "☀" : "☾";
+    var ic = box.querySelector(".ts-ic"), lbl = box.querySelector(".ts-lbl");
+    if(ic)  ic.textContent  = (mode === "dark") ? "☀" : "☾";
+    if(lbl) lbl.textContent = (mode === "dark") ? "Light" : "Dark";
   }
 
   function boot(){ injectDefs(); injectDeco(); buildUI(); apply(); }
