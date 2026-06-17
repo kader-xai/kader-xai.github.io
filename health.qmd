@@ -45,6 +45,21 @@ anchor-sections: false
 
 <div class="wb-toast" id="wbToast"></div>
 
+<div class="wb-modal" id="wbModal" onclick="if(event.target===this)wbCloseDetail()">
+  <div class="wb-modal-card">
+    <button class="wb-mclose" onclick="wbCloseDetail()" aria-label="Close">✕</button>
+    <img class="wb-mgif" id="wbMGif" alt="" decoding="async">
+    <div class="wb-mbody">
+      <div class="wb-mtags" id="wbMTags"></div>
+      <h3 id="wbMName"></h3>
+      <p class="wb-mtip" id="wbMTip"></p>
+      <a id="wbMW" class="wb-btn wb-primary wb-block" target="_blank" rel="noopener">View detailed demo on MuscleWiki ↗</a>
+      <a id="wbMSearch" class="wb-btn wb-block" target="_blank" rel="noopener">Not the exact one? Search MuscleWiki ↗</a>
+      <p class="wb-mnote">MuscleWiki blocks embedding, so its multi-angle demos open on their site in a new tab.</p>
+    </div>
+  </div>
+</div>
+
 <style>
 /* ===== Workout builder — reads ONLY site theme tokens (themes.css) ===== */
 .wb{max-width:1280px;margin:0 auto;padding:4px 0 40px}
@@ -147,6 +162,28 @@ anchor-sections: false
   .wb .sec-title,.wb-libitem,.wb-select,.wb-num,.wb-count{background-image:linear-gradient(var(--glass-chip),var(--glass-chip)),linear-gradient(var(--glass-chip),var(--glass-chip))}
   body .deco-layer{opacity:.28}
 }
+
+/* clickable exercises + detail popup */
+.wb-click{cursor:pointer}
+.wb-ex.wb-click:hover .nm,.wb-libitem.wb-click:hover .ln{color:var(--gold)}
+.wb-go{color:var(--gold);font-weight:800}
+.wb-modal{position:fixed;inset:0;z-index:1200;display:none;align-items:center;justify-content:center;padding:16px;
+  background:rgba(8,10,18,.62);-webkit-backdrop-filter:blur(5px);backdrop-filter:blur(5px)}
+.wb-modal.wb-open{display:flex}
+.wb-modal-card{position:relative;max-width:520px;width:100%;max-height:90vh;overflow:auto;
+  background:var(--glass-panel);border:1px solid var(--glass-border);border-radius:var(--radius-hero);
+  box-shadow:var(--hero-shadow);-webkit-backdrop-filter:var(--blur);backdrop-filter:var(--blur)}
+.wb-mclose{position:absolute;top:10px;right:10px;z-index:2;width:36px;height:36px;border-radius:50%;
+  border:var(--chip-border);background:var(--glass-chip);color:var(--ink);font-size:15px;cursor:pointer;
+  -webkit-backdrop-filter:var(--blur);backdrop-filter:var(--blur)}
+.wb-mgif{width:100%;max-height:330px;object-fit:contain;background:#fff;display:block;
+  border-radius:var(--radius-hero) var(--radius-hero) 0 0}
+.wb-mbody{padding:16px 18px 18px}
+.wb-mtags{display:flex;gap:7px;flex-wrap:wrap;margin-bottom:7px}
+.wb-mbody h3{margin:2px 0 9px;font-size:22px}
+.wb-mtip{color:var(--ink-soft);font-size:14px;margin-bottom:14px}
+.wb-block{display:flex;width:100%;margin-bottom:9px;text-decoration:none}
+.wb-mnote{font-size:11px;color:var(--ink-faint);margin-top:6px;text-align:center}
 
 @media print{
   .navbar,#theme-switch,.deco-layer,#quarto-footer,.nav-footer,#wbDays,#wbBuilder,.wb-lib,.wb-hero,.wb-stp,.wb-print,.wb-toast{display:none !important}
@@ -318,14 +355,32 @@ function wbShow(){if(!wbCur)return;wbSave();const d=wbDAYS[wbCur],sel=wbSel();
   document.getElementById('wbSesTitle').textContent=d.name+" Day";
   document.getElementById('wbSesCnt').textContent=d.slots.length+" exercises";
   document.getElementById('wbSesEx').innerHTML=d.slots.map((sl,i)=>{const id=sel[i]||sl.def,e=wbFLAT[id],sc=wbSEC[sl.sec];
-    return `<div class="wb-ex"><img class="g" data-src="${wbG}${id}.gif" alt="${e.name}" decoding="async">
-      <div class="i"><div class="sn">${i+1} · ${sl.t}</div><div class="nm">${e.name}</div>
+    return `<div class="wb-ex wb-click" onclick="wbOpenDetail('${id}')"><img class="g" data-src="${wbG}${id}.gif" alt="${e.name}" decoding="async">
+      <div class="i"><div class="sn">${i+1} · ${sl.t}</div><div class="nm">${e.name} <span class="wb-go">›</span></div>
         <div class="r"><span class="wb-tag" style="background:${wbEQ[e.eq].c}">${wbEQ[e.eq].l}</span><span class="wb-tag reps">${sc.reps}</span></div>
         <div class="tip">${sc.tip}</div></div></div>`;}).join('');
   document.getElementById('wbSession').style.display='block';
   if(wbIOses)wbIOses.disconnect();wbIOses=wbLazy(document.getElementById('wbSesEx'),false);
   document.getElementById('wbSession').scrollIntoView({behavior:'smooth',block:'start'});}
 let wbTT;function wbToast(m){const t=document.getElementById('wbToast');t.textContent=m;t.classList.add('wb-on');clearTimeout(wbTT);wbTT=setTimeout(()=>t.classList.remove('wb-on'),1400);}
+
+/* exercise detail popup with deep link to MuscleWiki */
+var wbMWov={concentration_curl:'dumbbell-concentration-curl',goblet_squat:'dumbbell-goblet-squat',
+  reverse_curl:'barbell-reverse-curl',barbell_rdl:'barbell-romanian-deadlift',single_leg_rdl:'dumbbell-single-leg-deadlift',
+  db_rdl:'dumbbell-romanian-deadlift',skull_crusher:'barbell-skull-crusher',rope_pushdown:'cable-tricep-pushdown'};
+function wbSlug(name){return name.toLowerCase().replace(/[→–—]/g,'-').replace(/&/g,'and').replace(/['’]/g,'')
+  .replace(/[()·.,\/]/g,' ').replace(/\s+/g,'-').replace(/-+/g,'-').replace(/^-|-$/g,'');}
+function wbOpenDetail(id){var e=wbFLAT[id];if(!e)return;var sc=wbSEC[e.sec];
+  var img=document.getElementById('wbMGif');img.removeAttribute('src');img.setAttribute('data-src',wbG+id+'.gif');img.dataset.loaded='0';wbLoadImg(img);
+  document.getElementById('wbMName').textContent=e.name;
+  document.getElementById('wbMTags').innerHTML='<span class="wb-tag" style="background:'+wbEQ[e.eq].c+'">'+wbEQ[e.eq].l+'</span><span class="wb-tag reps">'+sc.reps+'</span>';
+  document.getElementById('wbMTip').textContent=sc.tip;
+  var slug=wbMWov[id]||wbSlug(e.name);
+  document.getElementById('wbMW').href='https://musclewiki.com/exercise/'+slug;
+  document.getElementById('wbMSearch').href='https://www.google.com/search?q='+encodeURIComponent(e.name+' site:musclewiki.com');
+  document.getElementById('wbModal').classList.add('wb-open');document.body.style.overflow='hidden';}
+function wbCloseDetail(){document.getElementById('wbModal').classList.remove('wb-open');document.body.style.overflow='';}
+document.addEventListener('keydown',function(ev){if(ev.key==='Escape')wbCloseDetail();});
 /* reliable image loading: observe -> load (with retry) -> recycle far ones */
 let wbIOses,wbIOlib;
 function wbLoadImg(im){var url=im.getAttribute('data-src');if(!url)return;var t=0;
@@ -346,7 +401,7 @@ let wbFilter="all";
 function wbRenderLib(){document.getElementById('wbLibBody').innerHTML=Object.entries(wbSEC).map(([k,sc])=>{
   const items=sc.list.filter(e=>wbFilter==="all"||e.eq===wbFilter);if(!items.length)return"";
   return `<div class="wb-libsec"><h4>${sc.name} <span>${items.length}</span></h4><div class="wb-libgrid">${items.map(e=>
-    `<div class="wb-libitem"><img data-src="${wbG}${e.id}.gif" data-recycle="1" alt="${e.name}" decoding="async"><div class="ln">${e.name}</div><span class="le" style="background:${wbEQ[e.eq].c}">${wbEQ[e.eq].l}</span></div>`).join('')}</div></div>`;}).join('');}
+    `<div class="wb-libitem wb-click" onclick="wbOpenDetail('${e.id}')"><img data-src="${wbG}${e.id}.gif" data-recycle="1" alt="${e.name}" decoding="async"><div class="ln">${e.name}</div><span class="le" style="background:${wbEQ[e.eq].c}">${wbEQ[e.eq].l}</span></div>`).join('')}</div></div>`;}).join('');}
 const wbeqs=["all",...wbORDER];
 document.getElementById('wbFilters').innerHTML=wbeqs.map(f=>{const lbl=f==="all"?"All":wbEQ[f].l;
   return `<span class="wb-fchip ${f==='all'?'wb-on':''}" style="${f==='all'?'background:var(--gold);color:#fff':''}" onclick="wbSetFilter('${f}',this)">${lbl}</span>`;}).join('');
