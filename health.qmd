@@ -1,0 +1,329 @@
+---
+title: "Health"
+description: "Personal workout builder — pick a day, choose your exercises, see GIF demos. Dumbbell, cable/rope, machine, barbell & bodyweight variations."
+page-layout: full
+toc: false
+anchor-sections: false
+---
+
+```{=html}
+<div class="wb">
+  <div class="wb-hero panel">
+    <div class="sec-title">Workout Builder</div>
+    <h2 class="wb-h">Build your session</h2>
+    <p class="wb-sub">Pick a day, choose each exercise from the dropdowns, then hit <b>Show</b> to see your full session with GIF demonstrations. Every variation — dumbbell, cable/rope, machine, barbell, bodyweight &amp; cardio.</p>
+    <div class="wb-count" id="wbCount"></div>
+  </div>
+
+  <div class="sec-title wb-stp">Step 1 — choose your day</div>
+  <div class="wb-days" id="wbDays"></div>
+
+  <div id="wbBuilder">
+    <div class="sec-title wb-stp">Step 2 — pick your exercises</div>
+    <div class="wb-slots" id="wbSlots"></div>
+    <div class="wb-actions">
+      <button class="wb-btn" onclick="wbSave()">💾 Save</button>
+      <button class="wb-btn wb-primary" onclick="wbShow()">👁 Show session</button>
+    </div>
+  </div>
+
+  <div id="wbSession">
+    <div class="sec-title wb-stp">Your session</div>
+    <div class="panel wb-sescard">
+      <div class="wb-seshead"><h3 id="wbSesTitle"></h3><span id="wbSesCnt"></span>
+        <button class="wb-btn wb-print" onclick="window.print()">🖨 Print / PDF</button></div>
+      <div class="wb-sesgrid" id="wbSesEx"></div>
+    </div>
+  </div>
+
+  <details class="panel wb-lib" id="wbLib">
+    <summary>📚 Browse the full exercise library</summary>
+    <div class="wb-filters" id="wbFilters"></div>
+    <div id="wbLibBody"></div>
+  </details>
+</div>
+
+<div class="wb-toast" id="wbToast"></div>
+
+<style>
+/* ===== Workout builder — reads ONLY site theme tokens (themes.css) ===== */
+.wb{max-width:1280px;margin:0 auto;padding:4px 0 40px}
+.wb .panel{padding:0}
+.wb-hero{padding:22px 24px !important;margin-bottom:6px}
+.wb-h{margin:6px 0 8px;font-size:clamp(24px,4vw,36px)}
+.wb-sub{color:var(--ink-soft);font-size:15px;max-width:680px;margin:0}
+.wb-count{margin-top:12px;font-size:12.5px;color:var(--ink-faint);font-weight:600}
+.wb-stp{margin:26px 0 12px}
+
+/* day selector */
+.wb-days{display:grid;grid-template-columns:repeat(4,1fr);gap:11px}
+@media(max-width:820px){.wb-days{grid-template-columns:repeat(2,1fr)}}
+.wb-dayb{background:var(--glass-panel);border:1px solid var(--glass-border-soft);border-top:3px solid var(--c);
+  border-radius:var(--radius-panel);box-shadow:var(--panel-shadow);-webkit-backdrop-filter:var(--blur);backdrop-filter:var(--blur);
+  padding:16px 12px;text-align:center;cursor:pointer;font-weight:800;font-size:16px;color:var(--ink);transition:transform .15s,border-color .15s}
+.wb-dayb .s{display:block;font-size:11px;color:var(--ink-faint);font-weight:600;margin-top:4px}
+.wb-dayb:hover{transform:translateY(-3px)}
+.wb-dayb.wb-on{border-color:var(--c);background:color-mix(in srgb,var(--c) 16%,var(--glass-panel))}
+
+/* builder slots — 2 columns on desktop for wider layout */
+#wbBuilder,#wbSession{display:none}
+.wb-slots{display:grid;grid-template-columns:1fr 1fr;gap:11px}
+@media(max-width:760px){.wb-slots{grid-template-columns:1fr}}
+.wb-slot{background:var(--glass-panel);border:1px solid var(--glass-border-soft);border-radius:var(--radius-panel);
+  box-shadow:var(--panel-shadow);-webkit-backdrop-filter:var(--blur);backdrop-filter:var(--blur);
+  padding:13px 15px;display:flex;align-items:center;gap:13px}
+.wb-num{flex-shrink:0;width:28px;height:28px;border-radius:9px;background:var(--glass-chip);border:var(--chip-border);
+  display:grid;place-items:center;font-weight:800;font-size:13px;color:var(--gold)}
+.wb-slot .b{flex:1;min-width:0}
+.wb-slot .t{font-size:11px;letter-spacing:.5px;text-transform:uppercase;color:var(--ink-faint);font-weight:700;margin-bottom:6px}
+.wb-select{width:100%;background:var(--glass-chip);color:var(--ink);border:var(--chip-border);border-radius:12px;
+  padding:11px 32px 11px 13px;font-size:14.5px;font-weight:600;font-family:var(--font);cursor:pointer;appearance:none;-webkit-appearance:none;
+  background-image:url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'><path d='M2 4l4 4 4-4' stroke='%23999' stroke-width='1.6' fill='none' stroke-linecap='round'/></svg>");
+  background-repeat:no-repeat;background-position:right 12px center}
+.wb-select:focus{outline:none;border-color:var(--cyan)}
+.wb-eqdot{flex-shrink:0;width:11px;height:11px;border-radius:50%}
+
+.wb-actions{display:flex;gap:11px;margin:18px 0 4px;max-width:520px}
+.wb-btn{flex:1;border:var(--chip-border);background:var(--glass-chip);color:var(--ink) !important;
+  -webkit-backdrop-filter:var(--blur);backdrop-filter:var(--blur);box-shadow:var(--panel-shadow);
+  border-radius:var(--radius-pill);padding:14px;font-weight:800;font-size:15px;font-family:var(--font);cursor:pointer;
+  display:flex;align-items:center;justify-content:center;gap:8px;min-height:50px}
+.wb-btn:hover{color:var(--gold) !important}
+.wb-btn.wb-primary{background:var(--gold);color:#fff !important;border-color:transparent}
+.wb-btn.wb-primary:hover{color:#fff !important;filter:brightness(1.06)}
+.wb-btn:active{transform:scale(.98)}
+
+/* session */
+.wb-sescard{padding:16px 18px !important}
+.wb-seshead{display:flex;align-items:center;gap:12px;margin-bottom:8px;flex-wrap:wrap}
+.wb-seshead h3{margin:0;font-size:21px}
+.wb-seshead span{color:var(--ink-faint);font-size:13px}
+.wb-print{flex:0 0 auto;margin-left:auto;min-height:40px;padding:9px 16px;font-size:13px}
+.wb-sesgrid{display:grid;grid-template-columns:1fr 1fr;gap:6px 22px}
+@media(max-width:760px){.wb-sesgrid{grid-template-columns:1fr}}
+.wb-ex{display:flex;gap:14px;padding:14px 0;border-top:1px solid var(--glass-border-soft)}
+.wb-ex .g{flex-shrink:0;width:118px;height:118px;border-radius:14px;border:1px solid var(--glass-border-soft);
+  background:#fff;object-fit:cover}
+@media(max-width:520px){.wb-ex .g{width:98px;height:98px}}
+.wb-ex .i{flex:1;min-width:0}
+.wb-ex .sn{font-size:11px;letter-spacing:.5px;text-transform:uppercase;color:var(--ink-faint);font-weight:700}
+.wb-ex .nm{font-size:16px;font-weight:800;color:var(--ink);margin:2px 0 7px}
+.wb-ex .r{display:flex;gap:7px;flex-wrap:wrap;margin-bottom:7px}
+.wb-tag{font-size:11px;font-weight:800;padding:3px 10px;border-radius:var(--radius-pill);color:#0b1020}
+.wb-tag.reps{background:var(--glass-chip);color:var(--ink-soft);border:var(--chip-border)}
+.wb-ex .tip{font-size:12.5px;color:var(--ink-soft)}
+
+/* library */
+.wb-lib{margin-top:30px;padding:0 !important}
+.wb-lib>summary{cursor:pointer;padding:16px 18px;font-weight:800;font-size:17px;color:var(--ink);list-style:none;
+  display:flex;justify-content:space-between;align-items:center}
+.wb-lib>summary::-webkit-details-marker{display:none}
+.wb-lib>summary::after{content:"▾";color:var(--ink-faint)}
+.wb-lib[open]>summary::after{content:"▴"}
+.wb-filters{display:flex;gap:7px;flex-wrap:wrap;padding:0 16px 12px}
+.wb-fchip{font-size:12.5px;font-weight:700;padding:7px 13px;border-radius:var(--radius-pill);border:var(--chip-border);
+  background:var(--glass-chip);color:var(--ink-soft);cursor:pointer}
+.wb-fchip.wb-on{color:#0b1020}
+.wb-libsec{padding:4px 16px 12px}
+.wb-libsec h4{font-size:14px;color:var(--gold);margin:14px 0 9px;font-weight:800;display:flex;gap:8px;align-items:center}
+.wb-libsec h4 span{font-size:11px;color:var(--ink-faint);font-weight:600}
+.wb-libgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(120px,1fr));gap:9px}
+.wb-libitem{background:var(--glass-chip);border:1px solid var(--glass-border-soft);border-radius:14px;padding:7px;text-align:center}
+.wb-libitem img{width:100%;aspect-ratio:1;border-radius:9px;background:#fff;object-fit:cover}
+.wb-libitem .ln{font-size:11.5px;font-weight:700;color:var(--ink);margin-top:6px;line-height:1.25}
+.wb-libitem .le{font-size:9px;font-weight:800;color:#0b1020;padding:1px 7px;border-radius:5px;display:inline-block;margin-top:5px}
+
+.wb-toast{position:fixed;left:50%;bottom:74px;transform:translateX(-50%) translateY(20px);background:#2f9e6e;color:#fff;
+  font-weight:800;padding:11px 22px;border-radius:var(--radius-pill);font-size:14px;opacity:0;pointer-events:none;transition:.25s;z-index:1100}
+.wb-toast.wb-on{opacity:1;transform:translateX(-50%) translateY(0)}
+
+@media print{
+  .navbar,#theme-switch,.deco-layer,#quarto-footer,.nav-footer,#wbDays,#wbBuilder,.wb-lib,.wb-hero,.wb-stp,.wb-print,.wb-toast{display:none !important}
+  #wbSession{display:block !important}
+  .wb-ex .g{border:1px solid #ccc}
+}
+</style>
+
+<script>
+const wbG="/strength-x9f3a7c2e/gifs/";
+const wbEQ={dumbbell:{l:"DB",c:"#4dabf7"},kettlebell:{l:"KB",c:"#f2b705"},rope:{l:"Rope",c:"#f08c00"},
+  cable:{l:"Cable",c:"#b14fd8"},machine:{l:"Machine",c:"#2f9e6e"},barbell:{l:"Barbell",c:"#7a869a"},bodyweight:{l:"Body",c:"#13b88a"}};
+const wbORDER=["dumbbell","kettlebell","barbell","rope","cable","machine","bodyweight"];
+const wbLABEL={dumbbell:"Dumbbell",kettlebell:"Kettlebell",barbell:"Barbell",rope:"Cable / Rope",cable:"Cable",machine:"Machine",bodyweight:"Bodyweight"};
+function wx(id,name,eq){return {id,name,eq}}
+
+const wbSEC={
+ chest:{name:"Chest",reps:"3–4 × 8–12",tip:"Full stretch at the bottom, squeeze the chest at the top.",list:[
+   wx("incline_db_press","Incline Dumbbell Press","dumbbell"),wx("flat_db_press","Flat Dumbbell Press","dumbbell"),
+   wx("decline_db_press","Decline Dumbbell Press","dumbbell"),wx("incline_db_fly","Incline Dumbbell Fly","dumbbell"),
+   wx("db_pullover","Dumbbell Pullover","dumbbell"),wx("cable_fly_high","Cable Crossover (High→Low)","cable"),
+   wx("cable_fly_low","Low Cable Fly (Low→High)","cable"),wx("machine_chest_press","Machine Chest Press","machine"),
+   wx("machine_incline_press","Incline Machine Press","machine"),wx("pec_deck","Pec Deck Fly","machine"),
+   wx("barbell_incline_press","Barbell Incline Press","barbell"),wx("chest_dip","Chest Dip","bodyweight")]},
+ press:{name:"Shoulders – Press",reps:"3–4 × 8–12",tip:"Press up and slightly in; stop just short of lockout.",list:[
+   wx("db_shoulder_press","Dumbbell Shoulder Press","dumbbell"),wx("arnold_press","Arnold Press","dumbbell"),
+   wx("single_arm_db_press","Single-Arm Dumbbell Press","dumbbell"),wx("db_front_raise","Dumbbell Front Raise","dumbbell"),
+   wx("machine_shoulder_press","Machine Shoulder Press","machine"),wx("barbell_overhead_press","Barbell Overhead Press","barbell"),
+   wx("landmine_press","Kneeling Landmine Press","barbell")]},
+ side:{name:"Side Delts",reps:"3 × 12–20",tip:"Lead with the elbows, slow lower, no swinging.",list:[
+   wx("db_lateral_raise","Dumbbell Lateral Raise","dumbbell"),wx("seated_db_lateral","Seated Dumbbell Lateral Raise","dumbbell"),
+   wx("cable_lateral_raise","Cable Lateral Raise","cable"),wx("leaning_cable_lateral","Leaning Cable Lateral Raise","cable"),
+   wx("machine_lateral_raise","Machine Lateral Raise","machine")]},
+ rear:{name:"Rear Delts",reps:"3 × 15–20",tip:"Light weight, pull wide & back, squeeze the rear delts.",list:[
+   wx("db_rear_fly","Bent-Over Dumbbell Rear Fly","dumbbell"),wx("db_rear_delt_row","Dumbbell Rear Delt Row","dumbbell"),
+   wx("incline_rear_fly","Incline Bench Rear Fly","dumbbell"),wx("cable_rear_fly","Cable Rear Delt Fly","cable"),
+   wx("face_pull","Rope Face Pull","rope"),wx("reverse_pec_deck","Reverse Pec Deck","machine")]},
+ triceps:{name:"Triceps",reps:"3 × 10–15",tip:"Keep the elbows locked in place, full extension, squeeze.",list:[
+   wx("rope_pushdown","Rope Pushdown","rope"),wx("overhead_rope_ext","Rope Overhead Extension","rope"),
+   wx("v_bar_pushdown","V-Bar Pushdown","cable"),wx("straight_bar_pushdown","Straight-Bar Pushdown","cable"),
+   wx("single_arm_pushdown","Single-Arm Pushdown","cable"),wx("db_overhead_ext","Dumbbell Overhead Extension","dumbbell"),
+   wx("db_kickback","Dumbbell Kickback","dumbbell"),wx("skull_crusher","Skull Crusher","barbell"),
+   wx("close_grip_bench","Close-Grip Bench Press","barbell"),wx("machine_triceps_ext","Machine Triceps Extension","machine"),
+   wx("bench_dip","Bench Dips","bodyweight")]},
+ biceps:{name:"Biceps",reps:"3 × 10–15",tip:"No swinging — elbows pinned, full stretch each rep.",list:[
+   wx("db_curl","Dumbbell Curl","dumbbell"),wx("hammer_curl","Dumbbell Hammer Curl","dumbbell"),
+   wx("incline_db_curl","Incline Dumbbell Curl","dumbbell"),wx("concentration_curl","Concentration Curl","dumbbell"),
+   wx("rope_hammer_curl","Rope Hammer Curl","rope"),wx("cable_curl","Cable Curl","cable"),
+   wx("preacher_curl","Preacher Curl","machine"),wx("barbell_curl","Barbell Curl","barbell"),
+   wx("ez_bar_curl","EZ-Bar Curl","barbell"),wx("reverse_curl","Reverse Curl","barbell")]},
+ lats:{name:"Back – Vertical (Lats)",reps:"3–4 × 8–12",tip:"Drive the elbows down to your ribs, feel the lats.",list:[
+   wx("lat_pulldown","Lat Pulldown","cable"),wx("wide_pulldown","Wide-Grip Pulldown","cable"),
+   wx("close_grip_pulldown","Close-Grip Pulldown","cable"),wx("neutral_pulldown","Neutral-Grip Pulldown","cable"),
+   wx("single_arm_pulldown","Single-Arm Pulldown","cable"),wx("straight_arm_pulldown","Rope Straight-Arm Pulldown","rope"),
+   wx("assisted_pullup","Assisted Pull-Up","machine"),wx("pull_up","Pull-Up","bodyweight"),wx("chin_up","Chin-Up","bodyweight")]},
+ rows:{name:"Back – Row",reps:"3–4 × 8–12",tip:"Pull to the waist, squeeze the shoulder blades, control back.",list:[
+   wx("one_arm_db_row","One-Arm Dumbbell Row","dumbbell"),wx("db_bent_row","Bent-Over Dumbbell Row","dumbbell"),
+   wx("chest_supported_row","Chest-Supported Dumbbell Row","dumbbell"),wx("seated_cable_row","Seated Cable Row","cable"),
+   wx("rope_cable_row","Wide-Grip Cable Row","cable"),wx("single_arm_cable_row","Single-Arm Cable Row","cable"),
+   wx("machine_row","Machine Row","machine"),wx("barbell_row","Bent-Over Barbell Row","barbell"),
+   wx("t_bar_row","T-Bar Row","barbell"),wx("inverted_row","Inverted Row","bodyweight")]},
+ traps:{name:"Upper Back / Traps",reps:"3 × 12–20",tip:"Pull high and squeeze; keep it light and controlled.",list:[
+   wx("db_shrug","Dumbbell Shrug","dumbbell"),wx("db_upright_row","Dumbbell Upright Row","dumbbell"),
+   wx("rope_upright_row","Cable Upright Row","cable"),wx("cable_shrug","Cable Shrug","cable"),
+   wx("cable_high_row","Rope High Row","rope"),wx("face_pull","Rope Face Pull","rope"),wx("barbell_shrug","Barbell Shrug","barbell")]},
+ quads:{name:"Quads / Legs",reps:"3–4 × 8–12",tip:"Knees track over the toes, controlled depth, drive up.",list:[
+   wx("goblet_squat","Goblet Squat","dumbbell"),wx("db_squat","Dumbbell Squat","dumbbell"),
+   wx("bulgarian_split_squat","Bulgarian Split Squat","dumbbell"),wx("db_lunge","Dumbbell Lunge","dumbbell"),
+   wx("reverse_lunge","Dumbbell Reverse Lunge","dumbbell"),wx("db_step_up","Dumbbell Step-Up","dumbbell"),
+   wx("leg_press","Leg Press","machine"),wx("hack_squat","Hack Squat","machine"),wx("leg_extension","Leg Extension","machine"),
+   wx("smith_squat","Smith Machine Squat","machine"),wx("barbell_squat","Barbell Back Squat","barbell"),wx("front_squat","Front Squat","barbell")]},
+ hams:{name:"Hamstrings",reps:"3–4 × 8–12",tip:"Push the hips back, soft knees, feel the hamstring stretch.",list:[
+   wx("db_rdl","Dumbbell Romanian Deadlift","dumbbell"),wx("single_leg_rdl","Single-Leg RDL","dumbbell"),
+   wx("seated_leg_curl","Seated Leg Curl","machine"),wx("lying_leg_curl","Lying Leg Curl","machine"),
+   wx("barbell_rdl","Barbell RDL","barbell"),wx("stiff_leg_deadlift","Stiff-Leg Deadlift","barbell"),
+   wx("good_morning","Good Morning","barbell"),wx("nordic_curl","Nordic Curl","bodyweight")]},
+ glutes:{name:"Glutes",reps:"3 × 10–15",tip:"Drive through the heels, full hip extension, squeeze the glutes.",list:[
+   wx("cable_kickback","Cable Glute Kickback","cable"),wx("cable_pull_through","Cable Pull Through","cable"),
+   wx("bulgarian_split_squat","Bulgarian Split Squat","dumbbell"),wx("hip_abduction","Hip Abduction Machine","machine"),
+   wx("glute_bridge","Glute Bridge","bodyweight"),wx("frog_pump","Frog Pump","bodyweight"),
+   wx("barbell_hip_thrust","Barbell Hip Thrust","barbell"),wx("single_leg_hip_thrust","Single-Leg Hip Thrust","barbell")]},
+ calves:{name:"Calves",reps:"4 × 12–20",tip:"Full stretch at the bottom, big squeeze up top, no bouncing.",list:[
+   wx("db_calf_raise","Dumbbell Calf Raise","dumbbell"),wx("standing_calf_raise","Standing Calf Raise","machine"),
+   wx("seated_calf_raise","Seated Calf Raise","machine"),wx("leg_press_calf","Leg Press Calf Raise","machine"),
+   wx("donkey_calf","Donkey Calf Raise","machine")]},
+ core:{name:"Core / Abs",reps:"3 × 12–20",tip:"Slow and controlled, exhale as you crunch, don't rush.",list:[
+   wx("rope_crunch","Cable Rope Crunch","rope"),wx("woodchopper","Cable Woodchopper","cable"),
+   wx("pallof_press","Cable Pallof Press","cable"),wx("db_side_bend","Dumbbell Side Bend","dumbbell"),
+   wx("hanging_leg_raise","Hanging Leg Raise","bodyweight"),wx("lying_leg_raise","Lying Leg Raise","bodyweight"),
+   wx("plank","Plank","bodyweight"),wx("russian_twist","Russian Twist","bodyweight"),
+   wx("bicycle_crunch","Bicycle Crunch","bodyweight"),wx("ab_wheel","Ab Wheel Rollout","bodyweight"),
+   wx("dead_bug","Dead Bug","bodyweight"),wx("bird_dog","Bird Dog","bodyweight")]},
+ cardio:{name:"Cardio / Conditioning",reps:"30–45 sec × 3–4 rounds",tip:"Keep moving with good form and steady breathing. Scale the pace to your level.",list:[
+   wx("jumping_jack","Jumping Jack","bodyweight"),wx("high_knees","High Knees","bodyweight"),
+   wx("butt_kick","Butt Kicks","bodyweight"),wx("mountain_climber","Mountain Climber","bodyweight"),
+   wx("burpee","Burpee","bodyweight"),wx("jump_squat","Jump Squat","bodyweight"),
+   wx("skater_jump","Skater Jumps","bodyweight"),wx("box_jump","Box Jump","bodyweight"),
+   wx("bear_crawl","Bear Crawl","bodyweight"),wx("jump_rope","Jump Rope","bodyweight"),
+   wx("kettlebell_swing","Kettlebell Swing","kettlebell"),wx("battle_rope","Battle Rope","machine")]}
+};
+const wbFLAT={};for(const k in wbSEC)wbSEC[k].list.forEach(e=>{if(!wbFLAT[e.id])wbFLAT[e.id]={...e,sec:k}});
+const ws=(t,sec,def)=>({t,sec,def});
+const wbDAYS={
+ push:{name:"Push",sub:"Chest · Delts · Triceps",c:"#ff6b6b",slots:[
+   ws("Chest · Incline","chest","incline_db_press"),ws("Chest · Press","chest","machine_chest_press"),
+   ws("Shoulders · Press","press","db_shoulder_press"),ws("Side Delts","side","cable_lateral_raise"),
+   ws("Chest · Fly","chest","cable_fly_high"),ws("Triceps · Pushdown","triceps","rope_pushdown"),
+   ws("Triceps · Extension","triceps","overhead_rope_ext"),ws("Core","core","rope_crunch")]},
+ pull:{name:"Pull",sub:"Back · Rear Delts · Biceps",c:"#51cf66",slots:[
+   ws("Back · Pulldown","lats","lat_pulldown"),ws("Back · Row","rows","one_arm_db_row"),
+   ws("Back · Wide Pulldown","lats","wide_pulldown"),ws("Upper Back · Traps","traps","cable_high_row"),
+   ws("Rear Delts","rear","face_pull"),ws("Biceps · Dumbbell","biceps","db_curl"),
+   ws("Biceps · Cable/Rope","biceps","rope_hammer_curl"),ws("Core","core","hanging_leg_raise")]},
+ upper:{name:"Upper",sub:"Whole upper body",c:"#cc5de8",slots:[
+   ws("Chest","chest","incline_db_press"),ws("Back · Row","rows","seated_cable_row"),
+   ws("Back · Pulldown","lats","lat_pulldown"),ws("Shoulders · Press","press","db_shoulder_press"),
+   ws("Side Delts","side","db_lateral_raise"),ws("Triceps","triceps","rope_pushdown"),
+   ws("Biceps","biceps","db_curl"),ws("Core","core","plank")]},
+ lower:{name:"Lower",sub:"Quads · Hams · Glutes",c:"#4dabf7",slots:[
+   ws("Quads · Squat","quads","goblet_squat"),ws("Quads · Machine","quads","leg_press"),
+   ws("Hamstrings · Hinge","hams","db_rdl"),ws("Hamstrings · Curl","hams","seated_leg_curl"),
+   ws("Glutes","glutes","barbell_hip_thrust"),ws("Quads · Extension","quads","leg_extension"),
+   ws("Calves","calves","standing_calf_raise"),ws("Core","core","woodchopper")]},
+ full:{name:"Full Body",sub:"A bit of everything",c:"#ffa94d",slots:[
+   ws("Legs · Squat","quads","goblet_squat"),ws("Chest","chest","incline_db_press"),
+   ws("Back · Row","rows","one_arm_db_row"),ws("Shoulders","press","db_shoulder_press"),
+   ws("Hamstrings","hams","db_rdl"),ws("Biceps","biceps","hammer_curl"),
+   ws("Triceps","triceps","v_bar_pushdown"),ws("Core","core","hanging_leg_raise")]},
+ arms:{name:"Arms",sub:"Biceps · Triceps",c:"#69db7c",slots:[
+   ws("Biceps · Curl","biceps","db_curl"),ws("Triceps · Pushdown","triceps","rope_pushdown"),
+   ws("Biceps · Incline","biceps","incline_db_curl"),ws("Triceps · Overhead","triceps","overhead_rope_ext"),
+   ws("Biceps · Hammer","biceps","rope_hammer_curl"),ws("Triceps · Extension","triceps","db_overhead_ext"),
+   ws("Biceps · Preacher","biceps","preacher_curl"),ws("Triceps · Dips","triceps","bench_dip")]},
+ freeweights:{name:"Free Weights",sub:"Barbell & dumbbell",c:"#fab005",slots:[
+   ws("Squat","quads","barbell_squat"),ws("Press","chest","flat_db_press"),
+   ws("Hinge / Deadlift","hams","barbell_rdl"),ws("Overhead Press","press","barbell_overhead_press"),
+   ws("Row","rows","barbell_row"),ws("Lunge","quads","db_lunge"),
+   ws("Curl","biceps","barbell_curl"),ws("Core","core","ab_wheel")]},
+ cardio:{name:"Cardio",sub:"Conditioning & plyo",c:"#ff8787",slots:[
+   ws("Warm-up","cardio","jumping_jack"),ws("Conditioning","cardio","mountain_climber"),
+   ws("Conditioning","cardio","burpee"),ws("Power","cardio","jump_squat"),
+   ws("Power","cardio","kettlebell_swing"),ws("Conditioning","cardio","high_knees"),
+   ws("Core","core","dead_bug"),ws("Finisher","cardio","jump_rope")]}
+};
+
+const wbSTORE="kdr_builder_v3";
+let wbSaved=JSON.parse(localStorage.getItem(wbSTORE)||"{}");
+let wbCur=null;
+const uniq=Object.keys(wbFLAT).length;
+document.getElementById('wbCount').textContent=uniq+" exercises · "+Object.keys(wbSEC).length+" muscle groups · "+Object.keys(wbDAYS).length+" day types";
+document.getElementById('wbDays').innerHTML=Object.entries(wbDAYS).map(([k,d])=>
+  `<div class="wb-dayb" data-k="${k}" style="--c:${d.c}" onclick="wbPick('${k}')">${d.name}<span class="s">${d.sub}</span></div>`).join('');
+function wbOpt(sec,sel){const byeq={};wbSEC[sec].list.forEach(e=>{(byeq[e.eq]=byeq[e.eq]||[]).push(e)});
+  return wbORDER.filter(eq=>byeq[eq]).map(eq=>`<optgroup label="${wbLABEL[eq]}">`+byeq[eq].map(e=>`<option value="${e.id}" ${e.id===sel?'selected':''}>${e.name}</option>`).join('')+`</optgroup>`).join('');}
+function wbPick(k){wbCur=k;const d=wbDAYS[k];
+  document.querySelectorAll('.wb-dayb').forEach(b=>b.classList.toggle('wb-on',b.dataset.k===k));
+  const mem=wbSaved[k]||{};
+  document.getElementById('wbSlots').innerHTML=d.slots.map((sl,i)=>{const val=mem[i]||sl.def;const eq=wbFLAT[val]?wbFLAT[val].eq:'dumbbell';
+    return `<div class="wb-slot"><div class="wb-num">${i+1}</div><div class="b"><div class="t">${sl.t}</div>
+      <select class="wb-select" data-i="${i}" onchange="wbOnPick(this)">${wbOpt(sl.sec,val)}</select></div>
+      <span class="wb-eqdot" id="wbdot${i}" style="background:${wbEQ[eq].c}"></span></div>`;}).join('');
+  document.getElementById('wbBuilder').style.display='block';
+  document.getElementById('wbSession').style.display='none';
+  document.getElementById('wbBuilder').scrollIntoView({behavior:'smooth',block:'start'});}
+function wbOnPick(el){document.getElementById('wbdot'+el.dataset.i).style.background=wbEQ[wbFLAT[el.value].eq].c;}
+function wbSel(){const o={};document.querySelectorAll('#wbSlots select').forEach(s=>o[s.dataset.i]=s.value);return o;}
+function wbSave(){if(!wbCur)return;wbSaved[wbCur]=wbSel();localStorage.setItem(wbSTORE,JSON.stringify(wbSaved));wbToast("Saved ✓");}
+function wbShow(){if(!wbCur)return;wbSave();const d=wbDAYS[wbCur],sel=wbSel();
+  document.getElementById('wbSesTitle').textContent=d.name+" Day";
+  document.getElementById('wbSesCnt').textContent=d.slots.length+" exercises";
+  document.getElementById('wbSesEx').innerHTML=d.slots.map((sl,i)=>{const id=sel[i]||sl.def,e=wbFLAT[id],sc=wbSEC[sl.sec];
+    return `<div class="wb-ex"><img class="g" src="${wbG}${id}.gif" alt="${e.name}" loading="lazy">
+      <div class="i"><div class="sn">${i+1} · ${sl.t}</div><div class="nm">${e.name}</div>
+        <div class="r"><span class="wb-tag" style="background:${wbEQ[e.eq].c}">${wbEQ[e.eq].l}</span><span class="wb-tag reps">${sc.reps}</span></div>
+        <div class="tip">${sc.tip}</div></div></div>`;}).join('');
+  document.getElementById('wbSession').style.display='block';
+  document.getElementById('wbSession').scrollIntoView({behavior:'smooth',block:'start'});}
+let wbTT;function wbToast(m){const t=document.getElementById('wbToast');t.textContent=m;t.classList.add('wb-on');clearTimeout(wbTT);wbTT=setTimeout(()=>t.classList.remove('wb-on'),1400);}
+let wbFilter="all";
+function wbRenderLib(){document.getElementById('wbLibBody').innerHTML=Object.entries(wbSEC).map(([k,sc])=>{
+  const items=sc.list.filter(e=>wbFilter==="all"||e.eq===wbFilter);if(!items.length)return"";
+  return `<div class="wb-libsec"><h4>${sc.name} <span>${items.length}</span></h4><div class="wb-libgrid">${items.map(e=>
+    `<div class="wb-libitem"><img src="${wbG}${e.id}.gif" alt="${e.name}" loading="lazy"><div class="ln">${e.name}</div><span class="le" style="background:${wbEQ[e.eq].c}">${wbEQ[e.eq].l}</span></div>`).join('')}</div></div>`;}).join('');}
+const wbeqs=["all",...wbORDER];
+document.getElementById('wbFilters').innerHTML=wbeqs.map(f=>{const lbl=f==="all"?"All":wbEQ[f].l;
+  return `<span class="wb-fchip ${f==='all'?'wb-on':''}" style="${f==='all'?'background:var(--gold);color:#fff':''}" onclick="wbSetFilter('${f}',this)">${lbl}</span>`;}).join('');
+function wbSetFilter(f,el){wbFilter=f;document.querySelectorAll('.wb-fchip').forEach(c=>{c.classList.remove('wb-on');c.style.background='';c.style.color='';});el.classList.add('wb-on');el.style.background=f==='all'?'var(--gold)':wbEQ[f].c;if(f==='all')el.style.color='#fff';renderReady();}
+function renderReady(){wbRenderLib();}
+document.getElementById('wbLib').addEventListener('toggle',function(){if(this.open&&!document.getElementById('wbLibBody').innerHTML)wbRenderLib();});
+</script>
+```
