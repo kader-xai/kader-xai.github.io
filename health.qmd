@@ -137,6 +137,17 @@ anchor-sections: false
   font-weight:800;padding:11px 22px;border-radius:var(--radius-pill);font-size:14px;opacity:0;pointer-events:none;transition:.25s;z-index:1100}
 .wb-toast.wb-on{opacity:1;transform:translateX(-50%) translateY(0)}
 
+/* readability — keep words legible over the decorative vines */
+.wb .sec-title{background:var(--glass-chip);border:var(--chip-border);padding:9px 15px;border-radius:14px;
+  -webkit-backdrop-filter:var(--blur);backdrop-filter:var(--blur)}
+.wb-count{display:inline-block;background:var(--glass-chip);border:var(--chip-border);padding:5px 12px;border-radius:var(--radius-pill)}
+@media(max-width:820px){
+  /* stack each token over itself to raise effective opacity so the vine layer can't bleed through */
+  .wb .panel,.wb-hero,.wb-dayb,.wb-slot,.wb-sescard{background-image:linear-gradient(var(--glass-panel),var(--glass-panel)),linear-gradient(var(--glass-panel),var(--glass-panel))}
+  .wb .sec-title,.wb-libitem,.wb-select,.wb-num,.wb-count{background-image:linear-gradient(var(--glass-chip),var(--glass-chip)),linear-gradient(var(--glass-chip),var(--glass-chip))}
+  body .deco-layer{opacity:.28}
+}
+
 @media print{
   .navbar,#theme-switch,.deco-layer,#quarto-footer,.nav-footer,#wbDays,#wbBuilder,.wb-lib,.wb-hero,.wb-stp,.wb-print,.wb-toast{display:none !important}
   #wbSession{display:block !important}
@@ -307,7 +318,7 @@ function wbShow(){if(!wbCur)return;wbSave();const d=wbDAYS[wbCur],sel=wbSel();
   document.getElementById('wbSesTitle').textContent=d.name+" Day";
   document.getElementById('wbSesCnt').textContent=d.slots.length+" exercises";
   document.getElementById('wbSesEx').innerHTML=d.slots.map((sl,i)=>{const id=sel[i]||sl.def,e=wbFLAT[id],sc=wbSEC[sl.sec];
-    return `<div class="wb-ex"><img class="g" src="${wbG}${id}.gif" alt="${e.name}" loading="lazy">
+    return `<div class="wb-ex"><img class="g" src="${wbG}${id}.gif" alt="${e.name}" decoding="async" onerror="this.style.opacity=.25;this.alt='(image failed)'">
       <div class="i"><div class="sn">${i+1} · ${sl.t}</div><div class="nm">${e.name}</div>
         <div class="r"><span class="wb-tag" style="background:${wbEQ[e.eq].c}">${wbEQ[e.eq].l}</span><span class="wb-tag reps">${sc.reps}</span></div>
         <div class="tip">${sc.tip}</div></div></div>`;}).join('');
