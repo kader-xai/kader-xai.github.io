@@ -143,6 +143,9 @@ anchor-sections: false
 .wb-libsec{padding:4px 16px 12px}
 .wb-libsec h4{font-size:14px;color:var(--gold);margin:14px 0 9px;font-weight:800;display:flex;gap:8px;align-items:center}
 .wb-libsec h4 span{font-size:11px;color:var(--ink-faint);font-weight:600}
+.wb-libreg{font-size:11px;font-weight:800;letter-spacing:.6px;text-transform:uppercase;color:var(--ink-soft);
+  margin:12px 0 7px;padding-left:2px;display:flex;gap:7px;align-items:center;border-left:3px solid var(--gold);padding-left:9px}
+.wb-libreg span{font-size:10px;color:var(--ink-faint);font-weight:600}
 .wb-libgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(120px,1fr));gap:9px}
 .wb-libitem{background:var(--glass-chip);border:1px solid var(--glass-border-soft);border-radius:14px;padding:7px;text-align:center}
 .wb-libitem img{width:100%;aspect-ratio:1;border-radius:9px;background:#fff;object-fit:cover}
@@ -262,7 +265,7 @@ const wbSEC={
    wx("db_rdl","Dumbbell Romanian Deadlift","dumbbell"),wx("single_leg_rdl","Single-Leg RDL","dumbbell"),
    wx("seated_leg_curl","Seated Leg Curl","machine"),wx("lying_leg_curl","Lying Leg Curl","machine"),
    wx("barbell_rdl","Barbell RDL","barbell"),wx("stiff_leg_deadlift","Stiff-Leg Deadlift","barbell"),
-   wx("good_morning","Good Morning","barbell"),wx("nordic_curl","Nordic Curl","bodyweight")]},
+   wx("good_morning","Good Morning","barbell"),wx("nordic_curl","Nordic Curl","bodyweight"),wx("deadlift","Barbell Deadlift","barbell")]},
  glutes:{name:"Glutes",reps:"3 × 10–15",tip:"Drive through the heels, full hip extension, squeeze the glutes.",list:[
    wx("cable_kickback","Cable Glute Kickback","cable"),wx("cable_pull_through","Cable Pull Through","cable"),
    wx("bulgarian_split_squat","Bulgarian Split Squat","dumbbell"),wx("hip_abduction","Hip Abduction Machine","machine"),
@@ -285,9 +288,28 @@ const wbSEC={
    wx("burpee","Burpee","bodyweight"),wx("jump_squat","Jump Squat","bodyweight"),
    wx("skater_jump","Skater Jumps","bodyweight"),wx("box_jump","Box Jump","bodyweight"),
    wx("bear_crawl","Bear Crawl","bodyweight"),wx("jump_rope","Jump Rope","bodyweight"),
-   wx("kettlebell_swing","Kettlebell Swing","kettlebell"),wx("battle_rope","Battle Rope","machine")]}
+   wx("kettlebell_swing","Kettlebell Swing","kettlebell"),wx("battle_rope","Battle Rope","machine")]},
+ lowerback:{name:"Lower Back",reps:"3–4 × 8–15",tip:"Brace the core, hinge from the hips, keep a neutral spine — never round under load.",list:[
+   wx("deadlift","Barbell Deadlift","barbell"),wx("barbell_rdl","Barbell RDL","barbell"),
+   wx("good_morning","Good Morning","barbell"),wx("cable_pull_through","Cable Pull Through","cable"),
+   wx("back_extension","45° Back Extension","bodyweight"),wx("superman","Superman","bodyweight")]},
+ adductors:{name:"Inner / Outer Thigh",reps:"3 × 12–20",tip:"Controlled range, squeeze at the midline, slow on the return.",list:[
+   wx("hip_adduction","Hip Adduction (Inner)","machine"),wx("hip_abduction","Hip Abduction (Outer)","machine")]}
 };
 const wbFLAT={};for(const k in wbSEC)wbSEC[k].list.forEach(e=>{if(!wbFLAT[e.id])wbFLAT[e.id]={...e,sec:k}});
+/* anatomical sub-regions for the library, per muscle group */
+const wbReg={
+ chest:{order:['Upper Chest','Mid Chest','Lower Chest'],reg:{incline_db_press:'Upper Chest',incline_db_fly:'Upper Chest',cable_fly_low:'Upper Chest',machine_incline_press:'Upper Chest',barbell_incline_press:'Upper Chest',flat_db_press:'Mid Chest',machine_chest_press:'Mid Chest',pec_deck:'Mid Chest',db_pullover:'Mid Chest',decline_db_press:'Lower Chest',cable_fly_high:'Lower Chest',chest_dip:'Lower Chest'}},
+ triceps:{order:['Pushdowns','Overhead (Long Head)','Extensions & Dips'],reg:{rope_pushdown:'Pushdowns',v_bar_pushdown:'Pushdowns',straight_bar_pushdown:'Pushdowns',single_arm_pushdown:'Pushdowns',overhead_rope_ext:'Overhead (Long Head)',db_overhead_ext:'Overhead (Long Head)',skull_crusher:'Extensions & Dips',db_kickback:'Extensions & Dips',close_grip_bench:'Extensions & Dips',machine_triceps_ext:'Extensions & Dips',bench_dip:'Extensions & Dips'}},
+ biceps:{order:['Standard Curls','Hammer / Reverse','Peak / Stretch'],reg:{db_curl:'Standard Curls',cable_curl:'Standard Curls',barbell_curl:'Standard Curls',ez_bar_curl:'Standard Curls',hammer_curl:'Hammer / Reverse',rope_hammer_curl:'Hammer / Reverse',reverse_curl:'Hammer / Reverse',incline_db_curl:'Peak / Stretch',concentration_curl:'Peak / Stretch',preacher_curl:'Peak / Stretch'}},
+ lats:{order:['Wide / Vertical','Close / Neutral','Straight-Arm','Pull-Ups'],reg:{lat_pulldown:'Wide / Vertical',wide_pulldown:'Wide / Vertical',close_grip_pulldown:'Close / Neutral',neutral_pulldown:'Close / Neutral',single_arm_pulldown:'Close / Neutral',straight_arm_pulldown:'Straight-Arm',assisted_pullup:'Pull-Ups',pull_up:'Pull-Ups',chin_up:'Pull-Ups'}},
+ rows:{order:['Upper Back','Mid Back'],reg:{rope_cable_row:'Upper Back',one_arm_db_row:'Mid Back',db_bent_row:'Mid Back',chest_supported_row:'Mid Back',seated_cable_row:'Mid Back',single_arm_cable_row:'Mid Back',machine_row:'Mid Back',barbell_row:'Mid Back',t_bar_row:'Mid Back',inverted_row:'Mid Back'}},
+ traps:{order:['Traps','Upper Traps / Rear'],reg:{db_shrug:'Traps',db_upright_row:'Traps',rope_upright_row:'Traps',cable_shrug:'Traps',barbell_shrug:'Traps',cable_high_row:'Upper Traps / Rear',face_pull:'Upper Traps / Rear'}},
+ quads:{order:['Squat Pattern','Lunge & Split','Machine & Isolation'],reg:{goblet_squat:'Squat Pattern',db_squat:'Squat Pattern',barbell_squat:'Squat Pattern',front_squat:'Squat Pattern',hack_squat:'Squat Pattern',smith_squat:'Squat Pattern',bulgarian_split_squat:'Lunge & Split',db_lunge:'Lunge & Split',reverse_lunge:'Lunge & Split',db_step_up:'Lunge & Split',leg_press:'Machine & Isolation',leg_extension:'Machine & Isolation'}},
+ hams:{order:['Hip Hinge','Leg Curl'],reg:{db_rdl:'Hip Hinge',single_leg_rdl:'Hip Hinge',barbell_rdl:'Hip Hinge',stiff_leg_deadlift:'Hip Hinge',good_morning:'Hip Hinge',deadlift:'Hip Hinge',seated_leg_curl:'Leg Curl',lying_leg_curl:'Leg Curl',nordic_curl:'Leg Curl'}},
+ core:{order:['Abs (Flexion)','Obliques & Anti-Rotation','Stability'],reg:{rope_crunch:'Abs (Flexion)',hanging_leg_raise:'Abs (Flexion)',lying_leg_raise:'Abs (Flexion)',bicycle_crunch:'Abs (Flexion)',ab_wheel:'Abs (Flexion)',woodchopper:'Obliques & Anti-Rotation',pallof_press:'Obliques & Anti-Rotation',db_side_bend:'Obliques & Anti-Rotation',russian_twist:'Obliques & Anti-Rotation',plank:'Stability',dead_bug:'Stability',bird_dog:'Stability'}},
+ cardio:{order:['Steady','Plyometric','Loaded'],reg:{jumping_jack:'Steady',high_knees:'Steady',butt_kick:'Steady',mountain_climber:'Steady',bear_crawl:'Steady',burpee:'Plyometric',jump_squat:'Plyometric',skater_jump:'Plyometric',box_jump:'Plyometric',jump_rope:'Plyometric',kettlebell_swing:'Loaded',battle_rope:'Loaded'}}
+};
 const ws=(t,sec,def)=>({t,sec,def});
 const wbDAYS={
  push:{name:"Push",sub:"Chest · Delts · Triceps",c:"#ff6b6b",slots:[
@@ -402,10 +424,17 @@ function wbLazy(scope,recycle){if(!scope)return null;
 function wbLibObserve(){if(wbIOlib)wbIOlib.disconnect();wbIOlib=wbLazy(document.getElementById('wbLibBody'),true);}
 
 let wbFilter="all";
-function wbRenderLib(){document.getElementById('wbLibBody').innerHTML=Object.entries(wbSEC).map(([k,sc])=>{
-  const items=sc.list.filter(e=>wbFilter==="all"||e.eq===wbFilter);if(!items.length)return"";
-  return `<div class="wb-libsec"><h4>${sc.name} <span>${items.length}</span></h4><div class="wb-libgrid">${items.map(e=>
-    `<div class="wb-libitem wb-click" onclick="wbOpenDetail('${e.id}')"><img data-src="${wbG}${e.id}.gif" data-recycle="1" alt="${e.name}" decoding="async"><div class="ln">${e.name}</div><span class="le" style="background:${wbEQ[e.eq].c}">${wbEQ[e.eq].l}</span></div>`).join('')}</div></div>`;}).join('');}
+function wbCard(e){return `<div class="wb-libitem wb-click" onclick="wbOpenDetail('${e.id}')"><img data-src="${wbG}${e.id}.gif" data-recycle="1" alt="${e.name}" decoding="async"><div class="ln">${e.name}</div><span class="le" style="background:${wbEQ[e.eq].c}">${wbEQ[e.eq].l}</span></div>`;}
+function wbRenderLib(){document.getElementById('wbLibBody').innerHTML=Object.entries(wbSEC).map(function(en){
+  var k=en[0],sc=en[1];
+  var items=sc.list.filter(function(e){return wbFilter==="all"||e.eq===wbFilter;});if(!items.length)return"";
+  var rmap=wbReg[k],inner;
+  if(rmap){inner=rmap.order.map(function(rg){
+    var ri=items.filter(function(e){return (rmap.reg[e.id]||rmap.order[0])===rg;});
+    if(!ri.length)return"";
+    return '<div class="wb-libreg">'+rg+' <span>'+ri.length+'</span></div><div class="wb-libgrid">'+ri.map(wbCard).join('')+'</div>';}).join('');}
+  else{inner='<div class="wb-libgrid">'+items.map(wbCard).join('')+'</div>';}
+  return '<div class="wb-libsec"><h4>'+sc.name+' <span>'+items.length+'</span></h4>'+inner+'</div>';}).join('');}
 const wbeqs=["all",...wbORDER];
 document.getElementById('wbFilters').innerHTML=wbeqs.map(f=>{const lbl=f==="all"?"All":wbEQ[f].l;
   return `<span class="wb-fchip ${f==='all'?'wb-on':''}" style="${f==='all'?'background:var(--gold);color:#fff':''}" onclick="wbSetFilter('${f}',this)">${lbl}</span>`;}).join('');
