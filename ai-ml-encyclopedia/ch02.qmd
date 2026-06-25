@@ -133,6 +133,19 @@ In practice nobody recomputes that limit by hand. We use **differentiation rules
 The derivative has a *sign* and a *size*. The sign says which direction is uphill; the size says how steep. A derivative of zero means flat — a peak, valley, or plateau. Optimizers live and die by these two facts.
 :::
 
+
+::: {.viz-wrap}
+**🎮 Try it — Limits**
+
+<div class="ml-viz" data-viz="limit" data-params="{}"></div>
+:::
+
+::: {.viz-wrap}
+**🎮 Try it — Derivatives**
+
+<div class="ml-viz" data-viz="derivative" data-params="{}"></div>
+:::
+
 ## 2.2 — Partial derivatives & the chain rule (engine of backprop)
 
 Real models have not one input but millions. A **partial derivative** is the derivative with respect to *one* variable while holding all the others fixed — written $\partial f / \partial x$. The curly $\partial$ ("partial") just signals "there are other variables, but I am freezing them."
@@ -177,6 +190,19 @@ print(dL_dw)       # 24.0
 Backprop *reuses* the forward-pass values ($g$, $a$, …). If you overwrite them or forget to store them, the backward pass computes garbage. This is why frameworks keep a "computation graph" of intermediate activations in memory — and why long sequences run out of GPU RAM.
 :::
 
+
+::: {.viz-wrap}
+**🎮 Try it — Partial Derivatives**
+
+<div class="ml-viz" data-viz="gradientfield" data-params="{}"></div>
+:::
+
+::: {.viz-wrap}
+**🎮 Try it — Chain Rule**
+
+<div class="ml-viz" data-viz="derivative" data-params="{}"></div>
+:::
+
 ## 2.3 — Gradient, Jacobian & Hessian
 
 When a function has many inputs, its derivatives organize into structured objects. Which object you get depends on how many inputs and outputs you have.
@@ -219,6 +245,25 @@ The **Hessian** $H$ holds the *second* derivatives of a scalar function — the 
 Rule of thumb on cost: the gradient has $n$ numbers, the Hessian has $n^2$. For a model with a billion parameters, the gradient is feasible but the full Hessian is unthinkable. This is why almost all deep-learning optimizers are *first-order* (gradient only) and merely *approximate* curvature.
 :::
 
+
+::: {.viz-wrap}
+**🎮 Try it — Gradients**
+
+<div class="ml-viz" data-viz="gradientfield" data-params="{}"></div>
+:::
+
+::: {.viz-wrap}
+**🎮 Try it — Jacobian**
+
+<div class="ml-viz" data-viz="gradientfield" data-params="{}"></div>
+:::
+
+::: {.viz-wrap}
+**🎮 Try it — Hessian**
+
+<div class="ml-viz" data-viz="convexsurface" data-params="{}"></div>
+:::
+
 ## 2.4 — Taylor series & local approximation
 
 A **Taylor series** rebuilds a complicated function near a point out of its derivatives there. The idea: if you know a function's value, slope, curvature, and so on at one spot, you can predict its values nearby — better and better as you add terms.
@@ -250,6 +295,13 @@ Why ML cares: optimization methods *are* local approximations. Gradient descent 
 
 ::: {.callout-warning}
 A Taylor approximation is only trustworthy *near* the expansion point. Optimizers that take an overly large step are trusting a local quadratic model far outside its valid neighborhood — which is precisely why too-big a learning rate makes training diverge. This is the idea behind "trust region" methods.
+:::
+
+
+::: {.viz-wrap}
+**🎮 Try it — Taylor Series**
+
+<div class="ml-viz" data-viz="taylor" data-params="{}"></div>
 :::
 
 ## 2.5 — Integration (and where it appears in ML)
@@ -289,6 +341,13 @@ Because $p(x)$ is uniform on $[0,1]$ (density $=1$), the integral equals $\mathb
 
 ::: {.callout-tip}
 Whenever you see "expected loss," "marginal likelihood," "average reward," or "area under the curve," translate it mentally as *an integral we will probably approximate by sampling*. That reframing demystifies most of probabilistic ML.
+:::
+
+
+::: {.viz-wrap}
+**🎮 Try it — Integration**
+
+<div class="ml-viz" data-viz="integral" data-params="{}"></div>
 :::
 
 ## 2.6 — Numerical methods & stability
@@ -340,6 +399,19 @@ print(logsumexp(x))          # 1002.407... correct and finite
 
 ::: {.callout-warning}
 `NaN` in your loss is almost always a numerical-stability bug, not a math error: a $\log(0)$, a $0/0$, an $e^{\text{big}}$, or a $\sqrt{\text{negative}}$. Reach for the stable primitive (`logsumexp`, `log1p`, `expm1`, adding a small $\epsilon$ inside logs and denominators) before you suspect your model.
+:::
+
+
+::: {.viz-wrap}
+**🎮 Try it — Numerical Differentiation**
+
+<div class="ml-viz" data-viz="derivative" data-params="{}"></div>
+:::
+
+::: {.viz-wrap}
+**🎮 Try it — Numerical Optimization**
+
+<div class="ml-viz" data-viz="graddesc" data-params="{&quot;surface&quot;: &quot;convex&quot;}"></div>
 :::
 
 ## 2.7 — Key takeaways

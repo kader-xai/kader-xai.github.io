@@ -141,6 +141,25 @@ For a convex bowl GD is guaranteed to reach the global minimum given a small eno
 **Rule of thumb:** if your loss oscillates or explodes, your learning rate is too high — cut it by 3–10×. If it decreases painfully slowly in a smooth line, it is too low.
 :::
 
+
+::: {.viz-wrap}
+**🎮 Try it — Objective Functions**
+
+<div class="ml-viz" data-viz="graddesc" data-params="{&quot;surface&quot;: &quot;convex&quot;}"></div>
+:::
+
+::: {.viz-wrap}
+**🎮 Try it — Loss Functions**
+
+<div class="ml-viz" data-viz="losscurves" data-params="{}"></div>
+:::
+
+::: {.viz-wrap}
+**🎮 Try it — Batch Gradient Descent**
+
+<div class="ml-viz" data-viz="graddesc" data-params="{&quot;surface&quot;: &quot;convex&quot;}"></div>
+:::
+
 ## 3.2 — Stochastic gradient descent (SGD)
 
 Plain gradient descent computes the gradient over the *entire* dataset before taking a single step. With a million training examples, that is a million gradient evaluations per step — agonizingly slow. **Stochastic gradient descent (SGD)** makes a bargain: instead of the exact gradient, use a cheap, noisy estimate from a small random sample, and take many more steps.
@@ -182,6 +201,19 @@ The trade-off is variance: pure SGD ($B=1$) is cheap but jumpy, requiring a deca
 **Common mistake:** forgetting to shuffle the data between epochs. If batches always contain the same examples in the same order, the gradient noise becomes correlated and the model can learn the *ordering* rather than the signal.
 :::
 
+
+::: {.viz-wrap}
+**🎮 Try it — SGD**
+
+<div class="ml-viz" data-viz="graddesc" data-params="{&quot;surface&quot;: &quot;convex&quot;, &quot;noise&quot;: 1.4}"></div>
+:::
+
+::: {.viz-wrap}
+**🎮 Try it — Mini-Batch SGD**
+
+<div class="ml-viz" data-viz="graddesc" data-params="{&quot;surface&quot;: &quot;convex&quot;, &quot;noise&quot;: 0.6}"></div>
+:::
+
 ## 3.3 — Momentum & Nesterov accelerated gradient
 
 SGD in a long, narrow ravine is frustrating: the gradient points mostly *across* the valley (steep walls) rather than *along* it (gentle floor), so the optimizer zig-zags slowly toward the minimum. **Momentum** fixes this by giving the optimizer inertia, like a heavy ball rolling downhill: it accumulates velocity in directions of consistent gradient and cancels out the oscillating components.
@@ -215,6 +247,19 @@ def momentum(grad, theta, lr=0.01, beta=0.9, steps=100):
 ```
 
 The cost is one extra parameter and a velocity buffer the size of $\theta$. The benefit is often a 5–10× speedup in ill-conditioned valleys, which is why momentum (and its descendants) underlie nearly every modern optimizer.
+
+
+::: {.viz-wrap}
+**🎮 Try it — Momentum**
+
+<div class="ml-viz" data-viz="graddesc" data-params="{&quot;surface&quot;: &quot;nonconvex&quot;, &quot;momentum&quot;: true}"></div>
+:::
+
+::: {.viz-wrap}
+**🎮 Try it — Nesterov Momentum**
+
+<div class="ml-viz" data-viz="graddesc" data-params="{&quot;surface&quot;: &quot;nonconvex&quot;, &quot;momentum&quot;: true}"></div>
+:::
 
 ## 3.4 — AdaGrad / RMSProp / AdaDelta
 
@@ -254,6 +299,19 @@ def rmsprop(grad, theta, lr=0.01, rho=0.9, eps=1e-8, steps=100):
 **Intuition:** the denominator $\sqrt{E[g^2]}$ is a per-parameter "volatility" estimate. Noisy, large-gradient directions get damped; quiet directions get amplified — an automatic, dimension-by-dimension learning-rate tuner.
 :::
 
+
+::: {.viz-wrap}
+**🎮 Try it — AdaGrad**
+
+<div class="ml-viz" data-viz="graddesc" data-params="{&quot;surface&quot;: &quot;convex&quot;}"></div>
+:::
+
+::: {.viz-wrap}
+**🎮 Try it — RMSProp**
+
+<div class="ml-viz" data-viz="graddesc" data-params="{&quot;surface&quot;: &quot;convex&quot;}"></div>
+:::
+
 ## 3.5 — Adam / Adamax / Nadam
 
 **Adam** (Adaptive Moment Estimation) is the default optimizer for most deep learning today. Its idea is simply to combine the two best tricks: the *momentum* of Section 3.3 (a running average of gradients, the **first moment**) and the *per-parameter adaptivity* of RMSProp (a running average of squared gradients, the **second moment**).
@@ -286,6 +344,19 @@ def adam(grad, theta, lr=1e-3, b1=0.9, b2=0.999, eps=1e-8, steps=200):
 
 ::: {.callout-warning}
 **Common mistake:** assuming Adam always beats SGD. For many vision tasks, well-tuned SGD-with-momentum generalizes *better* than Adam, even if Adam trains faster. A frequent fix is **AdamW**, which decouples weight decay from the adaptive step and often closes the gap.
+:::
+
+
+::: {.viz-wrap}
+**🎮 Try it — Adam**
+
+<div class="ml-viz" data-viz="graddesc" data-params="{&quot;surface&quot;: &quot;nonconvex&quot;, &quot;momentum&quot;: true}"></div>
+:::
+
+::: {.viz-wrap}
+**🎮 Try it — AdamW**
+
+<div class="ml-viz" data-viz="graddesc" data-params="{&quot;surface&quot;: &quot;nonconvex&quot;, &quot;momentum&quot;: true}"></div>
 :::
 
 ## 3.6 — Learning rate & schedules (warmup, decay, cyclical)
@@ -322,6 +393,25 @@ def cosine_warmup(step, base=1e-3, warmup=500, total=10000):
 
 ::: {.callout-tip}
 **Rule of thumb (LR range test):** train for a few hundred steps while increasing $\eta$ exponentially and plot loss vs $\eta$. Pick a base rate a notch below where the loss starts to climb — a fast, reliable way to find a good starting point.
+:::
+
+
+::: {.viz-wrap}
+**🎮 Try it — Learning Rate Scheduling**
+
+<div class="ml-viz" data-viz="lrcurve" data-params="{}"></div>
+:::
+
+::: {.viz-wrap}
+**🎮 Try it — Early Stopping**
+
+<div class="ml-viz" data-viz="traincurve" data-params="{}"></div>
+:::
+
+::: {.viz-wrap}
+**🎮 Try it — Weight Decay**
+
+<div class="ml-viz" data-viz="convexsurface" data-params="{}"></div>
 :::
 
 ## 3.7 — Newton & quasi-Newton methods (BFGS / L-BFGS)
@@ -391,6 +481,19 @@ Many cornerstone ML models are convex in their parameters — linear and ridge r
 
 ::: {.callout-tip}
 **Why ML practitioners care:** if you can cast your problem as convex, you get guarantees — a unique global optimum, reproducible results, and a duality gap that *certifies* optimality. Deep learning gives those up in exchange for expressive power.
+:::
+
+
+::: {.viz-wrap}
+**🎮 Try it — Convex Optimization**
+
+<div class="ml-viz" data-viz="convexsurface" data-params="{}"></div>
+:::
+
+::: {.viz-wrap}
+**🎮 Try it — Non-Convex Optimization**
+
+<div class="ml-viz" data-viz="convexsurface" data-params="{&quot;nonconvex&quot;: true}"></div>
 :::
 
 ## 3.10 — Lagrange multipliers & the KKT conditions

@@ -126,6 +126,13 @@ One more workhorse is the **law of total probability**: if events $B_1, B_2, \do
 **Intuition:** conditioning is *zooming in*. $P(A\mid B)$ throws away every outcome outside $B$ and re-normalizes so the surviving world sums to 1.
 :::
 
+
+::: {.viz-wrap}
+**🎮 Try it — Random Variables**
+
+<div class="ml-viz" data-viz="dist" data-params="{&quot;kind&quot;: &quot;uniform&quot;}"></div>
+:::
+
 ## 4.2 — Probability distributions
 
 A **random variable** maps outcomes to numbers (for instance, the number of heads in 3 flips). Its **distribution** says how probability is spread across those numbers. **Discrete** variables — those taking countable, separate values — use a probability *mass* function (**PMF**) $P(X=x)$ that gives the probability of each value. **Continuous** variables — those taking any value in a range — use a probability *density* function (**PDF**) $f(x)$, where probability is the *area* under the curve over an interval, and the height $f(x)$ itself can exceed 1.
@@ -175,6 +182,37 @@ rng.exponential(scale=1/2.0, size=5)  # waits; scale = 1/λ
 **Common mistake:** a density $f(x)$ is **not** a probability. $f(x)$ can be 10 if the curve is narrow; only the *area* $\int f \,dx$ over an interval is a probability, and the total area must integrate to 1.
 :::
 
+
+::: {.viz-wrap}
+**🎮 Try it — Bernoulli**
+
+<div class="ml-viz" data-viz="dist" data-params="{&quot;kind&quot;: &quot;bernoulli&quot;}"></div>
+:::
+
+::: {.viz-wrap}
+**🎮 Try it — Binomial**
+
+<div class="ml-viz" data-viz="dist" data-params="{&quot;kind&quot;: &quot;binomial&quot;}"></div>
+:::
+
+::: {.viz-wrap}
+**🎮 Try it — Poisson**
+
+<div class="ml-viz" data-viz="dist" data-params="{&quot;kind&quot;: &quot;poisson&quot;}"></div>
+:::
+
+::: {.viz-wrap}
+**🎮 Try it — Uniform**
+
+<div class="ml-viz" data-viz="dist" data-params="{&quot;kind&quot;: &quot;uniform&quot;}"></div>
+:::
+
+::: {.viz-wrap}
+**🎮 Try it — Gaussian**
+
+<div class="ml-viz" data-viz="gaussian" data-params="{}"></div>
+:::
+
 ## 4.3 — Bayes' theorem & Bayesian inference
 
 Bayes' theorem flips a conditional probability around. Often you know $P(\text{evidence}\mid\text{cause})$ but you actually want $P(\text{cause}\mid\text{evidence})$ — given a positive test, how likely is the disease? Rearranging the definition of conditional probability gives:
@@ -216,6 +254,13 @@ round(posterior, 3)   # 0.167
 **Rule of thumb:** with a rare condition, even an accurate test gives mostly false alarms. Always factor in the **base rate** (the prior) — ignoring it is the *base-rate fallacy*.
 :::
 
+
+::: {.viz-wrap}
+**🎮 Try it — Bayesian Statistics**
+
+<div class="ml-viz" data-viz="bayes" data-params="{}"></div>
+:::
+
 ## 4.4 — Maximum Likelihood (MLE) & MAP
 
 How do you choose a model's parameters $\theta$? **Maximum Likelihood Estimation (MLE)** picks the $\theta$ under which the observed data is most probable. The **likelihood** is $L(\theta)=P(\text{data}\mid\theta)$ — read "backwards" as a function of $\theta$ with the data held fixed. For independent data points it is a product, and because multiplying many small probabilities underflows to zero, we maximize the **log-likelihood** $\ell(\theta)=\sum_i \log P(x_i\mid\theta)$ instead — turning the product into a sum. Since $\log$ is increasing, the maximizing $\theta$ is identical.
@@ -252,6 +297,19 @@ flowchart LR
 **Intuition:** MLE = "let the data speak." MAP = "let the data speak, but start from a sensible belief." With lots of data the prior washes out and MAP → MLE.
 :::
 
+
+::: {.viz-wrap}
+**🎮 Try it — MLE**
+
+<div class="ml-viz" data-viz="mle" data-params="{}"></div>
+:::
+
+::: {.viz-wrap}
+**🎮 Try it — MAP**
+
+<div class="ml-viz" data-viz="map" data-params="{}"></div>
+:::
+
 ## 4.5 — Expectation, variance & covariance
 
 The **expectation** (mean) $\mathbb{E}[X]$ is the probability-weighted average — the long-run value if you repeated the experiment forever: $\mathbb{E}[X]=\sum_x x\,P(x)$ for discrete variables, or $\int x f(x)\,dx$ for continuous ones. A fair die has $\mathbb{E}[X] = (1+2+\dots+6)/6 = 3.5$. Expectation is **linear**: $\mathbb{E}[aX+bY]=a\mathbb{E}[X]+b\mathbb{E}[Y]$ always, even when $X$ and $Y$ are dependent — a workhorse identity.
@@ -272,6 +330,25 @@ np.cov(x, y, bias=True)   # 2x2: diagonals are variances, off-diag = covariance
 
 ::: {.callout-warning}
 **Common mistake:** covariance is *not* comparable across datasets — its size depends on units (rescale hours into minutes and it inflates 60×). To compare the *strength* of association, normalize it into a correlation (next section).
+:::
+
+
+::: {.viz-wrap}
+**🎮 Try it — Expectation**
+
+<div class="ml-viz" data-viz="distmark" data-params="{}"></div>
+:::
+
+::: {.viz-wrap}
+**🎮 Try it — Variance**
+
+<div class="ml-viz" data-viz="distmark" data-params="{&quot;variance&quot;: true}"></div>
+:::
+
+::: {.viz-wrap}
+**🎮 Try it — Covariance**
+
+<div class="ml-viz" data-viz="scatter" data-params="{&quot;rho&quot;: 0.6}"></div>
 :::
 
 ## 4.6 — Correlation (Pearson / Spearman, vs causation)
@@ -302,6 +379,13 @@ The cardinal warning: **correlation is not causation**. Ice-cream sales correlat
 **Common mistake:** reporting $r\approx 0$ as "no relationship." Pearson $r$ can be $0$ for a strong but *non-linear* link (e.g. a perfect parabola, which rises then falls). Always look at the scatter plot before concluding anything.
 :::
 
+
+::: {.viz-wrap}
+**🎮 Try it — Correlation**
+
+<div class="ml-viz" data-viz="scatter" data-params="{&quot;rho&quot;: 0.7}"></div>
+:::
+
 ## 4.7 — Hypothesis testing & p-values
 
 Hypothesis testing is a disciplined way to ask "could this result just be noise?" You state a **null hypothesis** $H_0$ — the boring default of "no effect": the coin is fair, the two models score the same — and an **alternative** $H_1$ that says something *is* going on. Then you compute, *assuming $H_0$ is true*, how surprising your observed data would be.
@@ -327,6 +411,25 @@ Two error types haunt every test. A **Type I error** (false positive) is rejecti
 
 ::: {.callout-warning}
 **Common mistake:** a p-value is **not** "the probability $H_0$ is true," and 0.05 is not sacred. Worse is **p-hacking** — testing many things and reporting only what came out significant. Test 20 useless features and on average one clears $p<0.05$ by pure chance.
+:::
+
+
+::: {.viz-wrap}
+**🎮 Try it — Hypothesis Testing**
+
+<div class="ml-viz" data-viz="hyptest" data-params="{}"></div>
+:::
+
+::: {.viz-wrap}
+**🎮 Try it — p-values**
+
+<div class="ml-viz" data-viz="pvalue" data-params="{}"></div>
+:::
+
+::: {.viz-wrap}
+**🎮 Try it — A/B Testing**
+
+<div class="ml-viz" data-viz="abtest" data-params="{}"></div>
 :::
 
 ## 4.8 — Confidence intervals & sampling (CLT, bootstrap)
@@ -357,6 +460,25 @@ np.percentile(boot, [2.5, 97.5])   # ~[48, 52], no formula needed
 
 ::: {.callout-tip}
 **Rule of thumb:** when in doubt about a statistic's distribution, bootstrap it. It needs almost no assumptions and works for medians, correlations, and AUC where closed-form formulas get ugly.
+:::
+
+
+::: {.viz-wrap}
+**🎮 Try it — Confidence Intervals**
+
+<div class="ml-viz" data-viz="ci" data-params="{}"></div>
+:::
+
+::: {.viz-wrap}
+**🎮 Try it — Sampling**
+
+<div class="ml-viz" data-viz="sampling" data-params="{}"></div>
+:::
+
+::: {.viz-wrap}
+**🎮 Try it — Central Limit Theorem**
+
+<div class="ml-viz" data-viz="clt" data-params="{}"></div>
 :::
 
 ## 4.9 — Monte Carlo & MCMC
