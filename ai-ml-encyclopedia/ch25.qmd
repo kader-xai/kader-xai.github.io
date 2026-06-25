@@ -127,6 +127,9 @@ A **policy** $\pi(a \mid s)$ is the agent's strategy: a mapping from states to a
 
 $$G_t = R_{t+1} + \gamma R_{t+2} + \gamma^2 R_{t+3} + \cdots = \sum_{k=0}^{\infty} \gamma^k R_{t+k+1}$$
 
+**In words:** the return is all the rewards still to come, but each step further into the future counts a little less than the one before it.
+**Also written:** recursively, $G_t = R_{t+1} + \gamma\,G_{t+1}$ — today's return is the next reward plus a discounted copy of tomorrow's return.
+
 **Discounting** does two jobs. Mathematically, $\gamma < 1$ keeps the infinite sum finite. Behaviourally, it expresses preference for sooner rewards: with $\gamma = 0.9$ a reward 10 steps away is worth $0.9^{10} \approx 0.35$ of its face value. A $\gamma$ near 0 makes the agent myopic; near 1 makes it far-sighted.
 
 The agent-environment loop is the heartbeat of RL — a continuous cycle where each action reshapes the world the agent next perceives:
@@ -167,15 +170,23 @@ The Markov property is a modelling choice, not a law of nature. If your state om
 
 ## 25.2 — Dynamic Programming
 
+Picture planning a road trip when you already own the full map: every road, every distance, every toll. You don't need to drive around blindly — you can work out the best route at the kitchen table by reasoning backward from the destination. **Dynamic programming** is that kitchen-table planning for RL.
+
 When you **know** the MDP — every $P$ and $R$ — you do not need to learn by trial and error; you can compute the optimal policy directly. **Dynamic programming (DP)** does this using the **Bellman equations**, which express the value of a state in terms of the values of its successors.
 
 The **state-value function** $V^\pi(s)$ is the expected return starting from $s$ and following $\pi$. The **action-value function** $Q^\pi(s,a)$ is the expected return after taking $a$ in $s$, then following $\pi$. The **Bellman expectation equation** for $V$ is recursive:
 
 $$V^\pi(s) = \sum_a \pi(a \mid s) \sum_{s'} P(s' \mid s,a)\,\big[R(s,a) + \gamma V^\pi(s')\big]$$
 
+**In words:** the worth of a state is the average — over the actions your policy might pick and the places they might land you — of the reward you get now plus the discounted worth of wherever you end up.
+**Also written:** as an expectation, $V^\pi(s) = \mathbb{E}_{a\sim\pi,\,s'\sim P}\big[R(s,a) + \gamma V^\pi(s')\big]$.
+
 The value of now equals the immediate reward plus the discounted value of next — a self-consistency condition. The **Bellman optimality equation** replaces the policy average with a max:
 
 $$V^*(s) = \max_a \sum_{s'} P(s' \mid s,a)\,\big[R(s,a) + \gamma V^*(s')\big]$$
+
+**In words:** the best you can do from a state is to pick the single action whose reward-plus-future-value is highest — no averaging over a policy, just take the best move.
+**Also written:** $V^*(s) = \max_a Q^*(s,a)$, where $Q^*(s,a) = \sum_{s'} P(s'\mid s,a)[R(s,a)+\gamma V^*(s')]$.
 
 Two classic algorithms solve it:
 
@@ -228,11 +239,17 @@ When the model is unknown, the agent must estimate values from experience. Two p
 
 $$V(s) \leftarrow V(s) + \alpha\,\big[G_t - V(s)\big]$$
 
+**In words:** nudge your current guess for the value of $s$ a small step ($\alpha$) toward what actually happened ($G_t$), the real total reward you collected after visiting it.
+**Also written:** the running-average form, $V(s) \leftarrow (1-\alpha)V(s) + \alpha\,G_t$ — a weighted blend of the old estimate and the new sample.
+
 It is unbiased (the return is the real thing) but high-variance and only works for episodic tasks — you must reach the end to learn anything.
 
 **Temporal-Difference (TD)** learning does not wait. It **bootstraps**: it updates toward an estimate built from the *next* step's value, not the final return. The simplest version, **TD(0)**, uses one real reward plus the discounted estimate of where it landed:
 
 $$V(s_t) \leftarrow V(s_t) + \alpha\,\underbrace{\big[r_{t+1} + \gamma V(s_{t+1}) - V(s_t)\big]}_{\text{TD error }\delta_t}$$
+
+**In words:** don't wait for the episode to end — after one step, compare what you expected ($V(s_t)$) with one real reward plus your guess for where you landed, and step toward that.
+**Also written:** $V(s_t) \leftarrow V(s_t) + \alpha\,\delta_t$ with $\delta_t = r_{t+1} + \gamma V(s_{t+1}) - V(s_t)$; the MC update is the same shape with the bootstrap term $r_{t+1}+\gamma V(s_{t+1})$ swapped for the full return $G_t$.
 
 The **TD error** $\delta_t$ is the surprise: how much better or worse things turned out than expected. TD learns online, step by step, with lower variance but some bias.
 
@@ -281,11 +298,17 @@ Estimating $V$ alone is not enough to act without a model — you would need $P$
 
 $$Q(s,a) \leftarrow Q(s,a) + \alpha\,\big[r + \gamma\,Q(s',a') - Q(s,a)\big]$$
 
+**In words:** update the value of the move you just made toward the reward you got plus the value of the *next move you will really make* — exploration included.
+**Also written:** $Q(s,a) \leftarrow (1-\alpha)\,Q(s,a) + \alpha\,[\,r + \gamma\,Q(s',a')\,]$.
+
 Here $a'$ is the action the agent *actually* takes next.
 
 **Q-learning** is **off-policy**: it learns the value of the *optimal* policy regardless of what it does to explore, by using a max over next actions:
 
 $$Q(s,a) \leftarrow Q(s,a) + \alpha\,\big[r + \gamma\,\max_{a'} Q(s',a') - Q(s,a)\big]$$
+
+**In words:** update toward the reward plus the value of the *best* move available next, assuming you'll act greedily from then on — even if your exploration actually does something dumber.
+**Also written:** since $V^*(s') = \max_{a'} Q(s',a')$, the target is simply $r + \gamma\,V^*(s')$ — a sampled Bellman *optimality* backup.
 
 The single difference — $Q(s',a')$ vs $\max_{a'} Q(s',a')$ — gives them different personalities. SARSA accounts for the cost of exploration and tends to learn *safer* paths; Q-learning learns the optimal path assuming it will eventually act greedily, even if that path is risky during training. The classic illustration is **cliff walking**: a grid where a shortcut runs along the edge of a cliff (a big negative reward if you fall in). SARSA, feeling the occasional random plunge during exploration, learns a cautious route one row back from the edge; Q-learning, valuing the optimal greedy path, hugs the cliff.
 
@@ -340,6 +363,9 @@ Tabular $Q$ needs one cell per state-action pair — impossible for raw pixels. 
 
 $$L(\theta) = \mathbb{E}_{(s,a,r,s')\sim \mathcal{D}}\Big[\big(r + \gamma \max_{a'} Q(s',a';\theta^-) - Q(s,a;\theta)\big)^2\Big]$$
 
+**In words:** train the network so its predicted $Q$ for the action you took matches the reward-plus-best-next-value computed by a frozen copy of itself; minimise the squared gap, averaged over random past experiences.
+**Also written:** $L(\theta) = \mathbb{E}\big[\delta^2\big]$ with TD error $\delta = y - Q(s,a;\theta)$ and target $y = r + \gamma\max_{a'}Q(s',a';\theta^-)$ (often Huber-clipped instead of squared for stability).
+
 ```{mermaid}
 flowchart LR
     E[Env] -->|s,a,r,s'| B[(Replay buffer)]
@@ -349,6 +375,32 @@ flowchart LR
     Q --> L
     L -->|SGD| Q
     Q -.->|copy every N steps| T
+```
+
+A single DQN gradient step in **PyTorch** is exactly the loss above, with the target detached so gradients never flow through the frozen network:
+
+```python
+import torch, torch.nn.functional as F
+# online: Q-network theta; target: frozen copy theta-. batch tensors s,a,r,s2,done.
+q      = online(s).gather(1, a.unsqueeze(1)).squeeze(1)        # Q(s,a; theta)
+with torch.no_grad():
+    next_q = target(s2).max(dim=1).values                     # max_a' Q(s',a'; theta-)
+    y      = r + gamma * next_q * (1 - done)                   # bootstrap target
+loss = F.smooth_l1_loss(q, y)                                 # Huber on the TD error
+opt.zero_grad(); loss.backward(); opt.step()
+# every N steps: target.load_state_dict(online.state_dict())  # sync theta- <- theta
+```
+
+In practice you rarely write this by hand. **Stable-Baselines3** ships a tuned DQN (and PPO, A2C, SAC) you can train on any Gymnasium environment in a few lines:
+
+```python
+import gymnasium as gym
+from stable_baselines3 import DQN
+env   = gym.make("CartPole-v1")
+model = DQN("MlpPolicy", env, buffer_size=50_000, target_update_interval=500, verbose=0)
+model.learn(total_timesteps=50_000)        # replay buffer + target net handled internally
+obs, _ = env.reset()
+action, _ = model.predict(obs, deterministic=True)
 ```
 
 ::: {.callout-tip}
@@ -363,6 +415,9 @@ The foundational result is the **policy gradient theorem**. Its simplest estimat
 
 $$\nabla_\theta J(\theta) = \mathbb{E}_\pi\big[\,\nabla_\theta \log \pi_\theta(a_t \mid s_t)\, G_t\,\big]$$
 
+**In words:** push the knobs of the policy so that whatever action you took becomes more probable in proportion to how much reward followed it — good outcomes upvote their action, bad outcomes downvote it.
+**Also written:** as a sum over a trajectory, $\nabla_\theta J(\theta) \approx \sum_t \big(\nabla_\theta \log \pi_\theta(a_t\mid s_t)\big)\,G_t$ — the "log-likelihood times reward" estimator.
+
 Intuition: make actions that led to high return more likely, low return less likely. But $G_t$ has huge variance. The cure is to subtract a **baseline** — typically a learned value estimate $V(s)$ — giving the **advantage** $A_t = G_t - V(s_t)$: "how much better than expected was this action?"
 
 That pairing is **actor-critic**. The **actor** is the policy $\pi_\theta$; the **critic** is the value estimator $V_\phi$ that supplies the baseline and bootstraps the return. **A2C** (Advantage Actor-Critic) is the clean synchronous version. The two halves form a tight feedback loop:
@@ -376,7 +431,12 @@ flowchart LR
     CR -->|TD error| CR2[Update critic]
 ```
 
-**PPO** (Proximal Policy Optimization) is today's workhorse — stable, simple to tune, and the algorithm behind **RLHF** (training chat models from human preference rewards). Its insight: a big policy update can be catastrophic, so PPO *clips* the update so the new policy never moves too far from the old one in a single step. Concretely, it limits the probability ratio $r_t(\theta) = \pi_\theta(a_t \mid s_t) / \pi_{\theta_\text{old}}(a_t \mid s_t)$ to a narrow band around 1, so one noisy batch cannot wreck a good policy.
+**PPO** (Proximal Policy Optimization) is today's workhorse — stable, simple to tune, and the algorithm behind **RLHF** (training chat models from human preference rewards). Its insight: a big policy update can be catastrophic, so PPO *clips* the update so the new policy never moves too far from the old one in a single step. Concretely, it limits the probability ratio $r_t(\theta) = \pi_\theta(a_t \mid s_t) / \pi_{\theta_\text{old}}(a_t \mid s_t)$ to a narrow band around 1, so one noisy batch cannot wreck a good policy. The clipped objective it maximises is:
+
+$$L^{\text{CLIP}}(\theta) = \mathbb{E}_t\Big[\min\big(r_t(\theta)\,A_t,\ \operatorname{clip}(r_t(\theta),\,1-\epsilon,\,1+\epsilon)\,A_t\big)\Big]$$
+
+**In words:** improve the policy in the direction the advantage points, but if the new policy strays more than a fraction $\epsilon$ (say 20%) from the old one, stop giving credit for going further — the clip removes the incentive to take a reckless leap.
+**Also written:** with the unclipped term $u_t = r_t(\theta)A_t$ and clipped term $c_t = \operatorname{clip}(r_t,1-\epsilon,1+\epsilon)A_t$, the objective is just $\mathbb{E}_t[\min(u_t,c_t)]$ — a pessimistic (lower) bound on the improvement.
 
 | Method | Learns | Variance | Notes |
 |---|---|---|---|
@@ -393,6 +453,18 @@ def reinforce_grad(grad_logps, returns, baselines):
     return sum(g*a for g, a in zip(grad_logps, adv))   # advantage-weighted
 ```
 
+Training PPO for real is a one-liner with **Stable-Baselines3** — the clipping, advantage estimation (GAE), and multi-epoch reuse are all built in:
+
+```python
+import gymnasium as gym
+from stable_baselines3 import PPO
+model = PPO("MlpPolicy", gym.make("LunarLander-v3"),
+            clip_range=0.2, n_epochs=10, gae_lambda=0.95, verbose=0)
+model.learn(total_timesteps=200_000)
+```
+
+For RLHF on language models, the same PPO loop lives inside Hugging Face **TRL**'s `PPOTrainer`, where the "environment" is text generation and the reward comes from a learned preference model rather than a game score.
+
 ::: {.callout-warning}
 Policy gradients are **on-policy**: each batch of data is valid only for the policy that generated it, so you cannot freely reuse old experience as DQN does. PPO stretches this with a few epochs of reuse per batch, but throughput, not sample count, is usually its bottleneck.
 :::
@@ -408,6 +480,9 @@ Three strategies dominate:
 **UCB (Upper Confidence Bound).** Be **optimistic under uncertainty**: pick the arm with the highest upper confidence bound, rewarding both high estimated value and high uncertainty.
 
 $$a_t = \arg\max_i \left[\hat{\mu}_i + c\sqrt{\frac{\ln t}{N_i}}\right]$$
+
+**In words:** pick the arm with the best *optimistic* estimate — its average payoff so far plus a "could be better than it looks" bonus that is big when you've barely tried it.
+**Also written:** $a_t = \arg\max_i [\hat\mu_i + \text{bonus}_i]$ where $\text{bonus}_i = c\sqrt{\ln t / N_i}$ shrinks like $1/\sqrt{N_i}$ as the arm is sampled more.
 
 Arms tried rarely ($N_i$ small) get a large bonus, so they get a fair trial; as $N_i$ grows the bonus shrinks and UCB settles on the true best.
 
@@ -602,6 +677,9 @@ $$
 \text{Regret}(n) = n\,\mu^\star - \mathbb{E}\!\left[\sum_{t=1}^{n} \mu_{a_t}\right] = \sum_{a} \Delta_a\, \mathbb{E}[N_a(n)],
 $$
 
+**In words:** regret is the reward you left on the table — what a know-it-all who always pulled the best arm would have earned, minus what you actually earned.
+**Also written:** the rightmost form $\sum_a \Delta_a\,\mathbb{E}[N_a(n)]$ says total regret is "how bad each arm is" times "how often you pulled it," summed over arms.
+
 where $\Delta_a = \mu^\star - \mu_a$ is the *gap* of arm $a$ and $N_a(n)$ is how many times you pulled it. The second form is the key insight: **regret is just the sum, over suboptimal arms, of how bad each arm is times how often you pulled it.** Good algorithms keep $N_a(n)$ small for high-gap arms.
 
 The gold standard is **sublinear regret**: $\text{Regret}(n)/n \to 0$, meaning your average reward converges to the optimum. The best achievable rate is logarithmic, $O(\log n)$ — you can never stop exploring entirely, but you can explore ever more rarely. Any algorithm with *linear* regret (a constant fraction of pulls wasted forever) has failed.
@@ -685,6 +763,9 @@ $$
 b'(s') = \eta\; O(o \mid s', a) \sum_{s} T(s' \mid s, a)\, b(s),
 $$
 
+**In words:** your new belief that you're in state $s'$ = (how likely the dynamics would have carried you there) × (how likely that state would have produced the clue you just saw), then rescaled so all the beliefs add to 1.
+**Also written:** $b' \propto O_a \odot (T_a\, b)$ — element-wise multiply the predicted belief $T_a b$ by the observation likelihoods $O_a$, then normalize.
+
 where $\eta$ normalizes. This is exactly the predict-then-correct loop of a Bayes filter: the sum *predicts* the new state from dynamics, and multiplying by $O$ *corrects* using the fresh observation.
 
 Once you track beliefs, a POMDP becomes a fully-observed MDP — but over the continuous **belief space**, a simplex of distributions. That is the curse: you have traded a discrete state space for a continuous one of probability vectors.
@@ -705,6 +786,9 @@ Here is the structural miracle that makes POMDPs solvable. The optimal value fun
 $$
 V(b) = \max_{\alpha \in \Gamma}\; \sum_{s} \alpha(s)\, b(s) = \max_{\alpha \in \Gamma}\; \alpha \cdot b.
 $$
+
+**In words:** each candidate plan scores your current belief by a simple weighted sum; the value of the belief is whichever plan scores highest.
+**Also written:** $V(b) = \max_{\alpha\in\Gamma} \alpha^\top b$ — the top edge (upper envelope) of a bundle of straight lines, one per plan.
 
 Each $\alpha$ vector corresponds to a *conditional plan* — "do this, then react to the next observation thus" — and its value is linear in the belief because expected reward is linear in the state probabilities. At any belief $b$, the best plan is whichever $\alpha$ gives the highest dot product. Convexity has a satisfying meaning: value is *highest at the corners* of the simplex (you are certain of the state) and *lowest in the middle* (maximum confusion), because certainty is worth money.
 
@@ -778,6 +862,9 @@ $$
 J = \sum_{t=0}^{T} \big(x_t^\top Q\, x_t + u_t^\top R\, u_t\big).
 $$
 
+**In words:** add up, over all time, a penalty for being away from the target ($x^\top Q x$) plus a penalty for shoving the controls hard ($u^\top R u$); the controller minimizes that total.
+**Also written:** for a scalar system this is just $J = \sum_t (q\,x_t^2 + r\,u_t^2)$ — a sum of squared error and squared effort.
+
 Here $Q \succeq 0$ penalizes being away from the origin (the target state) and $R \succ 0$ penalizes large control effort. The tension is the whole story: $Q$ says "get to the goal fast," $R$ says "but don't slam the actuators." A cruise controller lives this trade-off — $Q$ wants the exact set speed *now*, $R$ wants to avoid flooring the throttle.
 
 ### The solution: a linear controller from the Riccati equation
@@ -787,6 +874,9 @@ The beautiful result: the optimal controller is **linear in the state**,
 $$
 u_t = -K_t\, x_t,
 $$
+
+**In words:** the optimal control is just "look at where you are and push back proportionally toward the target" — a thermostat-style feedback law, with the gain matrix $K_t$ deciding how hard to push.
+**Also written:** component-wise for a scalar system, $u_t = -k\,x_t$ — bigger error, bigger correction.
 
 a constant-feedback gain matrix $K_t$ that you compute *offline*, before ever running the system. The optimal cost-to-go is *quadratic*, $V_t(x) = x^\top P_t\, x$, mirroring the PWLC structure we saw for POMDPs — here the value function's shape is exactly a paraboloid. The matrix $P_t$ is found by sweeping *backward* in time through the **discrete-time Riccati equation**:
 
@@ -872,6 +962,9 @@ $$
 \text{VoI} = \mathbb{E}\big[\,\text{utility with the observation}\,\big] - \mathbb{E}\big[\,\text{utility without it}\,\big].
 $$
 
+**In words:** the worth of a piece of information is how much better your best decision becomes once you're allowed to see it first.
+**Also written:** $\text{VoI} = \mathbb{E}_o[\max_a \mathbb{E}[U\mid o,a]] - \max_a \mathbb{E}[U\mid a]$ — average over what you might learn, of the best you can then do, minus the best you can do blind.
+
 VoI is never negative — more information can't hurt when you're free to ignore it — and it is *zero* exactly when the information wouldn't change your decision. This is the principle QMDP was missing back in the POMDP section: an agent that computes VoI will pay to run a diagnostic test or peek around a corner precisely when, and only when, the knowledge would alter its action.
 
 **Worked example.** A drilling company decides whether to drill ($+\$200\text{k}$ if oil, $-\$100\text{k}$ if dry); oil has prior probability $0.5$. Blind, the expected value of drilling is $0.5(200) + 0.5(-100) = +\$50\text{k}$, so you drill and expect $\$50\text{k}$. Now a *perfect* seismic test reveals oil-or-dry for sure. With the test: if it says oil (prob $0.5$) you drill for $+\$200\text{k}$; if it says dry (prob $0.5$) you walk away for $\$0$. Expected utility with the test is $0.5(200) + 0.5(0) = \$100\text{k}$. So
@@ -914,7 +1007,119 @@ flowchart TB
 The unifying view of this whole chapter: an MDP is the base case, and every richer framework relaxes one assumption. POMDPs drop full observability (track beliefs); LQR specializes to continuous linear-quadratic dynamics (solve Riccati); Dec-POMDPs and Markov games add agents (solve for joint policies or equilibria). The algorithms differ, but the Bellman backbone — value, lookahead, fixed-point iteration — runs through all of them.
 :::
 
-## 25.15 — Key takeaways
+## 25.15 — Reward shaping and the sparse-reward problem
+
+Imagine teaching someone chess if the *only* feedback allowed is "you won" or "you lost" at the very end. They could play a hundred games before stumbling onto a win, with no clue which of the forty moves in each game helped. That is the **sparse-reward problem**, and it is the single most common reason RL fails in practice: when reward arrives rarely (a goal scored, a maze solved) the agent explores almost blindly, because nearly every action returns zero and there is nothing to climb toward.
+
+The tempting fix is **reward shaping**: add small intermediate rewards that nudge the agent in the right direction — a little bonus for moving closer to the goal, a small penalty for wasting time. Done casually, this is dangerous. If you reward a cleaning robot for *picking up* trash, it may learn to knock the bin over and re-collect the same trash forever. The agent optimizes the reward you *wrote*, not the behavior you *meant* — a phenomenon called **reward hacking**.
+
+::: {.callout-tip}
+**Intuition:** shaping is like leaving breadcrumbs to the goal. Helpful if they genuinely point the way — disastrous if the agent discovers it can eat breadcrumbs in a circle instead of reaching the door.
+:::
+
+The principled cure is **potential-based reward shaping** (Ng, Harada & Russell, 1999). Define a **potential** $\Phi(s)$ on states — a rough "how good is this state" hint, like negative distance to the goal — and add only the *change* in potential as a shaping reward:
+
+$$F(s, a, s') = \gamma\,\Phi(s') - \Phi(s).$$
+
+**In words:** reward the agent for the *improvement* in your hint between where it was and where it landed, not for the hint's absolute level — so moving toward the goal pays and moving away costs, but going in circles nets exactly zero.
+**Also written:** the agent optimizes $R'(s,a,s') = R(s,a,s') + \gamma\Phi(s') - \Phi(s)$; because the $\Phi$ terms telescope along any trajectory, the total added reward depends only on start and end.
+
+The remarkable guarantee: a potential-based shaping term **leaves the optimal policy unchanged**. The telescoping sum means it cannot be farmed in a loop (a cycle returns to where it started, so the potential changes cancel to zero), which is exactly what prevents the trash-knocking exploit. You get faster learning *for free*, with no risk of changing what "optimal" means.
+
+```{mermaid}
+flowchart LR
+    SP["sparse reward only<br/>(1 at goal, 0 elsewhere)"] -->|"blind exploration,<br/>slow"| A[agent]
+    PB["+ potential shaping<br/>γΦ(s′) − Φ(s)"] -->|"dense gradient to climb,<br/>same optimum"| A
+```
+
+When even shaping is not enough, three other ideas attack sparsity:
+
+- **Curiosity / intrinsic motivation** — manufacture an internal reward for visiting *surprising* states (where a learned dynamics model predicts poorly). The agent explores out of "boredom-avoidance" until it stumbles onto real reward. This is what cracked notoriously sparse games like *Montezuma's Revenge*.
+- **Hindsight Experience Replay (HER)** — after failing to reach goal $g$, *pretend* the state you actually ended in was the goal all along. Every failed episode becomes a successful demonstration of reaching *some* goal, so even a never-successful agent learns from every rollout. Indispensable for goal-conditioned robotics.
+- **Curriculum learning** — start with easy, nearby goals where reward is reachable, then gradually widen the task as competence grows (closely related to the self-play curriculum of Section 25.8).
+
+```python
+# Hindsight Experience Replay: relabel a failed trajectory with an achieved goal.
+# Original transition aimed at goal g but never reached it -> reward stays 0 forever.
+# HER adds a copy whose "goal" is a state actually visited later, making reward fire.
+for t, (s, a, s_next) in enumerate(trajectory):
+    buffer.add(s, a, s_next, goal=g, reward=reward_fn(s_next, g))   # real attempt
+    g_hindsight = trajectory[-1].achieved_state                    # pretend the end was the goal
+    buffer.add(s, a, s_next, goal=g_hindsight,
+               reward=reward_fn(s_next, g_hindsight))              # now sometimes = success
+```
+
+::: {.callout-warning}
+Before hand-crafting a dense reward, ask whether it admits a shortcut the agent will find and you won't. The safest dense signals are *potential-based* (provably exploit-proof) or *learned from human preference* (the RLHF route). Arbitrary engineered bonuses are where reward hacking lives.
+:::
+
+## 25.16 — Offline RL: learning from a fixed dataset
+
+Every method so far assumes the agent can *act* in the environment to gather fresh data. Often it cannot. You have a hospital's logged treatment histories, a fleet's recorded driving, a recommender's click logs — and letting a half-trained policy experiment on real patients or real cars is unthinkable. **Offline RL** (also "batch RL") asks: can we learn the best possible policy from a *fixed* dataset of past interactions, with no further environment access at all?
+
+**Intuition:** it is the difference between a student pilot in a real cockpit (online RL — risky but informative) and one who can only study a thick logbook of other pilots' flights (offline RL — safe, but you can never test a maneuver nobody recorded).
+
+The central obstacle is **distributional shift** combined with **overestimation**, and it is subtle. When the policy considers an action that the dataset rarely or never covers, the value network has no real data to ground its estimate there — so it extrapolates, and because training picks actions by $\max_a Q(s,a)$, it systematically latches onto whichever poorly-grounded action happens to be *overestimated*. The policy then confidently recommends actions it has never actually seen succeed. Online RL self-corrects this (try the action, get a low reward, fix the estimate); offline RL cannot — there is no feedback loop to puncture the delusion.
+
+<svg viewBox="0 0 460 200" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif" font-size="11">
+  <line x1="40" y1="160" x2="430" y2="160" stroke="currentColor" stroke-width="1"/>
+  <line x1="40" y1="160" x2="40" y2="25" stroke="currentColor" stroke-width="1"/>
+  <text x="10" y="30" fill="currentColor">Q̂</text>
+  <text x="360" y="178" fill="currentColor">action a</text>
+  <!-- data support region -->
+  <rect x="120" y="30" width="150" height="130" fill="#22c55e" opacity="0.13"/>
+  <text x="150" y="48" fill="#16a34a">data support</text>
+  <!-- true value curve -->
+  <path d="M50 120 C 140 70, 230 75, 300 110 S 400 150, 425 140" fill="none" stroke="#38bdf8" stroke-width="2.5"/>
+  <text x="60" y="112" fill="#38bdf8">true Q</text>
+  <!-- overestimated extrapolation outside support -->
+  <path d="M270 95 C 330 60, 380 40, 425 38" fill="none" stroke="#dc2626" stroke-width="2.5" stroke-dasharray="6 4"/>
+  <text x="300" y="40" fill="#dc2626">over-estimated Q̂</text>
+  <text x="300" y="55" fill="#dc2626">(off-support)</text>
+  <circle cx="415" cy="38" r="4" fill="#dc2626"/>
+  <text x="330" y="190" fill="currentColor">policy is lured to this phantom peak</text>
+</svg>
+
+The whole field is therefore organized around one principle: **stay close to the data, or be honest about uncertainty.** Three families implement it:
+
+| Approach | Core idea | Representative method |
+|---|---|---|
+| **Policy constraint** | Keep the learned policy near the behavior policy that generated the data | BCQ, BEAR, TD3+BC |
+| **Value penalization** | Push $Q$ *down* on out-of-distribution actions so the max can't chase phantoms | **CQL** (Conservative Q-Learning) |
+| **In-sample / implicit** | Never query unseen actions at all; learn using only actions in the dataset | **IQL** (Implicit Q-Learning) |
+
+CQL's idea is the cleanest to state: add a penalty that lowers $Q$ for actions the policy would pick but the data doesn't support, while keeping $Q$ honest on the actions actually logged.
+
+$$\min_\theta\ \alpha\,\mathbb{E}_{s\sim\mathcal{D}}\Big[\log\sum_a e^{Q_\theta(s,a)} - \mathbb{E}_{a\sim\mathcal{D}}\,Q_\theta(s,a)\Big] + L_{\text{TD}}(\theta)$$
+
+**In words:** on top of the usual TD loss, push down the $Q$-values of *all* actions the network is tempted to inflate, and pull *up* only the actions that really appear in the data — so unseen actions can never look better than seen ones.
+**Also written:** the bracket is "average over-optimistic value minus average logged value"; minimizing it yields a *conservative* (lower-bound) $Q$ that the policy can safely maximize.
+
+A simple **TD3+BC** recipe shows how light the touch can be — take a standard off-policy actor-critic and add one behavior-cloning term to the actor so it never drifts far from logged actions:
+
+```python
+# TD3+BC actor loss: maximize Q, but stay close to the dataset actions.
+import torch.nn.functional as F
+pi_a   = actor(s)                                  # action the policy wants
+q      = critic(s, pi_a)
+lmbda  = 2.5 / q.abs().mean().detach()             # auto-scale the RL term
+actor_loss = -lmbda * q.mean() + F.mse_loss(pi_a, a_data)   # +BC anchor to logged action a_data
+```
+
+Mature implementations live in libraries like **d3rlpy** (`CQL`, `IQL`, `TD3PlusBC`), which train directly from a logged dataset:
+
+```python
+import d3rlpy
+dataset, env = d3rlpy.datasets.get_d4rl("hopper-medium-v2")   # a standard offline benchmark
+cql = d3rlpy.algos.CQLConfig().create(device="cpu")
+cql.fit(dataset, n_steps=100_000)                            # no environment interaction during training
+```
+
+::: {.callout-tip}
+Offline RL is what makes RL usable in high-stakes domains — healthcare, finance, recommendation — where exploration is expensive, dangerous, or illegal. The mental model: online RL *asks* the world questions; offline RL must answer using only the questions someone already asked, and its whole craft is resisting the urge to trust answers it can't check.
+:::
+
+## 25.17 — Key takeaways
 
 - RL maximises **expected cumulative discounted reward** through interaction, not labelled answers; the **MDP** $(\mathcal{S},\mathcal{A},P,R,\gamma)$ is its universal model.
 - **Bellman equations** tie a state's value to its successors'; **dynamic programming** solves them exactly when the model is known but does not scale.
@@ -923,8 +1128,10 @@ The unifying view of this whole chapter: an MDP is the base case, and every rich
 - **Policy-gradient / actor-critic** methods (REINFORCE, A2C, **PPO**) optimise a policy directly; PPO's clipped update is the backbone of **RLHF**.
 - The **exploration–exploitation** tradeoff, studied cleanly in **bandits** (ε-greedy, UCB, Thompson), recurs everywhere in RL.
 - **Multi-agent RL** adds non-stationarity; **self-play** turns it into an automatic curriculum, powering **AlphaGo → AlphaZero → MuZero**.
+- **Imitation learning** (behavioral cloning, DAgger, inverse RL) skips reward design by learning from expert demonstrations; **POMDPs** track a **belief state** when the world is only partly observable; **LQR** solves the continuous linear-quadratic case in closed form via the Riccati equation.
+- **Sparse rewards** stall learning; **potential-based shaping** speeds it up without changing the optimum, while curiosity, **HER**, and curricula attack sparsity from other angles. **Offline RL** (CQL, IQL, TD3+BC) learns from a fixed logged dataset by staying close to the data and resisting overestimation.
 
-## 25.16 — See also
+## 25.18 — See also
 
 - **Optimization** — gradient ascent, SGD, and the loss-landscape view behind policy gradients.
 - **Probability & Statistics** — expectations, variance, and the Bayesian posteriors underlying Thompson sampling.

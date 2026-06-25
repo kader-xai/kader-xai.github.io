@@ -119,6 +119,10 @@ $$\mathcal{L}_{\text{pre}} = -\sum_t \log p_\theta(x_t \mid x_{<t})$$
 
 over the corpus. The result — the *base model* — is an extraordinary autocomplete engine. Ask it "What is the capital of France?" and it might continue with "What is the capital of Germany? What is the capital of Spain?" because a list of quiz questions is a perfectly plausible continuation of web text. It has knowledge but no *intent*.
 
+**In words:** add up, over every position in the text, how *surprised* the model was by the token that actually came next; training pushes that total surprise down so real text becomes unsurprising.
+
+**Also written:** as an expectation over the data, $\mathcal{L}_{\text{pre}} = -\mathbb{E}_{x\sim\mathcal{D}}\big[\sum_t \log p_\theta(x_t\mid x_{<t})\big]$, or equivalently minimizing the average per-token negative log-likelihood (the log of perplexity).
+
 Post-training installs intent. It is a much smaller, much more curated phase that reshapes behavior rather than adding raw knowledge. The canonical recipe has three stages: **supervised fine-tuning (SFT)** teaches the model the format of being an assistant by imitating high-quality demonstrations; **preference optimization** (RLHF, DPO — Ch 46) sharpens *which* of two valid answers humans prefer; and **distillation** can compress a large aligned teacher into a smaller deployable student. The intuition: pretraining gives the model a vocabulary of skills; post-training selects and arranges them into helpful behavior.
 
 ```{mermaid}
@@ -135,9 +139,13 @@ flowchart LR
 
 The key mental model for the rest of this chapter: post-training changes a *small fraction* of what the model is, and the techniques below are mostly about doing that change cheaply and without breaking what pretraining gave you.
 
+A useful everyday analogy: pretraining is like a person who has read the entire internet but has never had a conversation — they know everything yet answer a question by rambling about related questions. Post-training is the short apprenticeship where they learn the *job*: stop when the question is answered, speak in the house style, and prefer the answer a customer would actually thank you for. The apprenticeship is tiny compared to the reading, and that is exactly the point — you are not re-educating the model, you are giving it manners.
+
 ## 45.2 — Transfer learning
 
 The foundational idea behind all of post-training is **transfer learning**: representations learned on a big, general task are reusable for a smaller, specific one. A model that learned to predict the next token had to internalize syntax, world facts, and reasoning patterns. Those internal features are a far better starting point for *your* task than random weights — you are standing on a billion-dollar pretraining run for free.
+
+A homely analogy: a chef who has cooked professionally for years can learn your restaurant's specific menu in a weekend, because knife skills, heat, and timing all *transfer*. You would never hire someone and teach them to hold a knife from scratch. Transfer learning is hiring the experienced chef instead of the random stranger.
 
 There are two ways to transfer. **Feature extraction** freezes the pretrained *backbone* and trains only a new task-specific *head* on top — you treat the frozen network as a fixed feature encoder. It is cheap and nearly impossible to overfit, but limited: the features are stuck at whatever the original task produced. **Full fine-tuning** unfreezes everything and continues training all weights on the new task. It is more powerful and adapts the features themselves, but costs far more memory and risks **catastrophic forgetting** — as gradients overwrite weights for the new task, the model loses general capabilities it had before (it gets great at your support tickets and forgets how to write a poem).
 
@@ -163,11 +171,29 @@ There are two ways to transfer. **Feature extraction** freezes the pretrained *b
 
 Why does transfer work at all? Because the lower layers of a deep network learn *general* features (in vision: edges then textures; in language: morphology then syntax then semantics) that are useful across many tasks, while only the top layers are task-specific. PEFT methods (45.5 onward) are essentially a third path: keep the backbone frozen *and* adapt the features, by injecting tiny trainable modules instead of either a head-only or a full unfreeze.
 
+**Discriminative vs generative transfer.** Classic transfer learning in vision (e.g. taking an ImageNet-pretrained ResNet and bolting a new classifier head on it) and the modern LLM story are the *same idea* applied to different shapes of problem. In the vision case the new head is a literal `nn.Linear` mapping features to your class labels. In the LLM case the "head" is already the language-model output and the task is itself expressed in text, so "feature extraction" looks more like linear probing of hidden states, while "full fine-tuning" and PEFT dominate. The principle is identical: cheap reuse of a frozen general encoder, with optional adaptation of the features themselves.
+
+Here is the canonical scikit-learn-style feature-extraction pattern — encode once with a frozen backbone, then train a cheap head on top:
+
+```python
+# Feature extraction: frozen encoder + a cheap classifier head
+from sentence_transformers import SentenceTransformer
+from sklearn.linear_model import LogisticRegression
+
+encoder = SentenceTransformer("all-MiniLM-L6-v2")          # frozen backbone
+X_train = encoder.encode(train_texts)                       # fixed features (no grad)
+clf = LogisticRegression(max_iter=1000).fit(X_train, y_train)  # only the head learns
+preds = clf.predict(encoder.encode(test_texts))
+# The billion-token encoder never updates; you train ~thousands of head params.
+```
+
 ## 45.3 — Fine-tune vs RAG vs prompt
 
 Before spending a single GPU-hour, ask the cheapest question first: do you even need to change the weights? Three tools sit on a ladder of increasing cost and commitment. **Prompting** (including few-shot examples) steers an off-the-shelf model with words alone — zero training, instant iteration. **RAG** (retrieval-augmented generation, Ch 23) injects fresh or private *knowledge* at inference time by retrieving documents into the context. **Fine-tuning** changes the weights to bake in *behavior, format, or style* that prompting can't reliably hold.
 
 The decisive question is *what kind of gap* you are closing. A knowledge gap ("the model doesn't know our 2026 product catalog") is a RAG problem — fine-tuning is a terrible way to store facts, since they go stale and updating means retraining. A behavior gap ("we need every answer as valid JSON in our house tone") is a fine-tuning problem — no amount of retrieved context reliably enforces format. And many gaps are just a prompting problem you haven't solved yet.
+
+A kitchen analogy ties it together: prompting is *telling* the cook what you want tonight; RAG is *handing them today's fresh ingredients* at the moment they cook; fine-tuning is *sending them to culinary school* so the technique becomes second nature. You only pay for school when telling-and-handing repeatedly fails.
 
 <div style="display:flex;flex-direction:column;gap:10px;border:1px solid currentColor;border-radius:10px;padding:14px;">
   <div style="font-weight:bold;">Decision: which tool closes the gap?</div>
@@ -199,11 +225,21 @@ The decisive question is *what kind of gap* you are closing. A knowledge gap ("t
 
 The pragmatic order is *prompt → RAG → fine-tune*, and you stop at the first rung that works. They are not exclusive: the strongest systems fine-tune for behavior, retrieve for knowledge, and prompt for the long tail.
 
+**A concrete worked decision.** Say you run a clinic's support bot with three complaints. (1) "It doesn't know our new 2026 insurance plans" — pure knowledge gap → RAG over the plan documents (when plans change next year, you re-index, no retraining). (2) "It rambles; we need a fixed `{summary, next_step, urgency}` JSON every time" — behavior gap that prompting only holds ~80% of the time under load → fine-tune a small LoRA on a few thousand demonstrations to push format compliance toward 99%. (3) "Occasionally it should escalate to a human" — a rare edge case → just add a sentence to the prompt. Notice the same product used all three rungs, each for the gap it actually fits.
+
 ## 45.4 — Supervised Fine-Tuning (SFT) & instruction tuning
 
 SFT is the first and most important post-training step. The mechanism is simple: take the base model and continue next-token training, but now on curated *(instruction, response)* pairs instead of raw web text. By imitating thousands of high-quality demonstrations of an assistant answering well, the model learns the *format* of being helpful — that a question expects a direct answer, not another question. When the demonstrations span many task types, this is called **instruction tuning**, and it produces the striking ability to follow instructions on tasks never seen during fine-tuning.
 
 Two details make SFT work in practice. First, **chat templates**: the raw text is wrapped in role markers so the model learns turn structure, e.g. `<|user|> ... <|assistant|> ...`. Second — and this is the subtle one — **loss masking**. You do not want to train the model to *generate the user's question*; you only want it to learn the assistant's *response*. So the loss is computed on completion tokens only; prompt tokens are masked out (their loss is multiplied by zero and contributes no gradient).
+
+The SFT objective is the same cross-entropy as pretraining, but with a per-token mask $m_t$ that switches the loss on only for assistant tokens:
+
+$$\mathcal{L}_{\text{SFT}} = -\sum_t m_t \,\log p_\theta(x_t \mid x_{<t}), \qquad m_t = \begin{cases} 1 & x_t \text{ is an assistant token} \\ 0 & \text{otherwise} \end{cases}$$
+
+**In words:** score the model only on how well it predicts the *answer* tokens given everything before them; give it zero credit or blame for the user's question and the template markers.
+
+**Also written:** restricting the sum to the answer span $\mathcal{A}$, $\mathcal{L}_{\text{SFT}} = -\sum_{t\in\mathcal{A}}\log p_\theta(x_t\mid x_{<t})$ — equivalently, set the labels of all non-answer positions to the ignore-index $-100$ so the loss skips them.
 
 Here is the worked example — which tokens get a gradient:
 
@@ -227,6 +263,29 @@ Here is the worked example — which tokens get a gradient:
 
 The convention `-100` is the ignore-index in most frameworks: any token labeled `-100` is skipped by the cross-entropy loss. So the model is trained to produce "It is 4." *given* the question, but never trained to invent the question. Instruction datasets (e.g. open collections of diverse task demonstrations) provide tens of thousands to millions of such pairs; quality and diversity matter far more than raw count — a few thousand excellent examples often beat a noisy million.
 
+In practice you do not wire up masking by hand — TRL's `SFTTrainer` reads a chat-formatted dataset, applies the model's chat template, and masks the prompt for you:
+
+```python
+from datasets import load_dataset
+from trl import SFTTrainer, SFTConfig
+
+# dataset rows look like {"messages": [{"role":"user",...},{"role":"assistant",...}]}
+ds = load_dataset("HuggingFaceH4/ultrachat_200k", split="train_sft")
+
+trainer = SFTTrainer(
+    model="meta-llama/Llama-3.2-3B",
+    train_dataset=ds,
+    args=SFTConfig(
+        max_length=2048,
+        packing=True,                       # pack short samples to fill the context
+        assistant_only_loss=True,           # mask prompt tokens (loss on the answer)
+        per_device_train_batch_size=4,
+        learning_rate=2e-5,
+    ),
+)
+trainer.train()
+```
+
 ## 45.5 — Parameter-Efficient Fine-Tuning (PEFT)
 
 Full fine-tuning has a brutal memory bill, and it is not the weights that hurt — it is the optimizer. Train with Adam in mixed precision and for every parameter you must store, beyond the working fp16 weights: a gradient, an fp32 master copy of the weights, and *two* fp32 optimizer moments (Adam's first moment $m$ and second moment $v$). Do the arithmetic.
@@ -244,6 +303,8 @@ Full fine-tuning has a brutal memory bill, and it is not the weights that hurt �
 
 The PEFT idea: **freeze the entire pretrained model and train only a tiny set of new parameters.** If you train 0.1% of the parameters, the gradient and optimizer state shrink by ~1000×, the giant frozen base needs no optimizer state at all (only the fp16/4-bit weights, no master copy, no moments), and you can fine-tune a model that full fine-tuning could never fit. You also get a tiny, portable artifact — a few megabytes of adapter you can swap per task instead of cloning the whole model.
 
+The intuition for *why* this is allowed: the model already knows almost everything it needs from pretraining. Adapting it to your task is a small nudge, not a rebuild — like adjusting the trim tabs on an airplane rather than redesigning the wings. A small steering surface is enough to change where a very large, already-flying aircraft goes.
+
 | Method | What it adds / trains | Where it injects | Trainable params |
 |---|---|---|---|
 | Adapters | small bottleneck MLP blocks | between transformer sub-layers | ~0.5–5% |
@@ -254,13 +315,21 @@ The PEFT idea: **freeze the entire pretrained model and train only a tiny set of
 
 These differ in *where* they intervene — adding modules (adapters), prepending soft tokens (prefix/prompt), rescaling activations ((IA)³), or unfreezing a sliver of existing params (BitFit). LoRA, the next section, won the popularity contest because it adds *zero* inference latency once merged.
 
+A second axis worth naming: PEFT methods also fall into **additive** (inject new modules — adapters, LoRA, soft prompts), **selective** (unfreeze a subset of existing weights — BitFit), and **reparameterization** (express the update in a cheaper basis — LoRA again, viewed as a low-rank reparameterization of $\Delta W$). LoRA straddles additive and reparameterization, which is part of why it generalizes so well.
+
 ## 45.6 — LoRA
 
 LoRA (Low-Rank Adaptation) starts from an empirical observation: the *update* a model needs during fine-tuning has low intrinsic rank. You do not need a full $d \times d$ matrix of changes; a thin, low-rank one captures most of it. So instead of learning a dense weight update $\Delta W$, LoRA factors it into two skinny matrices.
 
+The plain-language picture: imagine the giant change matrix as a huge spreadsheet you would have to fill in cell by cell. LoRA's bet is that this spreadsheet is secretly just "a few row-patterns times a few column-patterns" — so instead of millions of independent cells you store two skinny strips and multiply them back out on demand. Far fewer numbers, almost the same result.
+
 Freeze the pretrained weight $W \in \mathbb{R}^{d\times k}$. Represent the update as $\Delta W = BA$ where $B \in \mathbb{R}^{d\times r}$ and $A \in \mathbb{R}^{r\times k}$, with rank $r \ll \min(d,k)$. The forward pass becomes:
 
 $$h = Wx + \frac{\alpha}{r}\,B A x$$
+
+**In words:** run the input through the frozen pretrained layer as usual, then add a small correction computed by squeezing the input down to $r$ dimensions and back up, scaled by $\alpha/r$.
+
+**Also written:** as a single effective weight, $h = (W + \tfrac{\alpha}{r}BA)\,x = W'x$ with $W' = W + \tfrac{\alpha}{r}BA$ — which is exactly why the adapter can be *merged* into $W$ at deploy time and cost nothing extra at inference.
 
 Here $r$ is the **rank** (typically 8–64), $\alpha$ is a scaling constant, and $A,B$ are the only trainable tensors — initialized so $BA=0$ at the start (A random, B zero) so training begins exactly at the pretrained model. The parameter saving is dramatic: a $4096\times4096$ matrix has ~16.8M params, but at rank 8 the pair $B,A$ has $4096\cdot8 + 8\cdot4096 = 65{,}536$ — a ~256× reduction.
 
@@ -294,11 +363,34 @@ def lora_forward(x, W, A, B, alpha, r):
 # only A,B receive gradients; W is frozen
 ```
 
+In real projects you attach LoRA with Hugging Face PEFT in a few lines — wrap the base model in a `LoraConfig` and only the adapters become trainable:
+
+```python
+from peft import LoraConfig, get_peft_model
+from transformers import AutoModelForCausalLM
+
+base = AutoModelForCausalLM.from_pretrained("meta-llama/Llama-3.2-3B")
+cfg = LoraConfig(
+    r=16, lora_alpha=32,                                  # effective scale alpha/r = 2
+    target_modules=["q_proj", "k_proj", "v_proj", "o_proj"],
+    lora_dropout=0.05, task_type="CAUSAL_LM",
+)
+model = get_peft_model(base, cfg)
+model.print_trainable_parameters()
+# -> trainable params: ~4.7M || all params: ~3.2B || trainable%: 0.15
+# ...then hand `model` to SFTTrainer exactly as in 45.4.
+# Later: model.merge_and_unload()  # fold BA into W -> zero inference latency
+```
+
 Practical knobs: **rank $r$** trades capacity for size (start at 8–16, raise if underfitting); **$\alpha$** sets the scaling — the *actual* multiplier on the update is $\alpha/r$, so the original practice was to fix $\alpha$ and tune $r$, though many recipes now just pin $\alpha = 2r$ (giving an effective scale of 2); and **target modules** decide which weight matrices get adapters — attention projections (`q_proj`, `v_proj`) are the usual minimum, and adapting the MLP layers too tends to help. At deploy time you can fold $\frac{\alpha}{r}BA$ back into $W$, so LoRA adds **zero inference latency**.
+
+A few notable descendants are worth knowing by name. **DoRA** (weight-decomposed LoRA) splits each weight into a magnitude and a direction and lets LoRA adapt the direction, often closing the small remaining gap to full fine-tuning. **rsLoRA** (rank-stabilized) rescales by $\alpha/\sqrt{r}$ instead of $\alpha/r$ so that high ranks stop being effectively under-scaled. And **multi-LoRA serving** keeps the base resident once and hot-swaps many tiny adapters per request — the operational payoff of LoRA's portability, letting one GPU serve dozens of fine-tuned "personalities" at near-zero extra memory.
 
 ## 45.7 — QLoRA
 
 LoRA shrinks the *trainable* params, but you still hold the full frozen base in memory. For a 70B model that is ~140 GB in fp16 — still too big for one GPU. **QLoRA** closes the gap by quantizing the frozen base to 4 bits while keeping the LoRA adapters in higher precision. The base is read-only anyway, so a lossy compression of it costs little; gradients only ever flow through the small high-precision adapters.
+
+Plain-language version: you are renting the model into GPU memory, and most of what you rent (the frozen base) you will only *read*, never edit. So store the read-only part in a cheap, compressed form (4-bit), and keep full-quality storage only for the tiny part you actually write to (the adapters). Same trick as keeping the reference encyclopedia on a thumb drive while your editable notes stay on the desk.
 
 Three ingredients make it work. **NF4 (4-bit NormalFloat)** is a quantization datatype whose levels are spaced to match a normal distribution — exactly how neural-net weights are distributed — so it loses less than naive uniform 4-bit. **Double quantization** also quantizes the per-block scaling constants themselves, shaving another ~0.4 bits/param. **Paged optimizers** spill optimizer state to CPU RAM when a memory spike (a long sequence) would otherwise OOM the GPU, like OS virtual memory for the optimizer.
 
@@ -320,6 +412,26 @@ Three ingredients make it work. **NF4 (4-bit NormalFloat)** is a quantization da
 </svg>
 
 The headline: a 65–70B model whose weights need ~140 GB in fp16 drops to **~35 GB in NF4** — but note that 35 GB is *weights only*. On top of it you still pay for the bf16 LoRA adapters and their optimizer state, plus activations, so the live training footprint is meaningfully higher (roughly ~46 GB for a 65B run in the QLoRA paper). The win is still decisive: a model that needed multiple 80 GB GPUs in fp16 now fine-tunes on a single 48 GB card, with quality close to full 16-bit fine-tuning. QLoRA is what put large-model fine-tuning within reach of a single workstation. For the broader quantization theory (calibration, GPTQ/AWQ, inference-time quant), see Ch 30.
+
+The whole recipe is two extra arguments at load time — a `BitsAndBytesConfig` for the 4-bit base, then the same LoRA wrapping as before:
+
+```python
+from transformers import AutoModelForCausalLM, BitsAndBytesConfig
+from peft import LoraConfig, get_peft_model, prepare_model_for_kbit_training
+import torch
+
+bnb = BitsAndBytesConfig(
+    load_in_4bit=True,
+    bnb_4bit_quant_type="nf4",            # NormalFloat 4-bit
+    bnb_4bit_use_double_quant=True,       # double quantization
+    bnb_4bit_compute_dtype=torch.bfloat16,
+)
+base = AutoModelForCausalLM.from_pretrained(
+    "meta-llama/Llama-3.1-70B", quantization_config=bnb, device_map="auto")
+base = prepare_model_for_kbit_training(base)
+model = get_peft_model(base, LoraConfig(r=16, lora_alpha=32, task_type="CAUSAL_LM"))
+# frozen base lives in NF4; gradients flow only through the bf16 adapters
+```
 
 ## 45.8 — The fine-tuning toolkit
 
@@ -361,7 +473,13 @@ To expose that structure you soften the distributions with a **temperature** $T$
 
 $$\mathcal{L} = (1-\lambda)\,\mathcal{L}_{\text{CE}}(y,\,p_s) + \lambda\,T^2\,\mathrm{KL}\!\left(p_t^{T}\,\|\,p_s^{T}\right)$$
 
+**In words:** train the student partly on the true answer (the hard label) and partly to mimic the teacher's softened opinion about *all* the answers; a knob $\lambda$ balances the two, and the $T^2$ keeps the two parts comparable in strength.
+
+**Also written:** as a weighted sum of two terms, $\mathcal{L} = (1-\lambda)\big[-\log p_s(y)\big] + \lambda T^2 \sum_i p_t^T(i)\log\frac{p_t^T(i)}{p_s^T(i)}$ — the first term is the usual one-hot cross-entropy, the second is the teacher-vs-student KL at temperature $T$.
+
 The $T^2$ factor rescales the soft-loss gradients back to the same magnitude as the hard-loss gradients.
+
+**Tiny worked example.** Teacher logits for {dog, wolf, cat} are $z=(4,2,0)$. At $T=1$ the softmax is roughly $(0.84, 0.11, 0.02)$ — already telling you wolf ≫ cat. Crank to $T=2$ and you divide logits first: $(2,1,0)\to(0.67,0.24,0.09)$; at $T=4$, $(1,0.5,0)\to(0.51,0.31,0.19)$. As $T$ rises the gaps shrink, so the student is forced to *also* learn the faint "cat is a little dog-like" signal it would have ignored under the near-one-hot $T=1$ distribution. That faint structure is the "dark knowledge."
 
 <svg viewBox="0 0 640 200" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif" font-size="13" fill="currentColor">
   <rect x="20" y="60" width="150" height="80" rx="8" fill="#6366f1" fill-opacity="0.3" stroke="#6366f1"/>
@@ -378,6 +496,20 @@ The $T^2$ factor rescales the soft-loss gradients back to the same magnitude as 
   <defs><marker id="a2" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6 Z" fill="currentColor"/></marker></defs>
 </svg>
 
+```python
+# Classic logit distillation loss in PyTorch
+import torch.nn.functional as F
+
+def distill_loss(student_logits, teacher_logits, labels, T=2.0, lam=0.5):
+    soft = F.kl_div(
+        F.log_softmax(student_logits / T, dim=-1),
+        F.softmax(teacher_logits / T, dim=-1),
+        reduction="batchmean",
+    ) * (T * T)                                   # rescale soft-loss gradients
+    hard = F.cross_entropy(student_logits, labels)
+    return (1 - lam) * hard + lam * soft
+```
+
 For LLMs, the modern variants matter. **Sequence-level distillation** trains the student on text *generated by* the teacher (the teacher writes the answers, the student imitates them). **On-policy distillation** goes further: the student generates, and the teacher scores or corrects the student's *own* outputs — closing the train/inference mismatch that hurts naive imitation. Distillation is how a frontier-quality teacher becomes a deployable 8B student.
 
 ## 45.10 — Model pruning
@@ -385,6 +517,8 @@ For LLMs, the modern variants matter. **Sequence-level distillation** trains the
 Pruning makes a model smaller by *removing* weights rather than compressing their precision (that was quantization). The premise: trained networks are massively over-parameterized, and many weights contribute almost nothing. **Magnitude pruning** is the simplest rule — rank weights by absolute value and zero out the smallest, on the theory that near-zero weights barely affect the output.
 
 The crucial distinction is structured vs unstructured. **Unstructured pruning** zeros individual weights anywhere; it reaches very high sparsity with little accuracy loss but produces a scattered sparse matrix that ordinary GPUs can't run faster (you saved memory, not necessarily time). **Structured pruning** removes whole units — entire neurons, attention heads, or channels — yielding a genuinely smaller dense model that runs faster on standard hardware, at the cost of more accuracy per weight removed.
+
+Think of unstructured pruning as poking holes in a sponge — lighter, but still sponge-shaped and awkward to handle — while structured pruning is sawing off whole corners: you lose a bit more, but what is left is a smaller solid block that fits the truck.
 
 <svg viewBox="0 0 640 180" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif" font-size="13" fill="currentColor">
   <text x="20" y="20" font-weight="bold">Dense</text>
@@ -413,6 +547,17 @@ The crucial distinction is structured vs unstructured. **Unstructured pruning** 
   </g>
 </svg>
 
+A middle ground deserves mention: **N:M semi-structured sparsity** (e.g. 2:4, "keep 2 of every 4 weights") is regular enough that modern GPUs *do* accelerate it via sparse tensor cores, recovering some of the speedup unstructured pruning leaves on the table. Here is the smallest possible magnitude-pruning demo in PyTorch:
+
+```python
+import torch, torch.nn.utils.prune as prune
+layer = torch.nn.Linear(512, 512)
+prune.l1_unstructured(layer, name="weight", amount=0.5)   # zero smallest 50% by |w|
+print((layer.weight == 0).float().mean().item())          # -> ~0.5 sparsity
+# structured variant: prune.ln_structured(layer, "weight", amount=0.3, n=2, dim=0)
+# typically followed by a few fine-tuning steps to recover accuracy
+```
+
 The **lottery-ticket hypothesis** adds a striking twist: inside a big trained network there exists a small sub-network (a "winning ticket") that, if you had trained it *from its original initialization* in isolation, would reach the same accuracy. Pruning isn't just trimming fat — it can reveal that a much smaller architecture was sufficient all along. In practice pruning is usually followed by fine-tuning to recover the accuracy lost when weights are cut.
 
 ## 45.11 — Model merging
@@ -420,6 +565,10 @@ The **lottery-ticket hypothesis** adds a striking twist: inside a big trained ne
 Merging is the almost-too-good-to-be-true trick: combine several fine-tuned models into one — *without any training or data* — by arithmetic on their weights. It works because checkpoints fine-tuned from the *same base* live in a connected region of weight space, so their parameters can be sensibly averaged.
 
 The simplest version, **model soups / weight averaging**, just takes the elementwise mean of two checkpoints' weights and often gets a model better than either. **SLERP** (spherical linear interpolation) interpolates along the arc between two weight vectors rather than the straight chord, respecting their geometry. The most powerful idea is **task arithmetic** built on **task vectors**: define $\tau = \theta_{\text{finetuned}} - \theta_{\text{base}}$, the direction fine-tuning moved the weights. You can then *add* task vectors to combine skills ($\theta_{\text{base}} + \tau_{\text{code}} + \tau_{\text{math}}$) or *subtract* one to remove a behavior.
+
+**In words:** a task vector is "everything that fine-tuning changed, as a single arrow"; adding two arrows to the base point lands you at a model that does both jobs, and subtracting an arrow walks the model *away* from a behavior.
+
+**Also written:** the merged model is $\theta_{\text{merged}} = \theta_{\text{base}} + \sum_i \lambda_i\,\tau_i$ with $\tau_i = \theta_i - \theta_{\text{base}}$; a uniform average ("soup") of $n$ models is the special case $\theta_{\text{merged}} = \frac{1}{n}\sum_i \theta_i = \theta_{\text{base}} + \frac{1}{n}\sum_i \tau_i$.
 
 <svg viewBox="0 0 640 200" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif" font-size="13" fill="currentColor">
   <line x1="80" y1="170" x2="560" y2="170" stroke="currentColor" stroke-opacity="0.3"/>
@@ -437,7 +586,20 @@ The simplest version, **model soups / weight averaging**, just takes the element
   <defs><marker id="a3" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6 Z" fill="currentColor"/></marker></defs>
 </svg>
 
-Naive addition causes interference when task vectors disagree on a parameter's sign. **TIES** resolves this by trimming tiny changes, electing a dominant sign per parameter, and merging only the agreeing entries. **DARE** randomly drops a large fraction of the delta entries and rescales the rest, exploiting the redundancy in task vectors so multiple can be stacked with less collision. Merging shines when you have several single-task fine-tunes and want one multi-skill model for free — but it only works across checkpoints sharing a common ancestor.
+```python
+# Task arithmetic: combine two same-base fine-tunes with no training, in NumPy
+import numpy as np
+def task_vector(ft, base):  return {k: ft[k] - base[k] for k in base}
+def merge(base, vectors, lams):
+    out = {k: base[k].copy() for k in base}
+    for tau, lam in zip(vectors, lams):
+        for k in out: out[k] += lam * tau[k]      # theta_base + sum lam_i * tau_i
+    return out
+# merged = merge(base, [tv_code, tv_math], [0.5, 0.5])
+# requires base, ft_code, ft_math share the SAME architecture + initialization
+```
+
+Naive addition causes interference when task vectors disagree on a parameter's sign. **TIES** resolves this by trimming tiny changes, electing a dominant sign per parameter, and merging only the agreeing entries. **DARE** randomly drops a large fraction of the delta entries and rescales the rest, exploiting the redundancy in task vectors so multiple can be stacked with less collision. Merging shines when you have several single-task fine-tunes and want one multi-skill model for free — but it only works across checkpoints sharing a common ancestor. In practice the **mergekit** library implements soups, SLERP, TIES, and DARE behind a small YAML config, so a merge is a one-file recipe rather than custom code.
 
 ## 45.12 — Retrieval-Augmented Fine-Tuning (RAFT)
 
@@ -467,6 +629,33 @@ Climb the cost ladder, don't leap it: try prompting, then RAG, then a LoRA/QLoRA
 Fine-tuning is for *behavior*, not *facts*. Baking knowledge into weights makes it stale the moment it changes and gives you no citations — use RAG for knowledge that updates. And watch for catastrophic forgetting: a model fine-tuned narrowly on one task can quietly lose general capability, so always evaluate on a broad held-out set, not just your target task.
 :::
 
+## 45.13 — Data curation & evaluating a fine-tune
+
+The single most under-appreciated lesson of post-training is that the *data*, not the algorithm, decides the outcome. Studies of instruction tuning repeatedly find that a few thousand carefully filtered, diverse, correctly formatted examples beat a noisy million — the "less is more" result. The everyday version: you become like the people you spend time with, so choose the demonstrations the model imitates as carefully as you would choose mentors.
+
+A practical curation checklist before you spend a GPU-hour:
+
+- **Diversity over volume.** Cover the range of tasks and phrasings you actually expect, not 50,000 near-duplicates of the same request.
+- **Deduplicate and decontaminate.** Remove near-duplicate samples (they waste capacity and skew the loss) and scrub anything that overlaps your evaluation set, or your numbers will lie.
+- **Format exactly like inference.** The chat template, system prompt, and any tool-call syntax in training must match what production sends, or the model learns the wrong surface form.
+- **Audit the responses, not just the prompts.** A demonstration teaches *whatever it shows* — a sloppy or subtly wrong answer is a sloppy lesson, faithfully learned.
+
+Evaluation is where fine-tunes quietly go wrong. Because the danger is **catastrophic forgetting**, you must measure two things at once: did the target task improve, *and* did general capability hold? The minimal protocol is a held-out split of your task data **plus** a broad general benchmark (e.g. a small slice of MMLU or a general chat eval) run on both the base and the fine-tuned model.
+
+```python
+# Guard against catastrophic forgetting: track BOTH axes, base vs fine-tuned
+def report(model, task_eval, general_eval):
+    return {"task_acc": task_eval(model), "general_acc": general_eval(model)}
+
+before = report(base_model,      task_eval, general_eval)
+after  = report(finetuned_model, task_eval, general_eval)
+assert after["task_acc"]    >  before["task_acc"],    "fine-tune didn't help the task"
+assert after["general_acc"] >= before["general_acc"] - 0.03, \
+    "regression > 3pp on general benchmark — likely catastrophic forgetting"
+```
+
+If the task improved but the general score collapsed, you over-fit: lower the learning rate, shrink the LoRA rank, mix some general-purpose data back into the training set ("replay"), or train for fewer epochs. A fine-tune that wins your task and loses everything else is usually a worse product than the model you started with.
+
 ## 45.x — Key takeaways
 
 - **Pretraining gives knowledge; post-training gives intent.** A base model is autocomplete; SFT, preference optimization (Ch 46), and distillation turn it into an assistant by reshaping behavior, not adding raw facts.
@@ -475,8 +664,9 @@ Fine-tuning is for *behavior*, not *facts*. Baking knowledge into weights makes 
 - **SFT** continues next-token training on instruction–response pairs, with the loss **masked to completion tokens only** so the model learns to answer, not to ask.
 - **Full fine-tuning's cost is the optimizer state**, not the weights: a 7B model with Adam in mixed precision needs ~112 GB resident (fp16 weights 14 + grads 14 + fp32 master 28 + Adam $m$+$v$ 56), of which ~84 GB is optimizer-related — far past one 80 GB GPU. **PEFT** trains ~0.1% of params; **LoRA** learns $\frac{\alpha}{r}BA$ in parallel to frozen $W$ (effective scale $\alpha/r$) with zero added inference latency; **QLoRA** 4-bit-quantizes the base (NF4 + double quant + paged optimizers) so a ~65–70B model fits one 48 GB GPU.
 - **The toolkit:** HF PEFT (adapters) → TRL (SFTTrainer/DPOTrainer) → Axolotl (YAML config) / Unsloth (fast kernels).
-- **Compression & combination:** distillation transfers a teacher's soft targets to a student; pruning removes weights (structured = faster, unstructured = sparser); merging combines same-base checkpoints by weight arithmetic (soups, SLERP, task vectors, TIES, DARE) with no retraining.
+- **Compression & combination:** distillation transfers a teacher's soft targets to a student; pruning removes weights (structured = faster, unstructured = sparser, N:M = GPU-accelerable middle ground); merging combines same-base checkpoints by weight arithmetic (soups, SLERP, task vectors, TIES, DARE) with no retraining.
 - **RAFT** fine-tunes the model to read retrieved context with distractors so it does RAG robustly at inference.
+- **Data and evaluation decide the outcome:** curate diverse, deduplicated, correctly formatted demonstrations, and always evaluate base-vs-fine-tuned on *both* the target task and a broad benchmark to catch catastrophic forgetting.
 
 ## 45.y — See also
 

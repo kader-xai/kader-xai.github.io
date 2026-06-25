@@ -142,9 +142,15 @@ The oldest idea in the book is also one of the most effective: fit a simple prob
 
 Start with the **z-score**, the workhorse for a single roughly bell-shaped feature. Standardize each point by how many standard deviations it sits from the mean, $z = (x - \mu)/\sigma$, and flag points beyond a cutoff such as $|z| > 3$ (about 0.3% of a true Gaussian). As a worked example, suppose daily logins average $\mu = 200$ with $\sigma = 25$. A day with 400 logins gives $z = (400-200)/25 = 8$ — wildly anomalous, the fingerprint of a likely credential-stuffing attack.
 
+**In words:** the z-score says how many standard-deviation steps a point is above or below the average — big steps mean strange.
+**Also written:** $z = \dfrac{x-\mu}{\sigma}$, equivalently $x = \mu + z\,\sigma$ (the point reconstructed from its score).
+
 Real data, though, has many *correlated* features, and that is where the **multivariate Gaussian** earns its keep. Fit a mean vector $\mu$ and a covariance matrix $\Sigma$, then score each point by its **Mahalanobis distance**, which stretches and rotates the notion of "far" to follow the data's natural correlations:
 
 $$D_M(x) = \sqrt{(x-\mu)^\top \Sigma^{-1} (x-\mu)}$$
+
+**In words:** measure distance from the center, but first squeeze the axes so that directions where the data naturally spreads out count for less — it is "how surprising is this point given how the features usually move together."
+**Also written:** $D_M(x) = \lVert \Sigma^{-1/2}(x-\mu)\rVert_2$, the ordinary Euclidean distance after whitening the data; for a single feature it collapses to $D_M = |z|$.
 
 The intuition is that a point can look perfectly normal on every single axis yet be anomalous *jointly*. A high transaction *amount* is fine on its own, late-*night* timing is fine on its own, but that amount *at* that hour may be very rare. Mahalanobis distance catches exactly this joint oddity; per-axis z-scores miss it entirely. The diagram below shows the geometry: the red dot is comfortably within range on each axis, yet far off the correlation ellipse that defines what "together" looks like.
 
@@ -164,6 +170,9 @@ The intuition is that a point can look perfectly normal on every single axis yet
 
 For data that arrives over time, "normal" itself drifts, and a fixed $\mu$ goes stale within days. The fix is the **EWMA (exponentially weighted moving average)**, a running estimate that weights recent points more heavily: $s_t = \alpha x_t + (1-\alpha)s_{t-1}$, where the smoothing factor $\alpha \in (0,1)$ controls how fast the model forgets. Track the smoothed mean alongside a smoothed variance, and raise an alarm when a new point falls outside a band such as $s_{t-1} \pm 3\sigma_t$. This single recurrence is the quiet backbone of streaming dashboards and security-operations alerting.
 
+**In words:** the new running average is a blend — a slice $\alpha$ of the latest reading plus the rest from yesterday's average — so old data fades away smoothly instead of being remembered forever.
+**Also written:** expanding the recurrence gives a geometric weighting $s_t = \alpha\sum_{i=0}^{t}(1-\alpha)^i x_{t-i}$, where the weight on a point $i$ steps in the past decays as $(1-\alpha)^i$.
+
 ```python
 import numpy as np
 def ewma_detect(x, alpha=0.3, k=3.0):
@@ -179,9 +188,27 @@ def ewma_detect(x, alpha=0.3, k=3.0):
 print(ewma_detect(np.array([10,11,9,10,12,40,11,10.])))  # -> [5]
 ```
 
+In practice you rarely hand-roll the multivariate Gaussian — scikit-learn ships it as a robust covariance estimator that returns Mahalanobis distances directly, and it down-weights contamination in the "normal" set as it fits:
+
+```python
+from sklearn.covariance import EllipticEnvelope
+import numpy as np
+X = np.vstack([np.random.randn(500, 2), [[6, 6]]])   # 500 normal + 1 outlier
+ee = EllipticEnvelope(contamination=0.01, random_state=0).fit(X)
+print(ee.predict(X)[-1])            # -1 -> the [6,6] point flagged
+print(ee.mahalanobis(X[-1:]))       # large squared Mahalanobis distance
+```
+
 ::: {.callout-warning}
 Z-scores assume a Gaussian. On skewed, heavy-tailed data — transaction amounts, packet sizes, file sizes — the "$3\sigma$" rule either fires constantly or never. Log-transform the feature first, or switch to **robust statistics**: use the median and the **MAD** (median absolute deviation) in place of the mean and $\sigma$, since a few extreme values cannot drag them around.
 :::
+
+The robust version of the z-score is worth spelling out, because it is the one you should actually reach for on messy real-world features. Replace the mean with the median and $\sigma$ with a scaled MAD, $\text{MAD} = \text{median}(|x_i - \text{median}(x)|)$:
+
+$$z_{\text{robust}} = \frac{x - \text{median}(x)}{1.4826 \cdot \text{MAD}}.$$
+
+**In words:** the same "how many steps from the middle" idea, but using the median and the typical gap from the median — quantities a handful of wild values cannot hijack.
+**Also written:** since $1.4826 \cdot \text{MAD} \to \sigma$ for Gaussian data, this is just $z_{\text{robust}} = (x - \tilde{\mu})/\hat{\sigma}_{\text{MAD}}$ with robust drop-in estimates $\tilde{\mu}, \hat{\sigma}_{\text{MAD}}$.
 
 ## 27.3 — Distance and Density Methods: kNN, LOF, DBSCAN
 
@@ -192,6 +219,9 @@ The most direct expression of that idea is the **kNN distance**. Score each poin
 That blind spot is exactly what **LOF (Local Outlier Factor)** repairs. Real data contains clusters of *different* densities: a sparse-but-legitimate region of large corporate transactions sitting beside a dense region of small retail ones. A single global distance threshold would wrongly condemn the entire sparse cluster. LOF sidesteps this by comparing each point's *local* density to the local densities of its neighbors. Roughly,
 
 $$\text{LOF}(p) = \frac{\text{average local density of } p\text{'s neighbors}}{\text{local density of } p}.$$
+
+**In words:** divide how crowded your neighbors' neighborhoods are by how crowded yours is — if your neighbors live in packed streets while you sit on an empty lane, the ratio shoots up and you are a local outlier.
+**Also written:** with local reachability density $\text{lrd}$, $\text{LOF}(p) = \dfrac{1}{|N_k(p)|}\sum_{o \in N_k(p)} \dfrac{\text{lrd}(o)}{\text{lrd}(p)}$, the mean of the neighbors' density ratios.
 
 A value of $\text{LOF}(p) \approx 1$ means "about as dense as my neighborhood" (normal), while $\text{LOF}(p) \gg 1$ means "I sit in a far sparser pocket than my neighbors do" (a *local* outlier). The picture below makes it concrete: the red point is an outlier *relative to its own tight cluster*, even though, in absolute distance, it is closer to that cluster than the loose cluster's members are to one another.
 
@@ -228,6 +258,13 @@ All three methods lean on a *meaningful distance*, and that is their Achilles' h
 Almost every method so far first models normality and then measures deviation from it. **Isolation Forest** flips that logic on its head with a beautifully lazy insight: anomalies are *few and different*, which means they are **easy to isolate**. So instead of describing normal and checking who departs from it, just see how little effort it takes to fence each point off by itself.
 
 The mechanism is randomized partitioning. Pick a random feature, pick a random split value between its min and max, and repeat — each split carves the space into smaller boxes, building a random tree. A weird, isolated point gets fenced into its own box after only a handful of cuts; a normal point buried deep in a dense cluster needs many cuts before it is finally alone. The **anomaly score** is therefore the average **path length** (the number of splits) needed to isolate a point, averaged over many random trees. A short path means anomalous. Formally, the path length is normalized against $c(n)$, the expected path length of an unsuccessful binary-search tree, so the score lands in $[0,1]$ with values near 1 flagging anomalies.
+
+The score has a tidy closed form. With $E[h(x)]$ the mean path length of point $x$ across the forest and $c(n)$ the expected path length in a tree of $n$ points,
+
+$$s(x, n) = 2^{-\,\frac{E[h(x)]}{c(n)}}.$$
+
+**In words:** turn "how few cuts did it take to isolate this point" into a 0-to-1 score — a very short path drives the exponent toward 0 and the score toward 1 (anomaly); a long path pushes the score toward 0.5 or below (normal).
+**Also written:** equivalently $s = 2^{-E[h(x)]/c(n)}$ with $c(n) = 2H(n-1) - \tfrac{2(n-1)}{n}$ and $H(i)$ the $i$-th harmonic number; $s \to 1$ as $E[h(x)] \to 0$ and $s \to 0$ as $E[h(x)] \to n-1$.
 
 ```{mermaid}
 flowchart TD
@@ -275,13 +312,25 @@ Using the **kernel trick** — typically an RBF kernel — it maps the points in
 
 The key knob is $\nu \in (0,1]$, which plays a double role: it is an upper bound on the fraction of training points allowed to fall *outside* the boundary (treated as outliers or noise) and simultaneously a lower bound on the fraction of points retained as support vectors. A small $\nu$ wraps the data tightly; a large $\nu$ is more willing to reject points as anomalous.
 
-The catch is practical. One-Class SVM is **sensitive to the choice of kernel and the `gamma` setting**, it scales poorly past tens of thousands of points (roughly $O(n^2)$ to $O(n^3)$), and it assumes the training data is genuinely clean — a few hidden anomalies in the "normal" set distort the boundary. On large or contaminated tabular data, Isolation Forest usually wins on speed and robustness; One-Class SVM shines on smaller, carefully curated sets of normal data.
+```python
+from sklearn.svm import OneClassSVM
+import numpy as np
+X_norm = np.random.randn(400, 2)                 # clean "normal" training data
+oc = OneClassSVM(kernel="rbf", gamma="scale", nu=0.05).fit(X_norm)
+X_test = np.vstack([np.random.randn(5, 2), [[5, 5]]])
+print(oc.predict(X_test))     # +1 = inside frontier, -1 = anomaly ([5,5])
+```
+
+The catch is practical. One-Class SVM is **sensitive to the choice of kernel and the `gamma` setting**, it scales poorly past tens of thousands of points (roughly $O(n^2)$ to $O(n^3)$), and it assumes the training data is genuinely clean — a few hidden anomalies in the "normal" set distort the boundary. On large or contaminated tabular data, Isolation Forest usually wins on speed and robustness; One-Class SVM shines on smaller, carefully curated sets of normal data. When you need the same boundary idea but at scale, `sklearn.linear_model.SGDOneClassSVM` gives a linear-time approximation that streams through the data.
 
 ## 27.6 — Reconstruction-Based Methods: Autoencoder Error
 
 Once the data is high-dimensional or richly structured — images, windows of sensor readings, sequences of events — the geometry-based methods stall, and deep learning takes over. An **autoencoder** (Chapter 18) is a neural network trained to copy its input to its output through a deliberately narrow **bottleneck**. That squeeze is the whole point: forced to pass everything through a few numbers, the network can only succeed by learning the underlying regularities of the data and discarding the rest.
 
 The trick that turns it into a detector is to train it *only on normal data*. It becomes an expert at reconstructing normal patterns and a klutz at everything else. Feed it an anomaly whose shape it has never seen, and it reconstructs the input badly. The **reconstruction error** $\lVert x - \hat{x}\rVert^2$ is therefore the anomaly score, and you raise an alert whenever it exceeds a threshold.
+
+**In words:** measure how far the network's redrawn version is from the original — small for the familiar normal shapes it was trained on, large for anything strange it has never learned to draw.
+**Also written:** $\lVert x - \hat{x}\rVert^2 = \sum_{j}(x_j - \hat{x}_j)^2$, the summed squared per-feature gap (the squared Euclidean distance between input and reconstruction).
 
 ```{mermaid}
 flowchart LR
@@ -301,6 +350,29 @@ def recon_error(X, W):                 # W: orthonormal bottleneck basis
 # train on normal X_norm -> learn W (top principal components);
 # score new points by error. Anomalies lie off the learned
 # subspace and so reconstruct poorly, earning a high error.
+```
+
+In practice you reach for a real deep autoencoder. Here is the idiomatic PyTorch version — train on normals, then threshold the per-sample error at a high percentile of clean validation errors:
+
+```python
+import torch, torch.nn as nn
+
+ae = nn.Sequential(
+    nn.Linear(30, 16), nn.ReLU(), nn.Linear(16, 4),   # encoder -> bottleneck
+    nn.ReLU(), nn.Linear(4, 16), nn.ReLU(), nn.Linear(16, 30),  # decoder
+)
+opt, loss_fn = torch.optim.Adam(ae.parameters(), 1e-3), nn.MSELoss()
+
+for _ in range(50):                       # train ONLY on normal data
+    opt.zero_grad()
+    xh = ae(X_norm)
+    loss = loss_fn(xh, X_norm)
+    loss.backward(); opt.step()
+
+with torch.no_grad():                     # per-sample reconstruction error
+    err = ((ae(X_new) - X_new) ** 2).mean(dim=1)
+thr = torch.quantile(((ae(X_val) - X_val) ** 2).mean(dim=1), 0.99)
+anomalies = err > thr                     # boolean mask of flagged points
 ```
 
 The same principle extends well beyond plain autoencoders: convolutional autoencoders handle images, LSTM autoencoders handle sequences (Chapter 16), and **variational autoencoders** replace the raw error with a probabilistic reconstruction likelihood, giving a more principled anomaly score.
@@ -327,7 +399,39 @@ The **semi-supervised** regime is the sweet spot for fraud and intrusion. You tr
 
 In production you rarely commit to just one. A common and powerful pattern layers them: an unsupervised or semi-supervised detector catches the unknown unknowns, and its analyst-confirmed hits are fed back as fresh labels to a supervised model — a feedback loop that sharpens the system over time.
 
-## 27.8 — Point vs Contextual vs Collective Anomalies
+## 27.8 — Handling Imbalance in the Supervised Layer
+
+When you *do* have labels and train a classifier on them, the 0.1% positive rate fights you at every step, and there is a small, well-worn toolbox for pushing back. The intuition: a learner shown 999 honest transactions for every fraud will, left alone, decide the cheapest way to be "right" is to call everything honest. You have to make the rare class *matter* in the loss.
+
+The first lever is **class weights** — tell the model that a mistake on the rare class costs many times more than a mistake on the common one. This is a one-line change in most frameworks (`class_weight="balanced"` in scikit-learn, `scale_pos_weight` in XGBoost) and is usually the first thing to try because it touches no data.
+
+The second lever is **resampling**: either *oversample* the minority (duplicate or synthesize fraud cases) or *undersample* the majority (throw away honest cases). The best-known synthesizer is **SMOTE**, which invents new minority points by interpolating between a real one and its nearest minority neighbors, fattening the rare class without naive duplication. Crucially, resampling must happen *inside* cross-validation folds, never before the split — otherwise synthetic copies leak from train into test and the scores lie.
+
+The third lever reshapes the loss itself. **Focal loss** multiplies the standard cross-entropy by a factor $(1-p_t)^\gamma$ that shrinks the contribution of easy, confidently-correct examples so the model spends its effort on the hard, rare ones:
+
+$$\text{FL}(p_t) = -\,(1-p_t)^{\gamma}\,\log(p_t).$$
+
+**In words:** start from ordinary log-loss, then dial down how much each easy example counts — the more confident and correct the prediction ($p_t$ near 1), the closer its weight falls to zero, leaving the hard rare cases to dominate the gradient.
+**Also written:** with $\gamma = 0$ it collapses back to plain cross-entropy $-\log(p_t)$; add a class-balancing weight $\alpha_t$ and it becomes $\text{FL} = -\alpha_t(1-p_t)^{\gamma}\log(p_t)$.
+
+```python
+from imblearn.over_sampling import SMOTE
+from imblearn.pipeline import Pipeline
+from sklearn.ensemble import HistGradientBoostingClassifier
+
+# resample INSIDE the pipeline so it stays within each CV fold (no leakage)
+pipe = Pipeline([
+    ("smote", SMOTE(sampling_strategy=0.1, random_state=0)),  # raise fraud to 10%
+    ("clf", HistGradientBoostingClassifier(class_weight="balanced")),
+])
+pipe.fit(X_train, y_train)        # y_train: 0=normal, 1=fraud (highly imbalanced)
+```
+
+::: {.callout-warning}
+Do not chase a balanced *training* set as a goal in itself. Over-aggressive oversampling teaches the model that fraud is far more common than it really is, inflating false positives in production. Resample modestly (often to 5–10% positives, not 50%), and always tune the final decision threshold on data with the *real* imbalance — see the next section.
+:::
+
+## 27.9 — Point vs Contextual vs Collective Anomalies
 
 Anomalies come in three different *kinds*, and matching the detection method to the kind is half the battle — a tool tuned for one kind is often blind to the others.
 
@@ -359,11 +463,18 @@ flowchart LR
 Pointing a point-anomaly detector at a collective problem fails *silently*. Every individual packet in a DDoS, and every small transfer in a structuring scheme, *is* normal in isolation, so a point detector sees nothing wrong and raises no alarm at all. Aggregate the data into windows first, then detect on the aggregates.
 :::
 
-## 27.9 — Evaluation Under Imbalance: PR-AUC and Threshold Setting
+## 27.10 — Evaluation Under Imbalance: PR-AUC and Threshold Setting
 
 When positives are 0.1% of the data, the usual metrics quietly lie to you. **Accuracy** is worthless — predicting "all normal" scores 99.9%. Even **ROC-AUC**, normally a reliable summary, turns misleadingly rosy here: it averages over the false-positive rate, and when the negatives vastly outnumber the positives, a flood of false alarms barely moves the FPR even as it wrecks real-world usability.
 
 The honest lens is **precision and recall**. **Precision** asks: of the alerts you raised, what fraction were truly fraud? It captures the cost of false alarms — wasted analyst time and blocked legitimate customers. **Recall** asks: of all the real fraud out there, what fraction did you catch? It captures the cost of misses — money walking out the door. The **PR-AUC**, the area under the precision–recall curve, summarizes this tradeoff across all thresholds, and crucially its baseline is the positive rate itself rather than a fixed 0.5 — which is exactly why it stays honest under extreme imbalance where ROC-AUC flatters.
+
+The two quantities are worth writing down in terms of the raw counts of true positives (TP), false positives (FP), and false negatives (FN):
+
+$$\text{Precision} = \frac{TP}{TP + FP}, \qquad \text{Recall} = \frac{TP}{TP + FN}.$$
+
+**In words:** precision is "of everything I alerted on, how much was real"; recall is "of everything that was real, how much did I catch." One guards against crying wolf, the other against sleeping through the fire.
+**Also written:** precision is the positive predictive value $P(\text{fraud}\mid\text{alert})$ and recall is the true-positive rate / sensitivity $P(\text{alert}\mid\text{fraud})$; their harmonic mean is $F_1 = \dfrac{2\,\text{Precision}\cdot\text{Recall}}{\text{Precision}+\text{Recall}}$.
 
 Work a concrete example. Out of 100,000 transactions, 100 are fraud (0.1%). Model A flags 200 transactions, of which 80 turn out to be fraud:
 
@@ -385,11 +496,27 @@ Work a concrete example. Out of 100,000 transactions, 100 are fraud (0.1%). Mode
 
 **Threshold setting** is a business decision, never a default. The model emits a continuous score; *you* choose the cutoff that balances precision against recall given two real constraints — how many alerts your analysts can actually review, and the asymmetric costs of the two error types (a missed \$10,000 fraud versus one annoyed customer). Fix the threshold on a validation set, monitor it in production, and move it as conditions shift.
 
+In code, you rank by score and read the curve directly, then pick the operating point your constraints allow:
+
+```python
+from sklearn.metrics import average_precision_score, precision_recall_curve
+import numpy as np
+
+scores = model.score_samples(X_val) * -1     # higher = more anomalous
+print("PR-AUC:", average_precision_score(y_val, scores))   # honest summary
+
+prec, rec, thr = precision_recall_curve(y_val, scores)
+# smallest threshold that still keeps precision >= 0.40 (analyst capacity)
+ok = prec[:-1] >= 0.40
+chosen = thr[ok][np.argmax(rec[:-1][ok])]    # among those, maximize recall
+print("operating threshold:", chosen)
+```
+
 ::: {.callout-tip}
 Report PR-AUC and the full precision–recall curve, not a single accuracy number. Then state the operating point in plain words: "at this threshold we catch 80% of fraud at 40% precision, costing about 120 false alerts per 100k transactions." That sentence is what the business actually decides on.
 :::
 
-## 27.10 — Streaming and Online Detection
+## 27.11 — Streaming and Online Detection
 
 Fraud and intrusion happen *now*, and a model that scores yesterday's data in a nightly batch simply lets the money walk out the door. **Streaming (online) detection** scores each event the instant it arrives, in milliseconds, while continuously updating its sense of what normal looks like.
 
@@ -408,13 +535,26 @@ flowchart LR
     U -.adapt to drift.-> M
 ```
 
+A modern streaming detector worth knowing by name is **Half-Space Trees** (and the closely related **Robust Random Cut Forest** used in AWS), an online cousin of Isolation Forest that maintains its random trees over a sliding window and updates them as events flow past. The `river` library — the de-facto Python toolkit for online ML — exposes it with a one-sample-at-a-time API that mirrors how the data actually arrives:
+
+```python
+from river import anomaly, preprocessing
+
+model = preprocessing.MinMaxScaler() | anomaly.HalfSpaceTrees(seed=0)
+for x in transaction_stream:          # x is a dict of features, one event
+    score = model.score_one(x)        # anomaly score, computed in microseconds
+    if score > 0.7:
+        raise_alert(x)
+    model.learn_one(x)                # update the model with this event
+```
+
 A pragmatic production architecture pairs two layers. A fast streaming layer blocks the obviously bad and challenges the merely suspicious with step-up authentication, such as a one-time passcode. A slower batch layer then retrains overnight on richer features and confirmed labels. This split between a real-time speed layer and a thorough batch layer is the classic **lambda architecture** applied to detection.
 
 ::: {.callout-warning}
 Online adaptation cuts both ways. If you let the model quietly absorb fraudulent traffic into its idea of "normal," a slow, patient attacker can **poison** the baseline until the attack looks ordinary and slips through unflagged. Gate the updates on confirmed labels, and cap how fast the baseline is allowed to move.
 :::
 
-## 27.11 — A Worked Fraud Example and the Security Tie-In
+## 27.12 — A Worked Fraud Example and the Security Tie-In
 
 To pull the chapter together, walk a concrete card-fraud pipeline from raw transaction to action, and then see how the very same machinery powers security operations.
 
@@ -447,18 +587,40 @@ The deep parallel is that fraud and intrusion are both **adversarial anomaly det
 Whether the label is "fraud" or "intruder," the recipe is identical: engineer behavioral and contextual features, baseline what normal looks like, score the deviations, tier the response by risk, and feed confirmed outcomes back into the model.
 :::
 
-## 27.12 — Key takeaways
+## 27.13 — Explaining and Acting on Alerts
+
+A detector that fires without saying *why* is operationally useless: an analyst staring at a flagged transaction needs a reason before they can confirm, dispute, or escalate it, and a customer whose card is declined deserves a defensible explanation. The intuition is that a score is a verdict, but an investigation needs evidence — so a production system must turn each high score into a short, human-readable story of which features drove it.
+
+The practical tool is **per-prediction attribution**. For supervised models, **SHAP** values decompose a single score into additive per-feature contributions, so an alert arrives annotated: "+0.4 from amount being 12× the 30-day mean, +0.3 from a new device, +0.2 from impossible travel." For the unsupervised side, the same idea applies more crudely — report which features had the largest standardized deviation, or for Isolation Forest, which splits isolated the point fastest.
+
+```python
+import shap
+explainer = shap.TreeExplainer(supervised_model)     # gradient-boosted fraud model
+sv = explainer.shap_values(flagged_tx)               # one row = one alert
+top = sorted(zip(feature_names, sv[0]), key=lambda p: -abs(p[1]))[:3]
+print("alert driven by:", top)   # e.g. [('amount_vs_baseline', 0.41), ...]
+```
+
+Beyond the single alert, two operational realities shape the whole system. The first is the **alert budget**: analysts can review only so many cases a day, so the threshold (Section 27.10) is set as much by review capacity as by statistics, and alerts are *ranked* so the riskiest reach a human first. The second is the **action tier** itself — not every alert should block. A graded response (allow, step-up authentication, hold for review, hard block) lets the system act proportionally to the score and to the cost of being wrong, sparing the honest customer a declined card while still stopping the obvious fraud.
+
+::: {.callout-tip}
+Treat explanations as part of the model's output, not an afterthought. An alert shipped with its top three driving features is one an analyst can action in seconds; a bare score is one they must reverse-engineer — and under a tight alert budget, that difference decides whether the system is usable at all.
+:::
+
+## 27.14 — Key takeaways
 
 - Anomaly detection means **modeling normal and measuring deviation** — reach for it when positives are rare, undefined, or unlabeled, precisely where ordinary classification breaks.
 - **Statistical methods** (z-score, Gaussian/Mahalanobis, EWMA) are simple, fast, and often enough; log-transform or use robust stats (median/MAD) on skewed, heavy-tailed data.
 - **Distance and density** methods (kNN, LOF, DBSCAN) catch geometric and local-density outliers but scale poorly and degrade in high dimensions.
 - **Isolation Forest** is the fast, robust default for tabular data — anomalies are easy to isolate, so a short random-tree path length flags them.
 - **One-Class SVM** and **autoencoder reconstruction error** are semi-supervised: train on clean normals, flag whatever fits or reconstructs poorly — and both catch *novel* anomalies.
+- When labels exist, **handle imbalance** in the supervised layer with class weights, modest resampling (SMOTE inside the CV fold), or focal loss — never chase a 50/50 training set.
 - Match the **type** to the method: point (single odd value), contextual (odd given time or place), collective (odd as a sequence) — and aggregate into windows before hunting collective anomalies.
 - Under extreme imbalance, judge models by **PR-AUC and the precision–recall curve**, never accuracy or ROC-AUC, and treat the **threshold as a business decision** tied to alert capacity and asymmetric costs.
 - Fraud and intrusion are **adversarial and streaming**: score in real time, adapt to drift, guard against baseline poisoning, and loop confirmed labels back into the model.
+- Ship each alert with an **explanation** (SHAP or top deviating features) and a **graded action tier**, since an unexplained, all-or-nothing alert is rarely usable under a real review budget.
 
-## 27.13 — See also
+## 27.15 — See also
 
 - **Classification Algorithms** — supervised detectors, support-vector machines, and decision boundaries.
 - **Ensemble Methods** — gradient-boosted trees for the supervised fraud layer, and the forest idea behind Isolation Forest.
@@ -468,6 +630,7 @@ Whether the label is "fraud" or "intruder," the recipe is identical: engineer be
 - **Generative Models** — autoencoders and variational autoencoders for reconstruction-based scoring.
 - **Recurrent & Sequence Models** — LSTM autoencoders and sequence models for collective and temporal anomalies.
 - **Time Series & Forecasting** — seasonal baselines and contextual anomalies over time.
+- **Interpretability & Explainability** — SHAP and per-prediction attribution for turning scores into actionable alerts.
 - **ML Across Industries** — fraud, security, and fault detection deployed in real production settings.
 - **MLOps & Deployment** — streaming inference, monitoring, drift handling, and retraining loops.
 

@@ -115,6 +115,8 @@ A base model trained on next-token prediction (Chapter 23) knows a staggering am
 
 A pretrained model optimizes one thing: predict the next token over a giant corpus. That objective makes it *capable* but not *cooperative*. Ask it a question and it might continue with more questions, because question-lists are common on the web. The gap between "models the data distribution" and "does the thing the user wants, safely" is the **alignment problem**.
 
+Think of it like hiring a brilliant new graduate who has read the entire internet but has never held a job. They know an enormous amount, but on day one they don't know your norms: when to speak up, when to decline, how to format an answer, or that "I'm not sure" is sometimes the right reply. Pretraining produces the brilliant graduate; post-training is the onboarding.
+
 The standard framing is **HHH** — a useful assistant should be **Helpful** (actually solve the task), **Honest** (say what it knows and flag what it doesn't), and **Harmless** (refuse to assist with serious harm). These three pull against each other: a maximally harmless model refuses everything; a maximally helpful one helps with anything. Alignment is the negotiation.
 
 The post-training stack handles this in stages. **Supervised fine-tuning (SFT)** teaches format and instruction-following from curated demonstrations — it gets the model answering questions instead of continuing them. But SFT can only imitate; it cannot learn from "this answer was better than that one." That is what **preference optimization** adds: it nudges the model toward responses humans prefer over responses they don't. The arc is *imitate, then refine*.
@@ -135,17 +137,27 @@ flowchart TD
 
 The dashed line to evaluation is the point of the whole chapter: every stage is only as trustworthy as the evals that measure it.
 
+### Why SFT alone is not enough — a one-line intuition
+
+Imagine teaching someone to cook only by showing them finished dishes (SFT demonstrations). They learn to plate food that *looks* right. But they never learn that *this* risotto tasted better than *that* one — there's no signal about relative quality, and no way to discover a better recipe than the ones they were shown. Preference optimization adds exactly that missing taste-test. This is why the modern recipe is almost never SFT-only: SFT clones the *style* of good answers; preferences teach the *judgment* of which answer is better.
+
 ## 46.2 — RLHF (Reinforcement Learning from Human Feedback)
 
-RLHF was the technique that made ChatGPT feel different. The intuition: it is hard to *write* the perfect answer for every prompt, but easy to *compare* two answers and say which is better. So instead of asking humans to demonstrate, we ask them to rank — and turn those rankings into a training signal.
+RLHF was the technique that made ChatGPT feel different. The intuition: it is hard to *write* the perfect answer for every prompt, but easy to *compare* two answers and say which is better. (Think of a wine tasting — you may not be able to describe the ideal Cabernet from scratch, but hand someone two glasses and they can reliably point to the one they prefer.) So instead of asking humans to demonstrate, we ask them to rank — and turn those rankings into a training signal.
 
 It runs in three steps. **First**, collect preference pairs: for a prompt, sample two responses from the SFT model and have a human label which is **chosen** ($y_w$) and which is **rejected** ($y_l$). **Second**, train a **reward model** $r_\phi$ that scores a response with a scalar. It is fit with the **Bradley-Terry** model, which says the probability a human prefers $y_w$ is the logistic of the reward gap:
 
 $$\mathcal{L}_{RM} = -\,\mathbb{E}_{(x,\,y_w,\,y_l)}\Big[\log \sigma\big(r_\phi(x, y_w) - r_\phi(x, y_l)\big)\Big]$$
 
+**In words:** train the scorer so that the better answer gets a higher score than the worse one — the bigger the score gap (in the right direction), the smaller the loss.
+**Also written:** since $\sigma(z)=\frac{1}{1+e^{-z}}$, the per-example loss is $\log\!\big(1+e^{-(r_\phi(x,y_w)-r_\phi(x,y_l))}\big)$ — the softplus of the negative reward margin.
+
 **Third**, optimize the policy $\pi_\theta$ with **PPO** (Chapter 21) to maximize reward, while a **KL penalty** chains it to the frozen reference (the SFT model) so it doesn't drift into gibberish that happens to fool the reward model:
 
 $$\max_{\theta}\ \mathbb{E}\big[\,r_\phi(x, y)\,\big] - \beta\,\mathrm{KL}\big(\pi_\theta(y\mid x)\,\|\,\pi_{ref}(y\mid x)\big)$$
+
+**In words:** chase higher reward, but pay a penalty for straying too far from the original SFT model — climb the hill without wandering off the map.
+**Also written:** as a per-token reward, this is equivalent to $\tilde r(x,y) = r_\phi(x,y) - \beta\log\frac{\pi_\theta(y\mid x)}{\pi_{ref}(y\mid x)}$, i.e. the reward model's score *minus* a per-token KL tax fed straight into the RL return.
 
 ```{mermaid}
 flowchart LR
@@ -160,19 +172,57 @@ flowchart LR
     POL -.new samples.-> RM
 ```
 
-The recurring failure is **reward hacking**: the policy finds responses that score high on the imperfect reward model without being genuinely better — verbose answers, sycophantic agreement, padded markdown. The KL penalty and a held-out reward model help, but reward hacking is the central reason RLHF is finicky: you are optimizing a *proxy* for human preference, and any proxy can be gamed.
+**A tiny worked example of the reward loss.** Suppose for one prompt the reward model scores the chosen answer $r_\phi(x,y_w)=2.0$ and the rejected one $r_\phi(x,y_l)=0.5$. The margin is $2.0-0.5=1.5$, so $\sigma(1.5)\approx 0.82$ and the loss is $-\log 0.82\approx 0.20$ — small, because the model already ranks them correctly. If instead it had them backwards ($r_\phi(x,y_w)=0.5$, $r_\phi(x,y_l)=2.0$), the margin is $-1.5$, $\sigma(-1.5)\approx0.18$, and the loss is $-\log 0.18\approx 1.71$ — almost nine times larger, pushing the scorer hard to flip its ranking. The loss only cares about the *gap*, not the absolute scores.
+
+The recurring failure is **reward hacking**: the policy finds responses that score high on the imperfect reward model without being genuinely better — verbose answers, sycophantic agreement, padded markdown. The KL penalty and a held-out reward model help, but reward hacking is the central reason RLHF is finicky: you are optimizing a *proxy* for human preference, and any proxy can be gamed. This is **Goodhart's law** in action — "when a measure becomes a target, it ceases to be a good measure." The reward model is a measure of human preference; turn it into the optimization target and the policy learns to satisfy the measure, not the preference.
 
 ::: {.callout-warning}
 RLHF is operationally heavy — you keep **four models** in play (policy, reference, reward, and a value/critic head) and PPO is notoriously sensitive to hyperparameters. This cost and instability is exactly what motivated DPO.
 :::
 
+### From-scratch reward model + PPO with TRL
+
+The from-scratch Bradley-Terry loss is just the line above; in practice you train the reward model and run PPO with Hugging Face **TRL**, which keeps the four-model bookkeeping out of your way:
+
+```python
+# Reward model training (TRL) — fits the Bradley-Terry loss above.
+from trl import RewardTrainer, RewardConfig
+from transformers import AutoModelForSequenceClassification, AutoTokenizer
+
+tok = AutoTokenizer.from_pretrained("Qwen/Qwen2.5-0.5B-Instruct")
+rm  = AutoModelForSequenceClassification.from_pretrained(
+        "Qwen/Qwen2.5-0.5B-Instruct", num_labels=1)   # scalar reward head
+
+# dataset rows need: {"chosen": <text>, "rejected": <text>}
+trainer = RewardTrainer(
+    model=rm, processing_class=tok,
+    args=RewardConfig(output_dir="rm-out", per_device_train_batch_size=4),
+    train_dataset=pref_ds,
+)
+trainer.train()
+```
+
+```python
+# PPO loop (TRL) — policy maximizes RM score under a KL leash to the reference.
+from trl import PPOTrainer, PPOConfig
+ppo = PPOTrainer(
+    args=PPOConfig(output_dir="ppo-out", kl_coef=0.05),  # β: the KL leash
+    model=policy, ref_model=ref, reward_model=rm,
+    processing_class=tok, train_dataset=prompts_ds,
+)
+ppo.train()   # samples, scores with rm, updates with PPO + KL penalty
+```
+
 ## 46.3 — Direct Preference Optimization (DPO)
 
-DPO asks a sharp question: if the reward model and the policy are both just functions of the same preference data, why train two models and run RL at all? The answer is a clever reparameterization. The optimal RLHF policy has a closed-form relationship to the reward — meaning the reward can be written *in terms of the policy itself*. Substituting that into the Bradley-Terry loss makes the reward model vanish. What's left is a simple classification-style loss directly on preference pairs.
+DPO asks a sharp question: if the reward model and the policy are both just functions of the same preference data, why train two models and run RL at all? (The everyday version: why hire a separate food critic to grade every dish when the chef can taste their own cooking and adjust?) The answer is a clever reparameterization. The optimal RLHF policy has a closed-form relationship to the reward — meaning the reward can be written *in terms of the policy itself*. Substituting that into the Bradley-Terry loss makes the reward model vanish. What's left is a simple classification-style loss directly on preference pairs.
 
 The implicit reward is the log-ratio of the trained policy to the reference, scaled by $\beta$. The DPO loss just pushes that implicit reward higher for chosen responses than rejected ones:
 
 $$\mathcal{L}_{DPO} = -\,\mathbb{E}_{(x,\,y_w,\,y_l)}\Big[\log \sigma\Big(\beta \log \tfrac{\pi_\theta(y_w\mid x)}{\pi_{ref}(y_w\mid x)} - \beta \log \tfrac{\pi_\theta(y_l\mid x)}{\pi_{ref}(y_l\mid x)}\Big)\Big]$$
+
+**In words:** make the model raise the probability of the chosen answer (relative to the reference) more than it raises the probability of the rejected one — the same "prefer the winner" idea as the reward loss, but expressed directly through the policy.
+**Also written:** defining the implicit reward $\hat r_\theta(x,y)=\beta\log\frac{\pi_\theta(y\mid x)}{\pi_{ref}(y\mid x)}$, the loss collapses to the Bradley-Terry form $-\,\mathbb{E}\big[\log\sigma\big(\hat r_\theta(x,y_w)-\hat r_\theta(x,y_l)\big)\big]$ — i.e. exactly $\mathcal{L}_{RM}$ with the reward *defined by the policy* instead of a separate network.
 
 ```python
 # DPO loss — one batch. policy & ref give summed log-probs of a response.
@@ -206,6 +256,28 @@ Why it caught on: **no separate reward model, no sampling loop, no RL.** It is a
   <text x="300" y="116" fill="#22c55e">DPO: 2 — reward &amp; critic folded into the loss</text>
 </svg>
 
+### DPO in practice with TRL
+
+In a real pipeline you don't hand-roll the loss — `DPOTrainer` handles the reference model, log-prob bookkeeping, and the paired batches. The whole alignment stage is a few lines:
+
+```python
+from trl import DPOTrainer, DPOConfig
+from transformers import AutoModelForCausalLM, AutoTokenizer
+
+model = AutoModelForCausalLM.from_pretrained("my-sft-model")
+tok   = AutoTokenizer.from_pretrained("my-sft-model")
+
+# dataset rows: {"prompt": ..., "chosen": ..., "rejected": ...}
+trainer = DPOTrainer(
+    model=model, ref_model=None,        # None → TRL clones model as the frozen ref
+    args=DPOConfig(output_dir="dpo-out", beta=0.1, learning_rate=5e-7),
+    train_dataset=pref_ds, processing_class=tok,
+)
+trainer.train()
+```
+
+A small but important detail: DPO learning rates are *tiny* (often `1e-6` to `5e-7`) compared to SFT — you are nudging an already-good model, not training one from scratch, and a large step blows past the reference anchor.
+
 ## 46.4 — The preference-optimization family
 
 DPO opened a floodgate. Once you can learn from preferences without RL, you can vary three knobs: whether you need a **reference model**, whether data must be **paired** (chosen *and* rejected for the same prompt) or can be **unpaired** (a single response labeled good/bad), and whether alignment is a **separate stage** or merged into SFT.
@@ -223,20 +295,59 @@ DPO opened a floodgate. Once you can learn from preferences without RL, you can 
 
 The practical read: start with **DPO** if you have clean pairs; reach for **KTO** when your feedback is thumbs-up/down rather than comparisons; consider **ORPO/SimPO** when you want one fewer model in memory and one fewer stage in the pipeline.
 
+The SimPO reward makes the length fix explicit. Where DPO's implicit reward sums log-probs (so longer answers accumulate more), SimPO divides by length:
+
+$$r_{SimPO}(x,y) = \frac{\beta}{|y|}\sum_{t=1}^{|y|} \log \pi_\theta(y_t\mid x, y_{<t})$$
+
+**In words:** score a response by its *average* per-token log-probability, not the total — so a long answer and a short answer are judged on per-word quality, removing the "longer looks better" thumb on the scale.
+**Also written:** $r_{SimPO}(x,y)=\frac{\beta}{|y|}\log \pi_\theta(y\mid x)$, i.e. $\beta$ times the length-normalized sequence log-likelihood (the mean log-prob), with no reference term.
+
 ::: {.callout-tip}
 Reference-free methods (ORPO, SimPO) save memory and a training stage, which matters a lot at large scale. The cost is losing the KL anchor's regularization — without it, watch for the model drifting away from its SFT behavior on capabilities you didn't put in the preference set.
 :::
 
+### Choosing a method — a decision doodle
+
+The whole family collapses to three yes/no questions about your data and budget:
+
+<svg viewBox="0 0 640 250" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif" font-size="12" fill="currentColor">
+  <text x="10" y="18" font-weight="bold">Which preference method? — follow your data</text>
+  <rect x="220" y="30" width="200" height="34" rx="6" fill="rgba(56,189,248,0.25)" stroke="currentColor"/>
+  <text x="320" y="51" text-anchor="middle">Is feedback paired (A vs B)?</text>
+  <line x1="220" y1="64" x2="120" y2="95" stroke="currentColor"/>
+  <text x="150" y="84" fill="#ec4899">no →</text>
+  <line x1="420" y1="64" x2="500" y2="95" stroke="currentColor"/>
+  <text x="450" y="84" fill="#22c55e">yes ↓</text>
+  <rect x="20" y="95" width="200" height="34" rx="6" fill="rgba(236,72,153,0.25)" stroke="currentColor"/>
+  <text x="120" y="116" text-anchor="middle">thumbs up/down only → KTO</text>
+  <rect x="400" y="95" width="220" height="34" rx="6" fill="rgba(56,189,248,0.25)" stroke="currentColor"/>
+  <text x="510" y="116" text-anchor="middle">Memory tight / want 1 stage?</text>
+  <line x1="510" y1="129" x2="340" y2="165" stroke="currentColor"/>
+  <text x="400" y="150" fill="#22c55e">yes →</text>
+  <line x1="510" y1="129" x2="560" y2="165" stroke="currentColor"/>
+  <text x="540" y="150" fill="#ec4899">no ↓</text>
+  <rect x="220" y="165" width="200" height="34" rx="6" fill="rgba(34,197,94,0.3)" stroke="currentColor"/>
+  <text x="320" y="186" text-anchor="middle">ORPO / SimPO (no ref)</text>
+  <rect x="460" y="165" width="160" height="34" rx="6" fill="rgba(99,102,241,0.3)" stroke="currentColor"/>
+  <text x="540" y="186" text-anchor="middle">DPO (the default)</text>
+  <text x="10" y="232" font-style="italic">Reach for PPO/RLHF only when you need live exploration the static methods can't give.</text>
+</svg>
+
 ## 46.5 — Training-time reasoning
 
-For math, code, and logic, the breakthrough was almost embarrassingly simple: let the model **think before it answers**, and reward it only for getting the final answer right. This is **RL with verifiable rewards (RLVR)** — and the key word is the *reward source*. Instead of a learned reward model that can be hacked, the reward here comes from a *checker*: run the unit tests, evaluate the math expression, compare to ground truth. It returns 1 or 0, and there is little to game because correctness is objective.
+For math, code, and logic, the breakthrough was almost embarrassingly simple: let the model **think before it answers**, and reward it only for getting the final answer right. (Picture grading a math exam where you only check the boxed final answer — you don't need to trust the student's scratch work, just whether the number is right.) This is **RL with verifiable rewards (RLVR)** — and the key word is the *reward source*. Instead of a learned reward model that can be hacked, the reward here comes from a *checker*: run the unit tests, evaluate the math expression, compare to ground truth. It returns 1 or 0, and there is little to game because correctness is objective.
 
 RLVR is a choice of reward, not a choice of optimizer. The optimizer most associated with it is **GRPO** (Group Relative Policy Optimization), the method behind DeepSeek-R1 — but GRPO is independent of where the reward comes from. It was introduced in DeepSeekMath against a *learned* reward model and works fine with one; pairing it with a verifier (RLVR) is what removes the hackable-proxy problem. Keep the two ideas separate: **GRPO = how you update; RLVR = what you reward.**
 
-GRPO's trick is to drop PPO's separate value network. For each prompt it samples a **group** of $G$ completions, scores them all, and uses the group's *mean* reward as the baseline. Each completion gets a single **group-relative advantage** — how much better than its peers it scored — and that scalar is then **broadcast to every token** in the completion. The objective still keeps a **KL penalty to the reference model** (it is not dropped — only the *critic* is):
+GRPO's trick is to drop PPO's separate value network. The intuition: instead of training a whole second model to predict "how good should this answer be" (the baseline), just sample several answers to the *same* prompt and use their average score as the bar to clear. An answer that beats its siblings gets pushed up; one that lags gets pushed down. For each prompt it samples a **group** of $G$ completions, scores them all, and uses the group's *mean* reward as the baseline. Each completion gets a single **group-relative advantage** — how much better than its peers it scored — and that scalar is then **broadcast to every token** in the completion. The objective still keeps a **KL penalty to the reference model** (it is not dropped — only the *critic* is):
 
 $$A_i = \frac{r_i - \mathrm{mean}(r_1,\dots,r_G)}{\mathrm{std}(r_1,\dots,r_G)}\qquad
 \mathcal{L}_{GRPO} = -\,\mathbb{E}\Big[\tfrac{1}{G}\sum_i A_i \cdot (\text{token ratios})_i\Big] + \beta\,\mathrm{KL}\big(\pi_\theta\,\|\,\pi_{ref}\big)$$
+
+**In words:** for each answer, measure how far above or below the group average it scored (in units of the group's spread), then nudge the model to make above-average answers more likely and below-average ones less likely — while staying close to the reference.
+**Also written:** $A_i$ is just the **z-score** of completion $i$'s reward within its group; equivalently $A_i = (r_i-\mu_G)/\sigma_G$ with $\mu_G,\sigma_G$ the group mean and standard deviation — a learned-critic-free, batch-normalized advantage.
+
+**A tiny worked example of the GRPO advantage.** Sample $G=4$ answers to a math prompt and grade each with a verifier: rewards $r=[1,0,1,0]$ (two correct, two wrong). The group mean is $\mu=0.5$ and the standard deviation is $\sigma=0.5$. The advantages are $A=[\,(1-0.5)/0.5,\ (0-0.5)/0.5,\ \dots\,]=[+1,-1,+1,-1]$. So the two correct completions get a $+1$ signal on *every one of their tokens*, the two wrong ones get $-1$ on every token, and no value network was needed — the group itself supplied the baseline.
 
 A key design choice is **outcome vs process** reward models. An **ORM** scores only the final answer (cheap, verifiable, but gives no credit for a mostly-correct derivation that slips at the last step). A **PRM** scores each intermediate reasoning step (denser signal, but requires step-level labels and can itself be hacked). RLVR with outcome rewards turned out to be enough to teach long chains of thought to *emerge* on their own.
 
@@ -262,6 +373,36 @@ A key design choice is **outcome vs process** reward models. An **ORM** scores o
 
 The payoff is **test-time compute**: a reasoning model trades more tokens of "thinking" for higher accuracy. o1- and R1-style models learn to spend hundreds or thousands of reasoning tokens on hard problems, and accuracy climbs roughly with the log of thinking budget — a genuinely new scaling axis. See **Chapter 23** for how this reshapes inference-time behavior and decoding.
 
+### GRPO with TRL and a verifiable reward
+
+The verifier is just a Python function returning a number; TRL's `GRPOTrainer` handles the group sampling and the z-score advantage. Here a reward of 1.0 for a correct boxed answer, plus a small bonus for showing reasoning:
+
+```python
+from trl import GRPOTrainer, GRPOConfig
+import re
+
+def reward_fn(completions, answer, **kwargs):
+    # one reward per completion; this IS the RLVR "checker"
+    rewards = []
+    for c, gold in zip(completions, answer):
+        m = re.search(r"\\boxed\{(.+?)\}", c)
+        correct = (m is not None and m.group(1).strip() == gold.strip())
+        fmt_bonus = 0.1 if "<think>" in c else 0.0   # encourage visible reasoning
+        rewards.append(1.0 * correct + fmt_bonus)
+    return rewards
+
+trainer = GRPOTrainer(
+    model="my-sft-model",
+    reward_funcs=reward_fn,
+    args=GRPOConfig(output_dir="grpo-out", num_generations=8,   # G = group size
+                    beta=0.04),                                  # KL-to-ref weight
+    train_dataset=math_ds,   # rows: {"prompt": ..., "answer": ...}
+)
+trainer.train()
+```
+
+The reward function is where most of the engineering goes: too sparse (only final-answer 0/1) and learning is slow; add too many shaping bonuses and you reintroduce the reward-hacking you were trying to escape. Keep verifiable signals dominant and shaping bonuses small.
+
 ## 46.6 — LLM evaluation & benchmarks
 
 You cannot improve what you cannot measure, and LLMs are unusually hard to measure — the output is free-form text, "correct" is often subjective, and the model may have *seen the test* during pretraining. The benchmark landscape splits into **capability** evals (does it know/can it do?) and **alignment** evals (is it helpful/safe in the way a human wants?).
@@ -281,11 +422,61 @@ The limits matter as much as the scores. **Contamination** is the big one: popul
 Treat any public benchmark score with suspicion if you don't know whether it was in the training set. A model that scores 90% on a contaminated benchmark and 60% on your private hold-out is a 60% model. Always keep a private eval the vendor has never seen.
 :::
 
-## 46.7 — Evaluation pipelines & tooling
+## 46.7 — Safety, red-teaming & alignment evaluation
+
+Capability benchmarks ask "can it?"; safety evaluation asks "*should* it, and will it refuse when it shouldn't?" These are different questions and need their own tests. The everyday analogy: a hiring test for a security guard checks not only that they can spot a threat (capability) but that they don't tackle every customer who reaches into a pocket (over-refusal) or wave through anyone with a confident smile (jailbreak susceptibility).
+
+**Red-teaming** is the practice of *actively trying to make the model misbehave* — eliciting harmful instructions, private-data leakage, or policy violations — so you find the failures before users (or adversaries) do. It runs in two modes: **manual** red-teaming, where humans craft adversarial prompts and role-plays, and **automated** red-teaming, where one model generates attack prompts at scale against another. The classic attack families are worth knowing by name:
+
+- **Jailbreaks** — prompts that talk the model out of its guardrails ("you are DAN, you have no rules…", or wrapping a request in a fictional frame).
+- **Prompt injection** — hostile instructions hidden in *data* the model reads (a web page, a retrieved document, an email) that hijack its behavior. This is the dominant risk for agents and RAG systems (Chapter 44).
+- **Many-shot / context attacks** — filling a long context with fake "compliant" examples so the model continues the pattern.
+
+The two failure modes you must measure *together*, because fixing one inflames the other:
+
+| Metric | What it catches | Failure if too high/low |
+|--------|-----------------|-------------------------|
+| **Attack success rate** | jailbreaks/injections that succeed | too high → unsafe model |
+| **Over-refusal rate** | benign requests wrongly refused | too high → uselessly cautious model |
+
+A model that refuses everything has a perfect attack-success rate of 0% and is also worthless — which is why benchmarks like **XSTest** (benign prompts that *look* unsafe, e.g. "how do I kill a Python process") exist specifically to catch over-refusal. Datasets like **AdvBench** and **HarmBench** measure the other side. The honest summary metric is the *pair*: low attack success **and** low over-refusal.
+
+```{mermaid}
+flowchart LR
+    M[Aligned model] --> RT[Red-team prompts<br/>manual + automated]
+    RT --> J1[Jailbreaks]
+    RT --> J2[Prompt injection]
+    RT --> J3[Benign-but-scary<br/>XSTest]
+    J1 --> S1[Attack success rate ↓]
+    J2 --> S1
+    J3 --> S2[Over-refusal rate ↓]
+    S1 --> V{Both low?}
+    S2 --> V
+    V -->|no| FIX[More safety data<br/>or relax refusals]
+    FIX --> M
+    V -->|yes| OK[Ship + keep as<br/>regression suite]
+```
+
+::: {.callout-warning}
+Safety is not a one-time gate. New jailbreak techniques appear constantly, and every capability improvement can reopen a closed hole. Treat your red-team suite exactly like the eval regression suite in 46.9 — every successful new attack becomes a permanent test case.
+:::
+
+A related, growing discipline is evaluating for **honesty/hallucination** directly (does the model claim things it cannot support?) and for **sycophancy** (does it change a correct answer when the user pushes back?). Both are alignment failures that capability benchmarks miss entirely, and both are increasingly part of a serious eval portfolio.
+
+## 46.8 — Evaluation pipelines & tooling
 
 Running evals by hand doesn't scale past the first afternoon. The workhorse is EleutherAI's **lm-evaluation-harness** — the same tool behind most public leaderboards — which standardizes prompts, few-shot setup, and scoring across hundreds of tasks so numbers are comparable run-to-run. For anything domain-specific you build **custom evals**: a golden set of inputs with known-good outputs and a scoring function.
 
 Scoring free-form text is the hard part. Three patterns dominate. **Exact/programmatic** (regex, unit tests, `pass@k` for code) is cheap and trustworthy where it applies — `pass@k` estimates the chance at least one of $k$ samples passes the tests. **LLM-as-judge** uses a strong model to grade outputs, either **pairwise** (which of A/B is better — robust, maps to Elo) or **single-grade** (score this 1–10 — cheaper, noisier). It scales beautifully but carries real biases: **position bias** (favoring the first option), **verbosity bias** (longer = better), and **self-preference** (a judge favoring its own family's outputs). Mitigations: swap A/B order and average, control for length, and calibrate the judge against human labels.
+
+The unbiased `pass@k` estimator is worth pinning down, because the naive "fraction of runs that passed" is biased for small sample counts. Generate $n \ge k$ samples, count $c$ that pass, then:
+
+$$\mathrm{pass@}k = \mathbb{E}\left[\,1 - \frac{\binom{n-c}{k}}{\binom{n}{k}}\,\right]$$
+
+**In words:** the probability that at least one of $k$ randomly drawn samples passes equals one minus the probability that *all* $k$ you drew came from the failing pile.
+**Also written:** equivalently $\mathrm{pass@}k = 1 - \prod_{i=0}^{k-1}\frac{n-c-i}{n-i}$ — the product form of drawing $k$ failures in a row without replacement.
+
+**A tiny worked example.** Generate $n=5$ samples for a coding problem; $c=2$ pass the unit tests. Then $\mathrm{pass@}1 = 1 - \binom{3}{1}/\binom{5}{1} = 1 - 3/5 = 0.4$ (matching the raw pass fraction $2/5$), but $\mathrm{pass@}3 = 1 - \binom{3}{3}/\binom{5}{3} = 1 - 1/10 = 0.9$ — with three tries you're very likely to hit a passing sample at least once.
 
 ```{mermaid}
 flowchart LR
@@ -304,7 +495,45 @@ flowchart LR
 For ranking many model versions, **pairwise LLM-judge votes fed into Bradley-Terry/Elo** is far more reliable than absolute 1–10 scores — relative judgments are easier and more consistent than calibrated absolute ones, the same reason RLHF collects comparisons rather than ratings.
 :::
 
-## 46.8 — Evals-driven development
+### Running a real eval and a hand-rolled LLM judge
+
+For standard benchmarks, the harness is one command:
+
+```bash
+# lm-evaluation-harness: score a HF model on MMLU and GSM8K
+lm_eval --model hf \
+        --model_args pretrained=my-org/my-model \
+        --tasks mmlu,gsm8k \
+        --num_fewshot 5 --batch_size auto
+```
+
+For domain-specific quality you build a small pairwise judge — note the *order swap* that cancels position bias:
+
+```python
+# Pairwise LLM-as-judge with position-bias control.
+from openai import OpenAI            # any strong judge model works
+client = OpenAI()
+
+def judge(prompt, a, b):
+    def ask(first, second):
+        msg = (f"Question:\n{prompt}\n\nResponse 1:\n{first}\n\n"
+               f"Response 2:\n{second}\n\nWhich response is better? "
+               f"Reply with only '1' or '2'.")
+        out = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[{"role": "user", "content": msg}], temperature=0)
+        return out.choices[0].message.content.strip()
+    # ask both orders; only count a win if the judge agrees regardless of order
+    w1 = ask(a, b) == "1"
+    w2 = ask(b, a) == "2"          # a is now "Response 2"
+    if w1 and w2: return "A"
+    if (not w1) and (not w2): return "B"
+    return "tie"                    # order-dependent → discard as noise
+```
+
+Feeding many such pairwise verdicts into a Bradley-Terry/Elo fit (e.g. `choix` or a few lines of logistic regression) gives the leaderboard-style ranking that this section's tip recommends.
+
+## 46.9 — Evals-driven development
 
 The discipline that ties this part together is borrowed straight from test-driven development: **write the eval before you train.** A model change without an eval that can detect its effect is a guess. The eval-first loop says define your **golden set** (representative inputs + acceptance criteria) and **metrics** *first*, so "better" has a number attached before you touch a hyperparameter.
 
@@ -324,21 +553,22 @@ flowchart LR
 
 The mindset shift mirrors MLOps (Chapter 12): evals are not a final exam you run once, they are a **regression suite** that grows with every bug you find and guards every future change.
 
-## 46.9 — Putting it together: a domain fine-tuning project
+## 46.10 — Putting it together: a domain fine-tuning project
 
 Here is the whole part wired into one end-to-end recipe — say, building a domain assistant for a specialized field. The order is deliberate, and **evals come first**, not last.
 
-**1. Evals first.** Before any training, write a golden set and metrics (46.8) so you can measure every later step. **2. Curate & dedup data.** Quality and de-duplication beat volume; near-duplicate removal prevents memorization and contamination of your own evals. **3. SFT with QLoRA.** Teach format and domain instruction-following cheaply on a single GPU (Chapter 45). **4. Preference optimization with DPO.** Refine on `(chosen, rejected)` pairs — simpler and more stable than PPO for most teams (46.3). **5. Evaluate.** Run lm-eval-harness for general capability regressions plus your domain evals, with an LLM-judge for free-form quality (46.6–46.7). **6. Ship**, then keep the evals as a CI regression suite for the next iteration.
+**1. Evals first.** Before any training, write a golden set and metrics (46.9) so you can measure every later step. **2. Curate & dedup data.** Quality and de-duplication beat volume; near-duplicate removal prevents memorization and contamination of your own evals. **3. SFT with QLoRA.** Teach format and domain instruction-following cheaply on a single GPU (Chapter 45). **4. Preference optimization with DPO.** Refine on `(chosen, rejected)` pairs — simpler and more stable than PPO for most teams (46.3). **5. Safety pass.** Run the red-team suite (46.7) for jailbreaks, injection, and over-refusal before anything ships. **6. Evaluate.** Run lm-eval-harness for general capability regressions plus your domain evals, with an LLM-judge for free-form quality (46.6, 46.8). **7. Ship**, then keep the evals *and* the red-team suite as CI regression tests for the next iteration.
 
 ```{mermaid}
 flowchart TD
     EV[① Write evals<br/>golden set + metrics] --> D[② Curate + dedup data]
     D --> SFT[③ SFT via QLoRA<br/>PEFT / Axolotl]
     SFT --> DPO[④ DPO on preference pairs<br/>TRL]
-    DPO --> E[⑤ Evaluate<br/>lm-eval-harness + domain evals + LLM-judge]
-    E --> CHK{Pass eval bar?}
+    DPO --> SAFE[⑤ Safety / red-team pass<br/>jailbreaks + over-refusal]
+    SAFE --> E[⑥ Evaluate<br/>lm-eval-harness + domain evals + LLM-judge]
+    E --> CHK{Pass eval + safety bar?}
     CHK -->|no| D
-    CHK -->|yes| SHIP[⑥ Ship + register]
+    CHK -->|yes| SHIP[⑦ Ship + register]
     SHIP -.regression suite.-> EV
     ML[(MLflow: track runs,<br/>configs, eval scores)] -.logs.- SFT
     ML -.logs.- DPO
@@ -347,14 +577,31 @@ flowchart TD
 
 Map to real tooling: **Axolotl** (config-driven SFT/DPO training), **PEFT** (LoRA/QLoRA adapters), **TRL** (the `SFTTrainer`, `DPOTrainer`, `PPOTrainer`/`GRPOTrainer` implementations), **lm-evaluation-harness** (standardized benchmarks), and **MLflow** or Weights & Biases (experiment tracking so every run's config, checkpoint, and eval scores are reproducible). The connecting thread of the entire part: cheap fine-tuning (Chapter 45) plus preference alignment plus disciplined evaluation is what turns a raw base model into something you can actually ship.
 
+For the SFT step that precedes DPO, the idiomatic TRL skeleton ties back to Chapter 45's QLoRA:
+
+```python
+from trl import SFTTrainer, SFTConfig
+from peft import LoraConfig
+
+sft = SFTTrainer(
+    model="base-model",
+    args=SFTConfig(output_dir="sft-out", max_length=2048,
+                   per_device_train_batch_size=2),
+    peft_config=LoraConfig(r=16, lora_alpha=32, task_type="CAUSAL_LM"),
+    train_dataset=demo_ds,   # rows of curated {"messages": [...]} demonstrations
+)
+sft.train()   # → checkpoint becomes the SFT init for DPOTrainer in step ④
+```
+
 ## 46.x — Key takeaways
 
 - **Alignment is a separate problem from capability.** Pretraining and SFT make a model *able*; preference optimization makes it *helpful, honest, and harmless*. The two are trained and measured differently.
-- **RLHF works but is heavy:** reward model + PPO + KL anchor, four models in play, and ever-present reward hacking because you optimize a proxy for human preference.
-- **DPO removed the reward model and the RL loop** by reparameterizing reward as a policy/reference log-ratio, turning alignment into a stable paired classification loss. It is the sane default. (Watch for chosen-likelihood drift; $\beta$ tunes the reference anchor.)
-- **The preference family trades off three knobs** — reference-model-needed, paired-vs-unpaired data, separate-vs-merged stage. KTO for thumbs-up/down data (still keeps a reference); ORPO/SimPO actually drop the reference model.
-- **Reasoning RL separates optimizer from reward source:** **GRPO** is the optimizer (drops the critic, uses a group-mean baseline, broadcasts one advantage over all tokens, keeps the KL-to-reference); **RLVR** is the reward (a verifier instead of a hackable learned RM). GRPO works with either reward; pairing it with a verifier is what removes the proxy-hacking problem — and lets long chains of thought emerge, bought with test-time compute.
-- **Evaluation is the spine of the whole part.** Beware contamination, keep private hold-outs, prefer pairwise-judge + Elo over absolute scores, and run evals as a growing CI regression suite — eval-first, like TDD.
+- **RLHF works but is heavy:** reward model + PPO + KL anchor, four models in play, and ever-present reward hacking because you optimize a proxy for human preference (Goodhart's law).
+- **DPO removed the reward model and the RL loop** by reparameterizing reward as a policy/reference log-ratio, turning alignment into a stable paired classification loss. It is the sane default. (Watch for chosen-likelihood drift; $\beta$ tunes the reference anchor; use tiny learning rates.)
+- **The preference family trades off three knobs** — reference-model-needed, paired-vs-unpaired data, separate-vs-merged stage. KTO for thumbs-up/down data (still keeps a reference); ORPO/SimPO actually drop the reference model and length-normalize.
+- **Reasoning RL separates optimizer from reward source:** **GRPO** is the optimizer (drops the critic, uses a group-mean baseline = z-score advantage, broadcasts one advantage over all tokens, keeps the KL-to-reference); **RLVR** is the reward (a verifier instead of a hackable learned RM). GRPO works with either reward; pairing it with a verifier is what removes the proxy-hacking problem — and lets long chains of thought emerge, bought with test-time compute.
+- **Safety needs its own evals.** Red-team for jailbreaks and prompt injection, and measure attack-success rate *and* over-refusal rate together — fixing one inflames the other. Successful new attacks become permanent regression tests.
+- **Evaluation is the spine of the whole part.** Beware contamination, keep private hold-outs, prefer pairwise-judge + Elo over absolute scores (control for position/verbosity bias), use unbiased `pass@k`, and run evals as a growing CI regression suite — eval-first, like TDD.
 
 ## 46.y — See also
 
@@ -364,7 +611,7 @@ Map to real tooling: **Axolotl** (config-driven SFT/DPO training), **PEFT** (LoR
 - **Chapter 21 — Reinforcement Learning:** PPO, policy gradients, and KL-regularized objectives that RLHF and GRPO build on.
 - **Chapter 12 — Model Evaluation:** general evaluation methodology and the regression-suite mindset that evals-driven development extends.
 - **Chapter 30 — AI Infrastructure & Efficient Inference:** serving aligned and reasoning models, and the test-time-compute cost tradeoffs.
-- **Chapter 44 — LLM Systems:** wiring aligned models into RAG, agents, and production pipelines.
+- **Chapter 44 — LLM Systems:** wiring aligned models into RAG, agents, and production pipelines — and where prompt-injection risk lives.
 
 ------------------------------------------------------------------------
 

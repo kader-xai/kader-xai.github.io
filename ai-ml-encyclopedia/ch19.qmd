@@ -132,6 +132,18 @@ Before any of these tasks, it helps to be concrete about what a "pixel" actually
   </g>
 </svg>
 
+Loading a real image with a framework makes the "grid of numbers" idea tangible. The same picture is just a tensor you can slice, average, and reshape:
+
+```python
+import numpy as np
+from PIL import Image
+img = Image.open("cat.jpg").convert("RGB")
+arr = np.asarray(img)              # shape (H, W, 3), dtype uint8, values 0..255
+print(arr.shape, arr.dtype)        # e.g. (224, 224, 3) uint8
+print(arr[0, 0])                   # the top-left pixel, e.g. [137 122  98]
+print(arr.mean(axis=(0, 1)))       # average R, G, B over the whole image
+```
+
 The three core tasks differ only in how precisely they localize. A picture is worth a thousand words here.
 
 ```{mermaid}
@@ -154,6 +166,10 @@ The dominant tool for two decades has been the **convolutional neural network (C
 
 $$p_i = \frac{e^{z_i}}{\sum_j e^{z_j}}$$
 
+**In words:** exponentiate every class score so it becomes positive, then divide each by the total so the scores become a probability distribution that adds to 1.
+
+**Also written:** $\mathbf{p} = \operatorname{softmax}(\mathbf{z})$, the vectorized form over the whole logit vector $\mathbf{z}$.
+
 The predicted class is the highest probability. We measure quality with **top-1 accuracy** (the single top guess is correct) and **top-5 accuracy** (the true label is among the model's five most confident guesses) — top-5 is forgiving on datasets like ImageNet where many classes are near-synonyms (e.g. dog breeds).
 
 ::: {.callout-tip}
@@ -173,9 +189,31 @@ print("top-1:", probs.argmax())               # 0 -> 'cat'
 assert abs(probs.sum() - 1.0) < 1e-9          # probabilities are normalized
 ```
 
+**Doing it for real with a pretrained model.** In practice you almost never train a classifier from scratch — you grab a model pretrained on ImageNet and run it (or fine-tune it). A handful of lines with torchvision:
+
+```python
+import torch
+from torchvision.models import resnet50, ResNet50_Weights
+weights = ResNet50_Weights.DEFAULT
+model = resnet50(weights=weights).eval()         # pretrained on ImageNet
+preprocess = weights.transforms()                # resize/crop/normalize to match training
+from PIL import Image
+x = preprocess(Image.open("cat.jpg")).unsqueeze(0)   # add batch dim -> (1,3,224,224)
+with torch.no_grad():
+    logits = model(x)
+probs = logits.softmax(dim=1)
+top5 = probs.topk(5)
+for p, idx in zip(top5.values[0], top5.indices[0]):
+    print(f"{weights.meta['categories'][idx]:<20} {p.item():.3f}")
+```
+
 **Face recognition** is a specialized recognition task. Instead of classifying into a fixed list, it maps each face to a fixed-length **embedding** vector such that the same person's faces land close together and different people land far apart. At inference you compare a new face's embedding to a gallery by distance — so the system recognizes people it was never explicitly trained to classify (*open-set* recognition). Training uses losses like **triplet loss**, which pulls an *anchor* toward a *positive* (same person) and pushes it from a *negative* (different person):
 
 $$\mathcal{L} = \max\big(0,\ \|a - p\|^2 - \|a - n\|^2 + \alpha\big)$$
+
+**In words:** the loss is zero once the anchor is at least a margin $\alpha$ closer to the same-person photo than to the different-person photo; otherwise it grows with how badly that gap is violated.
+
+**Also written:** $\mathcal{L} = [\,d(a,p) - d(a,n) + \alpha\,]_+$ with $d(\cdot,\cdot)$ the squared Euclidean distance and $[\,\cdot\,]_+ = \max(0,\cdot)$ the hinge.
 
 where $\alpha$ is a margin. The idea is geometric: think of every face as a point on a sphere. Training tugs the anchor and positive together while shoving the negative at least a margin $\alpha$ farther away. Once trained, "is this the same person?" becomes a simple distance check.
 
@@ -197,7 +235,38 @@ where $\alpha$ is a margin. The idea is geometric: think of every face as a poin
   <text x="282" y="100" font-size="9" fill="#888">≥ α apart</text>
 </svg>
 
-The same embedding trick powers image retrieval and is the conceptual bridge to the metric learning used elsewhere in vision.
+The same embedding trick powers image retrieval and is the conceptual bridge to the metric learning used elsewhere in vision. Once faces are embeddings, "same person?" is one cosine-similarity call:
+
+```python
+import torch
+import torch.nn.functional as F
+# emb_a, emb_b: 512-dim face embeddings from a model like FaceNet / ArcFace
+emb_a = F.normalize(torch.randn(1, 512), dim=1)
+emb_b = F.normalize(torch.randn(1, 512), dim=1)
+sim = F.cosine_similarity(emb_a, emb_b).item()
+print("same person" if sim > 0.6 else "different")   # 0.6 = tuned threshold
+```
+
+### Transfer learning and fine-tuning
+
+Think of a pretrained network as someone who already knows how to *see* — edges, textures, shapes — and only needs to be told which categories *you* care about. **Transfer learning** reuses a model trained on a huge dataset (ImageNet) as the starting point for your own, much smaller, problem. This is the single most important practical technique in vision: it routinely turns "I have 500 labelled images" from hopeless into a working model.
+
+There are two common modes. **Feature extraction** freezes the pretrained backbone and trains only a fresh classifier head on top — cheap, fast, and a strong baseline when your data is scarce or very similar to ImageNet. **Fine-tuning** unfreezes some or all of the backbone and continues training at a *small* learning rate, letting the features adapt to your domain — better when you have more data or a domain far from natural photos (medical scans, satellite imagery).
+
+```python
+import torch.nn as nn
+from torchvision.models import resnet18, ResNet18_Weights
+model = resnet18(weights=ResNet18_Weights.DEFAULT)
+for p in model.parameters():        # 1) freeze the backbone
+    p.requires_grad = False
+model.fc = nn.Linear(model.fc.in_features, 3)   # 2) new head: 3 classes (only this trains)
+# train as usual; optimizer sees only model.fc parameters.
+# To fine-tune later: unfreeze with `p.requires_grad = True` and use a tiny LR (e.g. 1e-5).
+```
+
+::: {.callout-tip}
+Rule of thumb: little data + similar domain → **freeze and train a head**. More data or a distant domain → **fine-tune** with a learning rate roughly 10× smaller than you'd use from scratch, so you nudge the pretrained features rather than smashing them.
+:::
 
 ## 19.2 — Object Detection
 
@@ -242,13 +311,36 @@ def nms(boxes, scores, iou_thresh=0.5):
     return keep                                # survivors = final detections
 ```
 
+**Running a real detector** is now a two-liner with Ultralytics YOLO — the practical default for most detection projects:
+
+```python
+from ultralytics import YOLO
+model = YOLO("yolov8n.pt")                  # nano model, pretrained on COCO
+results = model("street.jpg")               # runs detection + NMS internally
+for box in results[0].boxes:
+    cls = model.names[int(box.cls)]
+    print(cls, box.conf.item(), box.xywh.tolist())   # label, confidence, (x,y,w,h)
+```
+
 We evaluate detectors with **mAP (mean Average Precision)**: for each class you sweep the confidence threshold, trace a precision–recall curve, take the area under it (the **Average Precision**), then average over classes. A detection counts as correct only if its box overlaps the true box enough — which brings us to IoU.
+
+The **mAP** formula is just an average of averages:
+
+$$\text{mAP} = \frac{1}{C}\sum_{c=1}^{C} \text{AP}_c, \qquad \text{AP}_c = \int_0^1 p_c(r)\,dr$$
+
+**In words:** for each class, measure the area under its precision-against-recall curve (that's its Average Precision), then take the plain mean of those areas across all $C$ classes.
+
+**Also written:** in practice the integral is a finite sum over recall points, $\text{AP}_c \approx \sum_k (r_k - r_{k-1})\,p_{\text{interp}}(r_k)$, using interpolated precision $p_{\text{interp}}$.
 
 ## 19.3 — Intersection over Union (IoU): a worked example
 
 **Intersection over Union (IoU)** is the single most important number in detection and segmentation. It measures how well a predicted box matches a ground-truth box: the area where they overlap divided by the area they jointly cover.
 
 $$\text{IoU} = \frac{\text{Area of Intersection}}{\text{Area of Union}}$$
+
+**In words:** of all the area the two boxes touch in total, what fraction do they *both* cover? All overlap and no slop gives 1; no overlap gives 0.
+
+**Also written:** $\text{IoU}(A,B) = \dfrac{|A \cap B|}{|A \cup B|} = \dfrac{|A \cap B|}{|A| + |B| - |A \cap B|}$.
 
 IoU is 0 for boxes that don't touch and 1 for a perfect match. A detection is usually called a **true positive** if IoU ≥ 0.5 against a ground-truth box of the right class.
 
@@ -300,6 +392,16 @@ assert iou((0,0,2,2), (5,5,7,7)) == 0.0               # disjoint -> 0
 ::: {.callout-warning}
 The intersection is **not** just "overlap width × height" eyeballed — you must take the *max* of the left/top corners and the *min* of the right/bottom corners, then **clamp negative dimensions to zero**. Forgetting the clamp gives a positive "intersection" for boxes that don't even touch, silently corrupting your mAP.
 :::
+
+**A subtle limit of plain IoU.** If two boxes don't overlap at all, IoU is flatly 0 — whether they're a hair apart or on opposite sides of the image. That gives a gradient-based loss nothing to push on. **Generalized IoU (GIoU)** fixes this by subtracting a penalty for the empty space in the smallest box that *encloses both*, so the metric keeps decreasing as the boxes drift apart:
+
+$$\text{GIoU} = \text{IoU} - \frac{|C \setminus (A \cup B)|}{|C|}$$
+
+**In words:** start from IoU, then dock points for how much of the tightest enclosing box $C$ is wasted gap that neither box fills — so even non-overlapping boxes get a meaningful, improvable score.
+
+**Also written:** $\text{GIoU} = \text{IoU} - \dfrac{|C| - |A \cup B|}{|C|}$, ranging in $[-1, 1]$ rather than IoU's $[0,1]$.
+
+This is the box-error term used inside modern detection losses (including the DETR matcher in §19.9).
 
 ## 19.4 — Image Segmentation
 
@@ -364,11 +466,45 @@ assert inter == 3 and union == 5
 Pick the lightest task that solves your problem. If you only need to know *whether* a defect exists, classify. If you need to *count* objects, detect. Only reach for segmentation when you genuinely need the pixel outline (medical contours, photo background removal, autonomous-driving free-space) — it is the most expensive to label and train.
 :::
 
+### Dice loss and the class-imbalance problem
+
+Imagine the object you want to outline is a tiny tumor filling 1% of a scan. A model that lazily predicts "background everywhere" is 99% pixel-accurate while being completely useless. This is the **class-imbalance** trap of segmentation, and it's why per-pixel accuracy is a misleading score and plain cross-entropy can be a misleading loss.
+
+The fix is to optimize overlap directly. The **Dice coefficient** is twice the intersection over the sum of the two areas (closely related to IoU), and **Dice loss** is simply one minus it:
+
+$$\mathcal{L}_{\text{Dice}} = 1 - \frac{2\sum_i p_i\,g_i}{\sum_i p_i + \sum_i g_i}$$
+
+**In words:** reward the model for the pixels where its predicted mask $p$ and the ground-truth mask $g$ both light up, scaled so that a perfect overlap drives the loss to 0 — and crucially, empty background pixels don't inflate the score.
+
+**Also written:** $\mathcal{L}_{\text{Dice}} = 1 - \dfrac{2|P \cap G|}{|P| + |G|}$, with $P,G$ the predicted and true pixel sets; the Dice score itself relates to IoU as $\text{Dice} = \dfrac{2\,\text{IoU}}{1 + \text{IoU}}$.
+
+```python
+import torch
+def dice_loss(pred, target, eps=1e-6):       # pred: probabilities in [0,1]
+    pred, target = pred.flatten(), target.flatten()
+    inter = (pred * target).sum()
+    return 1 - (2*inter + eps) / (pred.sum() + target.sum() + eps)
+
+p = torch.tensor([0.9, 0.8, 0.1, 0.05])      # predicted foreground probs
+g = torch.tensor([1.0, 1.0, 0.0, 0.0])       # ground truth
+print(dice_loss(p, g).item())                 # small loss: good overlap
+```
+
+In medical and other imbalanced segmentation, Dice loss (often combined with cross-entropy) is the standard choice precisely because it ignores the easy ocean of background and focuses on the overlap you actually care about.
+
 ## 19.5 — OCR, Pose Estimation & Tracking
 
 Three workhorse tasks turn the core three into real applications.
 
 **OCR (Optical Character Recognition)** converts text in an image — a scanned page, a street sign, a receipt — into machine-readable characters. Modern OCR is a two-step pipeline: a **text-detection** stage (often a segmentation/detection model) finds *where* the text regions are, then a **text-recognition** stage reads each region into a string, usually with a CNN that extracts features followed by a sequence model decoding characters left-to-right (Chapter 16 owns sequence models). The standard training loss for the unsegmented "image strip → string" mapping is **CTC (Connectionist Temporal Classification)**, which handles the fact that you don't know in advance which pixel column produced which character — it lets the model emit a character at any column, then collapses repeats and blanks into the final string.
+
+The CTC idea in one line: the loss sums the probability of *every* alignment that collapses to the target string.
+
+$$p(\mathbf{y}\mid X) = \sum_{\pi \in \mathcal{B}^{-1}(\mathbf{y})} \prod_t p(\pi_t \mid X)$$
+
+**In words:** to read "CAT", add up the probabilities of all the per-column emission paths — like `C-CA-AT`, `CC-AAT`, `-CAT-` — that collapse (remove blanks and repeats) to "CAT".
+
+**Also written:** $\mathcal{L}_{\text{CTC}} = -\log p(\mathbf{y}\mid X)$, where $\mathcal{B}$ is the collapse function mapping a per-frame path $\pi$ to a deduplicated string.
 
 **Pose estimation** locates an object's **keypoints** — for a human body, joints like wrists, elbows, knees — and connects them into a skeleton. The dominant approach predicts a **heatmap** per keypoint: a low-resolution probability map whose peak marks where that joint most likely is. *Top-down* methods detect each person first, then find keypoints inside each box; *bottom-up* methods find all keypoints in the image first, then group them into individuals. Pose powers fitness apps, motion capture, gesture interfaces, and sports analytics.
 
@@ -400,6 +536,20 @@ flowchart LR
     P --> M[Match detections↔tracks<br/>IoU + appearance]
     M --> U[Update IDs<br/>car#7 stays car#7]
     U --> D
+```
+
+The matching step at the heart of a tracker is exactly the assignment problem — link each detection to the existing track it best continues, minimizing total cost:
+
+```python
+import numpy as np
+from scipy.optimize import linear_sum_assignment
+# cost[t, d] = 1 - IoU(track t's predicted box, detection d's box)
+cost = np.array([[0.1, 0.8, 0.9],   # track 0 best matches detection 0
+                 [0.7, 0.2, 0.85],  # track 1 best matches detection 1
+                 [0.9, 0.75, 0.15]])# track 2 best matches detection 2
+tracks, dets = linear_sum_assignment(cost)   # Hungarian: same algorithm DETR uses
+for t, d in zip(tracks, dets):
+    print(f"track {t} -> detection {d}  (cost {cost[t, d]:.2f})")
 ```
 
 ## 19.6 — Data Augmentation for Vision
@@ -435,6 +585,28 @@ _, fb = hflip(img, b)
 assert (fb == np.array([[3, 1, 5, 3]])).all()    # x flips: 1->5, 3->3; y unchanged
 ```
 
+**In practice, use a library** so image and labels transform together and you don't hand-roll geometry. Albumentations is the de facto standard and handles boxes/masks automatically:
+
+```python
+import albumentations as A
+transform = A.Compose([
+    A.HorizontalFlip(p=0.5),
+    A.RandomBrightnessContrast(p=0.3),
+    A.ShiftScaleRotate(shift_limit=0.06, scale_limit=0.1, rotate_limit=15, p=0.5),
+], bbox_params=A.BboxParams(format="pascal_voc", label_fields=["labels"]))
+
+out = transform(image=img, bboxes=[[1, 1, 3, 3]], labels=["cat"])
+out["image"], out["bboxes"]    # image AND boxes are transformed consistently
+```
+
+The **Mixup** trick is worth seeing as a formula, because it blends *labels* too — not just pixels:
+
+$$\tilde{x} = \lambda x_a + (1-\lambda) x_b, \qquad \tilde{y} = \lambda y_a + (1-\lambda) y_b$$
+
+**In words:** take a weighted average of two images and the *same* weighted average of their one-hot labels, so a 70%-cat/30%-dog blend is trained toward a 70/30 label rather than a hard choice.
+
+**Also written:** with mixing weight $\lambda \sim \text{Beta}(\alpha, \alpha)$, both the input and the target are convex combinations of the two examples.
+
 ::: {.callout-warning}
 The classic augmentation bug is flipping the image but forgetting the label geometry. A horizontally flipped photo with un-flipped bounding boxes trains the detector to point at empty space. Always run augmentation through a library (Albumentations, torchvision transforms v2) that transforms image *and* targets together — or carefully pair them yourself, as above.
 :::
@@ -451,6 +623,10 @@ The simplest useful model is the **pinhole camera**: imagine a sealed box with a
 Place the pinhole (the *camera center*) at the origin, looking down the $z$-axis. A world point $(X, Y, Z)$ projects to the image plane at distance $f$ (the focal length) as
 
 $$x = f\frac{X}{Z}, \qquad y = f\frac{Y}{Z}.$$
+
+**In words:** an object's image position is its world position scaled down by how far away it is — twice as far means half as big on the sensor.
+
+**Also written:** in homogeneous form $\begin{bmatrix} x \\ y \\ 1\end{bmatrix} \sim \begin{bmatrix} f & 0 & 0 \\ 0 & f & 0 \\ 0 & 0 & 1\end{bmatrix}\begin{bmatrix} X \\ Y \\ Z\end{bmatrix}$, where $\sim$ means "equal after dividing by the last entry."
 
 That division by $Z$ is the entire reason depth is lost: double the distance and halve the size, and the projected point is identical. A toy car at $1\text{ m}$ and a real car at $20\text{ m}$ can paint the exact same pixels.
 
@@ -476,6 +652,10 @@ The projection above lands in metric units on a plane centered on the optical ax
 
 $$K = \begin{bmatrix} f_x & s & c_x \\ 0 & f_y & c_y \\ 0 & 0 & 1 \end{bmatrix}.$$
 
+**In words:** $K$ converts a metric ray direction into a pixel coordinate — scaling by the focal length and shifting the origin from the image center to the corner.
+
+**Also written:** a pixel is $u = f_x\,(X/Z) + c_x$ and $v = f_y\,(Y/Z) + c_y$ (taking skew $s = 0$), the per-coordinate expansion of $K$.
+
 Here $f_x, f_y$ are focal lengths in pixels (different if pixels aren't square), $(c_x, c_y)$ is the **principal point** where the optical axis pierces the sensor (near the image center), and $s$ is a skew term that is essentially always zero on modern cameras. These parameters are *internal* to the camera — they don't change when the camera moves.
 
 ### Extrinsics: placing the camera in the world
@@ -483,6 +663,10 @@ Here $f_x, f_y$ are focal lengths in pixels (different if pixels aren't square),
 A camera also sits *somewhere*, pointed *somehow*. The **extrinsics** are a rotation $R$ (a $3\times3$ orientation) and translation $t$ (a $3$-vector position) that map world coordinates into the camera's own frame. Stacking intrinsics and extrinsics gives the full $3 \times 4$ **projection matrix**, acting on homogeneous coordinates:
 
 $$\lambda \begin{bmatrix} u \\ v \\ 1 \end{bmatrix} = K\,[\,R \mid t\,] \begin{bmatrix} X \\ Y \\ Z \\ 1 \end{bmatrix}.$$
+
+**In words:** first move the world point into the camera's frame ($R$ and $t$), then turn that into a pixel ($K$); the scalar $\lambda$ is the depth you divide out at the end.
+
+**Also written:** $\mathbf{x} \sim P\,\mathbf{X}$ with the single $3\times4$ projection matrix $P = K\,[R \mid t]$ and $\sim$ meaning "up to the scale $\lambda$."
 
 The scalar $\lambda$ is the depth that gets divided out. Homogeneous coordinates are the trick that turns the nonlinear "divide by $Z$" into a clean matrix multiply followed by a final normalization (divide the vector by its third entry).
 
@@ -509,7 +693,28 @@ Real lenses bend straight lines, especially wide-angle ones — the **radial dis
 
 $$x_{\text{dist}} = x\,(1 + k_1 r^2 + k_2 r^4 + \cdots).$$
 
+**In words:** push each point outward (or inward) by an amount that grows with its distance from the image center, which is why distortion is worst at the edges and zero at the middle.
+
+**Also written:** $r_{\text{dist}} = r\,(1 + k_1 r^2 + k_2 r^4 + \cdots)$ applied to the radius $r$ of the undistorted point, equivalently to both $x$ and $y$ components.
+
 **Calibration** is the process of recovering $K$ and the distortion coefficients $k_1, k_2, \dots$. The classic recipe (Zhang's method) photographs a checkerboard of known square size from many angles; because we know the true geometry of the board, we can solve for the camera parameters that best explain where its corners landed. OpenCV's `calibrateCamera` does exactly this in a few lines.
+
+```python
+import cv2, numpy as np
+# object points: the checkerboard's true 3D corner grid (z=0 plane), one set per image
+objp = np.zeros((6*9, 3), np.float32)
+objp[:, :2] = np.mgrid[0:9, 0:6].T.reshape(-1, 2)
+obj_points, img_points = [], []
+for gray in calibration_images_grayscale:          # many views of the board
+    found, corners = cv2.findChessboardCorners(gray, (9, 6))
+    if found:
+        obj_points.append(objp)
+        img_points.append(corners)
+ret, K, dist, rvecs, tvecs = cv2.calibrateCamera(
+    obj_points, img_points, gray.shape[::-1], None, None)
+print("intrinsics K =\n", K)        # recovered fx, fy, cx, cy
+print("distortion  =", dist.ravel())# recovered k1, k2, p1, p2, k3
+```
 
 ::: {.callout-warning}
 Skipping calibration silently poisons every downstream 3D task. Uncorrected radial distortion can shift a corner by tens of pixels at the image edge, which translates into large depth and pose errors in stereo and SfM. Calibrate once per lens/zoom setting and reuse it.
@@ -522,6 +727,10 @@ Point one camera at a scene, then a second camera from a different spot. A singl
 Algebraically, for calibrated cameras the constraint is captured by the **essential matrix** $E$, and for uncalibrated ones by the **fundamental matrix** $F$:
 
 $$x'^\top F\, x = 0,$$
+
+**In words:** a true pair of matching points, plugged into this equation, gives exactly zero — which is just the algebra of "the match lies on the epipolar line $F x$."
+
+**Also written:** equivalently $x'^\top (F x) = 0$, i.e. the right point $x'$ lies on the line $\ell' = F x$; for calibrated cameras the same holds with $E$ on normalized coordinates.
 
 where $x$ and $x'$ are corresponding points in homogeneous pixel coordinates. Given eight or more matches you can solve for $F$ linearly (the eight-point algorithm), then decompose $E = K'^\top F K$ to recover the relative rotation and translation between the two cameras.
 
@@ -539,6 +748,10 @@ flowchart LR
 If the two cameras are mounted side by side with parallel optical axes — a **rectified stereo rig** — the epipolar lines become horizontal scanlines, and a matching point simply shifts left or right by an amount called the **disparity** $d$. Disparity is inversely proportional to depth:
 
 $$Z = \frac{f \cdot B}{d},$$
+
+**In words:** the more a point jumps between the left and right views, the closer it is; far-away points barely shift, so disparity and depth trade off inversely.
+
+**Also written:** $d = \dfrac{f B}{Z}$ — the same relation solved for disparity instead of depth.
 
 where $B$ is the **baseline** (distance between the cameras) and $f$ the focal length in pixels. Near objects shift a lot between the two views; far objects barely move — exactly why your two eyes sense depth, and why the moon seems to follow the car.
 
@@ -568,6 +781,10 @@ The crucial final stage is **bundle adjustment**: a big nonlinear least-squares 
 
 $$\sum_{i,j} \left\lVert\, \text{proj}(C_i, P_j) - x_{ij} \,\right\rVert^2$$
 
+**In words:** for every camera $i$ and every 3D point $j$ it can see, project the point and measure the pixel distance to where the feature was actually detected; add up all those squared gaps and shrink the total.
+
+**Also written:** $\min_{\{C_i\},\{P_j\}} \sum_{i,j} v_{ij}\,\lVert \pi(C_i, P_j) - x_{ij}\rVert^2$, where $\pi$ is the projection function and $v_{ij}\in\{0,1\}$ flags whether point $j$ is visible in camera $i$.
+
 over all cameras $C_i$ and points $P_j$. It is the workhorse behind tools like COLMAP and photogrammetry apps, and the front end that feeds the neural reconstruction methods in the next section.
 
 ::: {.callout-tip}
@@ -588,9 +805,17 @@ A **Neural Radiance Field** (NeRF) is the breakout example. It trains a small ML
 
 $$F_\Theta : (x, y, z, \theta, \phi) \;\longmapsto\; (r, g, b, \sigma).$$
 
+**In words:** a single small network answers, for any point in space seen from any direction, "what color is here and how solid is it?"
+
+**Also written:** $F_\Theta(\mathbf{p}, \mathbf{d}) = (\mathbf{c}, \sigma)$ with position $\mathbf{p}\in\mathbb{R}^3$, unit view direction $\mathbf{d}$, color $\mathbf{c}=(r,g,b)$, and density $\sigma$.
+
 To render a pixel, you don't query one point — you shoot a ray from the camera through that pixel and **march** along it, sampling colors and densities, then composite them front-to-back with **volume rendering**. A sample's contribution is its color weighted by its density *and* by the probability that light got through everything in front of it (transmittance $T_i$):
 
 $$C(\mathbf{r}) = \sum_i T_i\,\big(1 - e^{-\sigma_i \delta_i}\big)\,c_i, \qquad T_i = e^{-\sum_{j<i}\sigma_j \delta_j},$$
+
+**In words:** the pixel's color is the sum of each sample's color, weighted by how opaque that sample is and by how much light survived all the stuff in front of it.
+
+**Also written:** with per-sample opacity $\alpha_i = 1 - e^{-\sigma_i\delta_i}$ and accumulated transmittance $T_i = \prod_{j<i}(1-\alpha_j)$, this is the standard front-to-back alpha-compositing sum $C = \sum_i T_i \alpha_i c_i$.
 
 where $\delta_i$ is the spacing between samples. The whole pipeline is differentiable, so the only training signal needed is a set of photos with known poses: render each pixel, compare to the real photo, backpropagate into the MLP weights.
 
@@ -624,7 +849,7 @@ The payoff is dramatic: comparable or better visual quality than NeRF, but rende
 | Editing | Hard (opaque weights) | Easier (explicit blobs) |
 | Memory | Tiny network | Large blob set |
 
-Both NeRF and 3DGS typically take the camera poses from an SfM run (Section 19.90) as their starting point — geometry feeds the neural reconstruction, exactly as foreshadowed.
+Both NeRF and 3DGS typically take the camera poses from an SfM run (Section 19.7) as their starting point — geometry feeds the neural reconstruction, exactly as foreshadowed.
 
 ### Understanding video: adding the time axis
 
@@ -673,6 +898,14 @@ flowchart LR
 
 How do you train a model that emits an unordered *set* of 100 predictions against, say, 3 ground-truth objects? You can't compare prediction #7 to "the dog" by position, because there's no fixed ordering. DETR's answer is **bipartite matching**: find the one-to-one assignment between predictions and ground-truth objects that minimizes total cost, using the **Hungarian algorithm**. Each ground-truth object gets matched to exactly one prediction; every unmatched prediction is trained to say "no object."
 
+The matching objective is a single argmin over all possible one-to-one pairings:
+
+$$\hat{\sigma} = \arg\min_{\sigma \in \mathfrak{S}_N} \sum_{i=1}^{N} \mathcal{L}_{\text{match}}\big(y_i,\ \hat{y}_{\sigma(i)}\big)$$
+
+**In words:** consider every way to pair each ground-truth object with one prediction, and keep the pairing whose total mismatch cost (wrong class plus badly-placed box) is smallest.
+
+**Also written:** $\hat\sigma$ is the optimal permutation, found by the Hungarian algorithm on the $N\times N$ cost matrix in polynomial time rather than checking all $N!$ pairings.
+
 This matching is *why* DETR needs no NMS. Because the loss permits only one prediction per object, the model is actively trained *not* to produce duplicates — the deduplication that NMS used to do by hand is now baked into the objective.
 
 Tiny worked example. Suppose the model emits 3 predictions $P_1, P_2, P_3$ and there are 2 ground-truth boxes $G_1, G_2$ (plus $\varnothing$). The matcher builds a cost matrix combining class mismatch and box error:
@@ -696,6 +929,25 @@ rows, cols = linear_sum_assignment(cost)   # Hungarian
 for r, c in zip(rows, cols):
     print(f"pred {r} -> gt {c}  (cost {cost[r,c]})")
 # pred 0 -> gt 0 (0.2);  pred 1 -> gt 1 (0.3);  pred 2 unmatched -> ∅
+```
+
+In practice you rarely implement DETR by hand — a pretrained one runs in a few lines with Hugging Face Transformers, NMS-free out of the box:
+
+```python
+from transformers import DetrImageProcessor, DetrForObjectDetection
+from PIL import Image
+import torch
+proc = DetrImageProcessor.from_pretrained("facebook/detr-resnet-50")
+model = DetrForObjectDetection.from_pretrained("facebook/detr-resnet-50").eval()
+image = Image.open("street.jpg")
+inputs = proc(images=image, return_tensors="pt")
+with torch.no_grad():
+    outputs = model(**inputs)
+# post-process turns 100 object queries into final boxes; no NMS step needed
+results = proc.post_process_object_detection(
+    outputs, target_sizes=[image.size[::-1]], threshold=0.9)[0]
+for label, box in zip(results["labels"], results["boxes"]):
+    print(model.config.id2label[label.item()], box.tolist())
 ```
 
 DETR's tradeoffs are honest: it is beautifully simple and end-to-end, but the original was slow to converge (hundreds of training epochs) and weak on small objects. Follow-ups — **Deformable DETR** (attend to a few key points instead of all pixels), DINO, and others — fixed convergence and accuracy, and the query-based paradigm has since spread well beyond boxes.
@@ -742,19 +994,87 @@ Each object query decodes into one mask plus its class. Semantic, instance, and 
 The throughline of this whole section: **set prediction with bipartite matching** is a general recipe, not a detection-only trick. Swap "box" for "mask" and the same machinery does panoptic segmentation; the same idea extends to pose, tracking, and more. One conceptual hammer, many nails — which is exactly why the query-based transformer view reshaped so much of vision after 2020.
 :::
 
-## 19.10 — Key takeaways
+## 19.10 — Promptable Segmentation and Vision Foundation Models
+
+For most of this chapter, a vision model has been a specialist: you train it on *your* classes, and it knows only those. The recent shift is toward **foundation models** — single models trained on internet-scale data that handle open-ended inputs, including categories they were never explicitly labeled with. Two ideas dominate.
+
+### Open-vocabulary recognition with CLIP
+
+Think of teaching a child by showing pictures next to their captions, never with a fixed multiple-choice answer sheet. **CLIP** (Contrastive Language–Image Pretraining) learns exactly this way: it trains an image encoder and a text encoder *together* on hundreds of millions of (image, caption) pairs, so that an image and its true caption land close together in a shared embedding space, while mismatched pairs are pushed apart.
+
+The payoff is **zero-shot classification**: to classify into *any* set of categories — even ones invented at test time — you embed the candidate label strings ("a photo of a cat", "a photo of a dog"), embed the image, and pick the nearest. No retraining, no fixed class list.
+
+```python
+import torch, clip
+from PIL import Image
+model, preprocess = clip.load("ViT-B/32")
+image = preprocess(Image.open("pet.jpg")).unsqueeze(0)
+labels = ["a photo of a cat", "a photo of a dog", "a photo of a rabbit"]
+text = clip.tokenize(labels)
+with torch.no_grad():
+    logits_per_image, _ = model(image, text)     # similarity image↔each label
+    probs = logits_per_image.softmax(dim=-1)
+print(dict(zip(labels, probs[0].tolist())))       # zero-shot class probabilities
+```
+
+The training objective is a **contrastive loss**: across a batch of $N$ pairs, the correct image–text pairing should score highest among all $N$ candidates for each image (and each text).
+
+$$\mathcal{L} = -\frac{1}{N}\sum_{i=1}^{N} \log \frac{e^{\,\text{sim}(I_i, T_i)/\tau}}{\sum_{j=1}^{N} e^{\,\text{sim}(I_i, T_j)/\tau}}$$
+
+**In words:** for each image, treat its own caption as the right answer among all captions in the batch, and push the model to score that pairing highest — a softmax over similarities, sharpened by temperature $\tau$.
+
+**Also written:** this is exactly cross-entropy with the matched index as the label, computed symmetrically over rows (image→text) and columns (text→image) of the $N\times N$ similarity matrix.
+
+CLIP embeddings underpin much of modern multimodal AI (Chapter on Multimodal owns the full story) and are the text-grounding behind open-vocabulary detectors and segmenters.
+
+### Promptable segmentation with SAM
+
+The **Segment Anything Model** (SAM, 2023) does for segmentation what CLIP did for recognition: it is a *promptable* model trained on a billion masks. Instead of a fixed class list, you give SAM a **prompt** — a click point, a box, or a rough scribble — and it returns a high-quality mask for whatever object that prompt indicates, *including objects and categories it was never told the names of*.
+
+```{mermaid}
+flowchart LR
+  A[Image] --> B[Heavy image encoder<br/>run once]
+  P[Prompt: point / box] --> C[Light mask decoder]
+  B --> C
+  C --> D[Object mask<br/>any object, no class list]
+```
+
+Its design is what makes it practical: a heavy image encoder runs **once** per image to produce an embedding, then a *lightweight* mask decoder turns each prompt into a mask in milliseconds. So an interactive tool can let a user click around an image and get instant masks. SAM is **class-agnostic** — it outlines the object but doesn't name it — which is why it's often paired with CLIP or a detector that supplies the label.
+
+```python
+from segment_anything import SamPredictor, sam_model_registry
+import numpy as np
+sam = sam_model_registry["vit_h"](checkpoint="sam_vit_h.pth")
+predictor = SamPredictor(sam)
+predictor.set_image(image_rgb)                 # heavy encoder runs once
+masks, scores, _ = predictor.predict(          # cheap per-prompt decode
+    point_coords=np.array([[420, 300]]),       # a single click on the object
+    point_labels=np.array([1]),                # 1 = foreground
+    multimask_output=True)                      # returns a few candidate masks
+best = masks[scores.argmax()]                   # boolean (H, W) mask
+```
+
+::: {.callout-tip}
+The pattern uniting CLIP and SAM is **prompting a general model** instead of training a narrow one. It mirrors what happened in NLP: a few huge, broadly-trained models, steered at inference by text or clicks, increasingly replace a zoo of task-specific networks. For a new vision problem in 2024+, the lazy-but-strong first move is often "can a foundation model already do this zero-shot?" before you label a single image.
+:::
+
+## 19.11 — Key takeaways
 
 - A digital image is just a grid of numbers (color = three stacked grids); every vision model is a function from that grid to a structured answer.
 - Vision tasks form a ladder of spatial precision: **classification** (one label/image) → **detection** (box + label/object) → **segmentation** (label/pixel). Pick the lightest one that solves your problem.
 - **CNNs** bring a strong locality inductive bias and are data-efficient; **ViTs** drop that bias and win with large data. Classification is scored by **top-1** and **top-5** accuracy.
+- **Transfer learning** is the practical default: freeze a pretrained backbone and train a new head when data is scarce, fine-tune at a small learning rate when you have more.
 - **Face recognition** maps faces to **embeddings** trained with **triplet loss**, enabling open-set recognition by distance comparison.
 - **Detection** = what + where. Know the vocabulary: **bounding boxes, anchors, IoU, NMS, mAP**, two-stage (R-CNN family) vs single-stage (YOLO, SSD).
-- **IoU = intersection / union**; ≥ 0.5 is the usual true-positive bar. Always take max-of-corners, min-of-corners, and **clamp to zero** — our worked box pair scored only 0.286.
-- Segmentation comes in **semantic** (class/pixel), **instance** (separate objects), and **panoptic** (both). **U-Net** for semantic, **Mask R-CNN** for instance; quality is **mIoU**.
+- **IoU = intersection / union**; ≥ 0.5 is the usual true-positive bar. Always take max-of-corners, min-of-corners, and **clamp to zero** — our worked box pair scored only 0.286. **GIoU** extends it to non-overlapping boxes for use as a loss.
+- Segmentation comes in **semantic** (class/pixel), **instance** (separate objects), and **panoptic** (both). **U-Net** for semantic, **Mask R-CNN** for instance; quality is **mIoU**, and **Dice loss** beats accuracy when classes are imbalanced.
 - **OCR** (CTC-trained text recognition), **pose** (keypoint heatmaps), and **tracking** (detection + Kalman/appearance association) are the applied workhorses.
 - **Data augmentation** cheaply buys invariance and fights overfitting — apply it to training only, and transform the boxes/masks alongside the image.
+- **Multi-view geometry** (pinhole projection, intrinsics/extrinsics, calibration, epipolar geometry, stereo, SfM) recovers 3D from 2D; **NeRF** and **3D Gaussian Splatting** turn posed photos into renderable scenes.
+- **Set prediction with bipartite matching** (DETR, Mask2Former) replaces anchors and NMS with one general recipe spanning detection and panoptic segmentation.
+- **Foundation models** — **CLIP** for open-vocabulary recognition, **SAM** for promptable segmentation — increasingly let you solve new tasks zero-shot instead of training a narrow model.
 
-## 19.11 — See also
+## 19.12 — See also
 
 - **Convolutional Neural Networks** — the backbone mechanics (filters, pooling, receptive fields) behind every model here.
 - **Attention & Transformers** — how Vision Transformers tokenize and attend over image patches.

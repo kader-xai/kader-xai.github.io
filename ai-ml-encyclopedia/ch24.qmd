@@ -121,6 +121,9 @@ Closeness is measured with **cosine similarity** — the cosine of the angle bet
 
 $$\text{sim}(\mathbf{u}, \mathbf{v}) = \frac{\mathbf{u} \cdot \mathbf{v}}{\|\mathbf{u}\|\,\|\mathbf{v}\|}$$
 
+**In words:** measure how much two vectors point the *same way*, ignoring how long they are — pure direction, not magnitude.
+**Also written:** $\text{sim}(\mathbf{u},\mathbf{v}) = \hat{\mathbf{u}} \cdot \hat{\mathbf{v}}$ where $\hat{\mathbf{u}} = \mathbf{u}/\|\mathbf{u}\|$ — i.e. the plain dot product of the two *unit-normalized* vectors.
+
 A value near $1$ means "very similar," near $0$ means "unrelated," and near $-1$ means "opposite."
 
 The diagram below shows the basic shape: two towers, two modalities, one space.
@@ -171,9 +174,14 @@ The cat photo is far closer to "a cat" than to "a car" — exactly the alignment
 
 The famous model that made the shared space practical at scale is **CLIP** (Contrastive Language–Image Pre-training, OpenAI 2021). Its recipe is almost embarrassingly direct: scrape ~400 million (image, caption) pairs from the web, and train two encoders so that **each image lands near its own caption and far from everyone else's**.
 
+**Intuition first.** Picture a speed-dating event with $N$ images on one side and their $N$ captions on the other. Every image was secretly written *for* exactly one caption. The training game: for each image, pick its true caption out of the lineup. To win, the encoders must learn what genuinely makes an image and a sentence "about the same thing" — and the other $N-1$ captions in the room act as free **negative examples** that the model must learn to push away. No human labels are needed; the *pairing itself* is the supervision.
+
 The training mechanism is **contrastive learning**. Take a batch of $N$ image–text pairs. Encode all images and all texts, then form the $N \times N$ matrix of cosine similarities between every image and every text. The **diagonal** entries are the *true* pairs (image $i$ with its caption $i$); the **off-diagonal** entries are mismatches. CLIP's loss pushes the diagonal up and the off-diagonal down — a softmax over each row and each column, the **InfoNCE** objective:
 
 $$\mathcal{L} = -\frac{1}{N}\sum_{i=1}^{N} \log \frac{\exp(\text{sim}(I_i, T_i)/\tau)}{\sum_{j=1}^{N}\exp(\text{sim}(I_i, T_j)/\tau)}$$
+
+**In words:** for each image, treat "which caption is mine?" as a multiple-choice question over the whole batch, and add up how surprised the model is by the right answer; minimizing surprise pulls true pairs together and shoves the rest apart.
+**Also written:** with rows L2-normalized this is a cross-entropy on logits $\tfrac{1}{\tau} I N^\top$ with targets on the diagonal — $\mathcal{L} = \tfrac{1}{N}\sum_i \text{CE}\big(\text{softmax}_j(\text{sim}(I_i,T_j)/\tau),\, y_i = i\big)$ — and the full CLIP loss averages this image→text term with its symmetric text→image counterpart.
 
 where $\tau$ is a learned **temperature** that sharpens or softens the distribution. Read it as a classification problem: "given image $i$, which of the $N$ captions is the right one?"
 
@@ -188,6 +196,31 @@ flowchart TB
   TE --> M
   M --> L["pull diagonal up, push off-diagonal down (InfoNCE)"]
 ```
+
+The similarity matrix is the heart of it. Here is a doodle of what training is trying to carve out — a bright diagonal, dim everywhere else:
+
+<svg viewBox="0 0 300 200" xmlns="http://www.w3.org/2000/svg">
+  <style>
+    @keyframes glow { 0%,100% { opacity:.55 } 50% { opacity:1 } }
+    .diag { animation: glow 2.4s ease-in-out infinite; }
+  </style>
+  <text x="150" y="14" font-size="11" text-anchor="middle" fill="currentColor">N×N similarity matrix (rows=images, cols=texts)</text>
+  <g transform="translate(60,30)">
+    <!-- grid 4x4 -->
+    <rect x="0" y="0" width="160" height="160" fill="none" stroke="#888" stroke-width="1"/>
+    <!-- diagonal (true pairs) -->
+    <rect class="diag" x="0"   y="0"   width="40" height="40" fill="#22c55e" fill-opacity="0.85"/>
+    <rect class="diag" x="40"  y="40"  width="40" height="40" fill="#22c55e" fill-opacity="0.85"/>
+    <rect class="diag" x="80"  y="80"  width="40" height="40" fill="#22c55e" fill-opacity="0.85"/>
+    <rect class="diag" x="120" y="120" width="40" height="40" fill="#22c55e" fill-opacity="0.85"/>
+    <!-- a few off-diagonal (negatives) -->
+    <rect x="40" y="0"  width="40" height="40" fill="#6366f1" fill-opacity="0.18"/>
+    <rect x="120" y="40" width="40" height="40" fill="#6366f1" fill-opacity="0.18"/>
+    <rect x="0" y="120" width="40" height="40" fill="#6366f1" fill-opacity="0.18"/>
+    <rect x="80" y="120" width="40" height="40" fill="#6366f1" fill-opacity="0.18"/>
+  </g>
+  <text x="150" y="198" font-size="9" text-anchor="middle" fill="#888">green = true pairs (push up) · blue = mismatches (push down)</text>
+</svg>
 
 **Worked example.** Take a tiny batch of 3 pairs. After encoding, suppose the similarity matrix (rows = images, cols = texts) is:
 
@@ -221,6 +254,30 @@ img_vec  = encode_image(photo)                 # CLIP image encoder
 txt_vecs = [encode_text(c) for c in classes]   # CLIP text encoder
 scores   = [cos(img_vec, t) for t in txt_vecs]
 print(classes[int(np.argmax(scores))])         # highest similarity wins
+```
+
+**With a real framework.** In practice you reach for `open_clip` (or Hugging Face `transformers`) and the whole zero-shot pipeline is a few lines:
+
+```python
+import torch, open_clip
+from PIL import Image
+
+model, _, preprocess = open_clip.create_model_and_transforms(
+    "ViT-B-32", pretrained="laion2b_s34b_b79k")
+tokenizer = open_clip.get_tokenizer("ViT-B-32")
+
+image  = preprocess(Image.open("pet.jpg")).unsqueeze(0)          # (1,3,224,224)
+labels = ["a photo of a dog", "a photo of a cat", "a photo of a car"]
+text   = tokenizer(labels)
+
+with torch.no_grad():
+    img_f = model.encode_image(image)
+    txt_f = model.encode_text(text)
+    img_f /= img_f.norm(dim=-1, keepdim=True)        # L2-normalize → cosine
+    txt_f /= txt_f.norm(dim=-1, keepdim=True)
+    probs = (100.0 * img_f @ txt_f.T).softmax(dim=-1)  # temperature-scaled
+
+print(labels[int(probs.argmax())], float(probs.max()))
 ```
 
 This same trick powers **semantic image search** (encode a query sentence, find nearest image vectors), **content moderation**, and the text-conditioning inside many generators. The wording of the prompt matters — "a photo of a dog" usually beats the bare word "dog," a quirk called **prompt engineering** for CLIP.
@@ -258,6 +315,27 @@ seq = concat([img_tokens, txt_tokens]) # image tokens sit IN the prompt
 answer = llm.generate(seq)             # ordinary autoregressive decoding
 ```
 
+**With a real framework.** Modern VLMs ship ready-to-run on Hugging Face. A LLaVA-style model in a few lines:
+
+```python
+from transformers import LlavaForConditionalGeneration, AutoProcessor
+from PIL import Image
+import torch
+
+model = LlavaForConditionalGeneration.from_pretrained(
+    "llava-hf/llava-1.5-7b-hf", torch_dtype=torch.float16, device_map="auto")
+proc  = AutoProcessor.from_pretrained("llava-hf/llava-1.5-7b-hf")
+
+prompt = "USER: <image>\nHow many people are wearing hats? ASSISTANT:"
+inputs = proc(images=Image.open("crowd.jpg"), text=prompt,
+              return_tensors="pt").to(model.device, torch.float16)
+
+out = model.generate(**inputs, max_new_tokens=40)
+print(proc.decode(out[0], skip_special_tokens=True))
+```
+
+The `<image>` placeholder is exactly where the processor splices the projected patch tokens into the prompt — the "soft tokens" made concrete.
+
 Two flagship tasks fall out of this design. **Image captioning** asks the model to generate a description from the image alone ("a golden retriever catching a frisbee on grass"). **Visual question answering (VQA)** conditions on image *plus* a question ("How many people are wearing hats?" → "Three"). Because the backbone is a full LLM, modern VLMs go far beyond these: reading documents, interpreting charts, writing code from a UI screenshot, or doing step-by-step visual reasoning.
 
 Training is typically two-stage. First **alignment pretraining**: freeze the vision encoder and the LLM, and train *only* the projector on image–caption pairs so the soft tokens land in meaningful regions of the LLM's space — cheap, because few parameters move. Then **instruction tuning** on multimodal conversations ("look at this and answer…") so the model learns to *follow visual instructions*, not just caption.
@@ -286,6 +364,9 @@ The strength of that steering is set by **classifier-free guidance (CFG)**. At e
 
 $$\hat{\epsilon} = \epsilon_{\varnothing} + w\,(\epsilon_{\text{text}} - \epsilon_{\varnothing})$$
 
+**In words:** start from the model's "no instructions" guess, see which way the prompt would tug it, and then step *extra hard* in that direction — the bigger $w$, the more the prompt wins over the generic guess.
+**Also written:** $\hat{\epsilon} = (1-w)\,\epsilon_{\varnothing} + w\,\epsilon_{\text{text}}$ — a linear blend (an *extrapolation* once $w>1$) of the unconditioned and text-conditioned predictions.
+
 The **guidance scale** $w$ trades faithfulness against diversity: $w=1$ ignores the extrapolation (looser, more varied), while $w=7$–$12$ pulls hard toward the prompt (sharper adherence, but risks over-saturated or unnatural images). It is the single knob users feel most.
 
 ```python
@@ -295,6 +376,23 @@ eps_uncond = denoiser(x_t, t, cond=empty_emb)   # ignore the prompt
 w = 7.5                                          # guidance scale
 eps = eps_uncond + w * (eps_text - eps_uncond)  # extrapolate toward prompt
 x_next = step(x_t, eps, t)                       # one denoising step
+```
+
+**With a real framework.** The `diffusers` library wraps all of this — text encoder, scheduler, CFG loop — behind one call; `guidance_scale` is the $w$ above:
+
+```python
+from diffusers import StableDiffusionPipeline
+import torch
+
+pipe = StableDiffusionPipeline.from_pretrained(
+    "runwayml/stable-diffusion-v1-5", torch_dtype=torch.float16).to("cuda")
+
+image = pipe(
+    prompt="a red fox sitting in fresh snow, golden hour, photorealistic",
+    num_inference_steps=30,
+    guidance_scale=7.5,            # w: faithfulness vs. diversity
+).images[0]
+image.save("fox.png")
 ```
 
 **Text-to-video** extends the same idea into time. The hard new constraint is **temporal consistency**: the fox must keep the same fur and move coherently across frames, not flicker into a different animal each frame. Systems achieve this by generating in a compressed **latent space** and adding **temporal attention** layers that let frames attend to one another, plus 3-D (space + time) convolutions. Because video is heavy, models often generate a few keyframes and **interpolate**, or produce low resolution then **upscale**. The trajectory from Imagen Video and Make-A-Video to Sora and Veo is essentially diffusion plus ever-better temporal modeling.
@@ -308,6 +406,14 @@ Push the guidance scale too high and images "burn" — garish colors, fried cont
 Sound fits the shared-space recipe just as cleanly as images. The trick is to make audio *look like* something a transformer already eats. Most systems first convert a waveform into a **spectrogram** — a 2-D image of frequency (vertical) versus time (horizontal) — and then treat it almost exactly like a picture (the audio front-end, spectrograms, and speech specifics live in Chapter 21).
 
 **Audio-language models** pair an audio encoder with a text encoder in one space, mirroring CLIP. **CLAP** (Contrastive Language–Audio Pretraining) trains on (sound, description) pairs so that the clip of a barking dog lands near the text "a dog barking," giving zero-shot **audio classification** and text-to-sound retrieval. On the generation side, **Whisper** maps speech-spectrograms to text (transcription/translation), while text-to-audio diffusion models like AudioLDM run §24.4 in the sound domain to synthesize effects and music from prompts.
+
+**With a real framework.** Whisper transcription is one pipeline call:
+
+```python
+from transformers import pipeline
+asr = pipeline("automatic-speech-recognition", model="openai/whisper-small")
+print(asr("meeting.wav")["text"])     # spectrogram → text, under the hood
+```
 
 The frontier is **any-to-any** models: a single network whose inputs and outputs can each be text, image, audio, or video in any combination. The enabling idea is **tokenizing every modality into one shared discrete vocabulary**. A **VQ (vector-quantized) tokenizer** turns an image patch or an audio frame into an integer code from a learned codebook — the same way a tokenizer turns text into integer IDs. Once *everything* is a sequence of tokens drawn from one combined vocabulary, a single transformer can read a mixed sequence and predict the next token, whether that token decodes back into a word, a pixel block, or an audio snippet.
 
@@ -333,6 +439,8 @@ This unification is what lets a model take a spoken question about a photo and r
 
 A recurring design choice underlies every model so far: **at what point do the modalities meet?** This is the question of **fusion**, and there are three canonical answers, each with a different cost–power tradeoff.
 
+A kitchen analogy keeps them straight. **Early fusion** is throwing every ingredient into one pot from the start — flavors blend completely, but you can't take the soup apart again. **Late fusion** is plating two finished dishes side by side and judging them together — clean and reusable, but they never actually mixed. **Cross-attention** is letting one dish *taste* the other and adjust its seasoning — they influence each other where it matters, while staying distinct dishes.
+
 **Early fusion** combines modalities at the *input* — concatenate raw features or tokens and feed one joint stream to a single model (as in the any-to-any transformers of §24.5). This is maximally expressive, because the model can mix the modalities at every layer, but it is heavy: everything must be processed together, and the two streams cannot be reused independently.
 
 **Late fusion** keeps the modalities *separate* through their own encoders and combines them only at the *end* — concatenating or averaging the final vectors before a small head, or just comparing them as in CLIP. It is modular and efficient (encode each modality once, even offline) and lets you swap encoders, but it can only model *shallow* interactions, since the streams never see each other internally.
@@ -340,6 +448,9 @@ A recurring design choice underlies every model so far: **at what point do the m
 **Cross-attention fusion** is the middle path that dominates modern VLMs. One modality forms the **queries** and attends *into* the other modality's **keys and values**, so information flows between streams at chosen layers without fully merging them. In a VLM, text tokens (queries) attend to image patches (keys/values); in diffusion (§24.4), image features attend to text. Attention computes, for query $\mathbf{q}$ over keys $K$ and values $V$:
 
 $$\text{Attn}(\mathbf{q}, K, V) = \text{softmax}\!\left(\frac{\mathbf{q}K^\top}{\sqrt{d}}\right)V$$
+
+**In words:** score how well the query matches every key, turn those scores into weights that sum to 1, and return a weighted blend of the values — a soft "look up the most relevant items and average them."
+**Also written:** $\sum_j \alpha_j \mathbf{v}_j$ with weights $\alpha_j = \dfrac{\exp(\mathbf{q}\cdot\mathbf{k}_j/\sqrt{d})}{\sum_{j'}\exp(\mathbf{q}\cdot\mathbf{k}_{j'}/\sqrt{d})}$ — an attention-weighted sum of the value vectors.
 
 — a content-addressed lookup that pulls in exactly the relevant patches (the mechanics of attention are Chapter 17; here it is the *bridge between modalities*).
 
@@ -371,7 +482,39 @@ flowchart TB
 Don't reflexively reach for early fusion because it is "most powerful." It multiplies compute and destroys modularity — you can no longer precompute and cache image embeddings for fast retrieval. For search at scale, late fusion's reusable vectors are the *right* answer; save cross-attention for tasks that truly need fine-grained interaction.
 :::
 
-## 24.7 — Applications and Challenges: Grounding & Cross-Modal Hallucination
+## 24.7 — Evaluating Multimodal Models
+
+Once you have built a captioner or a VQA system, an immediate question follows: **how good is it, and how would you know?** Multimodal evaluation is genuinely harder than single-modality evaluation, because a "correct" caption is not unique — a photo can be described in a hundred valid ways — and because a model can be right for the wrong reasons (guessing "tennis" whenever it sees a green court, with no real grounding).
+
+Evaluation splits into two families. **Discriminative tasks** have a checkable answer: VQA accuracy (did it say "three"?), image–text **retrieval** measured by *Recall@K* (is the true caption among the top-$K$ nearest?), and zero-shot **classification accuracy** on benchmarks like ImageNet. These are easy to score but can be gamed by dataset shortcuts.
+
+**Generative tasks** — captioning, text-to-image — have no single ground truth, so we lean on overlap metrics and learned scores. The classic worked example is captioning: compare the model's sentence against several human reference captions.
+
+| Metric | What it measures | Caveat |
+|--------|------------------|--------|
+| BLEU / CIDEr / METEOR | n-gram overlap with reference captions | rewards wording, not correctness |
+| CLIPScore | cosine similarity between image and generated caption (no references needed) | inherits CLIP's blind spots |
+| FID (text-to-image) | distance between real and generated image feature distributions | needs many samples; not per-image |
+| Human / VLM-as-judge | holistic preference, faithfulness | slow or noisy; judge has its own biases |
+
+A tiny **CIDEr-style** intuition: if the model writes "a dog catching a frisbee" and a human reference says "a dog catches a frisbee on grass," the shared n-grams ("a dog", "catching/catches", "frisbee") drive the score up, while a fabricated word like "umbrella" earns nothing — but note the metric would *also* reward a fluent wrong caption that happened to reuse common phrases. That gap is exactly why CLIPScore (which checks the *image*, not just the words) and human judgment remain necessary.
+
+```python
+# reference-free caption quality with CLIPScore (torchmetrics)
+from torchmetrics.multimodal.clip_score import CLIPScore
+import torch
+
+clip_score = CLIPScore(model_name_or_path="openai/clip-vit-base-patch16")
+images   = torch.randint(0, 255, (1, 3, 224, 224))           # a batch of images
+captions = ["a red fox sitting in fresh snow"]
+print(clip_score(images, captions).item())   # higher = caption fits image better
+```
+
+::: {.callout-warning}
+n-gram metrics (BLEU, CIDEr) reward *sounding like* the references, not being *true to the image*. A caption can score well while hallucinating, or score poorly while being a perfectly valid alternative phrasing. Never report a single number — pair an overlap metric with a grounding-aware one (CLIPScore) and spot-check with human eyes.
+:::
+
+## 24.8 — Applications and Challenges: Grounding & Cross-Modal Hallucination
 
 The shared-space toolkit powers a wide application surface: **semantic search** over mixed media, **automatic captioning** and alt-text for accessibility, **visual question answering** for documents and charts, **content moderation**, **robotics** (mapping camera + instruction to action), medical-image reporting, and creative **text-to-image/video** tools. But two hard problems recur, and both trace back to the same root — the model has the *words* without a firm hold on the *referents*.
 
@@ -393,7 +536,7 @@ Mitigations attack the imbalance between priors and evidence: stronger visual gr
 A multimodal model's fluency is *not* evidence of faithfulness. The most dangerous failure is a perfectly worded sentence about something that isn't there. Always ask whether a claim is **grounded** in the actual input before trusting it.
 :::
 
-## 24.8 — Key Takeaways
+## 24.9 — Key Takeaways
 
 - **Shared embedding space** is the unifying idea: map every modality into one vector space where distance = semantic similarity, then cross-modal tasks become nearest-neighbor lookups.
 - **CLIP** trains two encoders contrastively on web image–text pairs (pull true pairs together, push mismatches apart via InfoNCE), enabling **zero-shot classification** by comparing an image to text prompts.
@@ -401,9 +544,10 @@ A multimodal model's fluency is *not* evidence of faithfulness. The most dangero
 - **Text-to-image** is diffusion (Ch. 18) **conditioned** on text via cross-attention, steered by **classifier-free guidance** $w$; **text-to-video** adds temporal attention for frame consistency.
 - **Audio-language** models (CLAP, Whisper) reuse the recipe on spectrograms; **any-to-any** models tokenize every modality into one shared vocabulary so a single transformer handles all input/output combinations.
 - **Fusion** has three modes — early (input, deep, costly), late (output, shallow, modular/cacheable), cross-attention (middle, deep + selective) — and cross-attention dominates modern VLMs.
+- **Evaluation** is two-sided: discriminative tasks use accuracy and Recall@K; generative tasks need overlap metrics (BLEU/CIDEr), grounding-aware scores (CLIPScore, FID), and human judgment — never a single number.
 - **Grounding** (tying words to referents) and **cross-modal hallucination** (language priors overriding pixels) are the central open challenges; treat fluent multimodal output as a draft to verify.
 
-## 24.9 — See also
+## 24.10 — See also
 
 - **Attention & Transformers** — the attention mechanism behind cross-attention fusion and VLM backbones.
 - **Generative Models (Diffusion)** — the full diffusion machinery underlying text-to-image and text-to-video.
