@@ -119,6 +119,14 @@ The simplest scheme is a **train/test split**: randomly partition the data, trai
 
 The problem with a single split: your estimate is noisy. Get an unlucky 20%, and the number swings. **k-fold cross-validation (CV)** fixes this by reusing the data. Split into $k$ equal **folds**; train on $k-1$ of them and test on the one left out; rotate so every fold is the test set exactly once; average the $k$ scores. Every row is used for testing exactly once and for training $k-1$ times, so you get a stable estimate without wasting data.
 
+The averaged estimate is just the mean of the per-fold scores:
+
+$$\text{CV score} = \frac{1}{k}\sum_{i=1}^{k} \text{score}_i$$
+
+**In words:** add up the score you got on each of the $k$ held-out folds and divide by the number of folds — the typical performance across all the held-out trials.
+
+**Also written:** $\widehat{\text{CV}} = \mathbb{E}_i[\text{score}_i]$, the sample mean of the fold scores $\{\text{score}_1,\dots,\text{score}_k\}$.
+
 ```{mermaid}
 flowchart LR
   D[Full dataset] --> F1[Fold 1]
@@ -155,6 +163,26 @@ for tr, te in kfold_indices(200, 5):
 # print(np.mean(scores), np.std(scores))
 ```
 
+In practice you rarely hand-roll the loop — scikit-learn gives you the three flavours directly, and they all plug into `cross_val_score`:
+
+```python
+from sklearn.model_selection import (
+    cross_val_score, KFold, StratifiedKFold, TimeSeriesSplit)
+from sklearn.ensemble import RandomForestClassifier
+
+model = RandomForestClassifier(random_state=0)
+
+# plain k-fold (shuffles freely)
+cv = KFold(n_splits=5, shuffle=True, random_state=0)
+# classification → keep class balance in every fold
+cv = StratifiedKFold(n_splits=5, shuffle=True, random_state=0)
+# ordered data → train only on the past, test on the future
+cv = TimeSeriesSplit(n_splits=5)
+
+scores = cross_val_score(model, X, y, cv=cv, scoring="accuracy")
+print(scores.mean(), scores.std())   # estimate ± stability
+```
+
 Two important variants exist because the plain shuffle assumed two things that aren't always true: that classes are balanced, and that rows are independent of order.
 
 **Stratified k-fold** is for classification: it keeps each fold's class proportions equal to the whole dataset's. If 10% of your data is the positive class, every fold should be ~10% positive. Without stratification, a rare class can land entirely outside a fold — that fold then has zero examples of it to test on, and the fold's score becomes meaningless. The fix is to sample each class separately into the folds.
@@ -178,6 +206,10 @@ Rule of thumb: $k=5$ or $k=10$ is the standard. Higher $k$ → less bias in the 
 Every model's expected error on new data decomposes into three parts:
 
 $$\text{Error} = \underbrace{\text{Bias}^2}_{\text{wrong assumptions}} + \underbrace{\text{Variance}}_{\text{sensitivity to the sample}} + \underbrace{\sigma^2}_{\text{irreducible noise}}$$
+
+**In words:** the error you should expect on fresh data is how far off your model is *on average* (bias, squared), plus how much its predictions *wobble* from one training sample to another (variance), plus the noise baked into the data that no model can remove.
+
+**Also written:** for a point $x$, $\mathbb{E}\big[(y - \hat f(x))^2\big] = \big(\mathbb{E}[\hat f(x)] - f(x)\big)^2 + \mathrm{Var}\big(\hat f(x)\big) + \sigma^2$, where $f$ is the true function and $\hat f$ is the model fit on a random training set.
 
 **Bias** is error from the model being too simple to capture the truth — a straight line trying to fit a curve. **Variance** is error from the model being so flexible it chases the noise in *this particular* training sample, so it would fit a different sample very differently. **Irreducible noise** ($\sigma^2$) is the randomness in the data you can never remove no matter how good the model is.
 
@@ -223,6 +255,10 @@ The intuition is a dartboard. High bias = darts clustered tightly but far from t
 You cannot eliminate both — you trade them. More capacity / less regularization → less bias, more variance. The whole art of tuning (Sections 12.4–12.8) is finding the bottom of that U.
 :::
 
+::: {.callout-note}
+**A modern footnote — double descent.** The clean U-shape is the *classical* story and it holds for the models in this chapter. But for very over-parameterized models (huge neural nets), pushing capacity *past* the point of memorizing the training set can make test error fall a *second* time — the so-called **double-descent** curve. The classical U still governs the regimes you tune by hand here; double descent is covered with deep nets (Chapter 14).
+:::
+
 ## 12.3 — Overfitting & underfitting (diagnosing)
 
 These are the two failure modes named by the tradeoff above, and the good news is they have a clean diagnostic signature you read straight off train-vs-test scores.
@@ -241,6 +277,36 @@ A **good fit** sits between them: both errors low and close together.
 
 The **gap** between train and test error is the key tell. A large gap screams overfitting regardless of the absolute numbers; a small gap at high error screams underfitting.
 
+<svg viewBox="0 0 440 170" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif" font-size="10">
+  <!-- underfit -->
+  <g>
+    <text x="70" y="20" text-anchor="middle" font-size="11">Underfit</text>
+    <rect x="30" y="40" width="80" height="14" fill="#f59e0b" fill-opacity="0.55" stroke="currentColor"/>
+    <rect x="30" y="62" width="84" height="14" fill="#f59e0b" fill-opacity="0.55" stroke="currentColor"/>
+    <text x="120" y="51" font-size="9">train err high</text>
+    <text x="124" y="73" font-size="9">test err high</text>
+    <text x="70" y="100" text-anchor="middle" font-size="9" fill="currentColor">small gap, both bad</text>
+  </g>
+  <!-- good -->
+  <g transform="translate(150,0)">
+    <text x="70" y="20" text-anchor="middle" font-size="11">Good fit</text>
+    <rect x="30" y="40" width="22" height="14" fill="#22c55e" fill-opacity="0.55" stroke="currentColor"/>
+    <rect x="30" y="62" width="28" height="14" fill="#22c55e" fill-opacity="0.55" stroke="currentColor"/>
+    <text x="120" y="51" font-size="9">train err low</text>
+    <text x="124" y="73" font-size="9">test err low</text>
+    <text x="70" y="100" text-anchor="middle" font-size="9" fill="currentColor">small gap, both good</text>
+  </g>
+  <!-- overfit -->
+  <g transform="translate(300,0)">
+    <text x="70" y="20" text-anchor="middle" font-size="11">Overfit</text>
+    <rect x="30" y="40" width="14" height="14" fill="#ec4899" fill-opacity="0.55" stroke="currentColor"/>
+    <rect x="30" y="62" width="90" height="14" fill="#ec4899" fill-opacity="0.55" stroke="currentColor"/>
+    <text x="120" y="51" font-size="9">train err low</text>
+    <text x="124" y="73" font-size="9">test err high</text>
+    <text x="70" y="100" text-anchor="middle" font-size="9" fill="currentColor">LARGE gap</text>
+  </g>
+</svg>
+
 **Worked example.** A decision tree with no depth limit hits 100% train accuracy and 72% test accuracy — a 28-point gap, textbook overfitting. Cap the depth at 4: train drops to 86%, test rises to 83%. You gave up training accuracy you never deserved and bought generalization in exchange. The fixes flow directly from the diagnosis — overfit → simplify the model or add data; underfit → add capacity or better features.
 
 ::: {.callout-warning}
@@ -254,6 +320,10 @@ A near-zero training error is not a success — it is usually a *warning*. The q
 For a linear model with loss $L(\mathbf{w})$:
 
 $$L_{\text{ridge}} = L(\mathbf{w}) + \lambda \sum_j w_j^2 \quad(\text{L2}), \qquad L_{\text{lasso}} = L(\mathbf{w}) + \lambda \sum_j |w_j| \quad(\text{L1})$$
+
+**In words:** keep the usual "how wrong are my predictions" loss, but add a fine that grows with how big the weights are — squared size for Ridge, absolute size for Lasso — so the optimizer only buys a large weight if it pays for itself in fit.
+
+**Also written:** $\min_{\mathbf{w}} L(\mathbf{w}) + \lambda\lVert\mathbf{w}\rVert_2^2$ (Ridge) and $\min_{\mathbf{w}} L(\mathbf{w}) + \lambda\lVert\mathbf{w}\rVert_1$ (Lasso), where $\lVert\mathbf{w}\rVert_2^2=\sum_j w_j^2$ and $\lVert\mathbf{w}\rVert_1=\sum_j|w_j|$. Equivalently, each is the constrained problem "minimize $L$ subject to $\lVert\mathbf{w}\rVert \le t$" for some budget $t$ tied to $\lambda$.
 
 **L2 (Ridge)** penalizes squared weights. It shrinks all weights smoothly toward zero but rarely *to* zero. It's a good default and handles correlated features gracefully, spreading weight across them rather than picking one arbitrarily.
 
@@ -286,7 +356,26 @@ Why does L1 zero things out but L2 doesn't? The constraint regions differ. L1's 
 
 **Worked example.** Three correlated features with true coefficients roughly $[3, 0, 0]$ — only the first matters. Unregularized least squares might split the signal across all three as $[1.4, 0.9, 0.8]$, chasing noise. L2 shrinks them toward each other and toward zero, say $[1.7, 0.6, 0.5]$ — smaller, smoother, but still nonzero. L1 with the right $\lambda$ snaps the two useless ones to exactly $[2.6, 0, 0]$, recovering the sparse truth and telling you which feature to keep.
 
+```python
+from sklearn.linear_model import Ridge, Lasso
+# alpha is scikit-learn's name for the regularization strength λ
+Ridge(alpha=1.0).fit(X, y)   # L2: all weights small, none exactly 0
+Lasso(alpha=0.1).fit(X, y)   # L1: many weights driven exactly to 0
+# inspect (lasso.coef_ == 0).sum() to see how many features were dropped
+```
+
 In neural networks, L2 regularization is usually called **weight decay**, because at each gradient step it pulls every weight a little toward zero: $w \leftarrow w - \eta(\nabla L + \lambda w) = (1-\eta\lambda)\,w - \eta\nabla L$ — the $(1-\eta\lambda)$ factor literally *decays* the weight each step before the gradient update is applied.
+
+**In words:** before applying the usual gradient step, scale every weight down by a tiny factor $(1-\eta\lambda)$ — so weights constantly leak toward zero unless the gradient keeps pushing them back up.
+
+**Also written:** with learning rate $\eta$ and decay $\lambda$, $w_{t+1} = (1-\eta\lambda)\,w_t - \eta\,\partial L/\partial w$. In PyTorch this is the `weight_decay` argument of the optimizer:
+
+```python
+import torch
+opt = torch.optim.AdamW(model.parameters(), lr=1e-3, weight_decay=1e-2)
+# weight_decay is the λ above — AdamW applies the decay term correctly,
+# decoupled from the adaptive gradient scaling.
+```
 
 **Early stopping** is regularization through time. As you train iteratively, training loss keeps falling, but validation loss eventually turns back up — that turning point is where the model stops generalizing and starts memorizing. Stop there: monitor validation loss, keep the weights from its best epoch, and halt after it fails to improve for a set **patience** number of epochs.
 
@@ -348,6 +437,17 @@ def dropout(a, p, train=True):
     return a * mask / (1 - p)                 # zero some, scale the rest up
 ```
 
+In a real framework you never write that by hand — you drop in a layer and toggle train/eval mode, which flips dropout on and off for you:
+
+```python
+import torch.nn as nn
+net = nn.Sequential(nn.Linear(128, 64), nn.ReLU(),
+                    nn.Dropout(p=0.5),       # drops 50% of units in training
+                    nn.Linear(64, 10))
+net.train()   # dropout ACTIVE (and scaling applied)
+net.eval()    # dropout OFF — full network, deterministic predictions
+```
+
 **Worked example.** A layer outputs activations `[2, 4, 6, 8]` with $p=0.5$. A random mask keeps neurons 1 and 3: result `[2, 0, 6, 0]`, then scale by $1/(1-0.5)=2$ → `[4, 0, 12, 0]`. The kept activations are boosted so the layer's expected total is unchanged. At test time the layer simply outputs `[2, 4, 6, 8]` with no scaling and no dropping.
 
 ::: {.callout-warning}
@@ -384,6 +484,10 @@ From these four numbers come the three metrics that matter most:
 
 $$\text{Precision} = \frac{TP}{TP+FP}, \qquad \text{Recall} = \frac{TP}{TP+FN}, \qquad F_1 = 2\cdot\frac{\text{Precision}\cdot\text{Recall}}{\text{Precision}+\text{Recall}}$$
 
+**In words:** precision is "of the things I called positive, how many really were?"; recall is "of the things that really were positive, how many did I catch?"; F1 is a single score that's only high when *both* of those are high.
+
+**Also written:** with $P$ and $R$ for precision and recall, $F_1 = \dfrac{2TP}{2TP+FP+FN} = \left(\dfrac{P^{-1}+R^{-1}}{2}\right)^{-1}$ — the harmonic mean of $P$ and $R$.
+
 **Precision** answers: *of everything I flagged positive, what fraction really was positive?* It's the purity of the alarms. **Recall** (also called sensitivity) answers: *of all the real positives out there, what fraction did I catch?* It's coverage. **F1** is their **harmonic mean** — a single number that stays low unless *both* precision and recall are decent, which makes it a far better summary than accuracy on imbalanced data.
 
 **Worked example.** 1000 emails, 50 of them spam. The filter flags 40 emails as spam; 30 of those are truly spam.
@@ -393,6 +497,12 @@ $$\text{Precision} = \frac{TP}{TP+FP}, \qquad \text{Recall} = \frac{TP}{TP+FN}, 
 - Recall = 30/50 = **0.60** — it caught 60% of the actual spam.
 - F1 = 2·(0.75·0.60)/(0.75+0.60) = **0.667**.
 - Accuracy = (30+940)/1000 = **0.97** — flattering and nearly useless here, because the 940 easy true negatives dominate.
+
+```python
+from sklearn.metrics import classification_report, confusion_matrix
+print(confusion_matrix(y_true, y_pred))         # [[TN, FP], [FN, TP]]
+print(classification_report(y_true, y_pred))    # precision/recall/F1 per class
+```
 
 Which metric to favor depends on the *cost of each error type*:
 
@@ -406,13 +516,23 @@ Which metric to favor depends on the *cost of each error type*:
 Say the metric in plain words before computing it: precision = "when I shout, am I right?"; recall = "do I catch them all?". There's an inherent tension — push recall up by flagging more aggressively, and precision usually drops. F1 keeps you honest about the balance.
 :::
 
+::: {.callout-note}
+**Beyond F1 — when "both matter" isn't 50/50.** $F_1$ weights precision and recall equally. When one genuinely costs more, use $F_\beta = (1+\beta^2)\dfrac{P\cdot R}{\beta^2 P + R}$, where $\beta>1$ favors recall and $\beta<1$ favors precision (e.g. $F_2$ for cancer screening, $F_{0.5}$ for a spam filter). For *multi-class* problems you also pick an averaging rule: **macro** (unweighted mean across classes — every class counts the same, good when rare classes matter) vs **micro/weighted** (pool the counts — dominated by the big classes).
+:::
+
 ## 12.7 — ROC, AUC & thresholds (and PR curves for imbalance)
 
 Most classifiers don't output a hard label; they output a **score** or probability, and you pick a **threshold** above which you call it positive. Precision and recall are computed *at one threshold*. Slide the threshold and they change — lower it and you flag more (recall up, precision usually down); raise it and you flag less. So to judge the model itself, independent of any one cutoff, we sweep the threshold across its whole range and plot the result.
 
 The **ROC curve** (Receiver Operating Characteristic) plots the **True Positive Rate** (= recall, $TP/(TP+FN)$) against the **False Positive Rate** ($FP/(FP+TN)$) as the threshold varies from strict to lenient. The top-left corner is perfect (catch everything, no false alarms); the diagonal line is random guessing.
 
-**AUC** (Area Under the ROC Curve) collapses that whole curve into one number in $[0.5, 1.0]$. It has a beautiful interpretation: **AUC is the probability that the model scores a random positive higher than a random negative.** AUC = 1.0 is perfect ranking; 0.5 is a coin flip.
+**AUC** (Area Under the ROC Curve) collapses that whole curve into one number in $[0.5, 1.0]$. It has a beautiful interpretation: **AUC is the probability that the model scores a random positive higher than a random negative.**
+
+$$\text{AUC} = P\big(\,s(x^{+}) > s(x^{-})\,\big)$$
+
+**In words:** grab one positive example and one negative example at random; AUC is the chance the model gives the positive the higher score. A perfect ranker always does (AUC = 1); a coin flip is right half the time (AUC = 0.5).
+
+**Also written:** $\text{AUC} = \dfrac{1}{|P||N|}\sum_{i\in P}\sum_{j\in N}\mathbf{1}\!\left[s_i > s_j\right]$ — the fraction of all positive–negative pairs the model ranks correctly (the Mann–Whitney U statistic). AUC = 1.0 is perfect ranking; 0.5 is a coin flip.
 
 <svg viewBox="0 0 240 220" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif" font-size="11">
   <line x1="40" y1="180" x2="200" y2="180" stroke="#333"/>
@@ -440,11 +560,73 @@ def roc_points(scores, y):
 # AUC = trapezoidal area under the (fpr, tpr) points
 ```
 
+scikit-learn computes both summaries and the full curves for you:
+
+```python
+from sklearn.metrics import roc_auc_score, average_precision_score
+proba = model.predict_proba(X_test)[:, 1]   # positive-class scores
+roc_auc_score(y_test, proba)          # ROC AUC
+average_precision_score(y_test, proba)  # AP = area under PR curve
+```
+
+**Choosing the threshold.** AUC/AP judge the *ranking*; deployment needs one *cutoff*. Pick it from the cost of FP vs FN — e.g. choose the threshold that maximizes $F_1$, or the lowest threshold whose precision still clears a business floor:
+
+```python
+from sklearn.metrics import precision_recall_curve
+prec, rec, thr = precision_recall_curve(y_test, proba)
+f1 = 2 * prec * rec / (prec + rec + 1e-12)
+best_threshold = thr[f1[:-1].argmax()]   # operating point, not the lazy 0.5
+```
+
 ::: {.callout-warning}
 On rare-positive problems (fraud, disease, anomalies in Chapter 27), a high AUC can hide a useless model. Report the **PR curve / average precision** alongside it, and always pick the operating threshold from the cost of FP vs. FN — not the lazy 0.5 default.
 :::
 
-## 12.8 — Hyperparameter tuning (grid, random, Bayesian optimization)
+## 12.8 — Probability calibration
+
+Intuition first: a weather forecaster who says "70% chance of rain" is **well calibrated** if, across all the days she said 70%, it actually rained on about 70% of them. A classifier's `predict_proba` output is exactly such a forecast — and a model can *rank* cases perfectly (great AUC) while its probabilities are badly miscalibrated, saying "0.9" for cases that are right only 60% of the time. Whenever a downstream decision uses the probability itself — expected-value thresholds, risk scores, pricing, triage — calibration matters as much as accuracy.
+
+**Calibration** asks whether predicted probabilities match observed frequencies. To check it, bin predictions by their predicted probability and, in each bin, compare the average predicted probability to the actual fraction of positives. Plotting one against the other gives a **reliability diagram**: the diagonal is perfect calibration, a curve below it means the model is *over-confident*, above it means *under-confident*.
+
+<svg viewBox="0 0 240 220" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif" font-size="11">
+  <line x1="40" y1="180" x2="200" y2="180" stroke="currentColor"/>
+  <line x1="40" y1="180" x2="40" y2="20" stroke="currentColor"/>
+  <line x1="40" y1="180" x2="200" y2="20" stroke="#888" stroke-dasharray="4"/>
+  <path d="M40,180 C90,150 120,120 200,20" fill="none" stroke="#ec4899" stroke-width="2"/>
+  <text x="120" y="205" text-anchor="middle">predicted probability</text>
+  <text x="14" y="110" text-anchor="middle" transform="rotate(-90 14 110)">observed freq.</text>
+  <text x="150" y="150" fill="#ec4899" font-size="9">over-confident</text>
+  <text x="120" y="55" fill="#888" font-size="9">perfect</text>
+</svg>
+
+A common one-number summary is **Expected Calibration Error (ECE)** — the average gap between confidence and accuracy across bins:
+
+$$\text{ECE} = \sum_{b=1}^{B} \frac{n_b}{N}\,\big|\,\text{acc}(b) - \text{conf}(b)\,\big|$$
+
+**In words:** for each confidence bin, take how far its average predicted probability is from the fraction it actually got right, then average those gaps weighted by how many predictions fell in each bin.
+
+**Also written:** $\text{ECE} = \mathbb{E}_{\hat p}\big[\,|\,\Pr(y=1\mid \hat p) - \hat p\,|\,\big]$, the expected absolute deviation between predicted and true probability, estimated by binning ($n_b$ = count in bin $b$, $N$ = total).
+
+Two standard fixes refit a small mapping from raw scores to calibrated probabilities, learned on a held-out set:
+
+- **Platt scaling** fits a logistic (sigmoid) on the scores — good when the reliability curve is a smooth S, and works with little data.
+- **Isotonic regression** fits a free monotonic step function — more flexible, but needs more data or it overfits.
+
+**Worked example.** A boosted-tree fraud model has AUC 0.94 but tends to say "0.8" for cases that default only 55% of the time. You price loans off that probability, so the miscalibration costs real money. Fit isotonic regression on a validation fold: ranking (AUC) is unchanged, but the "0.8" bucket now defaults ~0.8 of the time and ECE drops from 0.12 to 0.02. The decisions built on those numbers are finally trustworthy.
+
+```python
+from sklearn.calibration import CalibratedClassifierCV
+# wrap a fitted (or unfitted) model; refit the score→probability map on CV folds
+calibrated = CalibratedClassifierCV(base_model, method="isotonic", cv=5)
+calibrated.fit(X_train, y_train)
+proba = calibrated.predict_proba(X_test)[:, 1]   # now well-calibrated
+```
+
+::: {.callout-tip}
+Tree ensembles and SVMs are often poorly calibrated out of the box; plain logistic regression is usually well calibrated already. If anything downstream consumes the *probability* (not just the rank or the hard label), check a reliability diagram and calibrate if needed. Calibrate on a *separate* fold from the one you trained on — calibrating on the training set just relearns the same over-confidence.
+:::
+
+## 12.9 — Hyperparameter tuning (grid, random, Bayesian optimization)
 
 **Parameters** are learned from the data (the weights of a model). **Hyperparameters** are the knobs *you* set before training — tree depth, learning rate, the regularization strength $\lambda$, the number of neighbors $k$. They aren't adjusted by the fitting procedure, so you find good values by training many models and scoring each one with cross-validation.
 
@@ -481,6 +663,25 @@ The picture below shows why random beats grid when one axis is irrelevant: the g
 
 **Worked example.** Tuning a gradient-boosted tree over learning rate and max depth. A 5×5 grid is 25 fits but probes only 5 learning rates. Spend the same 25 fits on random search and you probe 25 distinct learning rates — if depth barely matters, that's 5× the resolution on the knob that does. Bayesian optimization goes further: after 10 random trials it notices high scores cluster around learning rate ≈ 0.1, and spends its remaining budget there instead of wasting fits on values it already knows are bad.
 
+```python
+from sklearn.model_selection import RandomizedSearchCV
+from scipy.stats import loguniform, randint
+from sklearn.ensemble import GradientBoostingClassifier
+
+space = {
+    "learning_rate": loguniform(1e-3, 3e-1),  # sample log-scale, not linear
+    "max_depth":     randint(2, 8),
+    "n_estimators":  randint(100, 600),
+}
+search = RandomizedSearchCV(
+    GradientBoostingClassifier(), space,
+    n_iter=25, cv=5, scoring="f1", random_state=0, n_jobs=-1)
+search.fit(X, y)
+print(search.best_params_, search.best_score_)
+# For Bayesian optimization, swap in optuna or skopt's BayesSearchCV —
+# same idea, fewer trials to reach the same score.
+```
+
 | Method | Trials to good result | Parallel? | Best when |
 |---|---|---|---|
 | Grid | many (exponential) | yes | ≤2–3 hyperparameters, small grids |
@@ -504,7 +705,7 @@ Tune against a **validation** set (or inner CV fold), never the test set. If you
 <div class="ml-viz" data-viz="search" data-params="{}"></div>
 :::
 
-## 12.9 — Learning curves (reading them to decide more-data vs more-capacity)
+## 12.10 — Learning curves (reading them to decide more-data vs more-capacity)
 
 A **learning curve** plots model performance against the *amount of training data*: train on 10% of the data, then 20%, … up to 100%, and at each size record both training error and validation error. The *shape* of the two curves tells you whether your next move should be **get more data** or **build a more powerful model** — two expensive choices you really don't want to guess at.
 
@@ -536,11 +737,54 @@ Read the two curves and the gap between them:
 
 **Worked example.** You train an image classifier; at 5k examples train accuracy is 99% and validation 78% — a 21-point gap, and validation is still climbing as you add data. That's high variance: collecting more labeled images is worth the cost. Contrast a linear model where at 5k examples train is 74% and validation 73%, both flat since 2k — that's high bias; doubling the data is wasted money, you need a stronger model instead. The learning curve turns "should we spend on data or on modeling?" into a question you can *read off a chart*.
 
+```python
+from sklearn.model_selection import learning_curve
+import numpy as np
+sizes, train_sc, val_sc = learning_curve(
+    model, X, y, cv=5, scoring="accuracy",
+    train_sizes=np.linspace(0.1, 1.0, 8), n_jobs=-1)
+# plot train_sc.mean(1) and val_sc.mean(1) vs sizes; read the gap and the slope
+```
+
 ::: {.callout-tip}
 Before you pay for more labels, plot the learning curve. If the validation curve has gone flat right next to the training curve, more data is money burned — change the model instead. If there's still a gap and the curve is descending, more data is the cheapest win you have.
 :::
 
-## 12.10 — Data leakage warning
+## 12.11 — Comparing models honestly (statistical significance)
+
+Intuition first: model B beats model A by 0.3% accuracy on your test set. Is B *actually* better, or did it just get a luckier draw of test points? Cross-validation gives you a *distribution* of fold scores, not a single number — and a tiny mean difference that's swamped by fold-to-fold noise is not evidence of anything. Treating it as a real improvement is how teams ship "upgrades" that don't survive production.
+
+The disciplined move is to test whether the difference is bigger than the noise. Because both models see the *same* folds, the scores are **paired**, so you compare them fold-by-fold rather than as two independent samples.
+
+A **paired comparison** looks at the per-fold differences $d_i = \text{score}^B_i - \text{score}^A_i$ and asks whether their mean is meaningfully far from zero relative to their spread:
+
+$$t = \frac{\bar d}{s_d / \sqrt{k}}$$
+
+**In words:** take the average score difference across folds, and divide by the typical size of that difference's random wobble — a big ratio means the gap is real, a small one means it's within noise.
+
+**Also written:** $t = \dfrac{\bar d \sqrt{k}}{s_d}$, where $\bar d$ is the mean of the paired fold differences, $s_d$ their standard deviation, and $k$ the number of folds — a paired $t$-statistic on $\{d_i\}$.
+
+A small $p$-value (say $<0.05$) says the improvement is unlikely to be noise. The standard caveats apply: CV folds overlap in training data, so they aren't fully independent and the naive $t$-test is **optimistic** — practitioners often prefer a corrected variant (e.g. Nadeau–Bengio) or a non-parametric test, and on multiple-dataset benchmarks the Wilcoxon signed-rank test. Also separate **statistical** from **practical** significance: a real but 0.05% gain may not be worth a more complex, slower model.
+
+**Worked example.** Across 10 folds, model B beats A by a mean of 0.6 points with a fold-to-fold std of 0.4. Then $t = 0.6 / (0.4/\sqrt{10}) \approx 4.7$, a $p$-value around 0.001 — the gain is real, not luck. Change the std to 1.5 (noisy folds) and $t \approx 1.3$, $p \approx 0.22$ — the same 0.6-point "win" is now indistinguishable from chance, and you should keep the simpler model.
+
+```python
+import numpy as np
+from scipy import stats
+from sklearn.model_selection import cross_val_score, StratifiedKFold
+
+cv = StratifiedKFold(5, shuffle=True, random_state=0)   # SAME folds for both
+a = cross_val_score(model_a, X, y, cv=cv)
+b = cross_val_score(model_b, X, y, cv=cv)
+t, p = stats.ttest_rel(b, a)         # paired t-test on per-fold scores
+print(b.mean() - a.mean(), p)        # gain, and whether it's likely real
+```
+
+::: {.callout-warning}
+A single test-set number with no notion of variability invites self-deception. Report a mean *and* a spread (or confidence interval), compare models on the *same* folds with a **paired** test, and remember that the vanilla CV $t$-test understates uncertainty because folds share data. "B is 0.2% higher" is not a result; "B is higher with $p<0.05$ and the gain clears our deployment bar" is.
+:::
+
+## 12.12 — Data leakage warning
 
 **Data leakage** is when information that won't be available at prediction time sneaks into training — so the model looks brilliant in evaluation and then collapses in production. It is the single most common cause of "too good to be true" results, and it's insidious precisely because every offline metric looks *great* right up until deployment.
 
@@ -567,28 +811,43 @@ flowchart TB
 
 **Worked example.** You standardize features using the mean and standard deviation of the *whole* dataset, then split and report 95% CV accuracy. In production the model gets 81%. The leak: each test fold's scaling already encoded that fold's own distribution, which the model quietly exploited. Refit the scaler inside each fold and the CV number drops to a realistic 82% — uglier, but *true*. The honest 82% is worth infinitely more than the fake 95%, because it's the only one that survives contact with production.
 
+The defense is mechanical: bundle every transform with the estimator in a `Pipeline`, and hand the *pipeline* to cross-validation. Then each fold refits the scaler on its own training rows only — leakage is impossible by construction.
+
+```python
+from sklearn.pipeline import make_pipeline
+from sklearn.preprocessing import StandardScaler
+from sklearn.linear_model import LogisticRegression
+from sklearn.model_selection import cross_val_score
+
+pipe = make_pipeline(StandardScaler(), LogisticRegression())
+# scaler is refit INSIDE every fold — test rows never seen during fitting
+scores = cross_val_score(pipe, X, y, cv=5)   # honest estimate
+```
+
 ::: {.callout-warning}
 The tell-tale sign of leakage is a result that seems *too good*. When CV accuracy is suspiciously high, assume leakage until proven otherwise: audit every feature with "could this value exist before the label is known?", and make sure all preprocessing lives inside the CV loop. Preventing leakage is the whole reason the `Pipeline` object exists in scikit-learn (Chapter 31).
 :::
 
-## 12.11 — Key takeaways
+## 12.13 — Key takeaways
 
 - **Always measure on held-out data.** A train/test split gives one noisy estimate; **k-fold CV** averages several. Use **stratified** folds for classification and **time-series** (forward-only) folds for ordered data.
 - Every model's error splits into **bias** (too simple), **variance** (too sensitive), and irreducible noise; tuning is the search for the bottom of the U-shaped total-error curve.
 - Diagnose by the **train–test gap**: both-bad = underfit (add capacity); big-gap = overfit (regularize / add data).
 - **Regularization** trades training fit for generalization — **L1** selects features (drives weights to zero), **L2 / weight decay** shrinks them smoothly, **early stopping** halts at the validation minimum, and **dropout** ensembles sub-networks.
 - On imbalanced data **accuracy lies**. Read the **confusion matrix**; favor **precision** when false alarms hurt, **recall** when misses hurt, **F1** when both do; use **PR curves / average precision** when positives are rare, not just ROC/AUC.
+- If a decision consumes the *probability* itself, check **calibration** (reliability diagram, ECE) and fix it with Platt or isotonic scaling — good ranking does not imply honest probabilities.
 - Tune hyperparameters with **CV** — **random search** usually beats grid; **Bayesian optimization** is most sample-efficient. Never tune on the test set; use **nested CV** when you need an unbiased estimate too.
 - **Learning curves** tell you whether to buy more data (gap still closing) or a bigger model (curves flat and converged).
-- **Data leakage** produces results that are too good to be true; put all preprocessing inside the CV loop and audit every feature for future information.
+- Compare models **honestly**: report a spread, not a lone number, and use a **paired** significance test on the same folds before declaring a winner.
+- **Data leakage** produces results that are too good to be true; put all preprocessing inside the CV loop (use a `Pipeline`) and audit every feature for future information.
 
-## 12.12 — See also
+## 12.14 — See also
 
 - **Optimization** — the gradient methods and search landscapes behind hyperparameter tuning and early stopping.
-- **Probability & Statistics** — sampling variance, distributions, and the noise term in the bias–variance decomposition.
+- **Probability & Statistics** — sampling variance, distributions, significance testing, and the noise term in the bias–variance decomposition.
 - **Regression** — L1/L2 (Lasso/Ridge) penalties in their native linear-model home.
 - **Ensemble Methods** — why averaging models (and dropout's implicit ensemble) reduces variance.
-- **Neural Networks (Core)** — weight decay, dropout, and early stopping as applied in deep learning.
+- **Neural Networks (Core)** — weight decay, dropout, early stopping, and the double-descent curve as applied in deep learning.
 - **Anomaly & Fraud Detection** — evaluation under extreme class imbalance, where PR curves and threshold choice are decisive.
 - **MLOps & Deployment** / **Tools & Frameworks** — pipelines that prevent leakage and automate cross-validated tuning in production.
 

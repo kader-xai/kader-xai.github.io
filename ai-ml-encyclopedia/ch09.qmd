@@ -294,7 +294,7 @@ Work in **log space** and add **Laplace smoothing** ($+1$ to every count). Witho
 
 ## 9.3 — Logistic Regression as a Classifier
 
-It is impossible to talk about classification without the model that quietly underpins half the chapter: **logistic regression**. Despite the name it is a *classifier*, and it is the binary cousin of the softmax you will meet in §9.8. (The full derivation lives in the Regression chapter; here we use it purely as a workhorse linear classifier and probability source.)
+It is impossible to talk about classification without the model that quietly underpins half the chapter: **logistic regression**. Despite the name it is a *classifier*, and it is the binary cousin of the softmax you will meet in §9.9. (The full derivation lives in the Regression chapter; here we use it purely as a workhorse linear classifier and probability source.)
 
 > **Intuition:** take the perceptron's straight-line score $\mathbf{w}\cdot\mathbf{x}+b$, but instead of slamming it to a hard 0/1 with a step function, *squash* it through an S-curve so it becomes a smooth probability between 0 and 1. Now you don't just get a label — you get a confidence.
 
@@ -582,6 +582,8 @@ Discriminant analysis is a **generative** classifier in the same family as Naive
 
 > **Intuition:** picture each class as a fuzzy blob of probability. A new point gets assigned to whichever blob it falls deepest inside — accounting for how big and how common that blob is. Naive Bayes draws those blobs as axis-aligned; discriminant analysis lets them tilt and stretch.
 
+A quick word on **what the covariance buys you.** The covariance matrix $\Sigma$ encodes not just how wide each feature spreads, but how features *co-vary* — whether tall points also tend to be heavy, say. Naive Bayes forces $\Sigma$ to be diagonal (off-diagonal zeros), so its blobs are stuck axis-aligned. Discriminant analysis keeps the full matrix, so a blob can tilt along a diagonal and stretch into an ellipse. That extra freedom is exactly why it can place boundaries Naive Bayes cannot.
+
 **Linear Discriminant Analysis (LDA)** makes one simplifying assumption: all classes **share the same covariance matrix** $\Sigma$ (same shape, just different centers). The math then cancels the quadratic terms, leaving a **linear** decision boundary — a straight line or plane. With *equal priors* the boundary sits exactly halfway (in Mahalanobis distance) between the two class means; when the priors differ, the prior term shifts the boundary *toward the rarer class*, so it is no longer the midpoint. The shape stays linear either way.
 
 The score LDA assigns to each class (the **discriminant function**) is:
@@ -696,6 +698,13 @@ You diagnose calibration with a **reliability diagram** — bin predictions by c
   <text x="60" y="125" fill="#ec4899" font-size="9">overconfident</text>
 </svg>
 
+We can also put a single number on calibration quality. The **Expected Calibration Error (ECE)** is the gap between confidence and accuracy, averaged over the bins of the reliability diagram:
+
+$$\text{ECE} = \sum_{b=1}^{B}\frac{n_b}{N}\,\big|\,\text{acc}(b) - \text{conf}(b)\,\big|$$
+
+**In words:** for each confidence bin, measure how far its average predicted probability sits from its actual hit rate, then take a size-weighted average of those gaps — zero means perfectly calibrated.
+**Also written:** $\text{ECE}=\mathbb{E}_{\hat p}\big[\,|\,\Pr(y=1\mid \hat p) - \hat p\,|\,\big]$ — the expected distance between the diagram's curve and the diagonal.
+
 The two standard fixes wrap a *post-hoc* calibrator around any trained model, fit on a held-out set:
 
 - **Platt scaling** — fit a 1-D logistic regression on the model's scores ($p=\sigma(a\cdot s + b)$). Cheap, assumes a sigmoid-shaped distortion; great for SVMs.
@@ -714,7 +723,71 @@ print(cal.predict_proba(X_test)[:3])   # now trustworthy as probabilities
 Never calibrate on the training data — the model already fits it, so the curve will look perfect and mean nothing. Use a held-out split (which `CalibratedClassifierCV` does internally via `cv`). And remember: calibration changes the *probabilities*, not the *ranking*, so it leaves AUC unchanged while fixing log loss and threshold-based decisions.
 :::
 
-## 9.11 — Choosing a Classifier
+## 9.11 — Imbalanced Classes & the Decision Threshold
+
+Most real classification problems are lopsided: fraud is well under 1% of transactions, a rare disease afflicts a handful in a thousand, click-through is a sliver of impressions. On such data the default "predict the majority class" gets 99%+ accuracy while catching *zero* of the cases you actually care about. This is the single most common way a textbook-correct classifier fails in production, so it deserves its own treatment.
+
+> **Intuition:** if 999 of every 1000 emails are legitimate, a lazy model that screams "legit!" at everything is right 99.9% of the time and utterly useless. Accuracy rewards the lazy answer; the rare class is where all the value (and all the difficulty) lives.
+
+Two levers fix this, and they operate at different stages.
+
+**1. Move the decision threshold.** A probabilistic classifier outputs $\hat p = P(y=1\mid\mathbf{x})$ and labels positive when $\hat p > t$. The default $t=0.5$ is just a convention — and a bad one when the classes or the error costs are skewed. Lowering $t$ catches more positives (higher **recall**) at the cost of more false alarms (lower **precision**); raising it does the reverse. You pick $t$ to optimize the metric the *business* cares about, not to sit at 0.5.
+
+The principled choice comes from **expected cost**. If a missed positive (false negative) costs $C_{FN}$ and a false alarm (false positive) costs $C_{FP}$, the cost-minimizing threshold is:
+
+$$t^\star = \frac{C_{FP}}{C_{FP} + C_{FN}}$$
+
+**In words:** set the cutoff by how the two mistakes trade off — when missing a positive hurts far more than a false alarm, $C_{FN}$ is large, the denominator grows, and the threshold drops well below 0.5 so you flag aggressively.
+**Also written:** flag positive when $\hat p \cdot C_{FN} > (1-\hat p)\cdot C_{FP}$, i.e. when the expected cost of *not* flagging exceeds the expected cost of flagging.
+
+**Worked example — fraud.** A missed fraud costs \$500 ($C_{FN}$); a false alarm costs \$5 of review time ($C_{FP}$). Then $t^\star = 5/(5+500) = 0.0099 \approx 0.01$. So you should flag a transaction as fraud once its fraud probability clears just **1%**, not 50% — the asymmetry of cost pushes the threshold 50× lower than the default.
+
+<svg viewBox="0 0 380 150" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif" font-size="10">
+  <line x1="30" y1="115" x2="350" y2="115" stroke="currentColor" opacity="0.5"/>
+  <text x="190" y="140" text-anchor="middle">predicted P(fraud) →</text>
+  <text x="20" y="25" fill="currentColor">0</text><text x="345" y="25">1</text>
+  <!-- threshold markers -->
+  <line x1="33" y1="35" x2="33" y2="115" stroke="#22c55e" stroke-width="2"/>
+  <text x="33" y="30" text-anchor="middle" fill="#22c55e">t*=0.01</text>
+  <line x1="190" y1="45" x2="190" y2="115" stroke="#f59e0b" stroke-width="2" stroke-dasharray="3"/>
+  <text x="190" y="40" text-anchor="middle" fill="#f59e0b">default 0.5</text>
+  <rect x="33" y="95" width="317" height="20" fill="rgba(236,72,153,0.18)"/>
+  <text x="195" y="109" text-anchor="middle">flag as fraud (cost-aware net is far wider)</text>
+</svg>
+
+**2. Rebalance or reweight the training data.** Instead of (or alongside) moving the threshold, you can make the rare class louder during fitting:
+
+| technique | what it does | watch out for |
+|-----------|--------------|---------------|
+| **class weights** | penalize errors on the rare class more in the loss | usually the cleanest fix — no data copied |
+| **random oversampling** | duplicate minority examples | can overfit the duplicates |
+| **random undersampling** | drop majority examples | throws away data |
+| **SMOTE** | synthesize new minority points between neighbors | can blur the boundary if classes overlap |
+
+The laziest and often best of these is **class weighting** — most scikit-learn classifiers take `class_weight="balanced"`, which scales each class's loss inversely to its frequency, no resampling required:
+
+```python
+from sklearn.linear_model import LogisticRegression
+from sklearn.metrics import precision_recall_curve
+import numpy as np
+
+# 'balanced' weights the rare class up automatically
+clf = LogisticRegression(class_weight="balanced").fit(X_train, y_train)
+
+# tune the threshold on a held-out set instead of accepting 0.5
+p = clf.predict_proba(X_val)[:, 1]
+prec, rec, thr = precision_recall_curve(y_val, p)
+f1 = 2 * prec * rec / (prec + rec + 1e-9)
+best_t = thr[np.argmax(f1[:-1])]        # threshold that maximizes F1
+print("chosen threshold:", best_t)
+y_pred = (clf.predict_proba(X_test)[:, 1] > best_t).astype(int)
+```
+
+::: {.callout-warning}
+Resample **inside** cross-validation, never before splitting — oversampling first leaks copies of the same point into both train and validation folds, inflating your score. Use `imblearn`'s `Pipeline` so SMOTE/undersampling runs per-fold. And judge imbalanced models with **precision-recall** curves, not ROC: on extreme imbalance, ROC-AUC looks deceptively rosy because the huge true-negative count dominates.
+:::
+
+## 9.12 — Choosing a Classifier
 
 With seven methods on the table, the practical question is *which one first?* There is no universal winner (the "no free lunch" theorem makes that formal), but there are strong defaults. The cheat-sheet below maps common situations to a sensible starting point — start simple, and only climb in complexity if the metric demands it.
 
@@ -726,6 +799,7 @@ With seven methods on the table, the practical question is *which one first?* Th
 | need human-readable rules | **decision tree** | reads off as if-then logic |
 | many features ≫ samples (genomics) | **linear SVM / logistic** | margin needs few SVs; regularizes well |
 | tiny dataset, Gaussian-ish classes | **LDA** | few parameters, stable |
+| heavily imbalanced (fraud, rare disease) | **logistic / tree + `class_weight`** | reweight, then tune the threshold (§9.11) |
 | lots of data, accuracy over everything | **ensemble** (see Ensemble ch.) | trees + boosting usually win |
 
 ```{mermaid}
@@ -745,7 +819,7 @@ graph TD
 Whatever you pick, judge it with the *right* metric, not raw accuracy — on a 99%-negative fraud set, "always negative" scores 99%. Use precision/recall, F1, ROC-AUC, or log loss as the problem demands. The Model Evaluation chapter develops these.
 :::
 
-## 9.12 — Key takeaways
+## 9.13 — Key takeaways
 
 - **k-NN** is a lazy learner — no training, just memorize and vote among nearest neighbors; sensitive to feature scale, the choice of $k$, and even to distance-tie-breaks at small $k$.
 - **Naive Bayes** uses Bayes' rule with a (false but useful) conditional-independence assumption; fast, strong for text/spam; smooth and work in log space.
@@ -756,14 +830,15 @@ Whatever you pick, judge it with the *right* metric, not raw accuracy — on a 9
 - **Perceptron** is the original neuron with a mistake-driven update (weights *and* bias move only on errors); converges if data is linearly separable, but cannot solve XOR.
 - **LDA/QDA** are generative Gaussian classifiers — LDA (shared covariance) is linear, QDA (per-class covariance) is curved; unequal priors shift the LDA boundary off the midpoint.
 - **Multi-class** via OvR/OvO/softmax; **multi-label** via independent sigmoids or label powerset — never softmax for multi-label.
-- **Calibration** is confidence honesty, separate from accuracy; SVMs and NB are miscalibrated — fix with Platt scaling or isotonic regression on held-out data.
+- **Calibration** is confidence honesty, separate from accuracy; SVMs and NB are miscalibrated — fix with Platt scaling or isotonic regression on held-out data, and measure the gap with ECE.
+- **Imbalanced classes** break accuracy: reweight (`class_weight="balanced"`) or resample inside CV, then move the decision threshold by the cost ratio $t^\star = C_{FP}/(C_{FP}+C_{FN})$ — judge with precision-recall, not ROC.
 - **Choosing** a classifier: start with logistic regression as a baseline, climb only when the metric demands it — and judge with the right metric, not raw accuracy.
 
-## 9.13 — See also
+## 9.14 — See also
 
 - **Regression** — logistic regression and the linear models that underpin softmax classification.
 - **Ensemble Methods** — Random Forests and gradient boosting that fix the high variance of single decision trees.
-- **Model Evaluation & Tuning** — cross-validation for choosing $k$, $C$, $\gamma$, and tree depth; precision/recall, ROC-AUC, log loss, and reliability diagrams.
+- **Model Evaluation & Tuning** — cross-validation for choosing $k$, $C$, $\gamma$, and tree depth; precision/recall, ROC-AUC, log loss, reliability diagrams, and threshold selection on imbalanced data.
 - **Neural Networks (Core)** — how stacking perceptrons into hidden layers escapes the XOR limitation.
 - **Dimensionality Reduction** — LDA as a projection method, and PCA for preprocessing distance-based classifiers.
 - **Probability & Statistics** — Bayes' rule, priors, and the Gaussian distributions behind Naive Bayes and discriminant analysis.

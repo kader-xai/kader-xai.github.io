@@ -220,6 +220,33 @@ flowchart LR
 Default to **batch** until a real-time requirement forces your hand. A nightly job you can rerun is dramatically less operational burden than a 24/7 low-latency service.
 :::
 
+### Latency that the user actually feels: tail latency and SLOs
+
+**The intuition:** averages lie. If 99 requests take 20 ms and one takes 5 seconds, the *average* is a comfortable 70 ms — but one user in a hundred just waited five seconds, and at a billion requests that is ten million furious users. What you serve is not the average; it is the **tail**.
+
+This is why production teams quote latency as **percentiles**, written p50 / p95 / p99: the p99 is the value that 99% of requests come in *under*. A **Service Level Objective (SLO)** is a promise about that number — "p99 latency under 150 ms" — and the serving stack is tuned to hold it, not the mean.
+
+| Symbol | Reads as | Why it matters |
+|---|---|---|
+| p50 (median) | half of requests are faster | "typical" experience |
+| p95 | 95% are faster | the common slow case |
+| p99 | 99% are faster | the SLO you're usually held to |
+| p99.9 | the worst 1-in-1000 | what a power user hits hourly |
+
+**In words:** the p99 is the slowest response among the fastest 99% of requests — the worst case you promise *not* to exceed except one time in a hundred.
+
+A subtle, costly fact: **batching trades median for tail**. Coalescing requests (§29.9) raises throughput but a request that arrives just as a batch closes must wait for the *next* one, padding the tail. The fix is a bounded batch *window* (e.g. "wait at most 5 ms, then fire") so the tail penalty is capped by design.
+
+```python
+# p99 from a stream of measured latencies — the number your SLO is written against
+import numpy as np
+latencies_ms = np.array([12, 14, 13, 15, 11, 250, 14, 13, 16, 12])  # one slow outlier
+print("p50", np.percentile(latencies_ms, 50))   # 13.5 ms — looks great
+print("p99", np.percentile(latencies_ms, 99))   # ~228 ms — the real story
+# assert the SLO in a load test, not after a 3am page:
+assert np.percentile(latencies_ms, 95) < 100, "p95 SLO breached"
+```
+
 ## 29.2 — ML pipelines & workflows
 
 Think of a recipe where some steps must happen before others — you can't ice the cake before you bake it, but you *can* whip the frosting while the cake is in the oven. A pipeline is that recipe written down so a machine can run it, and run independent steps at the same time.
@@ -284,6 +311,30 @@ def training_flow(raw):
 
 In **Airflow**, the same graph is expressed with operators and explicit `>>` edges (`preprocess >> train >> evaluate`); in **Kubeflow**, each step is a containerized component wired into a pipeline. The flavor differs, the DAG is the same.
 
+### Validate the data *before* you train: the gate that catches silent corruption
+
+**The intuition:** a kitchen inspects ingredients before cooking, not after plating. A pipeline that trains on whatever arrives will happily learn from a column that silently turned to nulls, a feature whose unit changed, or a category that vanished — and you only find out weeks later when predictions look strange. A **data validation** step is a cheap gate that fails the run loudly *before* a single GPU-hour is spent.
+
+You assert *expectations* about each batch — schema, ranges, null rates, allowed categories — and halt the DAG when they break. **Great Expectations**, **Pandera**, and TFX's `TFDV` are the common tools; the idea is the same as a unit test, applied to data instead of code:
+
+```python
+# Pandera — a schema the data must satisfy or the pipeline stops
+import pandera as pa
+from pandera import Column, Check
+
+schema = pa.DataFrameSchema({
+    "age":    Column(int,   Check.in_range(0, 120)),      # no negative / 200-yr-olds
+    "income": Column(float, Check.greater_than_or_equal_to(0)),
+    "region": Column(str,   Check.isin(["NA", "EU", "APAC"])),  # closed vocabulary
+})
+
+def validate(df):
+    schema.validate(df, lazy=True)   # raises on ANY violation -> fails the DAG node
+    return df
+```
+
+This is the inexpensive insurance that turns "model mysteriously degraded" into "the run failed at 2 a.m. with a clear schema error," long before the bad data reaches training.
+
 ## 29.3 — Containers & orchestration
 
 "It works on my machine" is the disease; **containers** are the cure. A **Docker** container packages your code together with its exact Python version, libraries, system packages, and the model artifact into one immutable image. Anyone — your laptop, CI, the production cluster — runs the *same bytes*, so the environment stops being a variable.
@@ -319,6 +370,31 @@ The reconciliation loop is worth making concrete. You declare "3 replicas". A no
 
 The mental model: **Docker** makes one box reproducible; **Kubernetes** keeps a fleet of those boxes alive and balanced.
 
+A K8s `Deployment` is declared as YAML — the *desired state* the control loop reconciles toward. The minimal serving spec is short enough to read end to end:
+
+```yaml
+# deployment.yaml — "always keep 3 of this image alive and healthy"
+apiVersion: apps/v1
+kind: Deployment
+metadata: { name: fraud-model }
+spec:
+  replicas: 3                      # desired state; K8s reconciles toward it
+  selector: { matchLabels: { app: fraud-model } }
+  template:
+    metadata: { labels: { app: fraud-model } }
+    spec:
+      containers:
+        - name: serve
+          image: registry/fraud-model:v2   # the exact bytes you tested
+          resources:
+            requests: { cpu: "500m", memory: "1Gi" }   # scheduler sizing
+            limits:   { cpu: "1",    memory: "2Gi" }
+          readinessProbe:                    # don't route traffic until model is loaded
+            httpGet: { path: /healthz, port: 8080 }
+```
+
+The `readinessProbe` is the K8s-level twin of "load the model once at startup" from §29.1: a pod is kept *out* of the load balancer until its model is loaded and `/healthz` returns OK, so no user ever hits a half-warmed replica.
+
 ::: {.callout-tip}
 You rarely need Kubernetes on day one. A single container behind a managed service (Cloud Run, ECS, a serverless container) carries you a long way — reach for K8s when you genuinely need fleet-scale orchestration.
 :::
@@ -328,6 +404,18 @@ You rarely need Kubernetes on day one. A single container behind a managed servi
 Software, once correct, stays correct; an ML model silently rots because the *world it models* drifts away from its training data. So MLOps wraps the model in a feedback loop of versioning, monitoring, and automated re-shipping.
 
 **Experiment tracking** records, for every training run, the code version, data version, hyperparameters, and resulting metrics (tools: MLflow, Weights & Biases). Without it you cannot answer "which run produced the model in prod?" — the single most-asked question during an incident.
+
+A few lines of **MLflow** is all it takes to make a run reproducible and registrable — the same calls that later let an incident responder pull the exact artifact:
+
+```python
+import mlflow
+with mlflow.start_run():
+    mlflow.log_params({"max_depth": 6, "lr": 0.1})    # what you tried
+    mlflow.log_metric("val_auc", 0.91)                # what you got
+    mlflow.sklearn.log_model(model, "model",
+                             registered_model_name="churn")  # -> registry, staged
+# later: mlflow.sklearn.load_model("models:/churn/Production")
+```
 
 A **model registry** is the versioned store of trained model artifacts with stage tags (`Staging`, `Production`, `Archived`); a **data registry / feature store** does the same for datasets and features. Together they make a deployment *reproducible*: prod model `v7` ⇄ training run `#142` ⇄ dataset `d-2026-06`. When a prediction looks wrong six weeks later, this chain is what lets you pull the *exact* model, code, and data that produced it instead of guessing.
 
@@ -350,7 +438,7 @@ $$\text{PSI} = \sum_i (a_i - e_i)\,\ln\!\frac{a_i}{e_i}$$
 
 **Also written:** $\text{PSI} = \sum_i a_i \ln\frac{a_i}{e_i} + \sum_i e_i \ln\frac{e_i}{a_i} = D_{\mathrm{KL}}(a\Vert e) + D_{\mathrm{KL}}(e\Vert a)$ — PSI is exactly the *symmetric* (Jeffreys) KL divergence between the live and training histograms.
 
-with $e_i$ the expected (training) fraction in bin $i$ and $a_i$ the actual (live) fraction. Rule of thumb: $<0.1$ stable, $0.1$–$0.25$ moderate drift, $>0.25$ significant — retrain.
+with $e_i$ the expected (training) fraction in bin $i$ and $a_i$ the actual (live) fraction. Rule of thumb: $<0.1$ stable, $0.1$–$0.25$ moderate, $>0.25$ significant — retrain.
 
 Do one bin by hand to demystify the formula. Say bin 3 held 20% of training data ($e_3 = 0.20$) but now holds 35% of live data ($a_3 = 0.35$). That bin contributes $(0.35 - 0.20)\ln(0.35/0.20) = 0.15 \times \ln(1.75) = 0.15 \times 0.56 = 0.084$. One shifted bin already adds 0.084; a few more like it push the sum past the 0.25 retrain line. The term is large when a bin *both* changed a lot in absolute share *and* changed a lot in ratio.
 
@@ -378,6 +466,19 @@ flowchart LR
   Ev -->|yes| Promote[promote to Production]
   Ev -->|no| Keep[keep incumbent, alert]
 ```
+
+The three CI/CD pipelines of MLOps are worth separating, because they answer to different triggers — a useful mental map of the whole chapter's automation:
+
+```{mermaid}
+flowchart LR
+  CodeChg[code change] --> CI[CI: test + build image] --> CD[CD: deploy service]
+  DataChg[new data / drift] --> CT[CT: retrain + validate]
+  CT --> Reg[(registry)]
+  CI --> Reg
+  Reg --> CD
+```
+
+**In words:** classic software ships *code* through CI/CD; MLOps adds a third pipeline, *continuous training*, that ships a new *model* when the data changes — all three converging on the registry that the serving layer reads from.
 
 When it is time to release a new version, the **deployment strategy** controls risk:
 
@@ -711,7 +812,75 @@ Its sibling is the **model store** (or model registry): the versioned catalog of
 Feature store and model store answer the two halves of reproducibility. The feature store guarantees *the same inputs* offline and online; the model store guarantees *the same artifact* you evaluated is the one you serve. Skew enters wherever one of those guarantees is missing — which is why shadow mode, whose entire job is comparing offline-expected against online-actual on identical inputs, is the cheapest insurance you can buy before a real launch.
 :::
 
-## 29.9 — Cost, efficiency & the FinOps of serving
+## 29.9 — Serving generative models: LLMOps
+
+**The intuition:** everything so far assumed a model takes a feature vector and returns one number, fast and cheap. A large language model breaks all three assumptions at once — it takes *variable-length text*, returns *one token at a time* in a loop, and a single answer can cost a hundred forward passes instead of one. Serving it well is a different sport, and the practice has its own name: **LLMOps**.
+
+Why the classic serving playbook strains:
+
+| Classic ML serving | Generative / LLM serving |
+|---|---|
+| one forward pass per request | one pass *per output token* (autoregressive loop) |
+| fixed-size input/output | variable prompt length, variable answer length |
+| millisecond latency, kilobyte model | seconds-long generations, multi-GB weights |
+| metric = accuracy/AUC | metric = quality, *plus* tokens/sec and \$/1k tokens |
+| cache the prediction | cache the *KV state* and *the prompt prefix* |
+
+**Autoregressive generation** is the root of the difference: the model produces token 1, appends it to the input, produces token 2 from the longer sequence, and so on. The cost of a 500-token answer is roughly 500 sequential forward passes. The single most important optimization is the **KV cache** — the attention keys and values computed for tokens already generated are stored and reused, so each new token is *one* cheap step instead of re-reading the whole sequence. The serving cost then splits cleanly into two phases:
+
+```{mermaid}
+flowchart LR
+  P[Prompt] --> Pre[Prefill:<br/>process whole prompt once<br/>compute-bound, fills KV cache]
+  Pre --> Dec[Decode:<br/>1 token per step, reuse KV cache<br/>memory-bandwidth-bound]
+  Dec -->|loop until EOS| Dec
+  Dec --> Out[Completion]
+```
+
+**In words:** **prefill** reads the entire prompt in one compute-heavy pass and populates the KV cache; **decode** then emits tokens one at a time, each step cheap but bandwidth-bound — which is why long answers, not long prompts, dominate latency.
+
+Three latency numbers matter, not one:
+
+| Metric | Reads as | Driven by |
+|---|---|---|
+| **TTFT** (time to first token) | how long until the answer starts | prefill (prompt length) |
+| **TPOT / ITL** (time per output token) | how fast it streams after that | decode (model size, batch) |
+| **end-to-end** | TTFT + TPOT × output length | both |
+
+A chat UI feels fast when **TTFT** is low and tokens *stream*, even if the full answer takes seconds — which is why generations are streamed to the client token-by-token rather than returned whole.
+
+The throughput trick that makes LLM serving economical is **continuous (in-flight) batching**: instead of waiting for a fixed batch of requests to all finish (they finish at wildly different lengths), the server swaps a *completed* sequence out and a *waiting* one in at every decode step, keeping the GPU saturated. Combined with **PagedAttention** (managing the KV cache in non-contiguous "pages" like OS virtual memory, eliminating fragmentation), this is what serving engines like **vLLM**, **TGI**, and **TensorRT-LLM** deliver — often an order-of-magnitude more throughput than naive batching. In practice you point a server at a model and get an OpenAI-compatible endpoint:
+
+```python
+# vLLM — continuous batching + PagedAttention behind one OpenAI-compatible server
+from vllm import LLM, SamplingParams
+
+llm = LLM(model="meta-llama/Llama-3.1-8B-Instruct")   # weights loaded ONCE
+params = SamplingParams(temperature=0.7, max_tokens=256)
+
+out = llm.generate(["Explain KV caching in one sentence."], params)
+print(out[0].outputs[0].text)
+# serve: `vllm serve meta-llama/Llama-3.1-8B-Instruct`  -> POST /v1/chat/completions
+```
+
+Two cost levers are unique to this regime. **Prompt caching** reuses the prefill of a shared prefix — a long system prompt sent on every request is processed once and its KV state reused, cutting TTFT and cost for every subsequent call. And because most LLM apps call a hosted API rather than self-host, the **cost unit is tokens, not requests**: you are billed per input and output token, and output tokens usually cost several times more than input tokens (they each require a full forward pass).
+
+```python
+# Token cost is the LLM FinOps unit — estimate before you ship a prompt
+def cost(in_tok, out_tok, in_price=3.0, out_price=15.0):  # $ per 1M tokens
+    return (in_tok * in_price + out_tok * out_price) / 1e6
+
+# a verbose 800-token system prompt on 1M calls/day, 200-token answers:
+print(round(cost(800 + 50, 200) * 1_000_000, 2))  # ~$5550/day
+# trim the system prompt to 200 tokens -> the input line drops ~3x. Prompt length IS spend.
+```
+
+**Evaluating generative output** is the other hard part: there is no single ground-truth label to compute accuracy against. The toolkit is layered — automatic reference metrics where you *do* have a gold answer, an **LLM-as-judge** (a strong model scores outputs against a rubric) for open-ended quality at scale, and human review on a sampled slice for the cases that matter. Guardrails sit on the serving path too: output filtering for toxicity and PII, and grounding checks for **hallucination** (see *Large Language Models* and *Ethics & Responsible AI*).
+
+::: {.callout-warning}
+Do not treat a hosted LLM endpoint as a stable artifact. The provider can update the model under the same name, silently shifting behavior — the generative version of concept drift. **Pin model versions**, keep a regression suite of prompts with expected-quality bars, and re-run it on every provider update exactly as you would gate a retrained model.
+:::
+
+## 29.10 — Cost, efficiency & the FinOps of serving
 
 A model that is accurate but ruinously expensive to serve never ships twice. Once a model leaves the notebook, its dominant cost is usually not training but **inference** — training happens once (or weekly); inference runs on *every* request, forever. A fraud model scoring a billion card swipes a month at even a tenth of a cent each is a million-dollar line item. **MLOps owns this bill**, and the discipline of watching and trimming it is sometimes called **ML FinOps**.
 
@@ -754,7 +923,7 @@ A worked back-of-envelope makes the batching lever vivid. Suppose one GPU forwar
 Track **cost per 1,000 predictions** as a first-class metric next to latency and accuracy. A 2% accuracy gain that triples serving cost is often a *worse* model in production terms. The cheapest inference is the one you never run — cache, batch, and autoscale-to-zero before you reach for bigger hardware.
 :::
 
-## 29.10 — Security, governance & responsible deployment
+## 29.11 — Security, governance & responsible deployment
 
 A deployed model is software exposed to the internet, *plus* a data asset, *plus* a decision-maker that can harm people. Each of those three adds an attack surface and a governance duty that classic software ops does not have. Skipping this section is how an ML system that "works" still ends up on the front page.
 
@@ -789,30 +958,42 @@ A tiny worked illustration of why subgroup evaluation is non-negotiable: a model
 | B | 20% | 76% | the real story |
 | **Overall** | 100% | **92%** | looks fine |
 
+The "overall" number is just the traffic-weighted average of the groups — and that is exactly how a minority's failure hides:
+
+$$\text{acc}_{\text{overall}} = \sum_g w_g\,\text{acc}_g$$
+
+**In words:** overall accuracy is each group's accuracy weighted by its share of traffic — so a small group with poor accuracy barely moves the headline number, which is why you must read the groups, not the average.
+
+**Also written:** $\text{acc}_{\text{overall}} = 0.80 \times 0.96 + 0.20 \times 0.76 = 0.768 + 0.152 = 0.92$ — the 76% group is *in* the 92%, just drowned out by its small weight.
+
 ::: {.callout-warning}
 Treat the model registry as an **audit log, not just a convenience store**. The same lineage chain that helps you debug a bad prediction is what you hand a regulator after one. Build it before you need it — reconstructing "which model decided this" after the fact is usually impossible.
 :::
 
-## 29.11 — Key takeaways
+## 29.12 — Key takeaways
 
 - **Deployment splits into batch vs online**; default to batch, pay for online only when real-time freshness is required. Front multiple models with a **gateway**.
-- **Pipelines are DAGs** run by an orchestrator (Airflow/Kubeflow/Prefect); **idempotent, overwrite-by-partition** steps are what make retries safe.
-- **Docker** makes one environment reproducible; **Kubernetes** keeps a fleet of containers alive via a desired-vs-observed reconciliation loop.
-- A model **rots silently** — wrap it in experiment tracking, a model/data registry, and **drift detection** (PSI), with **continuous training** to retrain when drift crosses a threshold.
-- Ship new versions via **shadow → canary → blue-green** to bound blast radius and keep rollback instant.
+- **Latency is a tail, not a mean** — hold an SLO on **p99**, and remember batching trades median for tail unless you bound the batch window.
+- **Pipelines are DAGs** run by an orchestrator (Airflow/Kubeflow/Prefect); **idempotent, overwrite-by-partition** steps are what make retries safe, and a **data-validation gate** catches corruption before training spends a GPU-hour.
+- **Docker** makes one environment reproducible; **Kubernetes** keeps a fleet of containers alive via a desired-vs-observed reconciliation loop (declared as YAML, with readiness probes gating traffic).
+- A model **rots silently** — wrap it in experiment tracking, a model/data registry, and **drift detection** (PSI), with **continuous training** as a third CI/CD pipeline that ships a new model when the *data* changes.
+- **Distribution shift comes in three kinds** — covariate ($P(X)$), label ($P(Y)$), concept ($P(Y\mid X)$); watch unlabeled inputs for early warning, treat the delayed accuracy drop as confirmation.
+- Ship new versions via **shadow → canary → blue-green** (interleaving for rankers) to bound blast radius and keep rollback instant; the evergreen form is **champion/challenger**, and the silent killer is **training–serving skew**, fixed by a **feature store**.
 - **Data parallelism** (replicate model, shard batch, all-reduce) scales most training; **model parallelism** is for models too big to fit one device; gradient *communication* is the usual scaling limit.
 - **Spark** (in-memory) supplanted **Hadoop MapReduce** (disk-bound) as the big-data processing engine that builds your training tables; mind **skewed keys**.
-- **Inference dominates lifetime cost**; close the reserved-vs-used gap with right-sizing, **dynamic batching**, autoscale-to-zero, and quantization, and track **cost per 1,000 predictions** as a first-class metric.
+- **Generative models need LLMOps** — autoregressive decoding, the **KV cache**, **continuous batching + PagedAttention** (vLLM/TGI), prompt caching, token-based cost, TTFT/TPOT latency, and LLM-as-judge evaluation; pin provider model versions.
+- **Inference dominates lifetime cost**; close the reserved-vs-used gap with right-sizing, **dynamic batching**, autoscale-to-zero, and quantization, and track **cost per 1,000 predictions** (or per-token) as a first-class metric.
 - A deployed model adds ML-specific attack surfaces (**adversarial examples, poisoning, extraction, prompt injection**) and governance duties — ship **model cards with subgroup metrics**, keep the registry as an **audit log**, and gate promotion on fairness checks.
 
-## 29.12 — See also
+## 29.13 — See also
 
 - **AI Infrastructure & Efficient Inference** — serving optimizations, quantization, and inference hardware that this chapter's endpoints run on.
 - **Tools & Frameworks** — the broader library/framework landscape these pipelines are built from.
 - **Model Evaluation & Tuning** — the holdout metrics that gate continuous-training promotions.
 - **Data Preprocessing** — the transformations the pipeline and Spark layer actually perform.
-- **Large Language Models** — distributed training at the extreme scale where model parallelism becomes mandatory.
+- **Large Language Models** — autoregressive decoding, KV caching, and the model-quality side of the LLMOps serving stack in §29.9.
 - **Anomaly & Fraud Detection** — a canonical online-serving, low-latency consumer of deployed models.
+- **Ethics & Responsible AI** — the fairness gates, hallucination guardrails, and subgroup auditing this chapter wires into the pipeline.
 
 ------------------------------------------------------------------------
 

@@ -195,6 +195,8 @@ The intuition is a stress test. If I scramble `income` and the model's error bar
 
 $$\text{Imp}(j) = \text{Error}\big(\text{model on } X_{\text{shuffled } j}\big) - \text{Error}\big(\text{model on } X\big)$$
 
+**In words:** a feature's importance is how much worse the model gets once you scramble that one feature, compared with leaving everything intact. **Also written:** $\text{Imp}(j) = e_{\text{perm},j} - e_{\text{orig}}$, or as a *ratio* $e_{\text{perm},j}\,/\,e_{\text{orig}}$ when you want a scale-free "fold increase in error."
+
 A tiny worked example with real numbers. A model predicts default with baseline error (1 − accuracy) of $0.10$. We shuffle each feature in turn and re-measure:
 
 | Feature shuffled | New error | Importance (drop) |
@@ -219,6 +221,16 @@ def permutation_importance(model, X, y, metric):
     return imps                                  # large => feature matters
 ```
 
+In practice you reach for the battle-tested implementation, which repeats the shuffle several times and reports a mean and spread so you can tell a real effect from sampling noise:
+
+```python
+from sklearn.inspection import permutation_importance
+r = permutation_importance(model, X_test, y_test,
+                           n_repeats=30, random_state=0, scoring="accuracy")
+for j in r.importances_mean.argsort()[::-1]:
+    print(f"{feature_names[j]:<16} {r.importances_mean[j]:.3f} +/- {r.importances_std[j]:.3f}")
+```
+
 Two caveats decide whether you can trust the numbers. First, **correlated features** split the credit: if `height_cm` and `height_in` both encode the same thing, shuffling one leaves the other to carry the signal, so both look unimportant. Second, prefer to compute importance on a **held-out set** — importance on the training set can reward overfitting. Note also what permutation importance is *not*: it measures importance *to the model*, not a causal effect in the world (see *Causal Inference*).
 
 ::: {.callout-warning}
@@ -232,6 +244,8 @@ Knowing a feature is important does not tell you *which way* it pushes the predi
 The mechanism is direct. To get the partial dependence on feature $j$ at value $v$, set *every* row's feature $j$ to $v$, predict, and average:
 
 $$\text{PD}_j(v) = \frac{1}{n}\sum_{i=1}^{n} f\big(x^{(i)} \text{ with } x_j \!=\! v\big)$$
+
+**In words:** pretend everyone in your dataset had the same value $v$ for this one feature, ask the model for all those predictions, and report their average. **Also written:** $\text{PD}_j(v) = \mathbb{E}_{x_{-j}}\big[\,f(v, x_{-j})\,\big]$, the expectation of the model output over the distribution of all the *other* features $x_{-j}$.
 
 Sweep $v$ over a grid and plot. The curve is the model's average response to that feature.
 
@@ -255,6 +269,14 @@ def partial_dependence(model, X, j, grid):
     return np.array(pd)
 ```
 
+The library version draws the curve (and the ICE lines below) in one call:
+
+```python
+from sklearn.inspection import PartialDependenceDisplay
+PartialDependenceDisplay.from_estimator(
+    model, X, features=["square_footage"], kind="both")   # "both" overlays ICE + PDP
+```
+
 In a real model a PDP of predicted house price against `square_footage` might rise steeply then flatten — the model paid a premium for size up to a point, then stopped caring. That shape is invisible in a single importance number.
 
 <svg viewBox="0 0 380 200" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif" font-size="11">
@@ -265,7 +287,7 @@ In a real model a PDP of predicted house price against `square_footage` might ri
   <text x="14" y="95" transform="rotate(-90 14 95)" text-anchor="middle">predicted price →</text>
 </svg>
 
-The honest limitation: a PDP **averages over interactions and assumes feature independence**. If `square_footage` and `num_bedrooms` are correlated, forcing footage to a huge value while leaving bedrooms small creates impossible houses, and the average can mislead. **ICE plots** (Individual Conditional Expectation) — one line per row instead of the average — expose this by showing whether individuals behave differently from the mean.
+The honest limitation: a PDP **averages over interactions and assumes feature independence**. If `square_footage` and `num_bedrooms` are correlated, forcing footage to a huge value while leaving bedrooms small creates impossible houses, and the average can mislead. **ICE plots** (Individual Conditional Expectation) — one line per row instead of the average — expose this by showing whether individuals behave differently from the mean. When correlation is the worry, **Accumulated Local Effects (ALE)** plots are the principled fix: instead of forcing impossible combinations, ALE looks only at *small local changes* within realistic regions of the data and accumulates them, so it stays honest even when features are tangled together.
 
 ## 36.6 — LIME
 
@@ -288,6 +310,12 @@ The recipe for a single instance $x$:
 3. **Weight** each perturbation by how close it is to $x$ (near samples matter more).
 4. **Fit** a sparse linear model on the perturbations, weighted. Its coefficients are the explanation.
 
+Underneath, LIME minimizes a fidelity-plus-simplicity objective:
+
+$$\xi(x) = \arg\min_{g \in G} \; \mathcal{L}\big(f, g, \pi_x\big) + \Omega(g)$$
+
+**In words:** pick the simple model $g$ that best copies the black box $f$ on points near $x$ (that is the loss $\mathcal{L}$ weighted by the closeness kernel $\pi_x$), while staying as simple as possible (the penalty $\Omega$, e.g. few non-zero coefficients). **Also written:** $\xi(x) = \arg\min_{g}\;\sum_{z} \pi_x(z)\,\big(f(z) - g(z)\big)^2 + \Omega(g)$ — a weighted least-squares fit over perturbed samples $z$ with a sparsity penalty.
+
 ```{mermaid}
 flowchart LR
   X[instance x] --> P[perturb -> neighbours]
@@ -299,21 +327,32 @@ flowchart LR
 
 For a text classifier that flags an email as spam, LIME might report `+0.4 "free"`, `+0.3 "winner"`, `−0.1 "meeting"` — the local weights that reconstruct *this* email's score. For an image, it highlights the superpixels that pushed the class.
 
+```python
+from lime.lime_text import LimeTextExplainer
+explainer = LimeTextExplainer(class_names=["ham", "spam"])
+exp = explainer.explain_instance(email_text, clf.predict_proba, num_features=6)
+print(exp.as_list())     # e.g. [('free', 0.41), ('winner', 0.29), ('meeting', -0.11), ...]
+```
+
 LIME's strengths are that it is model-agnostic and intuitive. Its well-known weakness is **instability**: because perturbation and weighting involve random sampling and a kernel-width choice, running LIME twice on the same instance can give different explanations. Treat its outputs as indicative, and check robustness before relying on them.
 
 ## 36.7 — SHAP (Shapley values)
 
 **SHAP** (SHapley Additive exPlanations) brings a guarantee that LIME lacks: it is the unique explanation method satisfying a set of fairness axioms, borrowed from cooperative game theory. Picture the features as players in a game and the prediction as the payout. How should the payout be fairly divided among the players? The **Shapley value** answers this: a feature's contribution is its *average marginal contribution* over every possible order in which features could be added to the model.
 
-The intuition is a fair split. Some features only help in the presence of others; to be fair you must average a feature's added value across all orderings of who arrived before it.
+The intuition is a fair split. Some features only help in the presence of others; to be fair you must average a feature's added value across all orderings of who arrived before it. Think of three people building a project together: to pay each fairly you ask, for every order in which they could have joined, how much the project improved the moment that person walked in — then average those gains.
 
 $$\phi_j = \sum_{S \subseteq F \setminus \{j\}} \frac{|S|!\,(|F|-|S|-1)!}{|F|!}\big[f(S \cup \{j\}) - f(S)\big]$$
+
+**In words:** a feature's SHAP value is the average, over every coalition of other features that might already be "in the room," of how much adding this feature changes the prediction. **Also written:** $\phi_j = \frac{1}{|F|!}\sum_{\pi}\big[f(\text{before}_\pi(j)\cup\{j\}) - f(\text{before}_\pi(j))\big]$ — the plain average of the marginal gain of $j$ taken over all $|F|!$ feature orderings $\pi$.
 
 Here $S$ ranges over subsets of features *not* containing $j$, and the bracket is how much adding $j$ improves the prediction on top of $S$. The combinatorial weight is what makes it an average over all orderings.
 
 This yields the prized **additivity** property: the SHAP values plus the baseline reconstruct the prediction *exactly*.
 
 $$f(x) = \mathbb{E}[f] + \sum_{j} \phi_j$$
+
+**In words:** start from the model's average output, then add up every feature's SHAP contribution, and you land exactly on this instance's prediction — nothing is left over. **Also written:** $\hat{y}(x) = \phi_0 + \sum_{j=1}^{M}\phi_j$, where $\phi_0 = \mathbb{E}[f]$ is the base value.
 
 A fully worked two-feature example by hand. Features are `defaults` ($D$) and `income` ($I$); the baseline (predict-nothing) value is $f(\varnothing) = 0.10$. The model's value for each feature subset:
 
@@ -344,15 +383,66 @@ def shapley(f, x, baseline, j):
     return contrib / n                          # average over orderings
 ```
 
-The exact sum is exponential in the number of features, so practical SHAP uses fast approximations: **KernelSHAP** (a weighted-linear sampling scheme) for any model, and **TreeSHAP** (exact and polynomial-time) for tree ensembles. Aggregating local SHAP values across the dataset gives a faithful *global* importance ranking — the bridge between local and global from §36.3.
+The exact sum is exponential in the number of features, so practical SHAP uses fast approximations: **KernelSHAP** (a weighted-linear sampling scheme) for any model, and **TreeSHAP** (exact and polynomial-time) for tree ensembles. The library wraps both and produces the standard plots:
+
+```python
+import shap
+explainer = shap.TreeExplainer(model)          # exact + fast for tree ensembles
+shap_values = explainer(X_test)
+shap.plots.beeswarm(shap_values)               # global view: every dot a local SHAP value
+shap.plots.waterfall(shap_values[0])           # local view: one prediction, feature by feature
+```
+
+Aggregating local SHAP values across the dataset gives a faithful *global* importance ranking — the bridge between local and global from §36.3.
 
 ::: {.callout-tip}
 Prefer SHAP when you need consistency and a guarantee that explanations *add up* to the prediction. Its summary (beeswarm) plot — each dot a SHAP value, coloured by feature value — is the single most informative one-glance view of a tabular model.
 :::
 
-## 36.8 — Saliency maps / Grad-CAM for vision
+## 36.8 — Anchors and rule-based local explanations
+
+LIME and SHAP hand you *numbers* — a weight per feature. But a loan officer or a regulator often wants a *rule* they can state out loud and trust: "for cases like this one, the model says deny — period." **Anchors** (from the same group that built LIME) provide exactly that: an IF-THEN rule that "anchors" the prediction so firmly that, as long as the rule's conditions hold, the other features almost never change the outcome.
+
+The intuition is a sufficient condition. LIME tells you the slope at a point; an anchor tells you a *box* around the point inside which the prediction is locked. For a denied applicant an anchor might read:
+
+> **IF** `prior_defaults ≥ 2` **AND** `income < $40k` **THEN** predict **deny** (precision 0.97, coverage 0.12)
+
+Two numbers make the rule trustworthy and honest about its reach:
+
+$$\text{precision}(A) = P\big(f(z) = f(x) \mid z \in A\big), \qquad \text{coverage}(A) = P\big(z \in A\big)$$
+
+**In words:** *precision* is how often the model gives the same answer for perturbed inputs that still satisfy the rule (how reliable the rule is), and *coverage* is what fraction of all inputs the rule even applies to (how broadly useful it is). **Also written:** $\text{precision}(A) = \mathbb{E}_{z\sim \mathcal{D}(\cdot|A)}[\mathbb{1}\{f(z)=f(x)\}]$ and $\text{coverage}(A) = \mathbb{E}_{z\sim\mathcal{D}}[\mathbb{1}\{z\in A\}]$.
+
+Anchors searches for the *shortest* rule whose precision clears a threshold (say 0.95), greedily adding conditions and using a bandit-style sampling test to confirm precision without enumerating everything.
+
+```python
+from anchor.anchor_tabular import AnchorTabularExplainer
+explainer = AnchorTabularExplainer(class_names, feature_names, X_train)
+exp = explainer.explain_instance(x, model.predict, threshold=0.95)
+print("ANCHOR:", " AND ".join(exp.names()))
+print("precision %.2f  coverage %.2f" % (exp.precision(), exp.coverage()))
+```
+
+<svg viewBox="0 0 360 190" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif" font-size="11">
+  <rect x="10" y="15" width="340" height="160" fill="none" stroke="#888"/>
+  <rect x="30" y="40" width="150" height="115" fill="rgba(236,72,153,0.18)" stroke="#ec4899" stroke-dasharray="4 3"/>
+  <text x="105" y="33" text-anchor="middle" fill="#ec4899">anchor box: rule holds → always "deny"</text>
+  <circle cx="95" cy="95" r="5" fill="#e15759"/>
+  <text x="103" y="93" fill="#e15759">instance x</text>
+  <circle cx="60" cy="70" r="3" fill="#e15759"/><circle cx="130" cy="120" r="3" fill="#e15759"/>
+  <circle cx="150" cy="60" r="3" fill="#e15759"/><circle cx="70" cy="140" r="3" fill="#e15759"/>
+  <circle cx="250" cy="60" r="3" fill="#59a14f"/><circle cx="300" cy="120" r="3" fill="#59a14f"/>
+  <circle cx="270" cy="100" r="3" fill="#59a14f"/>
+  <text x="280" y="160" text-anchor="middle" fill="#59a14f">outside: mixed outcomes</text>
+</svg>
+
+Where SHAP gives a smooth, additive attribution and LIME gives a local slope, an anchor gives a crisp, high-precision *if-then* — the form humans audit and act on most easily. The tradeoff is coverage: a very reliable anchor may apply to only a thin slice of cases, and complex boundaries may admit no short high-precision rule at all.
+
+## 36.9 — Saliency maps / Grad-CAM for vision
 
 For images, the natural question is *where in the picture did the model look?* **Saliency maps** answer it by computing the gradient of the predicted class score with respect to each input pixel: $\big|\partial\, s_c / \partial\, x_{ij}\big|$. A large gradient means nudging that pixel would most change the score — so that pixel mattered. Raw pixel-gradient saliency is fast but noisy and scattered.
+
+**In words:** the saliency at a pixel is how sharply the class score would move if you tweaked that pixel a hair — steep sensitivity means the pixel was influential. **Also written:** $M_{ij} = \left\lvert \nabla_{x_{ij}} s_c(x)\right\rvert$, the absolute value of the input-gradient of the class-$c$ logit.
 
 **Grad-CAM** (Gradient-weighted Class Activation Mapping) gives a cleaner, more localised heatmap by working at the *last convolutional layer* rather than raw pixels — the layer where spatial position still survives but features are semantic ("ear", "wheel"). The steps:
 
@@ -360,6 +450,8 @@ For images, the natural question is *where in the picture did the model look?* *
 2. Backprop $s_c$ to the last conv layer's feature maps $A^k$, getting gradients.
 3. Average each map's gradients into a weight $\alpha_k^c = \frac{1}{Z}\sum_{i,j}\frac{\partial s_c}{\partial A^k_{ij}}$ — how important channel $k$ is for class $c$.
 4. Combine and keep positives: $L^c = \text{ReLU}\!\big(\sum_k \alpha_k^c A^k\big)$, then upsample to image size.
+
+For step 4: **In words:** weight each feature map by how much it helps class $c$, add them up, and throw away the negative parts so only regions that *support* the class light up. **Also written:** $L^c_{\text{Grad-CAM}} = \max\!\big(0,\ \sum_k \alpha_k^c A^k\big)$.
 
 ```{mermaid}
 flowchart LR
@@ -372,13 +464,32 @@ flowchart LR
   Combine --> H[upsample -> heatmap overlay]
 ```
 
+A minimal PyTorch sketch hooks the last conv layer, backprops the chosen class, and forms the weighted map:
+
+```python
+import torch, torch.nn.functional as F
+feats, grads = {}, {}
+layer = model.layer4[-1]                                   # last conv block (ResNet)
+layer.register_forward_hook(lambda m, i, o: feats.update(a=o))
+layer.register_full_backward_hook(lambda m, gi, go: grads.update(g=go[0]))
+
+scores = model(img)                                        # img: (1,3,H,W)
+c = scores.argmax(1)
+model.zero_grad(); scores[0, c].backward()                 # backprop the chosen class
+
+alpha = grads["g"].mean(dim=(2, 3), keepdim=True)          # global-avg-pool the gradients
+cam = F.relu((alpha * feats["a"]).sum(1))                  # weighted sum + ReLU
+cam = F.interpolate(cam[None], size=img.shape[-2:], mode="bilinear")  # upsample to image
+cam = (cam - cam.min()) / (cam.max() - cam.min() + 1e-8)   # normalize to [0,1] heatmap
+```
+
 The result overlays a "hot" region on the original image. This is exactly the tool that exposes shortcut learning: if a "husky vs wolf" classifier's Grad-CAM lights up the *snow in the background* instead of the animal, you have caught a model that learned "snow ⇒ wolf." A vivid debugging win that a confusion matrix would never reveal.
 
 ::: {.callout-warning}
 A pretty heatmap over the right object is *necessary but not sufficient* evidence the model is correct. Saliency shows *where* attention fell, not *what* the model concluded from it — and several saliency methods have failed sanity checks (producing similar maps even when the model's weights are randomised). Use them as a debugging signal, not proof of soundness.
 :::
 
-## 36.9 — Attention as (imperfect) explanation
+## 36.10 — Attention as (imperfect) explanation
 
 Transformers compute **attention weights** — for each token, a distribution over other tokens saying "how much I read from each." It is tempting to read these as explanations: the token a head attends to most is "the reason." Attention is convenient because it is produced for free during the forward pass, and it often *looks* meaningful (a pronoun attending to its antecedent).
 
@@ -399,13 +510,15 @@ But the field's consensus, after the "Attention is not Explanation" / "Attention
 
 The pragmatic stance: attention is a useful *hint* about information routing and a fine visualization, but for a faithful per-feature attribution prefer SHAP-style or gradient-based methods that measure actual effect on the output. Attention shows what was *looked at*, not necessarily what was *used*.
 
-## 36.10 — Counterfactual explanations
+## 36.11 — Counterfactual explanations
 
 The other methods answer "why this prediction?" A **counterfactual explanation** answers a more actionable question: *"what would have to change to flip the decision?"* It is the most human form of explanation — we naturally reason in "if only" terms.
 
 Formally, given an instance $x$ that the model classifies undesirably (loan denied), find the *closest* point $x'$ that the model classifies the desired way (approved):
 
 $$x' = \arg\min_{x'} \; d(x, x') \quad \text{subject to}\quad f(x') = \text{desired}$$
+
+**In words:** find the nearest tweaked version of this case that the model would have decided the other way — the smallest realistic change that flips the outcome. **Also written:** as a single soft objective, $x' = \arg\min_{x'}\;\big(f(x') - y_{\text{target}}\big)^2 + \lambda\,d(x, x')$, trading off "reach the desired class" against "stay close to the original."
 
 The distance $d$ keeps the change *small and realistic* — change as few features as little as possible.
 
@@ -419,13 +532,47 @@ A worked example. An applicant is denied; the model approves when a score crosse
 
 The output reads like advice: *"Your loan was denied. Had your annual income been \$6,000 higher, it would have been approved."* That single sentence is more useful to a rejected applicant than any importance bar chart, and it directly satisfies "adverse action notice" style regulation.
 
+```python
+# DiCE: diverse counterfactuals for a tabular model.
+import dice_ml
+d = dice_ml.Data(dataframe=df, continuous_features=["income", "credit_age"], outcome_name="approved")
+m = dice_ml.Model(model=clf, backend="sklearn")
+cf = dice_ml.Dice(d, m).generate_counterfactuals(x_query, total_CFs=3, desired_class=1)
+cf.visualize_as_dataframe()     # 3 nearby "what to change" recipes that flip the decision
+```
+
 Good counterfactuals respect three properties: **proximity** (close to the original), **actionability** (don't tell someone to lower their age or change their race — only *mutable* features), and **plausibility** (stay on the data manifold; "income \$1M, age 19" is not a credible recommendation). They also connect to fairness: if flipping *only* a protected attribute flips the decision, that is direct evidence of discrimination.
 
 ::: {.callout-tip}
 Counterfactuals and feature attribution are complementary. Attribution (SHAP) says *why* the decision was made; the counterfactual says *what to do about it*. For a person on the receiving end of a decision, the counterfactual is usually what they actually want.
 :::
 
-## 36.11 — Mechanistic interpretability and probing for deep nets/LLMs
+## 36.12 — Concept-based explanations (TCAV)
+
+Feature attributions speak the model's language — "pixel (143, 88)," "token 12." Humans think in *concepts* — "stripes," "wrinkles," "the word *urgent*." **Concept-based explanations** bridge that gap by asking: *how much does a human-named concept influence the model's prediction?* The flagship method is **TCAV** (Testing with Concept Activation Vectors).
+
+The intuition: you teach the *probe*, not the model, what a concept looks like, then measure whether the model's decisions move along that concept's direction. You collect example images *of* the concept (photos with stripes) and *not* the concept (random photos), look at their activations in some hidden layer, and find the direction in activation space that separates them. That direction is the **Concept Activation Vector** $v_C^\ell$ — a learned arrow pointing toward "more striped."
+
+Then TCAV asks: for a target class (say "zebra"), does nudging activations along $v_C^\ell$ tend to *increase* the class score? The **TCAV score** is simply the fraction of class examples for which it does:
+
+$$\text{TCAV}_{C,k}^{\ell} = \frac{\big|\{x \in X_k : \nabla h_{\ell,k}(f_\ell(x)) \cdot v_C^\ell > 0\}\big|}{|X_k|}$$
+
+**In words:** out of all images of class $k$, what fraction have a class score that goes *up* when you push their hidden activations in the concept's direction — that fraction is how much the concept matters to the class. **Also written:** $\text{TCAV}_{C,k}^{\ell} = \mathbb{E}_{x\in X_k}\big[\mathbb{1}\{\,\partial_{v_C^\ell} s_k(x) > 0\,\}\big]$, the expected indicator of a positive directional derivative along $v_C^\ell$.
+
+A TCAV score near $1.0$ for "stripes" on the "zebra" class means stripes are decisive; near $0.5$ means the concept is irrelevant (its direction is no better than random). The win is that the explanation is stated in a vocabulary a domain expert chose — a dermatologist can ask "does the model use *irregular borders* to flag melanoma?" and get a number, rather than squinting at a pixel heatmap.
+
+```{mermaid}
+flowchart LR
+  Pos[concept examples: striped] --> Act[hidden-layer activations]
+  Neg[random examples] --> Act
+  Act --> CAV[fit linear probe -> concept vector v_C]
+  CAV --> Dir[directional derivative of class score along v_C]
+  Dir --> Score[TCAV score = fraction with positive derivative]
+```
+
+The same cautions apply as for probing (§36.13): a concept needs enough clean examples, and you should run a *statistical test* against random concept sets to confirm a high TCAV score is not noise. Used well, TCAV catches a model relying on a concept it shouldn't — e.g. a skin-cancer model keying on the *ruler marks* dermatologists place beside malignant lesions.
+
+## 36.13 — Mechanistic interpretability and probing for deep nets/LLMs
 
 All the methods so far treat the network as a black box and study its inputs and outputs. **Mechanistic interpretability** takes the opposite, more ambitious stance: open the box and *reverse-engineer the internal algorithm* — the specific neurons, attention heads, and weight pathways (**circuits**) that implement a behaviour. The aspiration is to understand a network the way you understand a decompiled program.
 
@@ -442,6 +589,8 @@ print("probe accuracy:", probe.score(acts_test, y_test))
 
 The field has produced striking concrete results: **induction heads** in transformers that implement in-context copying ("...A B ... A → predict B"), and a real risk — **polysemanticity**, where a single neuron fires for several unrelated concepts because the network packs more features than it has neurons (**superposition**). **Sparse autoencoders** are the current tool for disentangling these into mono-semantic features. Probing has its own trap: a powerful probe might *learn* the concept itself rather than *find* it already there — control with a randomized-label baseline to confirm the model, not the probe, holds the information.
 
+A complementary, more *causal* tool is **activation patching** (a.k.a. causal tracing): run the model on a clean input, run it again on a corrupted one, then copy a specific activation from the clean run into the corrupted run and see if the correct answer is restored. If patching one head's output flips the prediction back, that head *causally* carries the relevant information — much stronger evidence than a correlational probe.
+
 ```{mermaid}
 flowchart TB
   subgraph blackbox[Treat model as black box]
@@ -455,7 +604,49 @@ flowchart TB
   A -. less faithful, more general .-> internals
 ```
 
-## 36.12 — The accuracy-vs-interpretability tradeoff and the limits of explanations
+## 36.14 — Evaluating explanations: faithfulness and stability
+
+Every method above produces an explanation — but *is the explanation any good?* A plausible-looking heatmap or a tidy feature ranking can still be wrong about the model. Because there is rarely a ground-truth "correct explanation," the field measures explanations by *proxy properties* you can test directly. Two matter most.
+
+**Faithfulness** asks whether the explanation reflects what the model *actually* does. The standard test is **deletion / insertion**: rank features by the explanation's importance, then remove (or add) them one by one and watch the prediction. A faithful explanation should make the score *drop fast* as you delete its top-ranked features.
+
+$$\text{AOPC} = \frac{1}{K+1}\sum_{k=0}^{K}\Big(f(x) - f\big(x_{\setminus \text{top-}k}\big)\Big)$$
+
+**In words:** the average amount the prediction falls as you progressively delete the features the explanation called most important — a bigger area means a more faithful explanation. **Also written:** $\text{AOPC} = \langle\, f(x) - f(x_{\setminus \text{top-}k})\,\rangle_k$, the mean prediction drop over the deletion curve.
+
+**Stability** (robustness) asks whether a tiny, prediction-preserving change to the input produces a similarly tiny change in the explanation. If two near-identical inputs get wildly different explanations, the method is too noisy to trust — this is precisely LIME's known weakness.
+
+$$\text{instab}(x) = \max_{\;x' :\, \lVert x'-x\rVert \le \epsilon}\; \lVert g(x') - g(x)\rVert$$
+
+**In words:** the worst-case change in the explanation over all inputs within a small neighbourhood of $x$ — smaller is more stable. **Also written:** the local Lipschitz constant $\sup_{x'\neq x}\frac{\lVert g(x') - g(x)\rVert}{\lVert x' - x\rVert}$ over the $\epsilon$-ball.
+
+<svg viewBox="0 0 380 200" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif" font-size="11">
+  <line x1="45" y1="170" x2="360" y2="170" stroke="#333"/>
+  <line x1="45" y1="170" x2="45" y2="20" stroke="#333"/>
+  <text x="200" y="192" text-anchor="middle">features deleted (most important first) →</text>
+  <text x="16" y="100" transform="rotate(-90 16 100)" text-anchor="middle">model score →</text>
+  <path d="M45 35 C90 60 140 130 360 160" fill="none" stroke="#22c55e" stroke-width="2.5"/>
+  <text x="150" y="55" fill="#22c55e">faithful: score drops fast</text>
+  <path d="M45 35 C160 50 280 70 360 110" fill="none" stroke="#f59e0b" stroke-width="2.5" stroke-dasharray="5 3"/>
+  <text x="250" y="95" fill="#f59e0b">unfaithful: barely drops</text>
+</svg>
+
+A small worked check for faithfulness in code — delete top-ranked features and confirm the score collapses:
+
+```python
+import numpy as np
+def deletion_auc(model, x, importances):
+    order = np.argsort(importances)[::-1]       # most important first
+    xc, scores = x.copy(), [model.predict([x])[0]]
+    for j in order:
+        xc = xc.copy(); xc[j] = 0.0             # ablate feature j (baseline value)
+        scores.append(model.predict([xc])[0])
+    return np.mean(scores[0] - np.array(scores))  # larger => more faithful explanation
+```
+
+The lesson loops back to the chapter's thesis: do not adopt an explanation method on looks alone. Run a deletion test for faithfulness and a perturbation test for stability — an explanation that fails both is decoration, not insight.
+
+## 36.15 — The accuracy-vs-interpretability tradeoff and the limits of explanations
 
 A folk belief holds that there is an iron law: the more accurate the model, the less interpretable, so you must trade one for the other. The picture is *often* true — a deep ensemble usually beats a 4-leaf tree — but it is not a law.
 
@@ -472,7 +663,19 @@ A folk belief holds that there is an iron law: the more accurate the model, the 
   <circle cx="305" cy="120" r="5" fill="#e15759"/><text x="300" y="113" text-anchor="end">GAM/EBM</text>
 </svg>
 
-The red point matters: **interpretable-by-design high-accuracy models** exist. **GAMs / Explainable Boosting Machines** fit a flexible shape per feature ($\hat y = \sum_j f_j(x_j)$) and rival boosted trees on tabular data while staying readable — each $f_j$ is a plottable curve. For many tabular problems the famous tradeoff is a few decimal points wide, and a leading argument (Rudin's) is that for *high-stakes* decisions you should reach for an inherently interpretable model first, not explain a black box you didn't have to use.
+The red point matters: **interpretable-by-design high-accuracy models** exist. **GAMs / Explainable Boosting Machines** fit a flexible shape per feature ($\hat y = \sum_j f_j(x_j)$) and rival boosted trees on tabular data while staying readable — each $f_j$ is a plottable curve.
+
+**In words:** a GAM predicts by adding up a separate learned curve for each feature, so you can literally plot and read off how every feature bends the prediction. **Also written:** $g(\mathbb{E}[y]) = \beta_0 + \sum_j f_j(x_j)\,(+\sum_{j<k} f_{jk}(x_j,x_k))$ — a link function $g$ on a sum of per-feature shape functions, optionally plus a few pairwise interaction terms (the EBM extension).
+
+```python
+# Explainable Boosting Machine: glass-box accuracy on tabular data.
+from interpret.glassbox import ExplainableBoostingClassifier
+ebm = ExplainableBoostingClassifier().fit(X_train, y_train)
+from interpret import show
+show(ebm.explain_global())     # per-feature shape curves you can read directly
+```
+
+For many tabular problems the famous tradeoff is a few decimal points wide, and a leading argument (Rudin's) is that for *high-stakes* decisions you should reach for an inherently interpretable model first, not explain a black box you didn't have to use.
 
 Finally, the **limits of explanation** — the disclaimer the whole chapter has been building toward:
 
@@ -483,19 +686,20 @@ Finally, the **limits of explanation** — the disclaimer the whole chapter has 
 
 An explanation is a tool for a human to *reason about* a model, not a certificate of its correctness. Use it to form hypotheses and catch bugs; verify those hypotheses with controlled tests.
 
-## 36.13 — Key takeaways
+## 36.16 — Key takeaways
 
 - Explainability serves four needs: **trust**, **debugging** (catching shortcut learning), **regulation**, and **fairness** auditing — and the stakes of a wrong decision set how much you need.
 - Choose **intrinsic** (model = explanation, exactly faithful) over **post-hoc** (approximate) when stakes are high and accuracy permits.
-- **Global** methods (permutation importance, PDP) describe the whole model; **local** methods (LIME, counterfactuals) explain one prediction; **SHAP** bridges both.
-- **Permutation importance** stress-tests features by shuffling; **PDP/ICE** show the *shape* of a feature's effect; both assume feature independence and can mislead under correlation.
-- **SHAP** uniquely guarantees the attributions *sum to the prediction*; **LIME** is intuitive but unstable.
-- For vision, **Grad-CAM** shows *where* the model looked; for transformers, **attention** is a hint, not a faithful attribution.
+- **Global** methods (permutation importance, PDP) describe the whole model; **local** methods (LIME, anchors, counterfactuals) explain one prediction; **SHAP** bridges both.
+- **Permutation importance** stress-tests features by shuffling; **PDP/ICE** show the *shape* of a feature's effect; both assume feature independence and can mislead under correlation (**ALE** is the correlation-robust fix).
+- **SHAP** uniquely guarantees the attributions *sum to the prediction*; **LIME** is intuitive but unstable; **anchors** give a crisp high-precision IF-THEN rule.
+- For vision, **Grad-CAM** shows *where* the model looked; **TCAV** measures whether a human-named *concept* drove the decision; for transformers, **attention** is a hint, not a faithful attribution.
 - **Counterfactuals** give actionable "what to change" advice and double as fairness probes.
-- **Mechanistic interpretability** and **probing** open the box to find circuits and concepts inside deep nets and LLMs.
+- **Mechanistic interpretability**, **probing**, and **activation patching** open the box to find circuits and concepts inside deep nets and LLMs.
+- Always **evaluate** an explanation: test **faithfulness** (deletion/insertion) and **stability** (robustness to small input changes) before trusting it.
 - The **accuracy–interpretability tradeoff** is real but often small; **GAMs/EBMs** can be both. No explanation proves correctness — verify, don't trust.
 
-## 36.14 — See also
+## 36.17 — See also
 
 - **Regression** — linear/logistic models as the canonical intrinsically interpretable family.
 - **Ensemble Methods** — the gradient-boosted trees that post-hoc methods most often explain (and TreeSHAP targets).

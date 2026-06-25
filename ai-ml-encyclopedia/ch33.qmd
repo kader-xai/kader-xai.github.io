@@ -228,7 +228,7 @@ From-scratch resolution is great for understanding, but in practice you reach fo
 ```python
 # Propositional entailment via a real SAT solver (pip install python-sat).
 # KB |= Q  iff  KB ∧ ¬Q is UNSATISFIABLE.
-from pysat.solvers import Glucose3      # CDCL solver (see §33.10)
+from pysat.solvers import Glucose3      # CDCL solver (see §33.12)
 
 # Vars: P=1, Q=2.  KB = (¬P ∨ Q) ∧ P ;  goal = Q.
 solver = Glucose3()
@@ -345,7 +345,63 @@ class Animals(KnowledgeEngine):
 engine = Animals(); engine.reset(); engine.run()   # -> "mammal derived"
 ```
 
-## 33.3 — Semantic Networks, Frames, Ontologies, the Semantic Web (RDF/OWL), and Knowledge Graphs
+## 33.3 — Logic Programming: Prolog, Datalog & Answer Set Programming
+
+The rule engines above are *procedural* — you write the matching loop. **Logic programming** flips this: you declare *what* is true and let a built-in proof procedure work out *how* to answer queries. You state facts and rules; the engine does the search. It is the most widely deployed form of symbolic reasoning, quietly running inside databases, network configuration tools, and program analyzers.
+
+**Think of it as a database that can reason.** An ordinary SQL table stores rows; a logic program stores rows *plus* rules that derive new rows on demand. Ask a question and the system chains rules together until it hits stored facts — no loops, no joins written by hand.
+
+**Prolog** is the classic. A program is a set of **Horn clauses** — rules with at most one positive conclusion, written `head :- body`. The engine answers a query by **backward chaining with unification** (§33.2, §33.11), trying clauses top-to-bottom and backtracking on failure. A Horn clause is the sweet spot of logic: expressive enough for real programs, restricted enough that inference is efficient.
+
+$$\underbrace{H}_{\text{head}} \;\leftarrow\; \underbrace{B_1 \wedge B_2 \wedge \dots \wedge B_n}_{\text{body}} \qquad\equiv\qquad H \vee \neg B_1 \vee \dots \vee \neg B_n$$
+
+**In words:** the head is true whenever every condition in the body is true — a single rule with one conclusion and a conjunction of premises.
+**Also written:** as a disjunctive clause $H \vee \neg B_1 \vee \dots \vee \neg B_n$ (exactly one un-negated literal), which is precisely what makes it a *Horn* clause and lets resolution stay efficient.
+
+```prolog
+% Family relations in Prolog. Facts, then a recursive rule.
+parent(tom, bob).   parent(bob, ann).   parent(bob, pat).
+ancestor(X, Y) :- parent(X, Y).                  % base case
+ancestor(X, Y) :- parent(X, Z), ancestor(Z, Y).  % recursive case
+% ?- ancestor(tom, ann).   -> true
+% ?- ancestor(tom, W).     -> W = bob ; W = ann ; W = pat
+```
+
+The single most important — and most surprising — feature is **negation as failure (NAF)**: Prolog concludes `\+ Goal` ("not Goal") whenever it *fails to prove* `Goal`. This is the **closed-world assumption** (§33.8) made operational: unproven means false. It is not the same as classical negation — `\+ raining` says "I have no proof it is raining," not "it is provably dry."
+
+**Datalog** is Prolog with the sharp edges filed off: no function symbols, no clause ordering, no NAF traps in its pure form. That restriction buys a guarantee Prolog lacks — every query **terminates**, and evaluation can run bottom-up (forward chaining) to a fixpoint. This is why Datalog powers modern systems where decidability is non-negotiable: program analysis (the Doop and Soufflé frameworks), cloud-network reachability checks at AWS, and graph databases.
+
+```python
+# Datalog in Python (pip install pyDatalog) — transitive closure that always halts.
+from pyDatalog import pyDatalog
+pyDatalog.create_terms('parent, ancestor, X, Y, Z')
++parent('tom', 'bob'); +parent('bob', 'ann')
+ancestor(X, Y) <= parent(X, Y)
+ancestor(X, Y) <= parent(X, Z) & ancestor(Z, Y)
+print(ancestor('tom', Y))      # -> bob, ann   (all descendants of tom)
+```
+
+**Answer Set Programming (ASP)** pushes logic programming toward hard combinatorial search. Instead of one proof, an ASP solver (clingo, DLV) computes **stable models** — complete consistent worlds satisfying every rule — and can enumerate *all* solutions. With "choice rules" and constraints it solves graph colouring, scheduling, and planning declaratively: you state the constraints, the solver finds every assignment that satisfies them, much like a SAT solver (§33.12) but with a richer rule language.
+
+```{mermaid}
+flowchart LR
+  HC["Horn clauses<br/>head :- body"] --> PL["Prolog<br/>top-down + NAF<br/>(may loop)"]
+  HC --> DL["Datalog<br/>bottom-up, no functions<br/>(always terminates)"]
+  HC --> ASP["Answer Set Prog.<br/>stable models<br/>(all solutions)"]
+  PL --> USE1["theorem proving,<br/>NLP, config"]
+  DL --> USE2["program analysis,<br/>graph queries"]
+  ASP --> USE3["scheduling,<br/>combinatorial search"]
+```
+
+::: {.callout-warning}
+**Common mistake:** assuming a Prolog query always terminates. Clause order and left-recursion matter — swapping the two `ancestor` rules, or writing `ancestor(X,Y) :- ancestor(Z,Y), parent(X,Z)`, can send the engine into an infinite loop. Datalog avoids this by construction; in Prolog you must order clauses with the search strategy in mind.
+:::
+
+::: {.callout-tip}
+**Intuition:** logic programming is "say what's true, ask questions, get answers." Prolog searches top-down and can recurse forever; Datalog trades function symbols for guaranteed termination; ASP enumerates whole consistent worlds. Same Horn-clause DNA, three points on the expressiveness-vs-guarantees curve.
+:::
+
+## 33.4 — Semantic Networks, Frames, Ontologies, the Semantic Web (RDF/OWL), and Knowledge Graphs
 
 Logic stores knowledge as flat formulas; this family stores it as **structure** — nodes and links you can draw — which is often closer to how people organise concepts.
 
@@ -369,7 +425,7 @@ A **semantic network** is a graph whose nodes are concepts and whose labelled ed
 </svg>
 
 ::: {.callout-note}
-**Default inheritance and its bite.** Slots with defaults make networks compact but introduce **non-monotonic** reasoning: adding a fact can *retract* a conclusion. The textbook case is *Tweety the penguin* — *Bird* has default *can-Fly = true*, so we infer Tweety flies; then we learn *Penguin* overrides *can-Fly = false*, and the earlier conclusion is withdrawn. Classical logic is **monotonic** (new facts never cancel old conclusions); default/inheritance reasoning deliberately is not, which is both its convenience and its hazard.
+**Default inheritance and its bite.** Slots with defaults make networks compact but introduce **non-monotonic** reasoning: adding a fact can *retract* a conclusion. The textbook case is *Tweety the penguin* — *Bird* has default *can-Fly = true*, so we infer Tweety flies; then we learn *Penguin* overrides *can-Fly = false*, and the earlier conclusion is withdrawn. Classical logic is **monotonic** (new facts never cancel old conclusions); default/inheritance reasoning deliberately is not, which is both its convenience and its hazard. §33.9 treats this head-on.
 :::
 
 An **ontology** is a formal, shared specification of the concepts in a domain and the constraints among them — the vocabulary plus the rules of the game. Scaled to the whole web, this became the **Semantic Web**, whose data model is **RDF (Resource Description Framework)**: every fact is a **triple** of *(subject, predicate, object)*, with things named by URIs so they are globally unambiguous. **OWL (Web Ontology Language)** layers expressive class axioms on top (e.g. "every *Parent* is a *Person* who *hasChild* some *Person*"), and **SPARQL** is the query language for triple stores.
@@ -420,7 +476,7 @@ print([str(r.x) for r in g.query(q)])   # -> ['http://ex.org/Socrates']  (derive
 **Intuition:** a triple store is just "subject–predicate–object" sentences at web scale. Reasoning is the act of writing down all the *unstated* sentences those sentences force to be true.
 :::
 
-## 33.4 — Reasoning Under Uncertainty
+## 33.5 — Reasoning Under Uncertainty
 
 Pure logic is brittle in a specific way: it assumes facts are certainly true or certainly false. The real world is full of "probably," "usually," and "I'm 80% sure." **Reasoning under uncertainty** extends KRR to handle degrees of belief, and it is where the symbolic and probabilistic traditions meet.
 
@@ -471,7 +527,7 @@ A logical engine cannot express this nuance; a probabilistic one captures it exa
 **Common mistake:** treating a high-accuracy test as near-certain proof. The **base rate** dominates: when a condition is rare, even a good test produces mostly false positives. Logic alone hides this trap; only carrying the probabilities through reveals it.
 :::
 
-## 33.5 — Description Logics
+## 33.6 — Description Logics
 
 **Description logics (DLs)** are the formal engine underneath ontologies and OWL. They occupy a deliberate sweet spot: a carefully chosen *fragment* of first-order logic that is **expressive enough** to define rich concepts yet **restricted enough** that inference stays **decidable** — guaranteed to terminate with a yes/no answer. This is the central design trade of the whole field: give up some of FOL's power to win back computational guarantees.
 
@@ -543,7 +599,7 @@ print(HappyParent in bob.is_a or bob in HappyParent.instances())  # True (derive
 **Intuition:** description logics are "object-oriented modelling with a proof engine." You define classes by their *necessary and sufficient* conditions, and the reasoner figures out the class hierarchy and memberships for you — even ones you never wrote down.
 :::
 
-## 33.6 — Strengths (Interpretability, Guarantees) vs the Brittleness / Knowledge-Acquisition Bottleneck
+## 33.7 — Strengths (Interpretability, Guarantees) vs the Brittleness / Knowledge-Acquisition Bottleneck
 
 Symbolic KRR earns its place through two strengths that data-driven learning struggles to match. First, **interpretability**: every conclusion comes with a **proof trace** — a chain of rules and facts you can read, audit, and challenge. When MYCIN recommended an antibiotic, it could answer "why?" by replaying its reasoning. For a regulated domain (medicine, law, finance, safety), that auditability is not a luxury. Second, **guarantees**: sound inference means a derived fact is *provably* entailed by the KB — not probable, not usually-right, but certain given the premises. A neural network offers neither by default.
 
@@ -577,7 +633,7 @@ The table makes the contrast precise — and notice the strengths are almost exa
 **Common mistake:** reading this list as "symbolic AI lost." It didn't — it became *infrastructure*. Knowledge graphs, ontologies, and rule engines quietly run search, fraud checks, and clinical decision support today. The lesson is that hand-authored knowledge does not *scale to the open world alone*, not that it is worthless.
 :::
 
-## 33.7 — The Frame Problem and Closed- vs Open-World Assumptions
+## 33.8 — The Frame Problem and Closed- vs Open-World Assumptions
 
 Before reasoning systems can be trusted, two foundational assumptions have to be pinned down — and getting them wrong is the source of a surprising amount of grief. Both are about *what a system is entitled to conclude from silence*.
 
@@ -609,7 +665,74 @@ This single idea — *inertia by default, change only when forced* — is exactl
 **Common mistake:** silently importing a database's closed-world habit into an ontology. Asking an OWL reasoner "is Bob *not* a doctor?" returns *unknown*, not *yes* — and code that treats "not returned" as "false" will quietly fabricate conclusions the KB never licensed.
 :::
 
-## 33.8 — The Modern Neurosymbolic Revival
+## 33.9 — Non-Monotonic Reasoning & Default Logic
+
+Classical logic has a property that sounds harmless but is actually a straitjacket: it is **monotonic**. Once you prove something, no new fact can ever take it back — the set of conclusions only ever grows. Human reasoning is nothing like that. We jump to sensible default conclusions and *retract* them the moment we learn an exception. **Non-monotonic reasoning** is the formal study of that: logics where adding a premise can *remove* a conclusion.
+
+**Think of it as reasoning with an eraser.** Monotonic logic writes in permanent ink — every line stays forever. Non-monotonic logic writes in pencil: "birds fly, so Tweety flies" goes down, then "Tweety is a penguin" arrives and you erase the flying conclusion. The pencil is what lets you act on incomplete information instead of freezing until you know everything.
+
+The canonical example is the one §33.4 hinted at. We believe *birds fly* — but only *typically*. Encode it as a **default rule**: "if $x$ is a bird, and it is *consistent* to assume $x$ flies, then conclude $x$ flies." That middle clause — *consistent to assume* — is what classical logic cannot express, and it is the heart of **default logic** (Reiter, 1980).
+
+$$\frac{Bird(x) \;:\; Flies(x)}{Flies(x)}$$
+
+**In words:** given that $x$ is a bird, if assuming $x$ flies does not contradict anything you already know, then go ahead and conclude $x$ flies.
+**Also written:** a Reiter default $\dfrac{\alpha : \beta}{\gamma}$ reads "if prerequisite $\alpha$ holds and justification $\beta$ is consistent with the current beliefs, derive consequent $\gamma$"; here $\alpha=\beta=\gamma=$ "$x$ flies" given $Bird(x)$.
+
+Now watch the non-monotonicity. With KB $=\{Bird(tweety)\}$, the default fires and we conclude $Flies(tweety)$. Add the fact $\neg Flies(tweety)$ (Tweety is a penguin): now assuming $Flies(tweety)$ is *inconsistent*, the default no longer fires, and the earlier conclusion vanishes. More information, *fewer* conclusions — the exact opposite of monotonic logic.
+
+<svg viewBox="0 0 480 180" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif" font-size="12">
+  <rect x="20" y="20" width="200" height="140" rx="8" fill="rgba(34,197,94,0.12)" stroke="#22c55e"/>
+  <text x="120" y="42" text-anchor="middle" fill="currentColor" font-weight="bold">KB = { Bird(tweety) }</text>
+  <text x="120" y="72" text-anchor="middle" fill="currentColor">default fires:</text>
+  <text x="120" y="92" text-anchor="middle" fill="#22c55e" font-weight="bold">Flies(tweety) ✓</text>
+  <text x="120" y="128" text-anchor="middle" fill="currentColor" font-size="11">consistent to assume</text>
+  <text x="120" y="144" text-anchor="middle" fill="currentColor" font-size="11">it flies</text>
+  <text x="245" y="95" fill="#ec4899" font-size="22">→</text>
+  <text x="245" y="115" fill="#ec4899" font-size="10">add ¬Flies</text>
+  <rect x="270" y="20" width="200" height="140" rx="8" fill="rgba(236,72,153,0.12)" stroke="#ec4899"/>
+  <text x="370" y="42" text-anchor="middle" fill="currentColor" font-weight="bold">KB ∪ { ¬Flies(tweety) }</text>
+  <text x="370" y="72" text-anchor="middle" fill="currentColor">default blocked:</text>
+  <text x="370" y="92" text-anchor="middle" fill="#ec4899" font-weight="bold">Flies(tweety) ✗</text>
+  <text x="370" y="128" text-anchor="middle" fill="currentColor" font-size="11">assumption now</text>
+  <text x="370" y="144" text-anchor="middle" fill="currentColor" font-size="11">contradicts KB</text>
+</svg>
+
+Several formalisms tame this. **Default logic** computes **extensions** — maximal consistent sets of beliefs you can build by applying defaults. **Circumscription** (McCarthy) minimises the *abnormal* cases: "everything is normal unless forced otherwise," formalising "birds fly except abnormal ones." **Negation as failure** in Prolog and the **stable models** of Answer Set Programming (§33.3) are the operational, runnable cousins — `\+ flies(X)` succeeds precisely when flight cannot be proved. And the *frame axiom* of §33.8 is itself a non-monotonic default: facts persist *unless* an action is known to change them.
+
+```python
+# Defeasible "birds fly" with an explicit exception list — the operational core
+# of negation-as-failure. A conclusion holds unless a known exception blocks it.
+birds       = {"tweety", "robin", "opus"}
+cannot_fly  = {"opus"}                       # opus is a penguin (the exception)
+
+def flies(x):
+    # default: a bird flies UNLESS we can show it can't (closed-world on exceptions)
+    return x in birds and x not in cannot_fly
+
+assert flies("tweety")          # default fires
+assert not flies("opus")        # exception retracts the default conclusion
+# Adding "opus" to cannot_fly REMOVED a conclusion -> non-monotonic
+print({b: flies(b) for b in birds})   # {'tweety': True, 'robin': True, 'opus': False}
+```
+
+```{mermaid}
+flowchart TB
+  M["Monotonic logic<br/>conclusions only grow"] -->|too rigid for<br/>incomplete info| NM["Non-monotonic reasoning"]
+  NM --> DL["Default logic<br/>(extensions)"]
+  NM --> CIRC["Circumscription<br/>(minimise abnormality)"]
+  NM --> NAF["Negation as failure<br/>(Prolog, ASP)"]
+  NM --> FR["Frame axiom<br/>(inertia by default)"]
+```
+
+::: {.callout-warning}
+**Common mistake:** treating a default conclusion as a proven fact downstream. Defaults are *defeasible* — a system that caches "Tweety flies" and never rechecks it when new facts arrive will act on a belief the logic has already retracted. Non-monotonic conclusions must be re-derived, not memoised as permanent.
+:::
+
+::: {.callout-tip}
+**Intuition:** non-monotonic reasoning is how you act decisively without complete information. Assume the normal case, commit to it, and stay ready to take it back. It is the formal bridge between brittle classical logic and the flexible "usually, but…" reasoning people use every minute.
+:::
+
+## 33.10 — The Modern Neurosymbolic Revival
 
 If symbolic systems are interpretable but brittle, and neural networks are robust but opaque, the obvious move is to combine them — and that is exactly what **neurosymbolic AI** sets out to do. The goal is a system that *perceives* with neural networks and *reasons* with symbolic logic, getting data-driven robustness and rule-based guarantees in one pipeline.
 
@@ -669,7 +792,7 @@ optimizer.step()
 **Intuition:** let each tradition do what it is good at. Neurons handle the fuzzy, high-bandwidth job of turning the world into symbols; logic handles the crisp, auditable job of reasoning over them. Neurosymbolic AI is the wiring that connects the two.
 :::
 
-## 33.9 — Resolution and Proof by Refutation
+## 33.11 — Resolution and Proof by Refutation
 
 The honest way to prove a statement is to assume it is false and watch the world catch fire. If assuming "the opposite" forces a contradiction, the original statement had to be true. This is **proof by refutation**, and it is the engine inside almost every automated theorem prover.
 
@@ -749,7 +872,7 @@ Resolution is **refutation-complete**: if a set of clauses is genuinely unsatisf
 Resolution proves *unsatisfiability*, not satisfiability. If it never derives $\square$ and runs out of new clauses, the goal simply does not follow — but on large problems "runs out" can take astronomically long, and naive resolution generates oceans of useless tautological clauses if you do not prune them.
 :::
 
-## 33.10 — Unification: Pattern-Matching for First-Order Logic
+## 33.12 — Unification: Pattern-Matching for First-Order Logic
 
 Propositional resolution cancels $\ell$ against $\lnot \ell$ — an exact match. First-order logic has variables, so $Loves(x, \text{Mary})$ and $Loves(\text{John}, y)$ *ought* to cancel too: there is clearly a way to make them the same statement. **Unification** is the algorithm that finds that way, computing the substitution that makes two expressions identical.
 
@@ -834,7 +957,7 @@ print(mgu)
 Variables in two different clauses are unrelated even if spelled the same. Always **standardize apart** (rename variables uniquely per clause) before unifying, or you will accidentally force $x$ in one fact to equal $x$ in an unrelated fact and derive nonsense.
 :::
 
-## 33.11 — DPLL and CDCL: Inside Modern SAT Solvers
+## 33.13 — DPLL and CDCL: Inside Modern SAT Solvers
 
 The **Boolean satisfiability problem** (SAT) asks: given a CNF formula, is there any assignment of true/false to the variables that makes every clause true? It was the first problem proven NP-complete, and in the worst case nothing beats trying assignments. Yet today's solvers routinely crack formulas with *millions* of variables. The gap between "exponential in theory" and "fast in practice" is the story of two algorithms.
 
@@ -895,7 +1018,7 @@ CDCL then performs **non-chronological backtracking** (backjumping): instead of 
 SAT solvers expect CNF. Converting an arbitrary formula to CNF by distributing $\lor$ over $\land$ can blow up exponentially. Real tools use the **Tseitin transformation**, which introduces fresh auxiliary variables to keep the encoding linear in size — never hand-distribute a large formula into CNF.
 :::
 
-## 33.12 — Model Checking: Verifying Systems Exhaustively
+## 33.14 — Model Checking: Verifying Systems Exhaustively
 
 Testing shows the presence of bugs, never their absence — you only ever check the inputs you thought to try. **Model checking** flips this: it explores *every* reachable state of a system and proves a property holds in all of them, or hands you a concrete **counterexample** trace showing exactly how it breaks. Where a theorem prover reasons about formulas, a model checker reasons about a finite (or finitely-abstracted) state machine.
 
@@ -984,7 +1107,7 @@ $$\text{Init}(s_0) \;\wedge\; \bigwedge_{i=0}^{k-1}\text{Trans}(s_i, s_{i+1}) \;
 BMC with bound $k$ only proves "no bug within $k$ steps." Declaring a system correct outright requires a **completeness threshold** (a $k$ large enough to cover the whole state space) or an unbounded method like BDD-based checking or k-induction. A clean BMC run at small $k$ is reassuring, not a proof.
 :::
 
-## 33.13 — Where This Powers Planning and Verification
+## 33.15 — Where This Powers Planning and Verification
 
 These four ideas are not museum pieces — they are the substrate under tools that ship real software and fly real spacecraft. The unifying trick is **reduction**: take a problem that does not look like logic, encode it as satisfiability or a reachability query, and let a decades-optimized solver do the work.
 
@@ -1028,24 +1151,26 @@ assert s.check() != sat   # no counterexample exists
 The throughline of this whole topic: you rarely build a bespoke reasoner. You translate your question — a plan, an invariant, a proof obligation — into clauses, and ride the enormous engineering investment poured into SAT/SMT solvers and model checkers over the last thirty years. Knowing *how to encode* is now more valuable than knowing how to search.
 :::
 
-## 33.14 — Key Takeaways
+## 33.16 — Key Takeaways
 
 - **Logic is the foundation:** propositional logic reasons over whole statements; **first-order logic** adds objects, relations, and quantifiers. **Resolution** mechanises proof by refutation — assume the negation of the goal and derive a contradiction (the empty clause). For FOL, **unification** (e.g. $\{x/socrates\}$) finds the substitution that lets a complementary pair cancel.
 - **Expert systems** separate a rule **knowledge base**, **working memory**, and an **inference engine**. **Forward chaining** is data-driven (facts → conclusions); **backward chaining** is goal-driven (goal → needed facts). They prove the same things, differing only in efficiency.
+- **Logic programming** turns Horn clauses into runnable reasoners: **Prolog** (top-down, with negation-as-failure, may loop), **Datalog** (no functions, always terminates — used in program analysis and graph queries), and **Answer Set Programming** (stable models, enumerates all solutions to combinatorial problems).
 - **Structured representations** — semantic networks, frames, ontologies, RDF triples, OWL, and **knowledge graphs** — store knowledge as a graph and derive unstated facts via inheritance and axioms.
 - **Description logics** are decidable FOL fragments (TBox schema + ABox data) that power OWL; reasoners perform subsumption, consistency, and instance checking with termination guarantees.
 - **Uncertainty** is handled by moving from truth values to probabilities; **Bayes' rule** and base rates expose traps that pure logic hides.
 - **Foundational assumptions matter:** the **closed-world** vs **open-world** choice changes what silence means, and the **frame problem** forces a default law of inertia for reasoning about change — both underpin planning and non-monotonic reasoning.
+- **Non-monotonic reasoning** (default logic, circumscription, negation-as-failure) lets conclusions be *retracted* when new facts arrive — the formal account of "birds fly, except penguins" and the way to act on incomplete information.
 - Symbolic AI's strengths are **interpretability and provable guarantees**; its weaknesses are **brittleness** and the **knowledge-acquisition bottleneck** — complementary to neural networks' profile.
 - **Mechanised reasoning scales via reduction:** resolution, **DPLL/CDCL SAT solvers**, **SMT**, and **model checking** turn proofs, plans, and verification into satisfiability or reachability queries you hand to a decades-optimised engine.
 - **Neurosymbolic AI** fuses the two: neural perception feeds symbolic reasoning, and logic constrains or grounds neural models — the modern antidote to LLM hallucination.
 
-## 33.15 — See Also
+## 33.17 — See Also
 
-- **Probabilistic Graphical Models** — Bayesian networks and the rigorous treatment of reasoning under uncertainty referenced in §33.4.
+- **Probabilistic Graphical Models** — Bayesian networks and the rigorous treatment of reasoning under uncertainty referenced in §33.5.
 - **Search & Problem Solving** — the state-space search machinery underlying chaining and theorem proving.
 - **Planning, Constraint Satisfaction & Game Playing** — logic-based action representation and constraint reasoning, the sibling of KRR in symbolic AI.
-- **Large Language Models** — statistical knowledge, hallucination, and retrieval-augmented grounding that §33.8 pairs with symbolic methods.
+- **Large Language Models** — statistical knowledge, hallucination, and retrieval-augmented grounding that §33.10 pairs with symbolic methods.
 - **Explainable AI & Interpretability** — the modern formalisation of the transparency that symbolic systems offer natively.
 - **Frontier & Emerging Directions** — where the neurosymbolic program is heading next.
 

@@ -121,6 +121,10 @@ The single most useful idea is **conditional probability**: how likely is $A$ on
 
 $$P(A \mid B) = \frac{P(A \cap B)}{P(B)}.$$
 
+**In words:** the chance of $A$ given $B$ is the share of the $B$-world that is also $A$ — take how often both happen and divide by how often $B$ happens at all.
+
+**Also written:** $P(A \cap B) = P(A \mid B)\,P(B)$ (the *multiplication rule*, the same equation solved for the joint probability).
+
 Here $A \cap B$ is the **intersection** — the outcomes in both $A$ and $B$. Dividing by $P(B)$ re-scales so that, within the smaller world of $B$, the probabilities still add to 1.
 
 **Worked example.** A fair die is rolled. Let $A$ = "rolled a 2", $B$ = "rolled an even number". Before knowing anything, $P(A) = 1/6 \approx 0.167$. But if I tell you the roll was even, only $\{2,4,6\}$ remain, so $P(A\mid B) = (1/6)/(3/6) = 1/3 \approx 0.333$. Knowing $B$ doubled the odds of $A$.
@@ -128,6 +132,10 @@ Here $A \cap B$ is the **intersection** — the outcomes in both $A$ and $B$. Di
 Two events are **independent** if knowing one tells you nothing about the other: $P(A\mid B) = P(A)$, equivalently $P(A\cap B) = P(A)\,P(B)$. Two separate fair coins are independent — the first landing heads doesn't bend the second. In the die example, $A$ and $B$ are *not* independent, since $1/3 \ne 1/6$.
 
 One more workhorse is the **law of total probability**: if events $B_1, B_2, \dots$ partition the sample space (exactly one must happen), then $P(A) = \sum_i P(A\mid B_i)\,P(B_i)$. You compute $A$'s probability by splitting into cases, weighting each by how likely the case is. This is exactly the move that produces the denominator in Bayes' theorem (§4.3).
+
+**In words:** to get the overall chance of $A$, break the world into mutually exclusive scenarios, find $A$'s chance inside each, and average those, weighting by how likely each scenario is.
+
+**Also written:** $P(A) = \sum_i P(A \cap B_i)$ — sum the slices of $A$ that fall in each case (using the multiplication rule on each term).
 
 <svg viewBox="0 0 420 170" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif" font-size="13">
   <rect x="10" y="20" width="400" height="130" fill="none" stroke="currentColor" stroke-width="1.5"/>
@@ -173,6 +181,10 @@ The **Uniform** spreads probability evenly: $f(x)=1/(b-a)$ on $[a,b]$ — the ma
 
 $$f(x) = \frac{1}{\sqrt{2\pi\sigma^2}}\exp\!\left(-\frac{(x-\mu)^2}{2\sigma^2}\right).$$
 
+**In words:** the height at $x$ peaks when $x$ sits right at the mean $\mu$, and falls off fast — like the square of the distance from $\mu$, measured in units of spread $\sigma$. The front fraction is just a scaling so the whole curve's area is exactly 1.
+
+**Also written:** for a standardized score $z=(x-\mu)/\sigma$, the same curve is $f(x)=\frac{1}{\sigma}\phi(z)$ with $\phi(z)=\frac{1}{\sqrt{2\pi}}e^{-z^2/2}$ (the standard normal density).
+
 It dominates ML because of the Central Limit Theorem (§4.8): averages of almost anything end up Gaussian. Here is its shape, centered at $\mu$ with width set by $\sigma$:
 
 <svg viewBox="0 0 420 180" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif" font-size="12">
@@ -193,6 +205,14 @@ rng.binomial(n=3, p=0.5, size=5)      # e.g. [2 1 2 0 3] successes
 rng.poisson(lam=2.0, size=5)          # counts of rare events
 rng.normal(loc=0, scale=1, size=5)    # standard Gaussian noise
 rng.exponential(scale=1/2.0, size=5)  # waits; scale = 1/λ
+```
+
+```python
+# SciPy: full distribution objects with .pdf/.pmf/.cdf, not just samples
+from scipy import stats
+stats.norm(loc=0, scale=1).cdf(1.96)        # 0.975 — area left of 1.96
+stats.binom(n=3, p=0.5).pmf(2)              # 0.375 — P(exactly 2 heads)
+stats.poisson(mu=2.0).pmf(0)                # 0.135 — P(0 requests)
 ```
 
 ::: {.callout-warning}
@@ -236,6 +256,10 @@ Bayes' theorem flips a conditional probability around. Often you know $P(\text{e
 
 $$P(H\mid E) = \frac{P(E\mid H)\,P(H)}{P(E)},$$
 
+**In words:** your updated belief in hypothesis $H$ after seeing evidence $E$ is your starting belief, scaled up or down by how well $H$ predicted that evidence, then renormalized so all hypotheses' beliefs still sum to 1.
+
+**Also written:** posterior $\propto$ likelihood $\times$ prior, i.e. $P(H\mid E) \propto P(E\mid H)\,P(H)$ — drop the constant denominator $P(E)$ when you only need to compare hypotheses.
+
 read as **posterior** = (**likelihood** × **prior**) / **evidence**. The **prior** $P(H)$ is your belief in hypothesis $H$ before seeing data; the **likelihood** $P(E\mid H)$ is how well that hypothesis explains the evidence $E$; the **evidence** $P(E)$ is the overall probability of the data (the normalizer that makes the posterior sum to 1); and the **posterior** $P(H\mid E)$ is your updated belief. **Bayesian inference** is simply doing this update repeatedly as data arrives — yesterday's posterior becomes today's prior.
 
 **Worked numeric example — the classic medical test.** A disease affects 1% of people. A test is 99% sensitive ($P(+\mid \text{sick})=0.99$) and has a 5% false-positive rate ($P(+\mid\text{healthy})=0.05$). You test positive. Are you probably sick?
@@ -271,6 +295,17 @@ round(posterior, 3)   # 0.167
 **Rule of thumb:** with a rare condition, even an accurate test gives mostly false alarms. Always factor in the **base rate** (the prior) — ignoring it is the *base-rate fallacy*.
 :::
 
+A small but important practical pattern: when one update finishes, its posterior becomes the prior for the next observation. With **conjugate** priors this update stays in closed form — the Beta distribution is conjugate to the Bernoulli/Binomial, so a $\text{Beta}(\alpha,\beta)$ prior plus $h$ heads and $t$ tails simply becomes a $\text{Beta}(\alpha+h,\ \beta+t)$ posterior. No integrals, just counting.
+
+```python
+from scipy import stats
+# Beta(2,2) prior ("fair-ish"), then observe 7 heads in 10 flips
+alpha, beta = 2 + 7, 2 + 3
+post = stats.beta(alpha, beta)
+post.mean()                      # 0.643 — pulled from MLE 0.7 toward the prior 0.5
+post.interval(0.95)              # 95% credible interval for the coin's bias
+```
+
 
 ::: {.viz-wrap}
 **🎮 Try it — Bayesian Statistics**
@@ -282,11 +317,21 @@ round(posterior, 3)   # 0.167
 
 How do you choose a model's parameters $\theta$? **Maximum Likelihood Estimation (MLE)** picks the $\theta$ under which the observed data is most probable. The **likelihood** is $L(\theta)=P(\text{data}\mid\theta)$ — read "backwards" as a function of $\theta$ with the data held fixed. For independent data points it is a product, and because multiplying many small probabilities underflows to zero, we maximize the **log-likelihood** $\ell(\theta)=\sum_i \log P(x_i\mid\theta)$ instead — turning the product into a sum. Since $\log$ is increasing, the maximizing $\theta$ is identical.
 
+$$\hat\theta_{\text{MLE}} = \arg\max_\theta \sum_{i=1}^N \log P(x_i\mid\theta).$$
+
+**In words:** pick the parameter setting that makes the data you actually saw as unsurprising as possible — adding up the log-probability it assigns to every data point.
+
+**Also written:** $\hat\theta_{\text{MLE}} = \arg\min_\theta \big[-\sum_i \log P(x_i\mid\theta)\big]$ — maximizing log-likelihood is the same as minimizing **negative log-likelihood**, which is what optimizers actually descend.
+
 **Worked example — coin flips.** You flip a coin 10 times and see 7 heads. With unknown bias $p$, the log-likelihood is $\ell(p)=7\log p + 3\log(1-p)$. Set the derivative to zero: $7/p - 3/(1-p) = 0 \Rightarrow p = 7/10 = 0.7$. MLE just recovers the observed frequency — sensible, and it generalizes: minimizing squared error turns out to be MLE under Gaussian noise, and log loss is MLE for classifiers.
 
 **Maximum A Posteriori (MAP)** estimation adds a prior. Instead of maximizing the likelihood alone, it maximizes the posterior $P(\theta\mid\text{data}) \propto P(\text{data}\mid\theta)\,P(\theta)$ (Bayes' theorem from §4.3, ignoring the constant denominator):
 
 $$\theta_{\text{MAP}} = \arg\max_\theta \big[\log P(\text{data}\mid\theta) + \log P(\theta)\big].$$
+
+**In words:** pick the parameters that best explain the data *and* look reasonable under your prior — the prior term nudges you away from settings that fit the data perfectly but are implausible.
+
+**Also written:** $\theta_{\text{MAP}} = \arg\min_\theta \big[\underbrace{-\log P(\text{data}\mid\theta)}_{\text{data-fit loss}} + \underbrace{-\log P(\theta)}_{\text{regularizer}}\big]$ — fit term plus penalty, exactly the regularized-loss form from optimization.
 
 The prior term $\log P(\theta)$ acts as a **regularizer** — a pull toward sensible parameter values. If you had flipped the coin only twice and seen 2 heads, MLE says $p=1.0$ (a coin that *never* lands tails!) — clearly overconfident from tiny data. A prior favoring fair coins pulls the MAP estimate back toward 0.5. In fact, L2 weight regularization is exactly MAP with a Gaussian prior on the weights.
 
@@ -299,6 +344,14 @@ ps[np.argmax(loglik)]   # ≈ 0.70  (MLE)
 # MAP with a Beta(2,2) "fair-ish" prior:
 logprior = np.log(ps*(1-ps))          # ∝ Beta(2,2)
 ps[np.argmax(loglik + logprior)]      # pulled toward 0.5
+```
+
+```python
+# Most scikit-learn fits ARE maximum likelihood under the hood.
+# LogisticRegression maximizes the log-likelihood (= minimizes log loss);
+# its C parameter is the inverse of a Gaussian-prior strength -> MAP.
+from sklearn.linear_model import LogisticRegression
+clf = LogisticRegression(penalty="l2", C=1.0)   # smaller C = stronger prior toward 0
 ```
 
 ```{mermaid}
@@ -329,13 +382,42 @@ flowchart LR
 
 ## 4.5 — Expectation, variance & covariance
 
-The **expectation** (mean) $\mathbb{E}[X]$ is the probability-weighted average — the long-run value if you repeated the experiment forever: $\mathbb{E}[X]=\sum_x x\,P(x)$ for discrete variables, or $\int x f(x)\,dx$ for continuous ones. A fair die has $\mathbb{E}[X] = (1+2+\dots+6)/6 = 3.5$. Expectation is **linear**: $\mathbb{E}[aX+bY]=a\mathbb{E}[X]+b\mathbb{E}[Y]$ always, even when $X$ and $Y$ are dependent — a workhorse identity.
+The **expectation** (mean) $\mathbb{E}[X]$ is the probability-weighted average — the long-run value if you repeated the experiment forever: $\mathbb{E}[X]=\sum_x x\,P(x)$ for discrete variables, or $\int x f(x)\,dx$ for continuous ones. A fair die has $\mathbb{E}[X] = (1+2+\dots+6)/6 = 3.5$.
 
-**Variance** measures spread: the expected squared distance from the mean, $\mathrm{Var}(X)=\mathbb{E}[(X-\mu)^2]=\mathbb{E}[X^2]-\mu^2$. Its square root, the **standard deviation** $\sigma$, is back in the original units (so you can compare it to the data directly). For the die, $\mathbb{E}[X^2]=91/6\approx15.17$, so $\mathrm{Var}=15.17-3.5^2\approx2.92$ and $\sigma\approx1.71$.
+**In words:** sweep over every possible value, weight each by how likely it is, and add them up — the center of gravity of the distribution.
+
+**Also written:** $\mathbb{E}[X] = \int x\,f(x)\,dx$ (continuous) — same idea with a sum replaced by an integral.
+
+Expectation is **linear**: $\mathbb{E}[aX+bY]=a\mathbb{E}[X]+b\mathbb{E}[Y]$ always, even when $X$ and $Y$ are dependent — a workhorse identity.
+
+**Variance** measures spread: the expected squared distance from the mean, $\mathrm{Var}(X)=\mathbb{E}[(X-\mu)^2]=\mathbb{E}[X^2]-\mu^2$.
+
+**In words:** on average, how far (squared) does a draw land from the mean — big variance means draws scatter widely, zero variance means the value is fixed.
+
+**Also written:** $\mathrm{Var}(X)=\mathbb{E}[X^2]-(\mathbb{E}[X])^2$ — "mean of the square minus square of the mean," the form that is fastest to compute.
+
+Its square root, the **standard deviation** $\sigma$, is back in the original units (so you can compare it to the data directly). For the die, $\mathbb{E}[X^2]=91/6\approx15.17$, so $\mathrm{Var}=15.17-3.5^2\approx2.92$ and $\sigma\approx1.71$.
 
 **Covariance** measures whether two variables move together: $\mathrm{Cov}(X,Y)=\mathbb{E}[(X-\mu_X)(Y-\mu_Y)]$. When both tend to sit above their means at the same time the product is positive; positive covariance means they rise together, negative means one rises as the other falls, and zero means no *linear* link.
 
+**In words:** average the product of "how far $X$ is above its mean" and "how far $Y$ is above its mean" — when they stray in the same direction together, the products pile up positive.
+
+**Also written:** $\mathrm{Cov}(X,Y)=\mathbb{E}[XY]-\mathbb{E}[X]\mathbb{E}[Y]$ — and note $\mathrm{Cov}(X,X)=\mathrm{Var}(X)$.
+
 **Worked example.** Three students' (study hours, score): $(1,50),(2,60),(3,70)$. Means: $\bar x=2,\ \bar y=60$. The deviation products are $(-1)(-10)+(0)(0)+(1)(10)=20$, so $\mathrm{Cov}=20/3\approx6.7>0$ — more study goes with a higher score.
+
+<svg viewBox="0 0 440 150" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif" font-size="11">
+  <line x1="40" y1="120" x2="420" y2="120" stroke="currentColor"/>
+  <line x1="80" y1="20" x2="80" y2="120" stroke="currentColor"/>
+  <line x1="80" y1="70" x2="420" y2="70" stroke="currentColor" stroke-dasharray="3 3" opacity="0.5"/>
+  <text x="55" y="35" fill="currentColor">ȳ</text>
+  <text x="200" y="138" fill="currentColor">x̄</text>
+  <circle cx="130" cy="100" r="4" fill="#22c55e" opacity="0.8"/>
+  <circle cx="210" cy="70" r="4" fill="currentColor"/>
+  <circle cx="300" cy="40" r="4" fill="#6366f1" opacity="0.8"/>
+  <text x="300" y="30" fill="currentColor">both above mean → +</text>
+  <text x="120" y="115" fill="currentColor">both below → +</text>
+</svg>
 
 ```python
 import numpy as np
@@ -374,6 +456,10 @@ np.cov(x, y, bias=True)   # 2x2: diagonals are variances, off-diag = covariance
 
 $$r = \frac{\mathrm{Cov}(X,Y)}{\sigma_X\,\sigma_Y}.$$
 
+**In words:** take the covariance and strip out the units by dividing by each variable's spread — what's left says how close the cloud of points lies to a straight line, on a fixed $-1$ to $+1$ scale.
+
+**Also written:** $r = \dfrac{\sum_i (x_i-\bar x)(y_i-\bar y)}{\sqrt{\sum_i (x_i-\bar x)^2}\,\sqrt{\sum_i (y_i-\bar y)^2}}$ — the sample version written directly from the data.
+
 A value $r=+1$ is a perfect upward line, $-1$ a perfect downward line, and $0$ means no *linear* relationship. For the study-hours data above, $\sigma_X=\sqrt{2/3}$ and $\sigma_Y=\sqrt{200/3}$, giving $r = 6.67/\sqrt{0.67\cdot66.7}=1.0$ — the three points fall exactly on a line.
 
 Pearson only sees **linear** structure. **Spearman correlation** instead correlates the *ranks* of the data (1st, 2nd, 3rd…), so it captures any **monotonic** relationship — one that consistently increases or decreases even if curved — and it shrugs off outliers. If $y=x^3$, Pearson is below 1 but Spearman is exactly 1, because the ordering is perfectly preserved.
@@ -389,6 +475,14 @@ Pearson only sees **linear** structure. **Spearman correlation** instead correla
   <circle cx="355" cy="60" r="3" fill="currentColor"/><circle cx="380" cy="100" r="3" fill="currentColor"/><circle cx="410" cy="45" r="3" fill="currentColor"/><circle cx="435" cy="90" r="3" fill="currentColor"/>
   <text x="360" y="140" fill="currentColor">r ≈ 0</text>
 </svg>
+
+```python
+from scipy.stats import pearsonr, spearmanr
+import numpy as np
+x = np.array([1, 2, 3, 4, 5]); y = x**3      # perfectly monotonic, but curved
+pearsonr(x, y).statistic    # ≈ 0.98  — linear fit is good but not perfect
+spearmanr(x, y).statistic   # 1.0     — ranks line up exactly
+```
 
 The cardinal warning: **correlation is not causation**. Ice-cream sales correlate with drownings, but neither causes the other — summer heat drives both (a **confounder**, a hidden variable behind both). A correlation is equally consistent with $X\to Y$, $Y\to X$, a hidden common cause, or pure coincidence in a small sample. Untangling which one is true is a separate discipline (see *Causal Inference*).
 
@@ -417,6 +511,16 @@ That is below 0.05, so you reject "fair coin" — the bias looks real.
 from scipy.stats import binom
 p_value = binom.sf(15, n=20, p=0.5)   # sf(15) = P(X >= 16)
 round(p_value, 4)                     # 0.0059  -> reject H0
+```
+
+```python
+# Comparing two groups' means is the everyday case (e.g. A/B test latency):
+from scipy import stats
+import numpy as np
+rng = np.random.default_rng(0)
+a = rng.normal(100, 15, 200)          # control
+b = rng.normal(104, 15, 200)          # variant
+stats.ttest_ind(a, b).pvalue          # two-sample t-test p-value
 ```
 
 Two error types haunt every test. A **Type I error** (false positive) is rejecting a true $H_0$ — crying wolf; its rate is exactly $\alpha$. A **Type II error** (false negative) is failing to detect a real effect. The **power** of a test, $1 - P(\text{Type II})$, is its chance of catching a true effect when one exists.
@@ -455,6 +559,12 @@ A point estimate like "mean = 3.2" hides its own uncertainty. A **confidence int
 
 The engine behind most CIs is the **Central Limit Theorem (CLT)**: if you take the *average* of $n$ independent samples from almost any distribution, that average is approximately Gaussian for large $n$, centered at the true mean $\mu$ with standard deviation $\sigma/\sqrt{n}$ — a quantity called the **standard error**. This is why the bell curve is everywhere, and why error shrinks like $\sqrt{n}$: quadrupling your data only halves your uncertainty.
 
+$$\bar X_n \;\xrightarrow{\;n\to\infty\;}\; \mathcal{N}\!\left(\mu,\ \frac{\sigma^2}{n}\right).$$
+
+**In words:** average enough independent draws and the average behaves like a bell curve sitting on the true mean, whose width shrinks as the sample grows — no matter what shape the original data had.
+
+**Also written:** the standardized average $\dfrac{\bar X_n - \mu}{\sigma/\sqrt{n}} \xrightarrow{d} \mathcal{N}(0,1)$ converges to a standard normal.
+
 A classic 95% CI for a mean is therefore $\bar x \pm 1.96\,\dfrac{\sigma}{\sqrt n}$, where the 1.96 marks the central 95% of a Gaussian. With $\bar x = 50$, $\sigma=10$, $n=100$: the standard error is $10/\sqrt{100}=1$, so the CI is $50 \pm 1.96 \approx [48.0,\ 52.0]$.
 
 ```{mermaid}
@@ -473,6 +583,13 @@ rng = np.random.default_rng(0)
 data = rng.normal(50, 10, size=100)
 boot = [rng.choice(data, size=len(data), replace=True).mean() for _ in range(10000)]
 np.percentile(boot, [2.5, 97.5])   # ~[48, 52], no formula needed
+```
+
+```python
+# SciPy ships a bootstrap that works for any statistic — here the median:
+from scipy.stats import bootstrap
+res = bootstrap((data,), np.median, confidence_level=0.95, random_state=0)
+res.confidence_interval        # (low, high) for the median, no formula needed
 ```
 
 ::: {.callout-tip}
@@ -501,6 +618,14 @@ np.percentile(boot, [2.5, 97.5])   # ~[48, 52], no formula needed
 ## 4.9 — Monte Carlo & MCMC
 
 Some quantities are impossible to compute by hand but easy to *estimate by random sampling*. That is the **Monte Carlo** idea: to find an average, an area, or a probability, simulate the situation many times and average the results. The error falls as $1/\sqrt{N}$ in the number of samples $N$ regardless of dimension — which is why it beats grid methods in high dimensions, where grids explode exponentially.
+
+The underlying identity is that any expectation can be approximated by a sample average:
+
+$$\mathbb{E}[g(X)] \;\approx\; \frac{1}{N}\sum_{i=1}^N g(x_i), \qquad x_i \sim P(X).$$
+
+**In words:** to get a hard-to-compute average, draw lots of samples, run each through the function, and just average the results — the more samples, the closer you land.
+
+**Also written:** by the law of large numbers $\frac{1}{N}\sum_i g(x_i) \to \mathbb{E}[g(X)]$ as $N\to\infty$; integrals $\int g(x)\,p(x)\,dx$ become sample averages.
 
 **Worked example — estimating $\pi$.** Throw random darts into a $1\times1$ square. The fraction landing inside the quarter-circle of radius 1 equals the ratio of the areas, $\pi/4$. Multiply by 4 to recover $\pi$.
 
@@ -535,21 +660,105 @@ flowchart LR
   M -.collect.-> H[Samples ≈ target<br/>after burn-in]
 ```
 
+```python
+# Metropolis sampling a standard-normal target, by hand — the whole loop fits here:
+import numpy as np
+rng = np.random.default_rng(0)
+target = lambda x: np.exp(-x*x/2)          # unnormalized N(0,1) density
+x, samples = 0.0, []
+for _ in range(50_000):
+    prop = x + rng.normal(0, 1)            # propose a small step
+    if rng.random() < target(prop)/target(x):   # accept ratio
+        x = prop
+    samples.append(x)
+np.mean(samples[5000:]), np.std(samples[5000:])   # ≈ 0, 1 after burn-in
+```
+
 ::: {.callout-warning}
 **Common mistake:** trusting MCMC after too few steps. The chain needs a **burn-in** period to forget its starting point, and successive samples are *correlated* — always check convergence before using the draws.
 :::
 
-## 4.10 — Entropy, KL divergence & information theory
+## 4.10 — Markov chains
+
+**Intuition:** a Markov chain is a board game where your next move depends only on the square you're standing on — not the path that got you there. That "memoryless" assumption is what makes MCMC (§4.9) work, and it underlies PageRank, hidden Markov models for speech, n-gram language models, and the transition dynamics of reinforcement learning.
+
+Formally, a sequence of states $X_0, X_1, X_2, \dots$ has the **Markov property** if the future depends on the present only:
+
+$$P(X_{t+1}=j \mid X_t=i,\, X_{t-1}, \dots, X_0) = P(X_{t+1}=j \mid X_t=i).$$
+
+**In words:** to predict where you go next, all you need is where you are now — the rest of the history adds nothing.
+
+**Also written:** "the future is conditionally independent of the past given the present," $X_{t+1} \perp X_{\text{past}} \mid X_t$.
+
+The chain is described by a **transition matrix** $P$, where entry $P_{ij}$ is the probability of moving from state $i$ to state $j$. Each row sums to 1 (you must go somewhere). If $\pi_t$ is the row vector of state probabilities at time $t$, then one step forward is just a matrix multiply:
+
+$$\pi_{t+1} = \pi_t\,P.$$
+
+**In words:** to get the spread of where you'll be next, multiply today's distribution by the transition rules.
+
+**Also written:** after $k$ steps, $\pi_{t+k} = \pi_t\,P^k$ — raising the matrix to a power jumps multiple steps at once.
+
+Many chains settle into a **stationary distribution** $\pi$ that no longer changes: $\pi = \pi P$. It is the long-run fraction of time spent in each state, and it is the left eigenvector of $P$ for eigenvalue 1. This is exactly the target MCMC engineers its chain to have, and it is what PageRank computes — the stationary distribution of a random web-surfer.
+
+**Worked example — weather.** States {Sunny, Rainy}. From sunny: 80% stay sunny, 20% turn rainy. From rainy: 40% turn sunny, 60% stay rainy.
+
+<svg viewBox="0 0 360 150" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif" font-size="12">
+  <circle cx="90" cy="75" r="34" fill="#f59e0b" opacity="0.20" stroke="currentColor"/>
+  <text x="72" y="79" fill="currentColor">Sunny</text>
+  <circle cx="270" cy="75" r="34" fill="#38bdf8" opacity="0.20" stroke="currentColor"/>
+  <text x="254" y="79" fill="currentColor">Rainy</text>
+  <path d="M122 62 Q180 30 240 62" fill="none" stroke="currentColor" marker-end="url(#a)"/>
+  <text x="165" y="38" fill="currentColor">0.2</text>
+  <path d="M238 90 Q180 120 122 90" fill="none" stroke="currentColor" marker-end="url(#a)"/>
+  <text x="165" y="118" fill="currentColor">0.4</text>
+  <path d="M64 50 A22 22 0 1 0 70 46" fill="none" stroke="currentColor" marker-end="url(#a)"/>
+  <text x="30" y="40" fill="currentColor">0.8</text>
+  <path d="M296 50 A22 22 0 1 1 290 46" fill="none" stroke="currentColor" marker-end="url(#a)"/>
+  <text x="318" y="40" fill="currentColor">0.6</text>
+  <defs><marker id="a" markerWidth="7" markerHeight="7" refX="5" refY="3" orient="auto"><path d="M0 0 L6 3 L0 6 z" fill="currentColor"/></marker></defs>
+</svg>
+
+Solving $\pi = \pi P$ with $\pi_S + \pi_R = 1$ gives the long-run climate: $\pi_S = 2/3$, $\pi_R = 1/3$ — two-thirds of days are sunny, regardless of today's weather.
+
+```python
+import numpy as np
+P = np.array([[0.8, 0.2],     # from Sunny -> [Sunny, Rainy]
+              [0.4, 0.6]])     # from Rainy
+# Power-iterate from any start; it converges to the stationary distribution
+pi = np.array([1.0, 0.0])
+for _ in range(100):
+    pi = pi @ P
+pi                              # [0.667, 0.333]
+
+# Or solve exactly via the eigenvector for eigenvalue 1:
+vals, vecs = np.linalg.eig(P.T)
+stat = np.real(vecs[:, np.argmin(abs(vals - 1))])
+stat / stat.sum()              # [0.667, 0.333]
+```
+
+::: {.callout-tip}
+**Intuition:** the stationary distribution forgets where you started. Whether today is sunny or rainy, run the chain long enough and you spend $2/3$ of days sunny — which is why MCMC can start anywhere and still sample the right target after burn-in.
+:::
+
+## 4.11 — Entropy, KL divergence & information theory
 
 Information theory measures uncertainty in **bits** — the average number of yes/no questions needed to pin something down. The **entropy** of a distribution is its average *surprise*:
 
 $$H(p) = -\sum_x p(x)\log_2 p(x).$$
+
+**In words:** weight each outcome's "surprise" ($-\log_2 p$, big when the outcome is rare) by how often it happens, and average — the result is how many yes/no questions it takes on average to learn the outcome.
+
+**Also written:** $H(p) = \mathbb{E}_{x\sim p}[-\log_2 p(x)]$ — the expected surprise.
 
 A fair coin has $H = -2\times 0.5\log_2 0.5 = 1$ bit — maximally uncertain, one full question to resolve. A coin that lands heads 90% of the time has only $H\approx0.47$ bits — more predictable, less surprising. A guaranteed outcome has entropy 0 (no question needed). Entropy is largest when every outcome is equally likely; it is the formal measure of "how much you don't know."
 
 **KL divergence** (relative entropy) measures how different one distribution $q$ is from a reference $p$ — the *extra* bits you waste by encoding data with the wrong distribution $q$ when the truth is really $p$:
 
 $$D_{\text{KL}}(p\,\|\,q) = \sum_x p(x)\log_2\frac{p(x)}{q(x)} \ge 0.$$
+
+**In words:** averaged over the true outcomes, how many extra bits do you burn by believing $q$ when reality is $p$ — zero only when your model $q$ matches the truth $p$ exactly.
+
+**Also written:** $D_{\text{KL}}(p\|q) = \mathbb{E}_{x\sim p}\!\big[\log_2 p(x) - \log_2 q(x)\big]$ — the expected log-probability gap between truth and model.
 
 It equals $0$ exactly when $p=q$, and it is **asymmetric**: $D_{\text{KL}}(p\|q)\ne D_{\text{KL}}(q\|p)$ in general, so it is a directed "divergence," not a true distance.
 
@@ -562,23 +771,38 @@ p = np.array([0.5, 0.5]); q = np.array([0.9, 0.1])
 (p * np.log2(p/q)).sum()   # 0.737 bits
 ```
 
+```python
+# SciPy's entropy() does both: entropy of p, or KL(p||q) when given qk:
+from scipy.stats import entropy
+entropy(p, base=2)            # 1.0  bit  — entropy of a fair coin
+entropy(p, q, base=2)         # 0.737 bits — KL(p || q)
+```
+
 KL divergence is the loss that trains variational autoencoders and the regularizer in many reinforcement-learning algorithms, so this idea resurfaces across the book.
 
 ::: {.callout-tip}
 **Intuition:** entropy = the surprise inherent in one distribution; cross-entropy = your *cost* when you predict with the wrong distribution; KL = the *gap* between them. In fact $\text{cross-entropy} = H(p) + D_{\text{KL}}(p\|q)$ — the subject of the next section.
 :::
 
-## 4.11 — Cross-entropy & log loss
+## 4.12 — Cross-entropy & log loss
 
 **Cross-entropy** measures the cost of predicting with distribution $q$ when reality follows $p$:
 
 $$H(p,q) = -\sum_x p(x)\log q(x).$$
 
-From §4.10, $H(p,q) = H(p) + D_{\text{KL}}(p\|q)$. Since the data's own entropy $H(p)$ is fixed, *minimizing cross-entropy is exactly minimizing KL divergence* — driving your model's distribution toward the truth. That is precisely why cross-entropy is the default loss for classification.
+**In words:** averaged over the true outcomes, how surprised your model $q$ is by what actually happens — lower means your predicted probabilities line up better with reality.
+
+**Also written:** $H(p,q) = H(p) + D_{\text{KL}}(p\|q) = \mathbb{E}_{x\sim p}[-\log q(x)]$ — the data's own entropy plus the KL gap to your model.
+
+From §4.11, $H(p,q) = H(p) + D_{\text{KL}}(p\|q)$. Since the data's own entropy $H(p)$ is fixed, *minimizing cross-entropy is exactly minimizing KL divergence* — driving your model's distribution toward the truth. That is precisely why cross-entropy is the default loss for classification.
 
 In classification the true label is **one-hot** (all probability on the correct class), so $p$ puts its entire mass on the right class $y$ and the sum collapses to a single term: $-\log q(y)$, the model's predicted probability for the correct answer. For binary labels this is **log loss** (binary cross-entropy):
 
 $$\mathcal{L} = -\frac{1}{N}\sum_{i=1}^N \Big[y_i\log \hat y_i + (1-y_i)\log(1-\hat y_i)\Big].$$
+
+**In words:** for each example, take the log of the probability the model assigned to the *true* answer, flip the sign, and average — confident-and-correct costs almost nothing, confident-and-wrong costs a lot.
+
+**Also written:** since only the true-class term survives, $\mathcal{L} = -\frac{1}{N}\sum_i \log \hat y_{i,\,y_i}$ — the mean negative log-probability of the correct class (the multi-class form).
 
 The shape of $-\log \hat y$ tells the whole story: predict the right class with confidence 1 and the penalty is 0; predict it with probability 0.1 and you pay $-\log 0.1 = 2.3$; predict it with probability near 0 and the loss rockets toward infinity. Being confident *and wrong* is punished savagely — exactly the steep gradient signal you want for fast learning.
 
@@ -603,11 +827,20 @@ eps = 1e-12   # clip to avoid log(0) blowing up
 -np.mean(y*np.log(yhat+eps) + (1-y)*np.log(1-yhat+eps))   # 0.415
 ```
 
+```python
+# In practice, frameworks fuse softmax/sigmoid + log into one stable op.
+# PyTorch: pass raw LOGITS, never hand-softmaxed probabilities.
+import torch, torch.nn.functional as F
+logits = torch.tensor([[2.0, 0.5], [0.1, 1.3]])   # (batch, classes)
+target = torch.tensor([0, 1])                       # class indices
+F.cross_entropy(logits, target)                     # softmax + NLL, numerically safe
+```
+
 ::: {.callout-warning}
 **Common mistake:** feeding raw probabilities of exactly 0 or 1 into log loss gives $\log 0 = -\infty$. Always clip predictions to $[\epsilon, 1-\epsilon]$, and prefer feeding **logits** to a numerically stable loss (e.g. `softmax_cross_entropy_with_logits`) rather than applying softmax and then taking the log by hand.
 :::
 
-## 4.12 — Key takeaways
+## 4.13 — Key takeaways
 
 - **Probability quantifies uncertainty**; conditioning ($P(A\mid B)$) is just zooming into a sub-world and renormalizing, and independence means one event tells you nothing about the other.
 - A handful of **distributions** (Bernoulli, Binomial, Poisson, Uniform, Gaussian, Exponential) model most situations; the Gaussian is everywhere because of the CLT.
@@ -617,9 +850,10 @@ eps = 1e-12   # clip to avoid log(0) blowing up
 - **Hypothesis tests** and **p-values** gauge whether a result is noise; beware Type I/II errors and p-hacking.
 - **CIs, the CLT, and the bootstrap** put error bars on estimates; error shrinks like $1/\sqrt{n}$.
 - **Monte Carlo and MCMC** estimate intractable quantities by sampling — the engine of Bayesian computation.
+- **Markov chains** make the future depend only on the present; their stationary distribution is what MCMC samples and what PageRank computes.
 - **Entropy, KL divergence, and cross-entropy** connect probability to learning: minimizing cross-entropy (log loss) is minimizing KL toward the true distribution.
 
-## 4.13 — See also
+## 4.14 — See also
 
 - *Linear Algebra & Calculus* — the vectors, matrices, and derivatives underneath these distributions and gradients.
 - *Optimization* — how the likelihoods and losses defined here are actually minimized.

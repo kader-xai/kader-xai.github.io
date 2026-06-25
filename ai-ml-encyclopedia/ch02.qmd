@@ -119,6 +119,10 @@ The plain-language picture: imagine driving and watching your odometer. Position
 
 $$f'(x) = \lim_{h \to 0} \frac{f(x+h) - f(x)}{h}$$
 
+**In words:** the derivative is what the average slope between two points settles down to as you slide those two points infinitely close together.
+
+**Also written:** $\dfrac{df}{dx} = \displaystyle\lim_{\Delta x \to 0} \dfrac{\Delta f}{\Delta x}$ — the same limit using Leibniz's $\Delta$ ("change in") notation; $f'(x)$ (Lagrange) and $\frac{df}{dx}$ (Leibniz) name the identical object.
+
 That limit is the formal **definition of the derivative**. Geometrically, the fraction is the slope of a *secant* line through two nearby points; as the points merge, the secant becomes the *tangent*.
 
 <svg viewBox="0 0 420 260" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif" font-size="12">
@@ -150,6 +154,25 @@ In practice nobody recomputes that limit by hand. We use **differentiation rules
 The derivative has a *sign* and a *size*. The sign says which direction is uphill; the size says how steep. A derivative of zero means flat — a peak, valley, or plateau. Optimizers live and die by these two facts.
 :::
 
+The most common derivatives in ML are not polynomials but the **activation-function** derivatives. They are worth knowing by heart because they decide how strongly a gradient survives as it passes back through a neuron:
+
+| Activation | $f(x)$ | $f'(x)$ | Why it matters |
+|------------|--------|---------|----------------|
+| Sigmoid | $\sigma(x) = \frac{1}{1+e^{-x}}$ | $\sigma(x)(1-\sigma(x))$ | maxes at $0.25$ → gradients shrink (vanishing) |
+| Tanh | $\tanh(x)$ | $1 - \tanh^2(x)$ | maxes at $1$, still saturates at the ends |
+| ReLU | $\max(0,x)$ | $1$ if $x>0$ else $0$ | gradient is $0$ or $1$ — cheap, no shrink, but "dies" at $0$ |
+
+Notice the sigmoid derivative is written entirely in terms of $\sigma(x)$ itself — so once the forward pass has computed the activation, the backward pass gets the derivative almost for free. That reuse is the seed of backpropagation in section 2.2.
+
+```python
+# verify a hand-derivative with SymPy (symbolic) before trusting it in code
+import sympy as sp
+x = sp.symbols('x')
+f = 3*x**2 + 2*x
+print(sp.diff(f, x))            # 6*x + 2
+print(sp.diff(sp.exp(-x)/(1+sp.exp(-x)), x))  # the sigmoid derivative, expanded
+```
+
 
 ::: {.viz-wrap}
 **🎮 Try it — Limits**
@@ -173,9 +196,21 @@ The **chain rule** is the real workhorse. It tells you how to differentiate *com
 
 $$\frac{dz}{dx} = \frac{dz}{dg} \cdot \frac{dg}{dx}$$
 
+**In words:** to find how fast the output moves when you wiggle the input, multiply how fast the outer function reacts to its input by how fast the inner function reacts to yours — rates of change multiply down the chain.
+
+**Also written:** $(f \circ g)'(x) = f'(g(x)) \, g'(x)$ — Lagrange's prime form of the same rule; the Leibniz fractions $\frac{dz}{dg}\frac{dg}{dx}$ "cancel" symbolically to leave $\frac{dz}{dx}$.
+
 Intuition: rates of change multiply. If revenue grows 2× as fast as users, and users grow 3× as fast as ad spend, then revenue grows $2 \times 3 = 6$× as fast as ad spend. Each link in the chain contributes a multiplier.
 
 This is *exactly* how **backpropagation** works. A neural network is a long composition: input → linear layer → activation → linear layer → … → loss. To learn, we need $\partial \text{loss}/\partial w$ for every weight $w$ buried deep inside. The chain rule lets us compute these by starting at the loss and multiplying derivatives backward through the layers, reusing intermediate results.
+
+When variables branch and recombine (one input feeding several paths), you also need the **multivariate chain rule**: sum the contributions over every path. For $z = f(u, v)$ with $u = u(x)$, $v = v(x)$,
+
+$$\frac{dz}{dx} = \frac{\partial z}{\partial u}\frac{du}{dx} + \frac{\partial z}{\partial v}\frac{dv}{dx}$$
+
+**In words:** when the input reaches the output through more than one route, add up the rate along each route.
+
+**Also written:** $\frac{dz}{dx} = \sum_{k} \frac{\partial z}{\partial u_k}\frac{du_k}{dx}$ — the general "sum over all intermediate variables $u_k$" form, which is precisely what a framework does when a tensor is used in several places.
 
 ```{mermaid}
 flowchart LR
@@ -203,6 +238,17 @@ dL_dw = dL_da * da_dg * dg_dw
 print(dL_dw)       # 24.0
 ```
 
+A real framework does this multiplication automatically. The same neuron in **PyTorch**, where `.backward()` walks the chain rule for us:
+
+```python
+import torch
+w = torch.tensor(3.0, requires_grad=True)
+x = torch.tensor(2.0)
+L = (w * x) ** 2          # build the graph: g = wx, a = g^2, L = a
+L.backward()              # apply the chain rule backward
+print(w.grad)             # tensor(24.) — matches our by-hand result
+```
+
 ::: {.callout-warning}
 Backprop *reuses* the forward-pass values ($g$, $a$, …). If you overwrite them or forget to store them, the backward pass computes garbage. This is why frameworks keep a "computation graph" of intermediate activations in memory — and why long sequences run out of GPU RAM.
 :::
@@ -227,6 +273,10 @@ When a function has many inputs, its derivatives organize into structured object
 The **gradient** $\nabla f$ collects all the first-order partials of a scalar function into a vector:
 
 $$\nabla f = \left[\frac{\partial f}{\partial x_1}, \frac{\partial f}{\partial x_2}, \dots, \frac{\partial f}{\partial x_n}\right]$$
+
+**In words:** the gradient is just a tidy list — one slope per input direction — bundled into a single vector that points the way the function rises fastest.
+
+**Also written:** $\nabla f = \left(\frac{\partial f}{\partial x_1}, \dots, \frac{\partial f}{\partial x_n}\right)^{\!\top}$, sometimes denoted $\operatorname{grad} f$ or $\partial f / \partial \mathbf{x}$ — the same object as a column vector.
 
 Its defining property is the one that makes optimization work: **the gradient points in the direction of steepest ascent**, and its negative points downhill. That is the whole basis of gradient descent — to minimize, step against the gradient.
 
@@ -256,7 +306,36 @@ The **Hessian** $H$ holds the *second* derivatives of a scalar function — the 
 | Jacobian $J$ | $\mathbb{R}^n \to \mathbb{R}^m$ | matrix ($m \times n$) | how each output reacts to each input |
 | Hessian $H$ | $\mathbb{R}^n \to \mathbb{R}$ | matrix ($n \times n$) | curvature (second order) |
 
+A useful way to see the family: each object is the derivative of the one above it. The gradient is the derivative of a scalar; the Hessian is the Jacobian *of the gradient* (the derivative of a derivative).
+
+<svg viewBox="0 0 460 150" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif" font-size="12">
+  <rect x="20" y="55" width="90" height="40" rx="6" fill="#6366f1" fill-opacity="0.25" stroke="currentColor"/>
+  <text x="65" y="80" text-anchor="middle" fill="currentColor">f (scalar)</text>
+  <rect x="170" y="55" width="110" height="40" rx="6" fill="#22c55e" fill-opacity="0.25" stroke="currentColor"/>
+  <text x="225" y="80" text-anchor="middle" fill="currentColor">∇f (gradient)</text>
+  <rect x="345" y="55" width="100" height="40" rx="6" fill="#f59e0b" fill-opacity="0.25" stroke="currentColor"/>
+  <text x="395" y="80" text-anchor="middle" fill="currentColor">H (Hessian)</text>
+  <line x1="110" y1="75" x2="168" y2="75" stroke="currentColor" stroke-width="1.5" marker-end="url(#ah)"/>
+  <line x1="280" y1="75" x2="343" y2="75" stroke="currentColor" stroke-width="1.5" marker-end="url(#ah)"/>
+  <text x="139" y="48" text-anchor="middle" fill="currentColor" font-size="10">∂</text>
+  <text x="311" y="48" text-anchor="middle" fill="currentColor" font-size="10">∂</text>
+  <defs><marker id="ah" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6 Z" fill="currentColor"/></marker></defs>
+</svg>
+
 **Worked example.** For $f(x, y) = x^2 + 3y^2$: the gradient is $\nabla f = [2x, 6y]$, and the Hessian is the constant matrix $H = \begin{bmatrix} 2 & 0 \\ 0 & 6 \end{bmatrix}$. Both diagonal entries are positive, so the bowl curves upward in every direction — the point $(0,0)$ is a genuine minimum. The unequal entries ($2$ vs $6$) mean the bowl is steeper along $y$ than $x$, which is exactly the kind of "stretched bowl" that makes plain gradient descent zig-zag (see Chapter 03).
+
+```python
+# autodiff gives gradient, Jacobian, and Hessian in a few lines (PyTorch)
+import torch
+def f(v):                      # f(x,y) = x^2 + 3y^2
+    x, y = v
+    return x**2 + 3*y**2
+
+p = torch.tensor([1.0, 2.0])
+g = torch.autograd.functional.jacobian(f, p)   # gradient: tensor([2., 12.])
+H = torch.autograd.functional.hessian(f, p)    # [[2,0],[0,6]]
+print(g, H, sep="\n")
+```
 
 ::: {.callout-tip}
 Rule of thumb on cost: the gradient has $n$ numbers, the Hessian has $n^2$. For a model with a billion parameters, the gradient is feasible but the full Hessian is unthinkable. This is why almost all deep-learning optimizers are *first-order* (gradient only) and merely *approximate* curvature.
@@ -281,13 +360,51 @@ Rule of thumb on cost: the gradient has $n$ numbers, the Hessian has $n^2$. For 
 <div class="ml-viz" data-viz="convexsurface" data-params="{}"></div>
 :::
 
-## 2.4 — Taylor series & local approximation
+## 2.4 — Directional derivatives & the steepest-descent direction
+
+We have been speaking of "the slope," but in many dimensions there is a slope in *every* direction you could walk. The **directional derivative** asks: standing at a point, if I step along a chosen unit direction $\mathbf{u}$, how fast does the function change? The answer is a dot product with the gradient:
+
+$$D_{\mathbf{u}} f = \nabla f \cdot \mathbf{u}$$
+
+**In words:** the rate of change in any direction is the gradient projected onto that direction — how much your chosen heading lines up with the uphill arrow.
+
+**Also written:** $D_{\mathbf{u}} f = \|\nabla f\|\,\|\mathbf{u}\|\cos\theta = \|\nabla f\|\cos\theta$ (since $\|\mathbf{u}\|=1$), where $\theta$ is the angle between your direction and the gradient.
+
+That second form is the intuition machine learning runs on. The slope is largest when $\cos\theta = 1$ — that is, when $\mathbf{u}$ points *exactly along* the gradient (steepest ascent). It is most negative when $\cos\theta = -1$, when you walk *opposite* the gradient (steepest descent). And when $\mathbf{u}$ is perpendicular to the gradient ($\cos\theta = 0$) the function is momentarily flat — you are walking along a contour line.
+
+<svg viewBox="0 0 320 220" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif" font-size="11">
+  <circle cx="120" cy="120" r="3.5" fill="currentColor"/>
+  <!-- gradient -->
+  <line x1="120" y1="120" x2="220" y2="70" stroke="#ef4444" stroke-width="2.5" marker-end="url(#a2)"/>
+  <text x="225" y="68" fill="#ef4444">∇f (steepest ↑)</text>
+  <!-- chosen direction u -->
+  <line x1="120" y1="120" x2="205" y2="135" stroke="#6366f1" stroke-width="2" marker-end="url(#a2)"/>
+  <text x="208" y="150" fill="#6366f1">u</text>
+  <!-- contour direction (perpendicular) -->
+  <line x1="120" y1="120" x2="70" y2="20" stroke="#22c55e" stroke-width="1.5" stroke-dasharray="4 3"/>
+  <text x="25" y="30" fill="#22c55e">contour (flat)</text>
+  <path d="M150 120 A 34 34 0 0 0 142 100" fill="none" stroke="currentColor"/>
+  <text x="155" y="108" fill="currentColor" font-size="10">θ</text>
+  <defs><marker id="a2" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6 Z" fill="currentColor"/></marker></defs>
+</svg>
+
+**Worked example.** Take $f(x,y) = x^2 + y^2$ at the point $(3, 4)$, so $\nabla f = [6, 8]$. Walk in the direction $\mathbf{u} = [1, 0]$ (pure $+x$): the directional derivative is $[6,8]\cdot[1,0] = 6$. Walk along the gradient's own direction, the unit vector $[6,8]/10 = [0.6, 0.8]$: the rate is $[6,8]\cdot[0.6,0.8] = 3.6 + 6.4 = 10 = \|\nabla f\|$ — the maximum possible. No direction climbs faster than straight along the gradient, which is *why* gradient descent steps along $-\nabla f$.
+
+::: {.callout-tip}
+This is the rigorous reason behind the chapter's one-line summary. "Step against the gradient" is not a heuristic — among all unit directions, $-\nabla f$ is provably the one that decreases $f$ fastest, because the dot product is minimized when the angle is $180°$.
+:::
+
+## 2.5 — Taylor series & local approximation
 
 A **Taylor series** rebuilds a complicated function near a point out of its derivatives there. The idea: if you know a function's value, slope, curvature, and so on at one spot, you can predict its values nearby — better and better as you add terms.
 
 Around a point $a$:
 
 $$f(x) \approx f(a) + f'(a)(x-a) + \tfrac{1}{2}f''(a)(x-a)^2 + \dots$$
+
+**In words:** start at the known height $f(a)$, tilt by the slope, bend by half the curvature, and keep adding finer corrections — each term fixes the error left by the previous ones.
+
+**Also written:** $f(x) = \displaystyle\sum_{k=0}^{\infty} \frac{f^{(k)}(a)}{k!}(x-a)^k$ — the compact summation form, where $f^{(k)}$ is the $k$-th derivative and $0! = 1$.
 
 The first two terms are just the tangent line — a **linear approximation**. Add the third (curvature) term and you get a parabola that hugs the curve more tightly. Each extra derivative buys you accuracy over a wider neighborhood.
 
@@ -310,6 +427,17 @@ Why ML cares: optimization methods *are* local approximations. Gradient descent 
 
 **Worked example.** Approximate $e^x$ near $a = 0$. The derivatives of $e^x$ are all $e^x$, equal to $1$ at $0$, so $e^x \approx 1 + x + \tfrac{1}{2}x^2$. At $x = 0.1$: the approximation gives $1 + 0.1 + 0.005 = 1.105$, while the true value is $1.10517\ldots$ — accurate to four decimals from just three terms. Push to $x = 1$ and the same three terms give $2.5$ versus the true $2.718$ — still close, but the error grows as you move away from $a$, exactly as expected.
 
+```python
+# watch accuracy grow with each Taylor term for e^x near 0
+import numpy as np
+from math import factorial
+x = 1.0
+for n_terms in range(1, 6):
+    approx = sum(x**k / factorial(k) for k in range(n_terms))
+    print(n_terms, round(approx, 5))   # ... converges toward 2.71828
+print("true", round(np.exp(x), 5))
+```
+
 ::: {.callout-warning}
 A Taylor approximation is only trustworthy *near* the expansion point. Optimizers that take an overly large step are trusting a local quadratic model far outside its valid neighborhood — which is precisely why too-big a learning rate makes training diverge. This is the idea behind "trust region" methods.
 :::
@@ -321,7 +449,7 @@ A Taylor approximation is only trustworthy *near* the expansion point. Optimizer
 <div class="ml-viz" data-viz="taylor" data-params="{}"></div>
 :::
 
-## 2.5 — Integration (and where it appears in ML)
+## 2.6 — Integration (and where it appears in ML)
 
 If differentiation is about *rates*, **integration** is about *accumulation* — adding up infinitely many infinitesimal pieces. The **definite integral** $\int_a^b f(x)\,dx$ is the signed area under the curve $f$ between $a$ and $b$. The two operations are inverses: the **Fundamental Theorem of Calculus** says integrating a derivative gives back the original function.
 
@@ -339,6 +467,10 @@ If differentiation is about *rates*, **integration** is about *accumulation* —
 In ML, integration shows up most often as **expectation**. The expected value of a function $g$ under a probability density $p$ is an integral:
 
 $$\mathbb{E}_{x \sim p}[g(x)] = \int g(x)\, p(x)\, dx$$
+
+**In words:** the expectation is a weighted average of $g$ — every possible value of $x$ contributes $g(x)$, weighted by how likely that $x$ is under $p$.
+
+**Also written:** for a discrete distribution this becomes a sum, $\mathbb{E}[g(x)] = \sum_x g(x)\,p(x)$ — integration is just the continuous limit of that weighted sum.
 
 This single formula hides under enormous amounts of ML: the expected loss over the data distribution, the mean of a Gaussian, the normalizing constant that makes a probability density integrate to $1$, the area under the ROC curve, and the marginal likelihood in Bayesian models. Probabilities themselves are integrals of densities over a region.
 
@@ -367,7 +499,7 @@ Whenever you see "expected loss," "marginal likelihood," "average reward," or "a
 <div class="ml-viz" data-viz="integral" data-params="{}"></div>
 :::
 
-## 2.6 — Numerical methods & stability
+## 2.7 — Numerical methods & stability
 
 Calculus on paper assumes infinite precision. Computers do not have it — they store numbers in **floating point**, with a fixed number of bits. Knowing how derivatives and integrals are *actually computed*, and how they fail, is the difference between a model that trains and one that silently fills with `NaN`.
 
@@ -393,11 +525,43 @@ flowchart TD
 
 **Automatic differentiation** is the winner for deep learning. It records the elementary operations of the forward pass and applies the chain rule mechanically, giving derivatives correct to machine precision at roughly the cost of one extra pass. It is neither a symbolic formula nor an approximation — it is exact arithmetic on the actual computational graph (this is the backprop of section 2.2, generalized).
 
+**Forward vs reverse mode.** Autodiff comes in two flavors, and the choice is about *shape*. Picture the chain rule's product of derivatives: you can multiply it left-to-right or right-to-left, and which is cheaper depends on whether the function fans *out* (few inputs, many outputs) or *in* (many inputs, one output).
+
+- **Forward mode** carries derivatives *forward* alongside the values, input by input. It is cheap when there are few inputs and many outputs ($n \ll m$).
+- **Reverse mode** does one forward pass to record the graph, then sweeps *backward* from the output. It is cheap when there are many inputs and few outputs ($n \gg m$) — which is *exactly* the deep-learning case: millions of parameters, one scalar loss. **Reverse mode is backpropagation.**
+
+<svg viewBox="0 0 440 150" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif" font-size="11">
+  <text x="10" y="20" fill="currentColor" font-weight="bold">forward mode</text>
+  <line x1="20" y1="40" x2="200" y2="40" stroke="#22c55e" stroke-width="2" marker-end="url(#a3)"/>
+  <text x="60" y="58" fill="#22c55e" font-size="10">value &amp; derivative travel together →</text>
+  <text x="240" y="20" fill="currentColor" font-weight="bold">reverse mode (backprop)</text>
+  <line x1="250" y1="40" x2="430" y2="40" stroke="#cbd5e1" stroke-width="2" marker-end="url(#a3)"/>
+  <text x="300" y="34" fill="currentColor" font-size="10">1) forward pass records graph</text>
+  <line x1="430" y1="70" x2="250" y2="70" stroke="#ec4899" stroke-width="2" marker-end="url(#a3)"/>
+  <text x="288" y="88" fill="#ec4899" font-size="10">2) gradients sweep ← backward</text>
+  <text x="20" y="120" fill="currentColor" font-size="10">few inputs → many outputs: forward wins</text>
+  <text x="20" y="138" fill="currentColor" font-size="10">many inputs → one loss: reverse wins (the DL case)</text>
+  <defs><marker id="a3" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6 Z" fill="currentColor"/></marker></defs>
+</svg>
+
+```python
+# reverse-mode autodiff: one scalar loss, gradients for all inputs at once
+import torch
+x = torch.tensor([1.0, 2.0, 3.0], requires_grad=True)
+loss = (x ** 2).sum()        # one forward pass builds the graph
+loss.backward()              # one backward sweep fills every gradient
+print(x.grad)                # tensor([2., 4., 6.]) = d(sum x^2)/dx
+```
+
 **Floating-point hazards: overflow and underflow.** A 32-bit float maxes out around $3.4 \times 10^{38}$. Compute $e^{1000}$ and you get `inf` (**overflow**); compute $e^{-1000}$ and you get $0$ (**underflow**). Both are disasters when they feed into a division or a logarithm.
 
 **The log-sum-exp trick.** This hazard bites constantly in softmax and cross-entropy, which compute $\log \sum_i e^{x_i}$. If any $x_i$ is large, $e^{x_i}$ overflows. The fix exploits a clean algebraic identity: subtract the max $m = \max_i x_i$ before exponentiating, then add it back:
 
 $$\log \sum_i e^{x_i} = m + \log \sum_i e^{x_i - m}$$
+
+**In words:** pull the biggest exponent out front so the largest thing you ever exponentiate is $e^0 = 1$; the subtraction inside and the addition outside cancel, so the answer does not change — only the overflow does.
+
+**Also written:** $\operatorname{LSE}(x_1,\dots,x_n) = m + \log\!\big(\sum_i e^{x_i - m}\big)$ with $m = \max_i x_i$ — the "shift-by-max" form used inside every numerically stable softmax.
 
 Now the largest exponent is $e^{0} = 1$ — no overflow — and the result is mathematically identical.
 
@@ -410,6 +574,14 @@ def logsumexp(x):
 x = np.array([1000.0, 1001.0, 1002.0])
 # np.log(np.sum(np.exp(x)))  -> inf  (overflow!)
 print(logsumexp(x))          # 1002.407... correct and finite
+```
+
+In practice you reach for the library version rather than rolling your own — `scipy.special.logsumexp`, or `torch.logsumexp` / `F.log_softmax`, all of which apply this shift internally:
+
+```python
+from scipy.special import logsumexp as lse
+import numpy as np
+print(lse(np.array([1000.0, 1001.0, 1002.0])))   # 1002.407..., no overflow
 ```
 
 **Worked example.** Naively, $e^{1000}$ is already `inf`, so the naive log-sum-exp returns `inf`. The stabilized version subtracts $m = 1002$, exponentiates $\{e^{-2}, e^{-1}, e^{0}\} = \{0.135, 0.368, 1\}$, sums to $1.503$, takes the log ($0.407$), and adds $1002$ back — giving $1002.407$, finite and exact. Every serious softmax implementation does this internally.
@@ -431,16 +603,17 @@ print(logsumexp(x))          # 1002.407... correct and finite
 <div class="ml-viz" data-viz="graddesc" data-params="{&quot;surface&quot;: &quot;convex&quot;}"></div>
 :::
 
-## 2.7 — Key takeaways
+## 2.8 — Key takeaways
 
 - A **derivative** is a slope: the signed rate of change of output with respect to input. Sign = direction uphill, magnitude = steepness.
 - **Partial derivatives** freeze all but one variable; the **chain rule** multiplies rates through a composition — this *is* backpropagation.
 - The **gradient** is the vector of partials and points uphill; the **Jacobian** handles vector→vector maps; the **Hessian** captures curvature but costs $n^2$, so deep learning stays first-order.
+- The **directional derivative** $\nabla f \cdot \mathbf{u}$ shows that among all directions, $-\nabla f$ is provably the steepest *descent* — the rigorous reason gradient descent works.
 - **Taylor series** approximate a function locally from its derivatives; gradient descent is a first-order model, Newton's method a second-order one — and both are untrustworthy far from the expansion point.
 - **Integration** in ML almost always means an **expectation**, usually intractable and estimated by **Monte Carlo** sampling.
-- Real computation lives in **floating point**: prefer **autodiff** over finite differences or symbolic math, and use the **log-sum-exp trick** and friends to dodge overflow/underflow and `NaN`.
+- Real computation lives in **floating point**: prefer **autodiff** (reverse mode = backprop) over finite differences or symbolic math, and use the **log-sum-exp trick** and friends to dodge overflow/underflow and `NaN`.
 
-## 2.8 — See also
+## 2.9 — See also
 
 - **Chapter 01 — Linear Algebra** — the vectors and matrices that gradients, Jacobians, and Hessians are built from.
 - **Chapter 03 — Optimization** — gradient descent, Newton's method, and learning rates that put these derivatives to work.

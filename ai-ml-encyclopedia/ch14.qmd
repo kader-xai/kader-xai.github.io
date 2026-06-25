@@ -298,7 +298,65 @@ print(w1.grad.item(), w2.grad.item())   # -> -4.5 -1.5
 Backprop needs the activations $a^{[\ell]}$ from the forward pass to compute gradients, so a framework caches them. This is why training uses far more memory than inference — every intermediate tensor is held until the backward pass consumes it.
 :::
 
-## 14.4 — Activation functions
+## 14.4 — Computational graphs & automatic differentiation
+
+Backprop felt magical in §14.3 — how does a framework "know" the chain rule for an arbitrary network you typed out? The answer is the **computational graph**: every operation you write (a multiply, an add, a ReLU) becomes a **node**, and the tensors flowing between them become **edges**. Forward propagation walks the graph left-to-right computing values; backprop walks it right-to-left, and at each node it only needs to know one thing — that node's *local* derivative. The chain rule then stitches the local pieces into the full gradient automatically. You never derive anything by hand; you just *build the graph by writing normal code*, and the framework differentiates it.
+
+The intuition: think of the graph as a factory assembly line. Going forward, each station adds a part (computes its output). Going backward, each station is handed "how much the final product cares about my output" and multiplies in "how much my output cares about my inputs" — that product is what it passes upstream. Every station only needs the rule for *its own little operation*; nobody needs the blueprint for the whole line.
+
+Here is the graph for the tiny network $L = \tfrac12(w_2\,(w_1 x) - y)^2$ from §14.3 — the same example, drawn as nodes:
+
+<svg viewBox="0 0 460 150" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif" font-size="11">
+  <g stroke="currentColor" stroke-width="0.9" opacity="0.7" fill="none" marker-end="url(#ah)">
+    <line x1="58" y1="55" x2="98" y2="55"/>
+    <line x1="142" y1="55" x2="182" y2="55"/>
+    <line x1="226" y1="55" x2="266" y2="55"/>
+    <line x1="310" y1="55" x2="350" y2="55"/>
+  </g>
+  <defs><marker id="ah" markerWidth="7" markerHeight="7" refX="5" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6 z" fill="currentColor"/></marker></defs>
+  <circle cx="40" cy="55" r="16" fill="#38bdf8" opacity="0.5" stroke="currentColor" stroke-width="0.7"/>
+  <text x="40" y="59" text-anchor="middle" fill="currentColor">x·w₁</text>
+  <circle cx="120" cy="55" r="16" fill="#6366f1" opacity="0.5" stroke="currentColor" stroke-width="0.7"/>
+  <text x="120" y="59" text-anchor="middle" fill="currentColor">·w₂</text>
+  <circle cx="204" cy="55" r="16" fill="#22c55e" opacity="0.5" stroke="currentColor" stroke-width="0.7"/>
+  <text x="204" y="59" text-anchor="middle" fill="currentColor">−y</text>
+  <circle cx="288" cy="55" r="16" fill="#f59e0b" opacity="0.5" stroke="currentColor" stroke-width="0.7"/>
+  <text x="288" y="59" text-anchor="middle" fill="currentColor">(·)²</text>
+  <circle cx="368" cy="55" r="16" fill="#ec4899" opacity="0.5" stroke="currentColor" stroke-width="0.7"/>
+  <text x="368" y="59" text-anchor="middle" fill="currentColor">½·</text>
+  <text x="404" y="59" fill="currentColor">L</text>
+  <text x="40" y="95" text-anchor="middle" fill="currentColor" font-size="9">a₁</text>
+  <text x="120" y="95" text-anchor="middle" fill="currentColor" font-size="9">ŷ</text>
+  <g opacity="0.8"><text x="230" y="128" fill="#d9774a" font-size="10">forward →   backward ←  (each node knows its own local derivative)</text></g>
+</svg>
+
+Frameworks come in two flavors of graph. A **static graph** (older TensorFlow 1.x) is defined once, then executed many times — fast, but awkward to debug because the code that builds the graph runs separately from the code that runs it. A **dynamic graph** (PyTorch, JAX, TF 2.x eager) is built *on the fly* each forward pass, so the graph can change every iteration (handy for variable-length inputs) and you can inspect intermediate values with an ordinary `print`. This mode is also called **define-by-run**.
+
+The mode of differentiation backprop uses is **reverse-mode autodiff**: start from the single scalar loss and sweep backward to all parameters at once. That direction is the whole reason training is affordable — one backward sweep yields the gradient for *millions* of weights in roughly the cost of one forward pass. (The opposite, forward-mode, would need one sweep per parameter — fine for one input and many outputs, useless when you have one loss and a billion weights.)
+
+**In words:** record what operations produced the loss; to differentiate, replay them in reverse, multiplying each node's local derivative into the running gradient.
+**Also written:** for a chain $L = f_n(\dots f_2(f_1(w)))$, reverse-mode computes $\frac{\partial L}{\partial w} = \prod_{k} f_k'$ by accumulating the product from $f_n$ down to $f_1$ — exactly the $\delta$ recursion of §14.3.
+
+You can watch the graph being built and traversed. PyTorch tags each result tensor with the function that created it (`grad_fn`), and `backward()` walks those tags:
+
+```python
+import torch
+x = torch.tensor(2.0)
+w1 = torch.tensor(0.5, requires_grad=True)
+w2 = torch.tensor(1.5, requires_grad=True)
+a1 = x * w1            # node: MulBackward
+yhat = a1 * w2         # node: MulBackward
+loss = 0.5 * (yhat - 3.0)**2
+print(loss.grad_fn)    # <MulBackward0 ...> — the graph remembers how loss was made
+loss.backward()        # reverse-mode sweep over the recorded graph
+print(w1.grad, w2.grad)         # tensor(-4.5) tensor(-1.5)
+```
+
+::: {.callout-tip}
+Two everyday consequences of the graph: call `optimizer.zero_grad()` each step or gradients *accumulate* into the graph's leaves (sometimes you want that — e.g. simulating a big batch); and wrap pure inference in `with torch.no_grad():` so the framework skips building the graph and saves memory.
+:::
+
+## 14.5 — Activation functions
 
 The **activation function** $g$ is the nonlinearity applied after each weighted sum. Without it, stacking layers collapses into a single linear map: $W_2(W_1 x) = (W_2 W_1)x$ is still linear, so the network could never learn a curved decision boundary. Nonlinearity is what makes depth meaningful.
 
@@ -354,7 +412,7 @@ gelu    = lambda z: 0.5*z*(1+np.tanh(np.sqrt(2/np.pi)*(z+0.044715*z**3)))
 Default to ReLU for hidden layers in plain MLPs and CNNs; reach for GELU in Transformers. Save sigmoid for a single output that must be a probability, not for hidden layers.
 :::
 
-### 14.4.1 — Why ReLU "dies," and the modern menu
+### 14.5.1 — Why ReLU "dies," and the modern menu
 
 The everyday way to picture a **dead ReLU**: a light switch stuck in the off position. If a unit's weighted sum lands in the negative zone for *every* training example, ReLU outputs 0 and — crucially — its gradient is also 0, so no update can ever push it back on. A bad batch or too-aggressive a learning rate can flip a chunk of units off permanently, and they contribute nothing for the rest of training.
 
@@ -374,7 +432,7 @@ import torch.nn.functional as F
 F.relu(z); F.leaky_relu(z, 0.01); F.gelu(z); F.silu(z)   # pick per the table
 ```
 
-## 14.5 — Softmax
+## 14.6 — Softmax
 
 When the output is a choice among $K$ classes, the network produces $K$ raw scores called **logits**. **Softmax** turns those logits into a probability distribution — all positive, summing to 1 — so the largest logit becomes the most likely class while keeping the others in proportion.
 
@@ -401,7 +459,7 @@ print(softmax(np.array([2.0, 1.0, 0.1])))   # [0.659 0.242 0.099]
 $e^{z}$ overflows for large logits. Always subtract $\max(z)$ first — it shifts every term equally and leaves the ratios unchanged, but keeps the exponentials in a safe range. Every production softmax does this.
 :::
 
-## 14.6 — Weight initialization
+## 14.7 — Weight initialization
 
 Before training, weights need starting values. The naive choice — **all zeros** — fails catastrophically: every neuron in a layer then computes the identical output and receives the identical gradient, so they update in lockstep and stay identical forever. This is the **symmetry problem**; the cure is small *random* weights to break it.
 
@@ -438,7 +496,7 @@ nn.init.kaiming_normal_(layer.weight, nonlinearity="relu")  # He init
 nn.init.zeros_(layer.bias)                                  # biases at 0
 ```
 
-## 14.7 — Loss / cost functions
+## 14.8 — Loss / cost functions
 
 The **loss function** measures how wrong a single prediction is; the **cost function** is the loss averaged over the dataset. Training minimizes it. The right loss depends on the task.
 
@@ -452,7 +510,7 @@ For **classification**, use **cross-entropy**, which measures the distance betwe
 **In words:** the loss is how surprised the model is by the true label — the lower the probability it gave the correct class, the bigger the penalty.
 **Also written:** $L = -\log \hat y_{c}$ where $c$ is the true class index — the sum collapses because only the correct class has $y_i = 1$.
 
-**Worked example.** True class is 0, model predicts $\hat y = [0.659, 0.242, 0.099]$ (from §14.5). Cross-entropy $= -\log(0.659) = 0.417$. If the model had been confident-and-correct ($\hat y_0 = 0.99$), loss $= 0.01$; confident-and-wrong ($\hat y_0 = 0.01$) gives $4.6$ — cross-entropy punishes confident mistakes hard.
+**Worked example.** True class is 0, model predicts $\hat y = [0.659, 0.242, 0.099]$ (from §14.6). Cross-entropy $= -\log(0.659) = 0.417$. If the model had been confident-and-correct ($\hat y_0 = 0.99$), loss $= 0.01$; confident-and-wrong ($\hat y_0 = 0.01$) gives $4.6$ — cross-entropy punishes confident mistakes hard.
 
 <svg viewBox="0 0 360 170" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif" font-size="11">
   <line x1="40" y1="140" x2="340" y2="140" stroke="#999"/>
@@ -485,7 +543,65 @@ ce   = nn.CrossEntropyLoss()        # multi-class: fuses softmax + cross-entropy
 Don't pair MSE with softmax for classification — the gradients are weak when the model is badly wrong. Softmax + cross-entropy gives a clean gradient of $\hat y - y$, which is why it's the universal default for classifiers.
 :::
 
-## 14.8 — Batch & layer normalization
+## 14.9 — Gradient descent: the update step
+
+Backprop hands you the gradient; **gradient descent** is what *uses* it to actually move the weights. The gradient $\nabla_w L$ points in the direction of steepest *increase* of the loss, so to shrink the loss you step the opposite way. That's the whole training engine in one line.
+
+The intuition everyone reaches for: you're a hiker in fog trying to reach the valley floor. You can't see the whole landscape, but you can feel the slope under your feet (the gradient). So you take a small step straight downhill, feel the slope again, step again — repeat until the ground is flat. The **learning rate** $\eta$ is your stride length: too short and you crawl, too long and you bound clear over the valley and end up higher than you started.
+
+$$w \leftarrow w - \eta\,\nabla_w L$$
+
+**In words:** nudge each weight a little in the downhill direction; how far is set by the learning rate.
+**Also written:** $w_{t+1} = w_t - \eta\,\dfrac{\partial L}{\partial w}\Big|_{w_t}$ — the same step, indexed by iteration $t$.
+
+The learning rate is the single most consequential dial in all of training. The picture below shows the three regimes: too small (slow crawl, may never arrive), just right (smooth descent to the minimum), too large (overshoot, bounce, possibly diverge).
+
+<svg viewBox="0 0 460 170" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif" font-size="10">
+  <!-- three identical loss bowls -->
+  <g fill="none" stroke="currentColor" stroke-width="1.4" opacity="0.5">
+    <path d="M10,20 Q70,160 130,20"/>
+    <path d="M165,20 Q225,160 285,20"/>
+    <path d="M320,20 Q380,160 440,20"/>
+  </g>
+  <!-- too small: tiny steps clustered high on left wall -->
+  <g fill="#f59e0b"><circle cx="38" cy="92" r="3.5"/><circle cx="46" cy="74" r="3.5"/><circle cx="52" cy="60" r="3.5"/></g>
+  <text x="70" y="150" text-anchor="middle" fill="currentColor">η too small</text>
+  <!-- just right: steps marching into the basin -->
+  <g fill="#22c55e"><circle cx="180" cy="58" r="3.5"/><circle cx="205" cy="100" r="3.5"/><circle cx="222" cy="120" r="3.5"/><circle cx="225" cy="126" r="3.5"/></g>
+  <text x="225" y="150" text-anchor="middle" fill="currentColor">η just right</text>
+  <!-- too large: zig-zag bouncing up the far wall -->
+  <g fill="#ec4899"><circle cx="338" cy="64" r="3.5"/><circle cx="420" cy="46" r="3.5"/><circle cx="332" cy="38" r="3.5"/></g>
+  <path d="M338,64 L420,46 L332,38" fill="none" stroke="#ec4899" stroke-width="1" opacity="0.7"/>
+  <text x="380" y="150" text-anchor="middle" fill="currentColor">η too large</text>
+</svg>
+
+**Worked example.** One weight $w = 4.0$, learning rate $\eta = 0.1$, and a gradient of $\nabla_w L = 6.0$ at this point. One step: $w \leftarrow 4.0 - 0.1\cdot6.0 = 3.4$. If the loss were the simple bowl $L = \tfrac12 w^2$ (so $\nabla_w L = w$), repeated steps give $w \leftarrow (1-\eta)w$ — a geometric decay $4.0 \to 3.6 \to 3.24 \to \dots$ gliding toward the minimum at $0$. Bump $\eta$ past $2$ and the same rule *grows* instead: divergence.
+
+```python
+import numpy as np
+w, eta = 4.0, 0.1
+grad = lambda w: w                       # gradient of L = ½w²  (minimum at 0)
+for step in range(6):
+    w -= eta * grad(w)                   # the update rule, by hand
+    print(round(w, 4))                   # 3.6 → 3.24 → 2.916 → ... → toward 0
+```
+
+In a framework the optimizer owns this update; you only supply gradients (via `backward()`) and call `step()`. Plain SGD *is* the rule above; momentum and Adam (next chapter) refine *which direction and how far* using the history of gradients, but the skeleton is identical:
+
+```python
+import torch
+optimizer = torch.optim.SGD(model.parameters(), lr=0.1)   # plain w ← w - η∇L
+# ... inside the training loop:
+optimizer.zero_grad()
+loss.backward()                          # backprop fills .grad on every weight
+optimizer.step()                         # applies w ← w - η·grad to all params
+```
+
+::: {.callout-tip}
+If a network won't train, change the learning rate *first*, by factors of 10 (1e-2, 1e-3, 1e-4). It explains more training failures than architecture, init, or optimizer choice combined. The full menu of momentum, Adam, and learning-rate schedules lives in the Optimization chapter.
+:::
+
+## 14.10 — Batch & layer normalization
 
 As training proceeds, the distribution of inputs to a layer keeps shifting (its previous layer's weights are changing). This **internal covariate shift** slows learning. **Normalization** layers fix it by re-centering and re-scaling activations to a stable distribution, then letting the network learn its own preferred scale and shift via two trainable parameters $\gamma$ (scale) and $\beta$ (shift).
 
@@ -538,7 +654,7 @@ ln = nn.LayerNorm(64)     # Transformers/RNNs: normalizes each example's 64 feat
 
 Beyond fixing covariate shift, normalization smooths the loss landscape, which lets you use higher learning rates and makes training far more robust.
 
-## 14.9 — Vanishing / exploding gradients
+## 14.11 — Vanishing / exploding gradients
 
 In a deep network, backprop multiplies many derivatives together as it travels back through layers. If those factors are consistently **less than 1**, the product shrinks toward zero — the **vanishing gradient** problem, where early layers learn agonizingly slowly. If they're consistently **greater than 1**, the product blows up — the **exploding gradient** problem, where updates overshoot and the loss diverges to NaN.
 
@@ -574,7 +690,7 @@ optimizer.step()
 First diagnostic when a deep net won't learn: print the gradient norm per layer. Near-zero norms at early layers → vanishing (switch to ReLU/He/norm). NaN loss → exploding (clip gradients, drop the learning rate).
 :::
 
-## 14.10 — Regularization: dropout & weight decay
+## 14.12 — Regularization: dropout & weight decay
 
 A network with thousands of free weights can simply *memorize* the training set — nailing those examples while flopping on new ones. That gap is **overfitting**, and **regularization** is any technique that fights it by discouraging the model from leaning too hard on any one detail. Two are so common they belong here next to the core training machinery.
 
@@ -607,10 +723,10 @@ opt = torch.optim.AdamW(net.parameters(), lr=1e-3, weight_decay=0.01)
 ```
 
 ::: {.callout-tip}
-Dropout and weight decay stack with the other generalization tools — early stopping (§14.11), data augmentation, and smaller models. Turn dropout *off* at inference (`model.eval()`), or your predictions will be needlessly noisy.
+Dropout and weight decay stack with the other generalization tools — early stopping (§14.13), data augmentation, and smaller models. Turn dropout *off* at inference (`model.eval()`), or your predictions will be needlessly noisy.
 :::
 
-## 14.11 — Epochs, batches & the training loop
+## 14.13 — Epochs, batches & the training loop
 
 Training repeats one core cycle: forward pass → compute loss → backward pass → update weights. The vocabulary describes how we slice the data through this cycle. A **batch** (or **mini-batch**) is a small group of examples processed together before one weight update. An **iteration** is one such update. An **epoch** is one full pass over the entire training set.
 
@@ -659,7 +775,7 @@ The **learning rate** scales each update; it's the single most important hyperpa
 A batch too large can hurt generalization (the gradient gets so smooth it heads straight for a sharp minimum) and a learning rate too high makes loss diverge. When in doubt, lower the learning rate first — it fixes more training failures than any other single knob.
 :::
 
-## 14.12 — A complete worked network (Keras)
+## 14.14 — A complete worked network (Keras)
 
 Pulling the whole chapter together, here is an end-to-end classifier — layers, activations, softmax output, cross-entropy loss, an optimizer, and the training loop — in a few lines of Keras. Every piece maps to a section above.
 
@@ -668,39 +784,41 @@ import tensorflow as tf
 from tensorflow import keras
 
 model = keras.Sequential([
-    keras.layers.Dense(128, activation="relu"),   # §14.1 layer + §14.4 ReLU
-    keras.layers.BatchNormalization(),            # §14.8 normalization
-    keras.layers.Dropout(0.3),                    # §14.10 regularization
-    keras.layers.Dense(10, activation="softmax"), # §14.5 softmax output
+    keras.layers.Dense(128, activation="relu"),   # §14.1 layer + §14.5 ReLU
+    keras.layers.BatchNormalization(),            # §14.10 normalization
+    keras.layers.Dropout(0.3),                    # §14.12 regularization
+    keras.layers.Dense(10, activation="softmax"), # §14.6 softmax output
 ])
 model.compile(
-    optimizer=keras.optimizers.Adam(1e-3),        # §14.11 update rule
-    loss="sparse_categorical_crossentropy",       # §14.7 loss
+    optimizer=keras.optimizers.Adam(1e-3),        # §14.9 update rule
+    loss="sparse_categorical_crossentropy",       # §14.8 loss
     metrics=["accuracy"],
 )
-model.fit(                                        # §14.11 epochs/batches loop
+model.fit(                                        # §14.13 epochs/batches loop
     X_train, y_train, epochs=10, batch_size=64,
     validation_split=0.1,
-    callbacks=[keras.callbacks.EarlyStopping(patience=3,    # §14.11 early stop
+    callbacks=[keras.callbacks.EarlyStopping(patience=3,    # §14.13 early stop
                                              restore_best_weights=True)],
 )
 ```
 
-That single `fit` call runs forward propagation (§14.2), backpropagation (§14.3), and mini-batch gradient descent (§14.11) under the hood — the entire chapter, executed on every batch.
+That single `fit` call runs forward propagation (§14.2), backpropagation (§14.3) over the computational graph (§14.4), and mini-batch gradient descent (§14.9, §14.13) under the hood — the entire chapter, executed on every batch.
 
-## 14.13 — Key takeaways
+## 14.15 — Key takeaways
 
 - An **MLP** stacks layers of (weighted sum + bias + nonlinear activation); depth + nonlinearity is what gives expressive power.
 - **Forward propagation** is repeated $z=Wa+b$, $a=g(z)$; **backpropagation** reuses the chain rule to get all gradients in one backward pass.
+- A network is a **computational graph**; frameworks build it as you write code and run **reverse-mode autodiff** over it to get every gradient at once.
 - **Activations** must be nonlinear — ReLU by default, GELU in Transformers, sigmoid only for probability outputs; soft-bottom variants cure dead units.
 - **Softmax** turns logits into probabilities; pair it with **cross-entropy** loss (and use **MSE** for regression).
 - **Initialize** weights small and random (never zero) with **He** (ReLU) or **Xavier** (tanh) scaling.
+- **Gradient descent** updates $w \leftarrow w - \eta\nabla_w L$; the **learning rate** $\eta$ is the dial that most often makes or breaks training.
 - **Normalization** (batch vs. layer) stabilizes activations and speeds training; layer norm dominates in Transformers.
 - **Regularize** with dropout and weight decay (and early stopping) to close the train–test gap.
 - **Vanishing/exploding gradients** come from multiplying many derivatives; fix with non-saturating activations, good init, normalization, residuals, and gradient clipping.
 - Train in **mini-batches** over multiple **epochs**; the **learning rate** is the knob that most often makes or breaks training.
 
-## 14.14 — See also
+## 14.16 — See also
 
 - **Calculus & Differentiation** — the chain rule that backpropagation is built on.
 - **Optimization** — SGD, momentum, Adam, and learning-rate schedules that drive the update step.

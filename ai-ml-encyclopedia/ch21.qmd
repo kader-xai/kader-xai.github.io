@@ -105,7 +105,7 @@ toc-expand: true
 
 ------------------------------------------------------------------------
 
-Speech and audio processing is the branch of applied AI that turns sound — the messy, continuous pressure waves hitting a microphone — into something a machine can recognize, generate, or reason about. It sits at the intersection of classical signal processing and deep learning, and it powers voice assistants, dictation, podcast transcripts, music apps, and accessibility tools. This chapter follows the full arc: how audio is represented as a signal and a sequence, how machines learn to transcribe it (ASR), how they learn to speak (TTS), how they tell *who* is speaking, how they classify and search non-speech audio, and the stubborn real-world challenges of noise, accents, and latency.
+Speech and audio processing is the branch of applied AI that turns sound — the messy, continuous pressure waves hitting a microphone — into something a machine can recognize, generate, or reason about. It sits at the intersection of classical signal processing and deep learning, and it powers voice assistants, dictation, podcast transcripts, music apps, and accessibility tools. This chapter follows the full arc: how audio is represented as a signal and a sequence, how machines learn to transcribe it (ASR), how they learn to speak (TTS), how they tell *who* is speaking, how they classify and search non-speech audio, how they learn audio representations without labels, how they compress sound into discrete tokens, and the stubborn real-world challenges of noise, accents, and latency.
 
 ::: {.callout-note appearance="simple"}
 🧭 **In context:** Applied AI built on sequence models · used for transcription, voice synthesis, speaker ID, and audio search · the one key idea: audio becomes a 2-D time-frequency image (the spectrogram), and from there it is a sequence-modeling problem.
@@ -113,13 +113,34 @@ Speech and audio processing is the branch of applied AI that turns sound — the
 
 ## 21.1 — Audio as a signal and a sequence
 
+**Intuition first.** Imagine sound as ripples on a pond. A microphone is a tiny cork bobbing up and down on those ripples, and thousands of times a second it writes down how high it sits. That column of numbers *is* the audio. The rest of this chapter is about turning that raw bobbing record into something a machine can read at a glance — and the trick is to stop staring at the height-over-time wiggle and instead ask "which musical notes are mixed into this moment?"
+
 A microphone measures air pressure many thousands of times per second. Each measurement is a **sample**, and the number of samples per second is the **sampling rate** (16,000 Hz for speech, 44,100 Hz for music). String the samples together and you get a **waveform**: a 1-D array of numbers, the rawest possible representation of sound.
 
 The waveform is faithful but unwieldy. One second of 16 kHz audio is 16,000 numbers, and almost none of them mean anything on their own — what matters is *patterns over time*. The **Nyquist theorem** tells us a sampling rate of $f_s$ can faithfully capture frequencies up to $f_s/2$; that is why 16 kHz speech keeps everything up to 8 kHz, which covers the human voice, and why music at 44.1 kHz reaches past 20 kHz, the edge of human hearing.
 
+$$f_{\max} = \frac{f_s}{2}$$
+
+**In words:** the highest frequency you can faithfully record is half your sampling rate; anything faster than that gets scrambled (aliased) into a fake lower tone.
+**Also written:** $f_s \ge 2\,f_{\max}$ — to capture a tone of frequency $f_{\max}$ you must sample at least twice as fast as it oscillates.
+
 The key move in audio processing is switching from the **time domain** (amplitude vs. time) to the **frequency domain** (how much energy sits at each pitch). The tool is the **Fourier transform**, which decomposes a signal into a sum of sine waves. Applied to short overlapping windows of the waveform — the **Short-Time Fourier Transform (STFT)** — it produces a **spectrogram**: a 2-D image where the x-axis is time, the y-axis is frequency, and brightness is energy. We use *short* windows (typically 25 ms, hopping 10 ms) because speech is non-stationary — the frequencies change as the mouth moves — so we cut the signal into slices short enough to be roughly steady within each one.
 
-Two refinements make the spectrogram match human hearing. First, we don't perceive pitch linearly: the gap from 100→200 Hz sounds huge, but 5000→5100 Hz is barely noticeable. The **mel scale** warps the frequency axis to match this perception, giving a **mel-spectrogram**. Second, we hear loudness logarithmically, so energies are converted to decibels (a log). Finally, **MFCCs (Mel-Frequency Cepstral Coefficients)** apply one more transform (a discrete cosine transform) to the log-mel energies, compressing each time frame into ~13 decorrelated numbers — the workhorse feature of classical speech systems for decades.
+The discrete Fourier transform that powers each STFT window is, for $N$ samples:
+
+$$X_k = \sum_{n=0}^{N-1} x_n \, e^{-\,i\,2\pi k n / N}, \qquad k = 0,\dots,N-1$$
+
+**In words:** to find how much of frequency-bin $k$ lives in the window, slide a sine/cosine wave of that frequency across the samples, multiply point-by-point, and add it all up; a big result means that pitch is strongly present.
+**Also written:** $X_k = \sum_n x_n\big(\cos(2\pi k n/N) - i\sin(2\pi k n/N)\big)$ — the same sum split into its real (cosine) and imaginary (sine) parts, so $|X_k|^2$ is the energy at bin $k$.
+
+Two refinements make the spectrogram match human hearing. First, we don't perceive pitch linearly: the gap from 100→200 Hz sounds huge, but 5000→5100 Hz is barely noticeable. The **mel scale** warps the frequency axis to match this perception, giving a **mel-spectrogram**. The standard mapping is:
+
+$$m = 2595 \,\log_{10}\!\left(1 + \frac{f}{700}\right)$$
+
+**In words:** convert a frequency in hertz into "perceived pitch" units that are stretched out in the low range (where our ears are picky) and squeezed in the high range (where they are not).
+**Also written:** $m = 1127\,\ln\!\left(1 + \frac{f}{700}\right)$ — the identical curve using the natural log instead of base-10 (since $2595/\ln(10)\approx 1127$).
+
+Second, we hear loudness logarithmically, so energies are converted to decibels (a log). Finally, **MFCCs (Mel-Frequency Cepstral Coefficients)** apply one more transform (a discrete cosine transform) to the log-mel energies, compressing each time frame into ~13 decorrelated numbers — the workhorse feature of classical speech systems for decades.
 
 The pipeline, drawn:
 
@@ -178,6 +199,18 @@ print("log-mel energies:", np.round(np.log(np.array(mel)+1e-6), 2))
 # the 200 Hz + 700 Hz energy lands in the first two bands, as expected
 ```
 
+In practice nobody hand-rolls this — a one-liner from a real library gives you the production feature. With **torchaudio**:
+
+```python
+import torchaudio, torch
+wav, sr = torchaudio.load("speech.wav")          # (channels, samples)
+melspec = torchaudio.transforms.MelSpectrogram(
+    sample_rate=sr, n_fft=400, hop_length=160, n_mels=80
+)(wav)                                            # (channels, 80 mels, frames)
+logmel = torchaudio.transforms.AmplitudeToDB()(melspec)  # to decibels (log)
+print(logmel.shape)   # the 80 x T "image" that most audio models consume
+```
+
 ::: {.callout-tip}
 **Rule of thumb:** almost every modern audio model eats a **log-mel-spectrogram**, not a raw waveform or MFCCs. MFCCs were designed to decorrelate features for Gaussian models; neural nets don't need that, and the extra DCT just throws away information they could use.
 :::
@@ -190,9 +223,17 @@ print("log-mel energies:", np.round(np.log(np.array(mel)+1e-6), 2))
 
 $$\hat{W} = \arg\max_W \; \underbrace{P(X \mid W)}_{\text{acoustic model}} \; \underbrace{P(W)}_{\text{language model}}$$
 
+**In words:** out of every possible sentence, pick the one that both *sounds like* the recorded audio (acoustic model) and *reads like* plausible language (language model); multiply those two scores and take the winner.
+**Also written:** $\hat{W} = \arg\max_W P(W \mid X)$, since by Bayes' rule $P(W\mid X) \propto P(X\mid W)\,P(W)$ — the $P(X)$ denominator is the same for every $W$, so it drops out of the $\arg\max$.
+
 The **acoustic model** (a Hidden Markov Model with Gaussian mixtures, later a neural net) scored how well audio matched **phonemes** — the atomic sounds of a language. A **pronunciation lexicon** mapped phonemes to words. The **language model** (an n-gram) scored how likely a word sequence was as English. A **decoder** searched the combined space. It worked, but it needed three separately trained components, a hand-built lexicon, and forced alignments between audio frames and phonemes.
 
 **End-to-end CTC.** **Connectionist Temporal Classification (CTC)** collapsed all of that into one neural network trained directly on (audio, text) pairs — no per-frame alignment needed. The trick: the network emits a character (or a special **blank** token) at every audio frame, then a collapsing rule removes blanks and merges adjacent repeats. The CTC loss sums the probability over *all* frame-level paths that collapse to the target text.
+
+$$P(Y \mid X) = \sum_{\pi \,\in\, \mathcal{B}^{-1}(Y)} \prod_{t=1}^{T} p_t(\pi_t \mid X)$$
+
+**In words:** the probability of the target text $Y$ is the total probability of *every* frame-by-frame path $\pi$ that collapses down to $Y$, where each path's probability is just the product of the per-frame symbol probabilities.
+**Also written:** $\mathcal{L}_{\text{CTC}} = -\log P(Y \mid X)$ — training minimizes the negative log of that summed-over-alignments probability ($\mathcal{B}$ is the collapse function; $\mathcal{B}^{-1}(Y)$ is all paths that map to $Y$).
 
 A worked example makes the collapsing rule concrete. Target word: `CAT`. Suppose the network sees 6 frames and emits one of these alignments (`_` is blank):
 
@@ -207,6 +248,16 @@ The blank token is essential: without it, the double-l in `HELLO` would collapse
 **Attention / sequence-to-sequence.** A second end-to-end family uses an **encoder–decoder with attention** (see Chapter 17): the encoder turns audio into a sequence of vectors, and the decoder generates text one token at a time, *attending* to the relevant audio frames at each step. This learns a soft alignment jointly with the language, often beating CTC on fluency — at the cost of needing the whole utterance before decoding, which is bad for streaming.
 
 **Whisper-style models.** Modern systems like **Whisper** are large Transformer encoder–decoders trained on hundreds of thousands of hours of weakly-labeled, multilingual web audio. The scale buys robustness: they transcribe accents, background music, and many languages out of the box, and a single model also does translation and language identification. The lesson mirrors NLP — at sufficient scale, one general model beats a stack of specialized components.
+
+In practice, running a state-of-the-art ASR model is now a few lines via Hugging Face:
+
+```python
+from transformers import pipeline
+asr = pipeline("automatic-speech-recognition", model="openai/whisper-small")
+text = asr("meeting.wav")["text"]          # multilingual, robust to noise
+print(text)
+# add return_timestamps=True for word/segment times; pass language= to force one
+```
 
 ```{mermaid}
 flowchart TD
@@ -224,6 +275,15 @@ flowchart TD
 **Common mistake:** judging ASR by accuracy on clean read speech. The metric that matters is **Word Error Rate (WER)** — $(\text{substitutions}+\text{insertions}+\text{deletions})/\text{words}$ — measured on *your* real audio: spontaneous, noisy, accented, domain-specific. A model at 4% WER on audiobooks can hit 25% on a noisy call-center recording.
 :::
 
+The WER formula, spelled out, since it is *the* number reported in every ASR paper:
+
+$$\text{WER} = \frac{S + I + D}{N}$$
+
+**In words:** count how many words the system swapped (substitutions), added (insertions), and dropped (deletions) compared to the human reference, then divide by the number of words actually spoken.
+**Also written:** $\text{WER} = 1 - \dfrac{N - S - I - D}{N}$ — one minus the fraction of reference words that survived untouched (the edit distance between hypothesis and reference, normalized by reference length).
+
+Worked example: the reference is "the cat sat on the mat" (6 words). The system outputs "the cat sat the mat" — it dropped "on" (1 deletion) and is otherwise correct. So $S=0,\,I=0,\,D=1,\,N=6$, giving $\text{WER} = 1/6 \approx 0.167$, or 16.7%.
+
 ## 21.3 — Text-to-Speech (TTS)
 
 **Text-to-Speech (TTS)**, or speech synthesis, is the inverse problem: turn text into a natural-sounding waveform. It splits into a **front end** (text → linguistic features: how to pronounce numbers, abbreviations, where to put stress and pauses) and a **back end** (linguistic features → audio). The front end alone is harder than it looks — "Dr." is *Doctor* on one line and *Drive* on the next, and "$1.50" must become "one dollar and fifty cents." The back end is where the technology evolved most.
@@ -236,6 +296,13 @@ flowchart TD
 
 1. An **acoustic model** like **Tacotron 2** — a sequence-to-sequence attention network — maps text (or phonemes) to a **mel-spectrogram**, learning prosody and rhythm end-to-end.
 2. A **neural vocoder** like **WaveNet** converts that mel-spectrogram into a raw waveform. WaveNet was the breakthrough: an autoregressive model that predicts each audio sample from the previous ones, producing audio nearly indistinguishable from human speech.
+
+WaveNet's autoregressive idea, in one formula, is worth pinning down because it reappears everywhere from PixelCNN to language models:
+
+$$p(\mathbf{x}) = \prod_{t=1}^{T} p\!\left(x_t \mid x_1, x_2, \dots, x_{t-1}\right)$$
+
+**In words:** the probability of a whole waveform is built one sample at a time — each new audio sample is predicted from all the samples that came before it.
+**Also written:** $p(\mathbf{x}) = \prod_t p(x_t \mid x_{<t})$, where $x_{<t}$ is shorthand for the entire history before step $t$ — which is exactly why naive generation is sequential and slow.
 
 ```{mermaid}
 flowchart LR
@@ -253,6 +320,17 @@ The catch with WaveNet was speed: predicting 24,000 samples per second one at a 
 | Parametric | Vocoder from predicted params | Low (buzzy) | High | Tiny |
 | Neural | Mel-net + neural vocoder | Human-level | High | Large (GPU) |
 
+A complete neural-TTS call is now also a few lines — here a HiFi-GAN-backed pipeline from Hugging Face:
+
+```python
+from transformers import pipeline
+import scipy.io.wavfile
+tts = pipeline("text-to-speech", model="suno/bark-small")  # text -> waveform
+out = tts("Dr. Smith will see you at 1:50.")
+scipy.io.wavfile.write("hello.wav", rate=out["sampling_rate"],
+                       data=out["audio"].squeeze())
+```
+
 ::: {.callout-tip}
 **Intuition:** think of neural TTS as ASR run backwards. ASR is audio → spectrogram → text; TTS is text → spectrogram → audio. The mel-spectrogram is the shared "interlingua" in the middle of both pipelines.
 :::
@@ -266,6 +344,13 @@ Three related tasks build on this:
 - **Speaker verification** (1-to-1): "Is this the enrolled user?" Compare the new clip's embedding to the enrolled one via **cosine similarity**, and accept if it is above a threshold. This is voice unlock.
 - **Speaker identification** (1-to-N): "Which of my N known speakers is this?" Pick the nearest enrolled embedding.
 - **Speaker diarization**: "Who spoke when?" Given a meeting recording with unknown speakers, segment it and label each segment — *Speaker A, Speaker B…* The classic approach slices audio into short windows, embeds each, then **clusters** the embeddings (Chapter 11); each cluster becomes one speaker.
+
+The comparison engine for all three is cosine similarity:
+
+$$\cos(\mathbf{a}, \mathbf{b}) = \frac{\mathbf{a} \cdot \mathbf{b}}{\lVert \mathbf{a}\rVert \, \lVert \mathbf{b}\rVert}$$
+
+**In words:** measure the angle between two voice vectors — point the same direction (score near 1) and it's likely the same speaker; point in unrelated directions (score near 0) and it's someone else, regardless of how loud either recording was.
+**Also written:** $\cos(\mathbf{a},\mathbf{b}) = \hat{\mathbf{a}} \cdot \hat{\mathbf{b}}$, the plain dot product of the two vectors after each is scaled to unit length — which is why only *direction*, not magnitude, matters.
 
 Worked example of verification with embeddings:
 
@@ -292,6 +377,16 @@ flowchart LR
 
 The first stage, **Voice Activity Detection (VAD)**, is worth naming on its own: a lightweight classifier that decides, frame by frame, whether speech is present at all. It trims silence before the expensive embedding step, and it is also what tells a phone "the caller stopped talking."
 
+Here is a real x-vector embedding and verification using **SpeechBrain**, the de-facto open toolkit for speaker tasks:
+
+```python
+from speechbrain.inference import SpeakerRecognition
+verifier = SpeakerRecognition.from_hparams(
+    source="speechbrain/spkrec-ecapa-voxceleb")
+score, accept = verifier.verify_files("enroll.wav", "test.wav")
+print(float(score), bool(accept))   # cosine score + threshold decision
+```
+
 ::: {.callout-warning}
 **Common mistake:** assuming the number of speakers is known. In real meetings it isn't, and overlapping speech (two people talking at once) breaks the one-window-one-speaker assumption that simple clustering relies on — a leading source of diarization error.
 :::
@@ -304,6 +399,16 @@ Not all audio is speech. **Audio classification** assigns a label to a sound cli
 
 **Keyword spotting (KWS)**, or **wake-word detection**, is the always-listening task: a tiny model that runs continuously on-device, waiting for "Hey Siri" or "Alexa." Its constraints are unique — it must be small enough to fit on a microcontroller, sip power, and produce almost no **false accepts** (waking when you didn't call it) while keeping **false rejects** (missing a real call) low. Only after the wake word fires does the heavy cloud ASR kick in.
 
+A worked classification pass with a real pretrained audio model (the Audio Spectrogram Transformer):
+
+```python
+from transformers import pipeline
+clf = pipeline("audio-classification",
+               model="MIT/ast-finetuned-audioset-10-10-0.4593")
+print(clf("street.wav", top_k=3))
+# e.g. [{'label': 'Siren', 'score': 0.61}, {'label': 'Vehicle', ...}, ...]
+```
+
 ```{mermaid}
 flowchart LR
   A[Mic stream] --> B["Tiny on-device<br/>KWS model<br/>always on, low power"]
@@ -315,11 +420,154 @@ flowchart LR
 **Why a two-stage design:** running full ASR continuously would drain the battery and stream your whole day to the cloud. KWS is the cheap, private gatekeeper; the expensive model only runs about 1% of the time. The same tiered pattern appears all over efficient ML — a cheap filter in front of an expensive model.
 :::
 
-## 21.6 — Challenges: noise, accents, and latency
+## 21.6 — Self-supervised audio representation learning
+
+**Intuition first.** Labeled speech is scarce and expensive — transcribing one hour of audio can take five hours of human effort — but *unlabeled* audio is nearly infinite (every podcast, audiobook, and YouTube video). Self-supervised learning is the trick of letting a model teach itself from that raw ocean of sound by playing a fill-in-the-blank game: hide part of the audio and make the model predict what was hidden. The model that gets good at this game has, as a side effect, learned what speech *is* — and then a tiny amount of labeled data is enough to point that knowledge at transcription, speaker ID, or emotion.
+
+This is the audio version of what BERT did for text (Chapter 18), and it is why a model like **wav2vec 2.0** can reach strong WER with only ten minutes of labeled speech after pretraining on tens of thousands of unlabeled hours.
+
+The two landmark recipes:
+
+- **wav2vec 2.0** (Meta, 2020). A CNN encoder turns the raw waveform into latent frames; some frames are **masked**; a Transformer then must identify the correct latent for each masked spot from a small set of distractors (a **contrastive** task). It also learns a discrete "vocabulary" of sound units via **product quantization** as the prediction targets.
+- **HuBERT** (Meta, 2021). Simpler target: first cluster audio features with k-means to assign every frame a pseudo-label (a fake "phoneme ID"), then train the masked Transformer to *classify* the hidden frames into those cluster IDs — a BERT-style masked-prediction loss instead of a contrastive one.
+
+The masked-prediction objective, in one line:
+
+$$\mathcal{L} = -\sum_{t \in M} \log p\!\left(z_t \mid \tilde{\mathbf{X}}\right)$$
+
+**In words:** only over the masked time steps $M$, ask the model to predict the correct hidden unit $z_t$ from the corrupted (partially masked) input $\tilde{\mathbf{X}}$, and penalize it when it's wrong.
+**Also written:** $\mathcal{L} = -\frac{1}{|M|}\sum_{t\in M}\log p(z_t \mid \tilde{\mathbf X})$ — the same loss averaged over the masked frames; $z_t$ is a quantized latent (wav2vec 2.0) or a k-means cluster ID (HuBERT).
+
+The payoff is the **pretrain-then-finetune** workflow that now dominates speech:
+
+```{mermaid}
+flowchart LR
+  U["50k hours<br/>unlabeled audio"] --> P["Self-supervised<br/>pretrain (mask + predict)"]
+  P --> R["Reusable speech<br/>encoder (wav2vec2 / HuBERT)"]
+  R --> F1["+ tiny CTC head<br/>10 min labels -> ASR"]
+  R --> F2["+ small head -> speaker ID,<br/>emotion, language"]
+```
+
+<svg viewBox="0 0 660 150" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif" font-size="12">
+  <text x="330" y="16" text-anchor="middle" font-weight="bold" fill="currentColor">Masked prediction on audio latents</text>
+  <g>
+    <rect x="40"  y="40" width="44" height="34" fill="#22c55e" opacity="0.55"/>
+    <rect x="92"  y="40" width="44" height="34" fill="#22c55e" opacity="0.55"/>
+    <rect x="144" y="40" width="44" height="34" fill="#6366f1" opacity="0.30"/>
+    <rect x="196" y="40" width="44" height="34" fill="#22c55e" opacity="0.55"/>
+    <rect x="248" y="40" width="44" height="34" fill="#6366f1" opacity="0.30"/>
+    <rect x="300" y="40" width="44" height="34" fill="#22c55e" opacity="0.55"/>
+  </g>
+  <text x="166" y="62" text-anchor="middle" fill="currentColor" font-size="13">?</text>
+  <text x="270" y="62" text-anchor="middle" fill="currentColor" font-size="13">?</text>
+  <text x="170" y="92" text-anchor="middle" fill="currentColor" font-size="10">masked frames the model must fill in</text>
+  <line x1="360" y1="57" x2="412" y2="57" stroke="currentColor" stroke-width="1.5" marker-end="url(#ss)"/>
+  <rect x="416" y="38" width="120" height="40" rx="6" fill="#f59e0b" opacity="0.30" stroke="currentColor"/>
+  <text x="476" y="62" text-anchor="middle" fill="currentColor" font-size="11">Transformer</text>
+  <line x1="540" y1="57" x2="592" y2="57" stroke="currentColor" stroke-width="1.5" marker-end="url(#ss)"/>
+  <text x="628" y="61" text-anchor="middle" fill="currentColor" font-size="11">predict</text>
+  <defs><marker id="ss" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6 Z" fill="currentColor"/></marker></defs>
+</svg>
+
+In code, the whole point is that the heavy lifting is already done — you load a pretrained encoder and fine-tune a small head:
+
+```python
+import torch
+from transformers import Wav2Vec2ForCTC, Wav2Vec2Processor
+# pretrained on 960h, fine-tuned for ASR — or load the base model and add your own head
+proc  = Wav2Vec2Processor.from_pretrained("facebook/wav2vec2-base-960h")
+model = Wav2Vec2ForCTC.from_pretrained("facebook/wav2vec2-base-960h")
+inputs = proc(speech_array, sampling_rate=16000, return_tensors="pt")
+logits = model(**inputs).logits
+pred_ids = torch.argmax(logits, dim=-1)        # greedy CTC decode
+print(proc.batch_decode(pred_ids))
+```
+
+::: {.callout-tip}
+**Why this changed the field:** before self-supervision, every new language or domain needed its own large labeled corpus. Now one pretrained encoder transfers to dozens of downstream tasks with a fraction of the labels — the same "foundation model" shift that hit NLP and vision, arriving in audio.
+:::
+
+## 21.7 — Neural audio codecs & discrete audio tokens
+
+**Intuition first.** Text is naturally made of discrete tokens (words, sub-words), which is exactly what makes language models possible — a Transformer predicts the next token from a fixed vocabulary. Audio is continuous, so for years it couldn't be fed to a language model the same way. A **neural audio codec** fixes this: it learns to chop sound into a stream of discrete **audio tokens** — a small alphabet of "sound words" — so that audio becomes just another sequence of tokens a Transformer can predict. This is the hidden engine under modern audio LLMs and text-to-audio models.
+
+A neural codec is an **autoencoder** (Chapter 19) with a quantizer in the middle: an encoder compresses the waveform into a low-rate latent, a **vector quantizer** snaps each latent to the nearest entry in a learned codebook (turning it into an integer token), and a decoder reconstructs the waveform. The landmarks are **SoundStream** (Google) and **EnCodec** (Meta).
+
+The catch: a single codebook can't be both small and high-fidelity. The fix is **Residual Vector Quantization (RVQ)** — quantize, then quantize the *leftover error* with a second codebook, then the error of that with a third, and so on. Each layer cleans up what the previous one missed, so a stack of small codebooks achieves what one giant codebook never could.
+
+$$\mathbf{z} \approx \sum_{i=1}^{Q} \mathbf{e}_i, \qquad \mathbf{e}_i = \text{codebook}_i\big[\,k_i\,\big]$$
+
+**In words:** the encoded vector is approximated by adding up $Q$ chosen codebook entries — the first captures the rough shape, each later one corrects the remaining error — and the integer indices $k_1,\dots,k_Q$ are the discrete audio tokens you actually store or feed to a model.
+**Also written:** define the residual $\mathbf{r}_1 = \mathbf{z}$ and iterate $k_i = \arg\min_k \lVert \mathbf{r}_i - \text{codebook}_i[k]\rVert$, $\;\mathbf{r}_{i+1} = \mathbf{r}_i - \text{codebook}_i[k_i]$ — successive refinement, the same idea as residual learning.
+
+<svg viewBox="0 0 680 180" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif" font-size="12">
+  <text x="340" y="16" text-anchor="middle" font-weight="bold" fill="currentColor">Neural codec: waveform → discrete tokens → waveform</text>
+  <polyline points="20,90 30,70 40,110 50,60 60,115 70,75 80,100" fill="none" stroke="#38bdf8" stroke-width="1.5"/>
+  <text x="50" y="135" text-anchor="middle" fill="currentColor" font-size="10">waveform</text>
+  <line x1="95" y1="88" x2="135" y2="88" stroke="currentColor" stroke-width="1.4" marker-end="url(#cc)"/>
+  <rect x="138" y="66" width="78" height="44" rx="6" fill="#6366f1" opacity="0.30" stroke="currentColor"/>
+  <text x="177" y="92" text-anchor="middle" fill="currentColor" font-size="10">encoder</text>
+  <line x1="220" y1="88" x2="258" y2="88" stroke="currentColor" stroke-width="1.4" marker-end="url(#cc)"/>
+  <g>
+    <rect x="262" y="50" width="96" height="18" fill="#22c55e" opacity="0.5" stroke="currentColor"/>
+    <rect x="262" y="72" width="96" height="18" fill="#22c55e" opacity="0.4" stroke="currentColor"/>
+    <rect x="262" y="94" width="96" height="18" fill="#22c55e" opacity="0.3" stroke="currentColor"/>
+    <text x="310" y="63" text-anchor="middle" fill="currentColor" font-size="9">RVQ codebook 1 → 7,2,5…</text>
+    <text x="310" y="85" text-anchor="middle" fill="currentColor" font-size="9">codebook 2 (residual)</text>
+    <text x="310" y="107" text-anchor="middle" fill="currentColor" font-size="9">codebook 3 (residual)</text>
+  </g>
+  <text x="310" y="130" text-anchor="middle" fill="currentColor" font-size="10">discrete tokens</text>
+  <line x1="362" y1="88" x2="400" y2="88" stroke="currentColor" stroke-width="1.4" marker-end="url(#cc)"/>
+  <rect x="404" y="66" width="78" height="44" rx="6" fill="#ec4899" opacity="0.30" stroke="currentColor"/>
+  <text x="443" y="92" text-anchor="middle" fill="currentColor" font-size="10">decoder</text>
+  <line x1="486" y1="88" x2="524" y2="88" stroke="currentColor" stroke-width="1.4" marker-end="url(#cc)"/>
+  <polyline points="528,90 538,70 548,110 558,60 568,115 578,75 588,100" fill="none" stroke="#38bdf8" stroke-width="1.5"/>
+  <text x="558" y="135" text-anchor="middle" fill="currentColor" font-size="10">reconstruction</text>
+  <defs><marker id="cc" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6 Z" fill="currentColor"/></marker></defs>
+</svg>
+
+Why this matters: once audio is a token stream, **generation** becomes a language-modeling problem. Models like AudioLM, VALL-E, and MusicGen generate speech or music by predicting these codec tokens autoregressively, then hand them to the codec's decoder to render sound. The same codec also gives extreme compression (EnCodec hits a few kbit/s at quality that rivals classic codecs like Opus).
+
+A real EnCodec round-trip is short:
+
+```python
+from transformers import EncodecModel, AutoProcessor
+import torch
+model = EncodecModel.from_pretrained("facebook/encodec_24khz")
+proc  = AutoProcessor.from_pretrained("facebook/encodec_24khz")
+inputs = proc(raw_audio=wav, sampling_rate=24000, return_tensors="pt")
+enc = model.encode(inputs["input_values"], inputs["padding_mask"])
+codes = enc.audio_codes            # integer tokens: (batch, num_codebooks, T)
+recon = model.decode(enc.audio_codes, enc.audio_scales,
+                     inputs["padding_mask"])[0]   # back to a waveform
+print(codes.shape)                 # these tokens are what an audio LLM predicts
+```
+
+::: {.callout-tip}
+**The unifying picture:** Section 21.6 made audio *understandable* without labels (self-supervised encoders); this section makes audio *generatable* as tokens (neural codecs). Together they are why "audio language models" exist — one turns sound into features, the other turns sound into a vocabulary, and a Transformer does the rest.
+:::
+
+## 21.8 — Challenges: noise, accents, and latency
 
 Lab demos are clean; the real world is not. Three challenges dominate deployed speech systems.
 
 **Noise and reverberation.** Background chatter, traffic, music, and room echo (**reverberation**) all corrupt the signal. The main defenses are **data augmentation** — training on audio with synthetic noise and echo mixed in, plus **SpecAugment**, which masks random time and frequency bands of the spectrogram so the model can't over-rely on any single cue — and front-end **speech enhancement** / denoising. The **far-field** problem (a speaker across a room, as with smart speakers) compounds this, and is attacked with **microphone arrays** and **beamforming**, which combine several mics to steer sensitivity toward the talker and suppress sound from other directions.
+
+A common way to *quantify* how bad the noise is, and to set augmentation levels, is the **signal-to-noise ratio**:
+
+$$\text{SNR}_{\text{dB}} = 10 \,\log_{10}\!\left(\frac{P_{\text{signal}}}{P_{\text{noise}}}\right)$$
+
+**In words:** compare the power of the speech to the power of the background, on a decibel (log) scale — a big positive number means clean speech, near zero means the noise is as loud as the talker.
+**Also written:** $\text{SNR}_{\text{dB}} = 20\,\log_{10}\!\left(\dfrac{A_{\text{signal}}}{A_{\text{noise}}}\right)$ — the same ratio expressed with amplitudes instead of powers (since power $\propto$ amplitude$^2$, the 10 becomes 20).
+
+SpecAugment in practice is a one-liner you apply to the log-mel features during training:
+
+```python
+import torchaudio.transforms as T
+freq_mask = T.FrequencyMasking(freq_mask_param=27)   # hide horizontal bands
+time_mask = T.TimeMasking(time_mask_param=100)        # hide vertical bands
+aug = time_mask(freq_mask(logmel))   # forces the model to use redundant cues
+```
 
 **Accents and dialects.** Models inherit the bias of their training data. A system trained mostly on US English under-performs on Scottish, Indian, or Nigerian English, and on **code-switching** (mixing languages mid-sentence). The fix is data — deliberately diverse, multi-accent, multilingual corpora — and large weakly-supervised models like Whisper that have simply *heard* far more variety. This is also a fairness issue (Chapter 38): a higher WER for some accent groups is a real, measured harm, not a rounding error.
 
@@ -336,23 +584,26 @@ flowchart TD
 **Common mistake:** validating only on read, native-accent, close-mic speech, then being shocked by field performance. Build a test set that mirrors deployment — far-field, noisy, accented, spontaneous — *before* you ship, and track WER per accent and per noise condition, not just the average.
 :::
 
-## 21.7 — Key takeaways
+## 21.9 — Key takeaways
 
 - Audio starts as a 1-D **waveform**; the field's central move is the **STFT → spectrogram → mel-spectrogram (log) → MFCCs** chain that turns it into a 2-D time-frequency image. Modern models eat **log-mel-spectrograms**.
 - **ASR** evolved from a three-part pipeline (acoustic HMM + lexicon + LM) to end-to-end **CTC** (alignment-free via a blank token), **attention seq2seq**, and large weakly-supervised **Whisper-style** Transformers. Measure quality with **WER** on realistic audio.
 - **TTS** went **concatenative → parametric → neural**. The neural recipe is text → mel-spectrogram (**Tacotron 2**) → waveform (**WaveNet / HiFi-GAN**); the mel-spectrogram is the shared interlingua between ASR and TTS.
 - **Speaker embeddings** (x-vectors) power verification (1-to-1), identification (1-to-N), and **diarization** (who-spoke-when via clustering), with cosine similarity doing the comparison and **VAD** trimming silence first.
 - Non-speech audio — **classification, MIR, keyword spotting** — is largely a CNN/Transformer over a spectrogram; KWS is a tiny always-on gatekeeper in front of the heavy ASR stage.
-- The deployment challenges are **noise/reverb** (augmentation, beamforming), **accents** (diverse data; a fairness concern), and **latency** (streaming CTC/RNN-T with a tunable lookahead).
+- **Self-supervised learning** (**wav2vec 2.0**, **HuBERT**) pretrains a reusable speech encoder on unlabeled audio via masked prediction, so downstream ASR/speaker/emotion tasks need only a fraction of the labels — the foundation-model shift, arrived in audio.
+- **Neural audio codecs** (**SoundStream**, **EnCodec**) with **residual vector quantization** turn continuous sound into discrete **audio tokens**, making audio generatable by a Transformer (AudioLM, VALL-E, MusicGen) and giving extreme compression.
+- The deployment challenges are **noise/reverb** (augmentation, SpecAugment, beamforming; gauged by **SNR**), **accents** (diverse data; a fairness concern), and **latency** (streaming CTC/RNN-T with a tunable lookahead).
 
-## 21.8 — See also
+## 21.10 — See also
 
 - **Recurrent & Sequence Models** — RNNs, LSTMs, and the sequence-modeling backbone of older ASR/TTS.
 - **Attention & Transformers** — the encoder–decoder and attention mechanism behind Whisper, Tacotron, and modern audio models.
 - **Convolutional Neural Networks** — the CNNs reused on spectrograms for audio classification.
-- **Generative Models** — the GAN and autoregressive foundations behind neural vocoders like HiFi-GAN and WaveNet.
-- **Natural Language Processing** — the language models and tokenization that pair with ASR output and TTS input.
-- **Clustering & Unsupervised Learning** — the clustering step at the heart of speaker diarization.
+- **Generative Models** — the GAN, autoencoder, and autoregressive foundations behind neural vocoders (HiFi-GAN, WaveNet) and audio codecs (EnCodec).
+- **Transfer & Self-Supervised Learning** — the masked-prediction pretraining behind wav2vec 2.0 and HuBERT.
+- **Natural Language Processing** — the language models and tokenization that pair with ASR output, TTS input, and discrete audio tokens.
+- **Clustering & Unsupervised Learning** — the clustering step at the heart of speaker diarization (and HuBERT's pseudo-labels).
 - **Recommender Systems** — where music-information-retrieval features feed recommendation.
 - **AI Ethics, Fairness & Safety** — the accent-bias and fairness dimension of deployed speech systems.
 

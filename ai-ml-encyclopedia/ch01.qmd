@@ -1135,7 +1135,128 @@ print(G.shape, np.allclose(G, G.T))            # (200, 200) True (symmetric)
 Whenever an algorithm can be written using only dot products between examples, it can be "kernelized" — swap the dot product for a kernel and you gain nonlinear power for free. That single observation turns linear regression into kernel ridge regression and the linear separator into the kernel SVM of Chapter 9.
 :::
 
-## 1.19 — Key takeaways
+## 1.19 — Span, basis, linear independence & dimension
+
+Everything in this chapter rests on one quiet foundation: the idea of a **vector space** and the handful of words that describe its structure. The chapter has used "linear combination", "subspace", "rank", and "basis" freely — this section makes them precise, because they are the grammar the rest of the math is written in.
+
+Intuition first. Think of a few arrows pinned at the origin. The **span** of those arrows is every place you can reach by scaling and adding them — the whole region they can "fill in". Two arrows pointing in different directions in a plane span the *entire* plane: any point is some mix of them. But two arrows pointing along the *same* line span only that line — the second one is redundant, it tells you nothing new.
+
+That redundancy is exactly **linear dependence**. A set of vectors is **linearly independent** when no one of them is a linear combination of the others — each pulls in a genuinely new direction. Formally, $\{\mathbf{v}_1,\dots,\mathbf{v}_k\}$ are independent when the only way to combine them to zero is the trivial way:
+
+$$c_1\mathbf{v}_1 + c_2\mathbf{v}_2 + \cdots + c_k\mathbf{v}_k = \mathbf{0} \;\;\Longrightarrow\;\; c_1=c_2=\cdots=c_k=0.$$
+
+**In words:** the only mix of these vectors that cancels out to nothing is the one where every weight is zero — none of them is secretly a copy of the others.
+**Also written:** stacking the vectors as columns of a matrix $V$, independence means $V\mathbf{c}=\mathbf{0}$ forces $\mathbf{c}=\mathbf{0}$, i.e. $V$ has a trivial null space and full column rank.
+
+A **basis** for a space is a set of vectors that is both *independent* (no waste) and *spanning* (reaches everything) — the minimal complete set of axes. The number of vectors in any basis is the **dimension** of the space, an honest count of its independent directions. The familiar $[1,0]$ and $[0,1]$ are the **standard basis** for the plane, but $\{[1,1],[1,-1]\}$ is an equally valid basis — the same plane, different rulers (which is precisely the change-of-basis story of §1.17).
+
+<svg viewBox="0 0 420 180" xmlns="http://www.w3.org/2000/svg" width="430" font-family="sans-serif" font-size="11">
+  <!-- independent: spans the plane -->
+  <line x1="20" y1="150" x2="180" y2="150" stroke="currentColor" stroke-opacity="0.3"/>
+  <line x1="60" y1="20" x2="60" y2="170" stroke="currentColor" stroke-opacity="0.3"/>
+  <rect x="20" y="40" width="120" height="100" fill="#22c55e" fill-opacity="0.12"/>
+  <line x1="60" y1="150" x2="130" y2="120" stroke="#22c55e" stroke-width="2.5" marker-end="url(#ar)"/>
+  <line x1="60" y1="150" x2="90" y2="60" stroke="#6366f1" stroke-width="2.5" marker-end="url(#ar)"/>
+  <text x="22" y="172" fill="currentColor">independent → fills plane (dim 2)</text>
+  <!-- dependent: spans only a line -->
+  <line x1="240" y1="150" x2="400" y2="150" stroke="currentColor" stroke-opacity="0.3"/>
+  <line x1="280" y1="20" x2="280" y2="170" stroke="currentColor" stroke-opacity="0.3"/>
+  <line x1="240" y1="170" x2="380" y2="100" stroke="#ec4899" stroke-opacity="0.5" stroke-width="6"/>
+  <line x1="280" y1="150" x2="340" y2="120" stroke="#ec4899" stroke-width="2.5" marker-end="url(#ar)"/>
+  <line x1="280" y1="150" x2="360" y2="110" stroke="#f59e0b" stroke-width="2.5" marker-end="url(#ar)"/>
+  <text x="242" y="172" fill="currentColor">dependent → only a line (dim 1)</text>
+  <defs>
+    <marker id="ar" markerWidth="7" markerHeight="7" refX="5" refY="3" orient="auto">
+      <path d="M0,0 L6,3 L0,6 Z" fill="currentColor"/>
+    </marker>
+  </defs>
+</svg>
+
+This ties together threads already running through the chapter. The **rank** of a matrix (§1.8) is the dimension of its column space — the number of independent columns, i.e. the size of a basis for what it can output. **Multicollinearity** is just linearly dependent feature columns, which is why it collapses the rank and breaks the inverse. The **null space** (§1.9) is the space of weight combinations that the columns send to zero — nonzero only when the columns are dependent. And finding a good basis — eigenvectors, principal components, singular vectors — is the recurring punchline of §1.5, §1.17, and Chapter 7.
+
+A worked check: are $\mathbf{v}_1=[1,2,3]$, $\mathbf{v}_2=[2,4,6]$, $\mathbf{v}_3=[1,0,1]$ independent? No — $\mathbf{v}_2 = 2\mathbf{v}_1$, so they collapse to two independent directions. The span is a 2-D plane inside 3-D space, the rank is 2, and a basis is any two of the non-parallel ones.
+
+```python
+import numpy as np
+V = np.array([[1., 2., 1.],
+              [2., 4., 0.],
+              [3., 6., 1.]])          # columns are v1, v2, v3
+print(np.linalg.matrix_rank(V))       # 2  -> only 2 independent directions
+# v2 is exactly 2*v1: a dependent column. Confirm the dependence:
+print(np.allclose(V[:, 1], 2 * V[:, 0]))   # True
+
+# Number of independent columns == dimension of the column space (span)
+# A basis: keep the linearly independent columns
+_, _, Vt = np.linalg.svd(V)
+print("nonzero singular directions =", np.linalg.matrix_rank(V))   # 2
+```
+
+::: {.callout-tip}
+"How many independent directions does my data really have?" is the question behind rank, PCA's component count, and an embedding's effective dimensionality. Features can number in the thousands while the true dimension — the size of a basis that captures them — is far smaller. Spotting that gap is the whole motivation for dimensionality reduction.
+:::
+
+
+::: {.viz-wrap}
+**🎮 Try it — Span & Basis**
+
+<div class="ml-viz" data-viz="lintransform" data-params="{&quot;mode&quot;: &quot;rank&quot;, &quot;m&quot;: [1, 2, 2, 4]}"></div>
+:::
+
+## 1.20 — Outer products & rank-1 structure
+
+The dot product takes two vectors and returns one number — it *collapses*. Its mirror image, the **outer product**, takes two vectors and returns a whole matrix — it *expands*. Intuition: where the dot product asks "how aligned are these?", the outer product builds the full multiplication table of one vector's entries against the other's.
+
+For a column vector $\mathbf{u}$ of length $m$ and $\mathbf{v}$ of length $n$, the outer product $\mathbf{u}\mathbf{v}^\top$ is the $m\times n$ matrix whose $(i,j)$ entry is $u_i v_j$:
+
+$$\mathbf{u}\mathbf{v}^\top = \begin{bmatrix} u_1 \\ u_2 \\ u_3 \end{bmatrix}\begin{bmatrix} v_1 & v_2 \end{bmatrix} = \begin{bmatrix} u_1v_1 & u_1v_2 \\ u_2v_1 & u_2v_2 \\ u_3v_1 & u_3v_2 \end{bmatrix}$$
+
+**In words:** every entry of the result is one entry of $\mathbf{u}$ times one entry of $\mathbf{v}$ — the full grid of pairwise products.
+**Also written:** $(\mathbf{u}\mathbf{v}^\top)_{ij} = u_i v_j$; note $\mathbf{u}^\top\mathbf{v}$ (a scalar, the dot product) and $\mathbf{u}\mathbf{v}^\top$ (a matrix, the outer product) are *opposite* operations — the transpose lands on the other vector.
+
+The crucial property: **every outer product has rank 1.** All its columns are scalar multiples of the single vector $\mathbf{u}$ (column $j$ is just $v_j\,\mathbf{u}$), so it carries exactly one independent direction. A rank-1 matrix is the simplest non-trivial matrix there is — one direction in, one direction out, a single scaling between them.
+
+That is why rank-1 outer products are the *atoms* of the big decompositions. SVD (§1.5) writes any matrix as a weighted sum of rank-1 outer products, $A = \sum_i \sigma_i\,\mathbf{u}_i\mathbf{v}_i^\top$, and keeping only the largest terms is low-rank approximation. Matrix factorization for recommenders (§1.7) is the same idea: the prediction $\hat R = WH$ is a sum of $k$ rank-1 layers, one per latent factor.
+
+<svg viewBox="0 0 360 150" xmlns="http://www.w3.org/2000/svg" width="380" font-family="sans-serif" font-size="11">
+  <text x="10" y="20" fill="currentColor">u (m×1)</text>
+  <rect x="10" y="30" width="22" height="90" fill="#6366f1" fill-opacity="0.3" stroke="#6366f1"/>
+  <text x="60" y="20" fill="currentColor">vᵀ (1×n)</text>
+  <rect x="60" y="30" width="110" height="22" fill="#22c55e" fill-opacity="0.3" stroke="#22c55e"/>
+  <text x="190" y="20" fill="currentColor">=  uvᵀ (m×n, rank 1)</text>
+  <rect x="200" y="30" width="110" height="90" fill="#f59e0b" fill-opacity="0.2" stroke="#f59e0b"/>
+  <line x1="222" y1="30" x2="222" y2="120" stroke="#f59e0b" stroke-opacity="0.6"/>
+  <line x1="244" y1="30" x2="244" y2="120" stroke="#f59e0b" stroke-opacity="0.6"/>
+  <line x1="266" y1="30" x2="266" y2="120" stroke="#f59e0b" stroke-opacity="0.6"/>
+  <line x1="288" y1="30" x2="288" y2="120" stroke="#f59e0b" stroke-opacity="0.6"/>
+  <text x="200" y="140" fill="currentColor">every column ∝ u</text>
+</svg>
+
+Outer products also show up the moment you take a gradient. The gradient of a linear layer's loss with respect to its weight matrix is an outer product of the input vector and the upstream error vector — which is exactly why a single backprop step updates the whole weight matrix at once (Chapter 14). Covariance estimates are averaged outer products of centered data, $\frac{1}{n}\sum_i (\mathbf{x}_i-\bar{\mathbf{x}})(\mathbf{x}_i-\bar{\mathbf{x}})^\top$ — the link to the Gram matrix of §1.18.
+
+```python
+import numpy as np
+u = np.array([1., 2., 3.])
+v = np.array([4., 5.])
+M = np.outer(u, v)              # 3x2 outer product
+print(M)                        # [[4 5] [8 10] [12 15]]
+print(np.linalg.matrix_rank(M)) # 1  -> always rank 1
+
+# A rank-2 matrix is a SUM of two rank-1 outer products
+A = np.outer([1,0,1], [1,1]) + np.outer([0,1,0], [2,-1])
+print(np.linalg.matrix_rank(A)) # 2
+
+# This is exactly how SVD rebuilds a matrix, one rank-1 layer at a time
+B = np.array([[3.,1.,1.],[1.,3.,1.]])
+U, s, Vt = np.linalg.svd(B, full_matrices=False)
+recon = sum(s[i] * np.outer(U[:, i], Vt[i]) for i in range(len(s)))
+print(np.allclose(recon, B))    # True
+```
+
+::: {.callout-tip}
+Read $\mathbf{u}\mathbf{v}^\top$ as "one direction repeated, scaled across the grid". Once you see that SVD, PCA, recommender factorization, and the weight-gradient are all *sums of rank-1 outer products*, those four topics stop being separate tricks and become one idea: build complicated matrices out of the simplest possible building block.
+:::
+
+## 1.21 — Key takeaways
 
 - **Data is vectors, models are matrices.** Examples are vectors of features; a model layer is a matrix that transforms them. The dot product — alignment of two vectors — is the atomic operation underneath neurons, similarity, and kernels.
 - **A matrix is a transformation.** Multiplication chains transformations; the determinant measures volume scaling and flags non-invertibility (zero ⇒ singular); shapes must conform.
@@ -1144,10 +1265,12 @@ Whenever an algorithm can be written using only dot products between examples, i
 - **Norms, rank, and orthogonality are the measuring tools.** L1 vs. L2 norms drive sparse vs. smooth regularization; rank exposes redundancy; orthogonal matrices transform without distorting error.
 - **Least squares is a projection.** Regression projects $\mathbf{b}$ onto the column space; the residual is orthogonal. Prefer QR/SVD solvers over the normal equations for stability.
 - **Tensors generalize matrices** to the n-dimensional arrays deep learning runs on — and `.shape` is your best debugging friend.
+- **Independence, span, and basis are the grammar.** A basis is the minimal set of independent directions that spans a space; its size is the dimension, and the matrix rank counts exactly those directions — the same idea behind multicollinearity, null spaces, and dimensionality reduction.
+- **Rank-1 outer products are the atoms.** $\mathbf{u}\mathbf{v}^\top$ is the simplest matrix; SVD, PCA, recommender factorization, and weight gradients are all just weighted sums of these building blocks.
 - **The right basis makes hard problems easy.** Change of basis and diagonalization ($A=P\Lambda P^{-1}$) turn coupled transformations into pure scaling; it is the same plot as PCA and SVD — rotate into friendlier axes.
 - **Everything similarity-based runs on dot products.** The Gram matrix collects pairwise dot products; the kernel trick swaps that dot product for a kernel to buy nonlinear power without leaving linear algebra.
 
-## 1.20 — See also
+## 1.22 — See also
 
 - **Calculus & Differentiation** — gradients and the chain rule that train the transformations defined here.
 - **Optimization** — how eigenvalues of the Hessian and conditioning govern convergence.

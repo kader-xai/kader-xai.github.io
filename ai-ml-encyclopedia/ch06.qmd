@@ -111,6 +111,8 @@ Raw data is almost never ready for a model. It arrives with holes, wildly differ
 🧭 **In context:** The ML Workflow · turning raw, dirty data into clean numeric features a model can learn from · garbage in, garbage out — the model is only as good as what you feed it.
 :::
 
+Think of preprocessing like prepping ingredients before cooking. You wash, peel, chop, and measure *before* anything hits the pan. A great chef with dirty, unmeasured ingredients still cooks a bad meal; a modest cook with everything prepped properly turns out something solid. The model is the pan; this chapter is the prep.
+
 The whole chapter follows one pipeline. Keep this map in mind; every section is a box in it.
 
 ```{mermaid}
@@ -133,6 +135,18 @@ Real datasets have gaps: a sensor dropped out, a survey question was skipped, a 
 
 Statisticians name three mechanisms, and the names matter because each demands a different response. **MCAR** (Missing Completely At Random) means the gap is unrelated to anything — a random glitch, a dropped packet. **MAR** (Missing At Random) means missingness depends on *other observed* columns — for example, older users skip the income field, but since you can see their age, the pattern is explainable from what you have. **MNAR** (Missing Not At Random) means missingness depends on the *missing value itself* — high earners hide income *because* it is high. MCAR is safe to impute with a simple statistic. MNAR is dangerous, because the very fact that a value is missing carries information you should preserve rather than paper over; the standard defence is to add a "was-missing" indicator column so the model can learn from the absence itself.
 
+A quick way to keep the three straight: ask "does the *chance* of the cell being empty depend on nothing, on something I can see, or on the hidden value itself?"
+
+```{mermaid}
+flowchart TD
+  Q{Does missingness depend on...} --> A[nothing at all<br/>→ MCAR]
+  Q --> B[other observed columns<br/>→ MAR]
+  Q --> C[the missing value itself<br/>→ MNAR]
+  A --> A2[simple impute is safe]
+  B --> B2[impute using the related columns]
+  C --> C2[keep a 'was-missing' flag;<br/>imputing alone hides signal]
+```
+
 The first fork in the road is **deletion versus imputation**. *Deletion* drops rows that have gaps (listwise deletion) or drops whole columns that are mostly empty. It is honest — you never invent data — but wasteful: drop a column that is only 5% missing and you throw away 95% of perfectly good values. *Imputation* fills each gap with a principled guess. The common guesses, and when each fits, are laid out below.
 
 | Method | Fills with | Good for | Pitfall |
@@ -153,6 +167,21 @@ x_imp = np.where(np.isnan(x), fill, x)
 miss_flag = np.isnan(x).astype(int) # keep "was missing" as a feature
 ```
 
+In real pipelines you almost never roll imputation by hand — scikit-learn's `SimpleImputer` (and `KNNImputer` / `IterativeImputer`) learn the fill value on training data and reapply it on test, which is exactly the leakage-safe behaviour you want:
+
+```python
+from sklearn.impute import SimpleImputer
+from sklearn.pipeline import Pipeline
+from sklearn.linear_model import LogisticRegression
+
+# the imputer learns the median from X_train only when fit inside a Pipeline
+pipe = Pipeline([
+    ("impute", SimpleImputer(strategy="median", add_indicator=True)),  # adds was-missing flags
+    ("clf", LogisticRegression()),
+])
+pipe.fit(X_train, y_train)   # median computed on train, reused on test automatically
+```
+
 ::: {.callout-warning}
 Compute the imputation value (mean/median/mode) on the **training set**, then reuse that exact number on test data. Imputing with a statistic computed over the full dataset leaks information from test rows into training.
 :::
@@ -161,16 +190,29 @@ Compute the imputation value (mean/median/mode) on the **training set**, then re
 
 Features routinely arrive on incompatible scales: age lives in $[0,100]$ while salary lives in $[0,200000]$. Any algorithm that measures distance between points or sums weighted inputs will let salary dominate the calculation purely because its raw numbers are larger — not because it matters more. **Scaling** rewrites each feature onto a comparable range so that no feature wins by its unit of measurement alone.
 
+The intuition: imagine judging which of two runners is "more unusual," one timed in seconds and one in milliseconds. Unless you put both on the same footing, the millisecond runner's numbers look enormous and drown out the other. Scaling is putting every feature on the same footing before they get compared.
+
 There are three workhorses, and the intuition for each is worth holding separately. **Min-max normalization** squeezes a feature into the interval $[0,1]$:
 $$x' = \frac{x - \min}{\max - \min}$$
+
+**In words:** subtract the smallest value, then divide by the full range, so the minimum maps to 0 and the maximum maps to 1.
+**Also written:** $x' = \dfrac{x - x_{\min}}{x_{\max} - x_{\min}}$.
+
 It is bounded and intuitive, but fragile: a single huge outlier stretches the `max`, which crushes every other value toward 0.
 
 **Z-score standardization** instead recenters the feature to mean 0 and rescales it to standard deviation 1:
 $$z = \frac{x - \mu}{\sigma}$$
+
+**In words:** measure how many standard deviations each value sits above or below the mean.
+**Also written:** $z = (x - \bar{x})\,/\,s$, where $\bar{x}$ is the sample mean and $s$ the sample standard deviation.
+
 The result is unbounded but robust to differences in scale, which makes it the sensible default for most models.
 
 **Robust scaling** swaps in the median and the **IQR** (interquartile range — the spread of the middle 50% of the data, $Q_3 - Q_1$) in place of mean and standard deviation, so a few extreme points barely move it:
 $$x' = \frac{x - \text{median}}{\text{IQR}}$$
+
+**In words:** center on the median and divide by the middle-50% spread, so extreme tails barely shift the result.
+**Also written:** $x' = \dfrac{x - Q_2}{Q_3 - Q_1}$, where $Q_2$ is the median.
 
 Run the same salaries `[40, 50, 60, 200]` (in thousands) through all three to feel the difference. Min-max gives $(40-40)/(200-40)=0$, then $0.0625$, $0.125$, and $1.0$ — the lone `200` pins the three real values into a tiny corner near zero. Z-score uses $\mu = 87.5$ and $\sigma \approx 65.7$, producing $-0.72, -0.57, -0.42, 1.71$ — a much healthier spread. Robust scaling uses the median $55$ and IQR $= Q_3 - Q_1 = 72.5 - 47.5 = 25$, producing $-0.6, -0.2, 0.2, 5.8$ — and notice that the outlier now sits *visibly* far out at $5.8$, which is exactly what you want when an outlier is genuinely anomalous.
 
@@ -190,6 +232,16 @@ Which models actually need this? Distance-based and gradient-based models do, be
 | KNN, K-means (distances) | Decision trees |
 | SVM, logistic/linear regression | Random forests |
 | Neural nets, PCA, gradient descent | Gradient-boosted trees |
+
+In practice scikit-learn gives you each scaler as a one-liner, and the pipeline guarantees the statistics are learned from training data only:
+
+```python
+from sklearn.preprocessing import StandardScaler, MinMaxScaler, RobustScaler
+
+scaler = StandardScaler()            # or MinMaxScaler(), RobustScaler()
+X_train_s = scaler.fit_transform(X_train)  # learns mu, sigma from TRAIN
+X_test_s  = scaler.transform(X_test)       # reuses the SAME mu, sigma
+```
 
 ::: {.callout-tip}
 Default to z-score. Switch to robust scaling when the column has heavy outliers, and min-max when you specifically need a bounded $[0,1]$ range (e.g., image pixels, or a sigmoid output target).
@@ -225,6 +277,12 @@ def tgt(cat):
 
 The smoothing term deserves a second look. With one Riyadh row whose churn is 1, raw mean encoding would assign Riyadh a confident `1.0`; the smoothed formula $(1 + 1.0 \cdot 0.5)/(1 + 1) = 0.75$ instead, pulling that thinly-supported estimate back toward the global rate of `0.5`. The fewer examples a category has, the harder it is shrunk — exactly the right behaviour.
 
+That smoothed formula is worth stating in general:
+$$\hat{x}_{\text{cat}} = \frac{n_{\text{cat}}\,\bar{y}_{\text{cat}} + m\,\bar{y}}{n_{\text{cat}} + m}$$
+
+**In words:** blend the category's own target mean with the global mean, weighting the global mean by a smoothing strength $m$ so tiny categories lean on the global rate.
+**Also written:** $\hat{x}_{\text{cat}} = w\,\bar{y}_{\text{cat}} + (1-w)\,\bar{y}$ with the blend weight $w = \dfrac{n_{\text{cat}}}{n_{\text{cat}} + m}$.
+
 | Encoding | Width | Cardinality fit | Risk |
 |---|---|---|---|
 | Ordinal | 1 | any | fake order |
@@ -232,6 +290,15 @@ The smoothing term deserves a second look. With one Riyadh row whose churn is 1,
 | Target/mean | 1 | high | label leakage |
 | Hashing | fixed | very high | collisions |
 | Embedding | d (small) | very high | needs a net + data |
+
+The everyday tool is scikit-learn's `OneHotEncoder`, with `handle_unknown="ignore"` so a category unseen at training time does not crash inference:
+
+```python
+from sklearn.preprocessing import OneHotEncoder
+enc = OneHotEncoder(handle_unknown="ignore", sparse_output=False)
+enc.fit(X_train[["city"]])          # learns the vocabulary from TRAIN
+X_test_oh = enc.transform(X_test[["city"]])  # unseen cities -> all zeros
+```
 
 ::: {.callout-warning}
 Target encoding is the classic leakage trap. Computing category means over the whole dataset (including the rows you'll predict) hands the model the answer. Always fit it out-of-fold.
@@ -244,6 +311,12 @@ An **outlier** is a point that sits far from the rest of the data — sometimes 
 Three detectors cover most needs. The **z-score** method flags any point more than $k$ (usually 3) standard deviations from the mean, i.e. $|z| > 3$. It is simple but circular: the mean and standard deviation it relies on are themselves distorted by the very outliers you are hunting, so a wild point can inflate $\sigma$ enough to hide itself.
 
 The **IQR rule** — the logic behind a boxplot — avoids that trap by using quartiles, which ignore the tails. You compute $Q_1$, $Q_3$, and $\text{IQR} = Q_3 - Q_1$, then flag anything below $Q_1 - 1.5\,\text{IQR}$ or above $Q_3 + 1.5\,\text{IQR}$.
+
+The fences themselves are worth writing once:
+$$\text{lower} = Q_1 - 1.5\,\text{IQR}, \qquad \text{upper} = Q_3 + 1.5\,\text{IQR}$$
+
+**In words:** mark a point as an outlier if it falls more than one-and-a-half box-widths below the bottom of the box or above the top.
+**Also written:** flag $x$ when $x < Q_1 - 1.5(Q_3 - Q_1)$ or $x > Q_3 + 1.5(Q_3 - Q_1)$.
 
 The **Isolation Forest** is model-based and shines in many dimensions where the other two (which look one column at a time) fail. It builds random trees that split on a random feature at a random threshold; outliers get *isolated* in very few splits (a short path from the root), while normal points buried in the crowd need many splits to separate. A short average path length is therefore the anomaly signal.
 
@@ -270,6 +343,15 @@ lo,hi = q1-1.5*iqr, q3+1.5*iqr
 x_capped = np.clip(x, lo, hi)      # winsorize: 100 -> upper fence
 ```
 
+For the multivariate case, the Isolation Forest is a one-liner in scikit-learn — `-1` marks the points it judges anomalous:
+
+```python
+from sklearn.ensemble import IsolationForest
+iso = IsolationForest(contamination=0.05, random_state=0)
+flags = iso.fit_predict(X_train)   # -1 = outlier, +1 = inlier
+X_clean = X_train[flags == 1]
+```
+
 ::: {.callout-warning}
 Don't reflexively delete outliers. In fraud, fault, and disease detection the outliers are the signal — deleting them throws away the only examples of the thing you care about. Detect, understand the cause, *then* decide.
 :::
@@ -280,8 +362,15 @@ Sometimes the problem is not a feature's scale but its *shape*. Income, city pop
 
 The **log transform** $x' = \log(x)$ — or $\log(1+x)$ when the data contains zeros — compresses large values aggressively while leaving small ones nearly alone, which pulls the tail inward. Incomes `[1k, 10k, 100k, 1M]` become `[3, 4, 5, 6]` in $\log_{10}$: evenly spaced and tame, with the millionaire no longer a thousand times louder than everyone else.
 
+**In words (the log transform):** replace each value by its logarithm, so a value ten times larger only moves one unit further along.
+**Also written:** $x' = \log_{10}(x)$, or $x' = \ln(1+x)$ (NumPy's `log1p`) when zeros are present.
+
 **Box-Cox** generalizes the log into a family indexed by a tunable power $\lambda$, and picks the exponent that makes the data most normal:
 $$x^{(\lambda)} = \begin{cases} \dfrac{x^\lambda - 1}{\lambda} & \lambda \neq 0 \\[4pt] \ln x & \lambda = 0 \end{cases}$$
+
+**In words:** raise the value to a tunable power, shift and rescale it, and choose the power that makes the column look most bell-shaped; the power 0 falls back to the plain log.
+**Also written:** fit $\lambda$ by maximizing the normality (log-likelihood) of the transformed column; $\lambda=1$ is "no change," $\lambda=0.5$ is a square root, $\lambda=0$ is the log.
+
 Here $\lambda = 1$ leaves the data essentially unchanged, $\lambda = 0$ recovers the log, and $\lambda = 0.5$ behaves like a square root. Box-Cox requires strictly positive data; its cousin **Yeo-Johnson** extends the same idea to zeros and negatives.
 
 **Discretization (binning)** runs in the opposite direction — it turns a continuous feature into a handful of categories. *Equal-width* binning cuts the value range into slices of equal size; *equal-frequency* (quantile) binning instead places the same number of points in each bin. Binning age into `child / adult / senior` can let a simple linear model capture a non-linear effect it otherwise could not, at the cost of discarding the fine detail within each bin.
@@ -302,6 +391,15 @@ log_inc = np.log10(inc)            # [3,4,5,6] — tame, evenly spaced
 edges = np.quantile(inc,[0,.5,1.]); bins = np.digitize(inc, edges[1:-1])
 ```
 
+For Box-Cox / Yeo-Johnson, scikit-learn's `PowerTransformer` fits $\lambda$ on the training data automatically:
+
+```python
+from sklearn.preprocessing import PowerTransformer
+pt = PowerTransformer(method="yeo-johnson")   # handles zeros and negatives
+X_train_t = pt.fit_transform(X_train)         # learns lambda per column on TRAIN
+X_test_t  = pt.transform(X_test)
+```
+
 ::: {.callout-tip}
 Reach for a log transform whenever a feature spans several orders of magnitude or its histogram has a long right tail. It is the single highest-value transform for messy real-world numeric data.
 :::
@@ -315,6 +413,9 @@ In fraud, disease, and defect detection the interesting class is rare — perhap
 **SMOTE** (Synthetic Minority Over-sampling Technique) is a smarter form of oversampling. Rather than copying a minority point, it *interpolates*: it picks a minority point, picks one of its minority nearest neighbors, and creates a brand-new synthetic point somewhere on the straight line between them. This populates the minority region with plausible new examples instead of stacking exact duplicates.
 $$x_{\text{new}} = x_i + \lambda\,(x_{nn} - x_i), \qquad \lambda \sim U(0,1)$$
 
+**In words:** stand at a minority point, walk a random fraction of the way toward one of its minority neighbours, and drop a new synthetic example there.
+**Also written:** $x_{\text{new}} = (1-\lambda)\,x_i + \lambda\,x_{nn}$ — a random convex combination (weighted average) of the point and its neighbour.
+
 Concretely, if a minority point sits at $x_i = (2, 4)$ and its chosen neighbor at $x_{nn} = (4, 8)$, then with a random $\lambda = 0.5$ the synthetic point lands at $(2,4) + 0.5\cdot(2,4) = (3, 6)$ — squarely between the two, a new minority example the model has never literally seen.
 
 <svg viewBox="0 0 420 120" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif" font-size="11">
@@ -326,6 +427,12 @@ Concretely, if a minority point sits at $x_i = (2, 4)$ and its chosen neighbor a
 
 **Class weights** leave the data untouched and instead tell the loss function to penalize minority mistakes more heavily — weighting each class by roughly $\tfrac{1}{\text{frequency}}$, so that one misclassified fraud costs about as much as the ~99 misclassified legitimate cases it is outnumbered by. This is often the cleanest fix, since it invents no synthetic data and is usually a single `class_weight='balanced'` flag in a library.
 
+The balanced weight has a tidy closed form:
+$$w_c = \frac{N}{K \cdot n_c}$$
+
+**In words:** each class's weight is the total number of samples divided by (the number of classes times how many samples that class has), so rarer classes get proportionally heavier weights.
+**Also written:** $w_c \propto \dfrac{1}{n_c}$, normalized so the average weight is 1 ($N$ = total samples, $K$ = number of classes, $n_c$ = count of class $c$).
+
 ```python
 # class weights, inversely proportional to frequency
 import numpy as np
@@ -333,6 +440,19 @@ y = np.array([0]*99 + [1])          # 99 majority, 1 minority
 counts = np.bincount(y)
 w = len(y) / (len(counts) * counts) # [~0.505, ~50.0]
 # pass w[label] as each sample's loss weight
+```
+
+In practice, the two clean library paths are scikit-learn's built-in class weighting and `imbalanced-learn`'s SMOTE — and SMOTE belongs inside an `imblearn` Pipeline so it only ever sees the training fold:
+
+```python
+from sklearn.linear_model import LogisticRegression
+clf = LogisticRegression(class_weight="balanced")   # weights handled for you
+
+from imblearn.over_sampling import SMOTE
+from imblearn.pipeline import Pipeline
+pipe = Pipeline([("smote", SMOTE(random_state=0)),  # resamples train fold ONLY
+                 ("clf", LogisticRegression())])
+pipe.fit(X_train, y_train)
 ```
 
 ::: {.callout-warning}
@@ -346,7 +466,16 @@ Resample and SMOTE **only on the training fold, after splitting** — never befo
 The richest everyday source is **datetime**. A raw timestamp like `2026-06-25 14:30` means little to most models, but its parts are gold: hour, day-of-week, month, is_weekend, is_holiday. The subtlety is that *cyclical* features such as hour and month wrap around — hour 23 and hour 0 are adjacent in time, yet the integers `23` and `0` look maximally far apart. The fix is to place the value on a circle with sine and cosine so that midnight meets midnight:
 $$\text{hour}_{\sin}=\sin\!\Big(\tfrac{2\pi\,h}{24}\Big),\quad \text{hour}_{\cos}=\cos\!\Big(\tfrac{2\pi\,h}{24}\Big)$$
 
-For **text**, the job is to turn documents into vectors. **Bag-of-words** simply counts how often each word appears; **TF-IDF** (term frequency–inverse document frequency) refines that by down-weighting words common across all documents — so "the" counts for almost nothing — and up-weighting words that are distinctive to a document. Modern pipelines increasingly replace both with learned embeddings (Chapter 20).
+**In words:** map the hour onto a clock face — two coordinates (sine and cosine) — so that 23:00 and 00:00 sit right next to each other instead of at opposite ends of a number line.
+**Also written:** with the angle $\theta = 2\pi h / 24$, the pair $(\cos\theta, \sin\theta)$ are the point's coordinates on the unit circle.
+
+For **text**, the job is to turn documents into vectors. **Bag-of-words** simply counts how often each word appears; **TF-IDF** (term frequency–inverse document frequency) refines that by down-weighting words common across all documents — so "the" counts for almost nothing — and up-weighting words that are distinctive to a document. The TF-IDF weight of a term is a product:
+$$\text{tfidf}(t,d) = \text{tf}(t,d)\cdot\log\frac{N}{1+\text{df}(t)}$$
+
+**In words:** how often a word appears in this document, multiplied by how rare it is across all documents, so common-everywhere words are pushed toward zero.
+**Also written:** $\text{tfidf} = \text{tf} \times \text{idf}$, where $\text{idf}(t) = \log\frac{N}{1+\text{df}(t)}$ ($N$ = number of documents, $\text{df}(t)$ = documents containing $t$).
+
+Modern pipelines increasingly replace both with learned embeddings (Chapter 20).
 
 For **images**, classic pipelines hand-built edge and corner descriptors, while modern ones pass the image through a pretrained CNN and read out an intermediate layer as the feature vector (Chapters 15, 19). And when you have many *correlated numeric* features, **PCA** extracts a few uncorrelated combinations that retain most of the variance — covered in full in Chapter 07.
 
@@ -358,6 +487,15 @@ feats = {
   'hour_sin': np.sin(2*np.pi*t.hour/24),   # midnight wraps correctly
   'hour_cos': np.cos(2*np.pi*t.hour/24),
 }
+```
+
+Turning a column of raw documents into a TF-IDF matrix is a two-line job with scikit-learn, and again the vocabulary and IDF weights are learned on training text only:
+
+```python
+from sklearn.feature_extraction.text import TfidfVectorizer
+vec = TfidfVectorizer(stop_words="english", max_features=5000)
+Xtr = vec.fit_transform(train_docs)   # learns vocab + idf from TRAIN
+Xte = vec.transform(test_docs)        # reuses them; new words ignored
 ```
 
 ::: {.callout-tip}
@@ -393,14 +531,72 @@ corr = [abs(np.corrcoef(X[:,j], y)[0,1]) for j in range(3)]
 keep = [j for j,c in enumerate(corr) if c > 0.3]  # filter: drop f2
 ```
 
+scikit-learn packages one tool per family — `SelectKBest` (filter), `RFE` (wrapper), and `SelectFromModel` over an L1 model (embedded):
+
+```python
+from sklearn.feature_selection import SelectKBest, f_classif, RFE, SelectFromModel
+from sklearn.linear_model import LogisticRegression
+
+filt = SelectKBest(f_classif, k=10).fit(X_train, y_train)             # filter
+wrap = RFE(LogisticRegression(), n_features_to_select=10).fit(X_train, y_train)  # wrapper
+emb  = SelectFromModel(LogisticRegression(penalty="l1", solver="liblinear")
+                       ).fit(X_train, y_train)                        # embedded (L1)
+```
+
 ::: {.callout-warning}
 Run feature selection **inside** cross-validation, not once on the full dataset beforehand. Picking features using the whole dataset — test rows included — is leakage and silently inflates your reported score.
 :::
 
-## 6.9 — Key takeaways
+## 6.9 — Building a leak-proof pipeline
+
+Up to here each step has been shown in isolation, but the warnings all share one root cause and one cure. The root cause: any statistic learned from data — a median, a scaler's mean, an encoder's category means, a TF-IDF vocabulary, a SMOTE neighbourhood, a selected feature set — is a *parameter fit to data*, and if it sees the test rows it has leaked. The cure is to bundle every such step into a single object that exposes one `fit` (which only ever touches training data) and one `transform`, so the discipline is enforced by construction rather than by remembering.
+
+The intuition: a pipeline is a sealed assembly line. Training data goes in one end and every station calibrates itself; at scoring time new data runs through the *already-calibrated* stations untouched. There is no way for a downstream station to peek at the test data because it was bolted shut before the test data ever arrived.
+
+```{mermaid}
+flowchart LR
+  subgraph FIT [fit — TRAIN ONLY]
+    A1[impute] --> B1[scale] --> C1[encode] --> D1[model]
+  end
+  subgraph APPLY [transform — VALID / TEST]
+    A2[reuse medians] --> B2[reuse mu, sigma] --> C2[reuse vocab] --> D2[predict]
+  end
+  FIT -.learned params.-> APPLY
+```
+
+scikit-learn's `ColumnTransformer` plus `Pipeline` is the standard way to express this. Numeric and categorical columns get different treatment, the whole thing is fit once on the training split, and cross-validation re-fits it cleanly on each fold:
+
+```python
+from sklearn.compose import ColumnTransformer
+from sklearn.pipeline import Pipeline
+from sklearn.impute import SimpleImputer
+from sklearn.preprocessing import StandardScaler, OneHotEncoder
+from sklearn.linear_model import LogisticRegression
+from sklearn.model_selection import cross_val_score
+
+num = ["age", "salary"]; cat = ["city"]
+pre = ColumnTransformer([
+    ("num", Pipeline([("imp", SimpleImputer(strategy="median")),
+                      ("sc",  StandardScaler())]), num),
+    ("cat", Pipeline([("imp", SimpleImputer(strategy="most_frequent")),
+                      ("oh",  OneHotEncoder(handle_unknown="ignore"))]), cat),
+])
+model = Pipeline([("pre", pre), ("clf", LogisticRegression())])
+
+# every transform is re-fit on each training fold only — no leakage
+scores = cross_val_score(model, X, y, cv=5, scoring="f1")
+```
+
+A worked sanity check makes the leakage concrete. Imagine 1000 rows, scaled by a mean computed over all 1000, then split 800/200 for training and test. That global mean was nudged — however slightly — by the 200 test rows, so the test score is a touch optimistic; on a small or skewed dataset that "touch" can be the difference between a model that ships and one that fails in production. Re-running the exact same code with the scaler inside the pipeline removes the nudge, and the cross-validated score drops to its honest value. The honest, slightly-lower number is the one to trust.
+
+::: {.callout-tip}
+If you remember one habit from this chapter, make it this: never call `fit` on anything outside a pipeline. `fit_transform` on the training split, `transform` on everything else — or better, let a `Pipeline` do both so you cannot get it wrong.
+:::
+
+## 6.10 — Key takeaways
 
 - Preprocessing often decides a project more than model choice — clean inputs beat clever algorithms.
-- **Fit on train, apply to test.** Every statistic — imputation value, scaler, encoder means, SMOTE, feature selection — must be learned from training data only, or you leak.
+- **Fit on train, apply to test.** Every statistic — imputation value, scaler, encoder means, SMOTE, feature selection — must be learned from training data only, or you leak. A `Pipeline` / `ColumnTransformer` enforces this by construction.
 - Missing values: prefer median for skewed numeric, mode for categorical; keep a "was-missing" flag, and respect the missingness mechanism (MCAR/MAR/MNAR).
 - Scale (z-score by default, robust for outliers, min-max for bounded) for distance- and gradient-based models; trees don't care.
 - Encode without inventing order: one-hot for low cardinality, target/hashing/embeddings for high — and fit target encoding out-of-fold.
@@ -409,7 +605,7 @@ Run feature selection **inside** cross-validation, not once on the full dataset 
 - Fight imbalance with class weights or SMOTE (training fold only) and judge with precision/recall/F1/AUC, never plain accuracy.
 - Extraction *creates* features (datetime parts, TF-IDF, CNN/embedding vectors); selection *keeps* the useful originals (filter / wrapper / embedded).
 
-## 6.10 — See also
+## 6.11 — See also
 
 - **Dimensionality Reduction** — PCA, t-SNE, UMAP: building new compressed features rather than selecting existing ones.
 - **AI, ML & the Learning Process** — train/validation/test splits and the leakage discipline this chapter depends on.

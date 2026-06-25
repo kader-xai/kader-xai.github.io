@@ -661,7 +661,153 @@ for xb in loader:                                # xb: (batch, 784)
 Autoencoders need enough data to train and can **overfit** — with a wide enough bottleneck they may just memorize, learning the identity function instead of useful structure. Keep the bottleneck genuinely narrow, add noise (denoising) or a regularizer, and prefer PCA when the data is small or the structure is roughly linear. Reach for autoencoders when the manifold is clearly curved and you have the samples to learn it.
 :::
 
-## 7.7 — Key takeaways
+## 7.7 — Random Projection: Dimensionality Reduction Without Looking at the Data
+
+Every method so far studies the data first — PCA computes a covariance, LDA reads labels, autoencoders train for hours. **Random projection** does something almost insolent: it multiplies the data by a *random* matrix and walks away. No eigenvectors, no training, no peeking at the structure. The astonishing part is that it works, and there is a theorem that says it must.
+
+**Intuition.** Imagine you want to flatten a cloud of points from a high-dimensional room onto a much smaller wall, but you do not want pairs of points that were far apart to suddenly collide, or close pairs to fly apart. Picking the *best* wall is expensive (that is what PCA does). Random projection says: just pick a wall at random. In very high dimensions there is so much room that a random flattening almost always keeps every pairwise distance roughly intact — the geometry survives the squash.
+
+The guarantee is the **Johnson–Lindenstrauss (JL) lemma**: any $n$ points in any dimension can be mapped into $O(\log n / \varepsilon^2)$ dimensions so that all pairwise distances are preserved within a factor of $1\pm\varepsilon$. Strikingly, the target dimension depends on the *number of points* and the tolerance $\varepsilon$ — **not on the original dimension $D$ at all**. A million features can collapse to a few thousand random coordinates while every distance stays almost unchanged.
+
+$$(1-\varepsilon)\,\|x_i-x_j\|^2 \;\le\; \|f(x_i)-f(x_j)\|^2 \;\le\; (1+\varepsilon)\,\|x_i-x_j\|^2 , \qquad k \;\ge\; \frac{8\ln n}{\varepsilon^2}.$$
+
+**In words:** after the random squash $f$, the distance between any two points changes by at most a factor of $\varepsilon$ in either direction, and the number of target dimensions $k$ you need grows only with the log of how many points you have and how tight a tolerance you demand.
+**Also written:** $\big|\,\|f(x_i)-f(x_j)\|^2 / \|x_i-x_j\|^2 - 1\,\big| \le \varepsilon$ for all pairs $i,j$, with the same sample-count-driven bound $k = O(\varepsilon^{-2}\log n)$.
+
+The map itself is just $f(x) = \frac{1}{\sqrt k}\,R\,x$, where $R$ is a $k\times D$ matrix of random entries — Gaussian $\mathcal N(0,1)$, or even sparse $\{-1,0,+1\}$ values (Achlioptas's construction) that make the multiply fast and cheap.
+
+<svg viewBox="0 0 380 150" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif" font-size="10">
+  <text x="10" y="14" fill="currentColor">Random matrix R squashes D → k, distances survive</text>
+  <rect x="20" y="35" width="34" height="90" fill="rgba(99,102,241,0.25)" stroke="#6366f1"/>
+  <text x="22" y="138" fill="currentColor">x (D)</text>
+  <text x="62" y="84" fill="currentColor">×</text>
+  <rect x="78" y="55" width="70" height="50" fill="rgba(236,72,153,0.25)" stroke="#ec4899"/>
+  <text x="88" y="118" fill="#ec4899">R (k×D, random)</text>
+  <text x="156" y="84" fill="currentColor">=</text>
+  <rect x="172" y="60" width="22" height="40" fill="rgba(34,197,94,0.3)" stroke="#22c55e"/>
+  <text x="166" y="116" fill="#22c55e">f(x) (k)</text>
+  <line x1="215" y1="80" x2="245" y2="80" stroke="currentColor" stroke-width="1.5" marker-end="url(#rp)"/>
+  <defs><marker id="rp" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6 z" fill="currentColor"/></marker></defs>
+  <text x="250" y="70" fill="currentColor">‖xᵢ−xⱼ‖ ≈</text>
+  <text x="250" y="90" fill="currentColor">‖f(xᵢ)−f(xⱼ)‖</text>
+</svg>
+
+**When to reach for it.** Random projection shines exactly where PCA strains: enormous $D$ where even computing the covariance is too slow, streaming data where you cannot revisit points, or as a cheap pre-reduction before a heavier method. It is the standard speed trick behind large-scale nearest-neighbor search and many sketching algorithms. The trade-off is honest: it preserves distances *on average with high probability* but, unlike PCA, makes no attempt to concentrate variance or denoise — it keeps the geometry, not the signal-to-noise.
+
+**Worked check — distances really do survive.** Project 200-dimensional points down to 50 random dimensions and measure how much pairwise distances drift:
+
+```python
+import numpy as np
+rng = np.random.default_rng(0)
+D, k, n = 200, 50, 300
+X = rng.standard_normal((n, D))
+
+R = rng.standard_normal((k, D)) / np.sqrt(k)   # JL random projection
+Z = X @ R.T                                     # (n, k) reduced
+
+def pdists(M):                                  # all pairwise distances
+    sq = (M**2).sum(1)
+    return np.sqrt(np.maximum(sq[:,None] + sq[None,:] - 2*M@M.T, 0))
+
+ratio = pdists(Z)[np.triu_indices(n,1)] / pdists(X)[np.triu_indices(n,1)]
+print("distance ratio mean/std:", ratio.mean().round(3), ratio.std().round(3))
+assert abs(ratio.mean() - 1) < 0.05            # distances preserved on average
+```
+
+**With scikit-learn.** The library picks the JL target dimension for you from the sample count and tolerance, and offers both dense Gaussian and sparse variants:
+
+```python
+from sklearn.random_projection import GaussianRandomProjection, johnson_lindenstrauss_min_dim
+
+k = johnson_lindenstrauss_min_dim(n_samples=10_000, eps=0.1)   # suggested target dim
+rp = GaussianRandomProjection(n_components=k, random_state=0)
+Z = rp.fit_transform(X)        # no covariance, no eigendecomposition — just a matmul
+```
+
+::: {.callout-tip}
+Random projection is the lazy first move on truly massive, high-$D$ data: it costs one matrix multiply and a fixed memory budget. If results look good, you have saved a PCA; if you need denoising or interpretable axes, fall back to PCA — often *on the randomly projected data*, which is much smaller and faster to decompose.
+:::
+
+## 7.8 — Choosing a Method in Practice & Evaluating the Result
+
+With seven techniques on the table, the practical question is which one to grab — and once you have a reduced representation, how to tell whether it is any good. This section is the field guide.
+
+**Pick by your goal, not by fashion.** The single most useful filter is *what you are reducing for*:
+
+| Your goal | Reach for | Why |
+|---|---|---|
+| Compress / denoise / speed up a model | PCA (SVD) | fast, invertible, concentrates variance |
+| Truly huge $D$, can't afford PCA | Random projection | one matmul, no eigendecomposition |
+| Maximize class separation (you have labels) | LDA | optimizes between/within class ratio |
+| Unfold a known curved manifold | Kernel PCA, Isomap, LLE | respect along-surface geometry |
+| Make a 2-D picture of clusters | UMAP (or t-SNE) | preserve neighborhoods for the eye |
+| Separate mixed sources (audio, EEG) | ICA | targets independence, not variance |
+| Curved structure + lots of data + reuse | Autoencoder | learns a nonlinear, reusable encoder |
+
+```{mermaid}
+flowchart TD
+    A[Need to reduce] --> B{Have labels and want separation?}
+    B -->|Yes| C[LDA]
+    B -->|No| D{Goal is a 2-D picture?}
+    D -->|Yes| E[UMAP / t-SNE]
+    D -->|No| F{D huge, need it cheap now?}
+    F -->|Yes| G[Random projection]
+    F -->|No| H{Structure curved?}
+    H -->|No| I[PCA / SVD]
+    H -->|Yes, lots of data| J[Autoencoder]
+    H -->|Yes, modest data| K[Kernel PCA / Isomap]
+```
+
+**Two practical splits to keep straight.** First, **feature selection vs. feature extraction**. Everything in this chapter is *extraction* — it builds brand-new features as combinations of the originals (a principal component is a blend of many inputs). *Selection* instead keeps a subset of the original columns untouched (drop low-variance features, pick by mutual information, use L1/Lasso). Extraction usually compresses harder; selection keeps features human-readable. Reach for selection when interpretability or audit trails matter; extraction when raw compression and denoising matter.
+
+Second, **transform leakage**. A reducer like PCA *learns parameters* (the components) from data, so it must be fit on the **training set only** and then applied to validation and test — exactly like a scaler. Fitting PCA on the full dataset before splitting leaks test information into training and inflates your scores. In scikit-learn the fix is one line: put the reducer inside a `Pipeline` so cross-validation re-fits it on each fold.
+
+```python
+from sklearn.pipeline import make_pipeline
+from sklearn.preprocessing import StandardScaler
+from sklearn.decomposition import PCA
+from sklearn.linear_model import LogisticRegression
+from sklearn.model_selection import cross_val_score
+
+# PCA is fit fresh on each training fold — no leakage from val/test
+pipe = make_pipeline(StandardScaler(), PCA(n_components=0.95), LogisticRegression(max_iter=1000))
+scores = cross_val_score(pipe, X, y, cv=5)
+print("CV accuracy:", scores.mean().round(3))
+```
+
+**How to tell a reduction is good.** There is no single number, but three lenses cover most cases:
+
+- **Reconstruction error** (for invertible methods: PCA, autoencoders) — push the reduced code back to the original space and measure $\|x - \hat x\|$. Low error means little was lost. This is the cleanest, most honest score when it applies.
+- **Downstream task score** — the pragmatic test: does a model trained on the reduced features match (or beat, via denoising) the model on the full features? If accuracy holds with 20 dimensions instead of 1,000, the reduction earned its keep.
+- **Trustworthiness / neighbor preservation** (for visualization methods) — check what fraction of each point's near neighbors in 2-D were also near neighbors in high-D. This catches the failure mode where t-SNE or UMAP invents clusters that were not there.
+
+$$\text{explained variance ratio} = \frac{\sum_{j\le k}\lambda_j}{\sum_j \lambda_j}, \qquad \text{reconstruction error} = \frac{1}{n}\sum_i \|x_i - \hat x_i\|^2 .$$
+
+**In words:** the explained-variance ratio is the share of total spread your kept components account for; the reconstruction error is the average squared gap between each original point and its rebuilt version — high explained variance and low reconstruction error both say "little was thrown away."
+**Also written:** for PCA the two are linked — reconstruction error equals the *discarded* variance $\sum_{j>k}\lambda_j$, so $\text{explained ratio} = 1 - \dfrac{\text{reconstruction error}}{\text{total variance}}$.
+
+<svg viewBox="0 0 380 160" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif" font-size="10">
+  <text x="10" y="14" fill="currentColor">More components → less lost, diminishing returns</text>
+  <line x1="40" y1="130" x2="350" y2="130" stroke="currentColor"/>
+  <line x1="40" y1="20" x2="40" y2="130" stroke="currentColor"/>
+  <text x="150" y="152" fill="currentColor">components kept k</text>
+  <!-- explained variance rising curve -->
+  <path d="M40,120 C100,60 180,40 340,32" fill="none" stroke="#22c55e" stroke-width="2.5"/>
+  <text x="250" y="46" fill="#22c55e">explained variance</text>
+  <!-- reconstruction error falling curve -->
+  <path d="M40,32 C100,90 180,118 340,124" fill="none" stroke="#f59e0b" stroke-width="2.5"/>
+  <text x="250" y="118" fill="#f59e0b">reconstruction error</text>
+  <line x1="150" y1="20" x2="150" y2="130" stroke="#ec4899" stroke-dasharray="4 3"/>
+  <text x="154" y="28" fill="#ec4899">good k</text>
+</svg>
+
+**A small worked comparison.** Suppose 1,000-D data and a classifier that scores 0.90 on the full features. You try three reductions to 50-D and read the lenses: PCA keeps 95% explained variance and the classifier holds 0.90 (cheap win — half the noise, same accuracy). Random projection is faster to compute but the classifier slips to 0.86 (geometry preserved, but no denoising). An autoencoder pushes to 30-D with the classifier at 0.91 (it found curved structure PCA missed) but took an hour to train. The right call depends on your budget: PCA for the easy 90% of cases, the autoencoder only when the extra point of accuracy or the reusable encoder pays for the training time.
+
+::: {.callout-tip}
+Always benchmark against the **no-reduction baseline**. If the full-feature model is already fast enough and accurate enough, the laziest correct answer is to skip reduction entirely — its main payoffs (speed, denoising, visualization) only matter when one of them is actually a bottleneck.
+:::
+
+## 7.9 — Key takeaways
 
 - Dimensionality reduction trades a tolerable bit of information for speed, denoising, less overfitting, and the ability to visualize — fighting the curse of dimensionality (in high $D$, almost all of a region's volume hugs its boundary, so points grow sparse and equidistant).
 - **PCA**: unsupervised, finds orthogonal directions of maximum variance via eigenvectors of the covariance (best computed by SVD); standardize and center first; choose $k$ with a scree elbow or cumulative-variance threshold. Real covariance matrices are PSD, so every eigenvalue is non-negative.
@@ -670,8 +816,10 @@ Autoencoders need enough data to train and can **overfit** — with a wide enoug
 - **t-SNE & UMAP** are for *visualization only*: they preserve neighborhoods, not distances or cluster sizes; never trust absolute geometry and never feed their coordinates into a model.
 - **ICA** seeks statistical independence (not mere decorrelation) by maximizing non-Gaussianity, solving the cocktail-party unmixing problem; scale and order of components are ambiguous.
 - **Autoencoders** learn the reduction with a neural-network bottleneck; a linear one reproduces PCA, deep ones capture curved manifolds, and the VAE variant turns the latent code into a sampler that bridges into generative modeling.
+- **Random projection** ignores the data entirely — a random matrix multiply preserves all pairwise distances within $1\pm\varepsilon$ (Johnson–Lindenstrauss), with target dimension set by the point count, not $D$; the go-to cheap reducer for truly huge dimensions.
+- **Choosing a method** starts from the goal (compress, separate classes, unfold a manifold, visualize, or unmix); fit reducers on training data only (use a `Pipeline` to avoid leakage), and judge results by reconstruction error, downstream task score, or neighbor preservation — always against a no-reduction baseline.
 
-## 7.8 — See also
+## 7.10 — See also
 
 - **[Mathematical Foundations] Linear Algebra** — eigenvectors, SVD, and projections that underpin PCA, LDA, and ICA.
 - **[Mathematical Foundations] Probability & Statistics** — covariance, variance, KL divergence, non-Gaussianity, and the Central Limit Theorem behind ICA.

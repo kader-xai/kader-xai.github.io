@@ -587,7 +587,77 @@ The deep parallel is that fraud and intrusion are both **adversarial anomaly det
 Whether the label is "fraud" or "intruder," the recipe is identical: engineer behavioral and contextual features, baseline what normal looks like, score the deviations, tier the response by risk, and feed confirmed outcomes back into the model.
 :::
 
-## 27.13 — Explaining and Acting on Alerts
+## 27.13 — Calibrated Thresholds and Conformal Anomaly Detection
+
+Every method so far emits a raw score — a Mahalanobis distance, a path-length score, a reconstruction error — but a raw score is not a *guarantee*. The intuition: a number like "0.83" tells you this point looks weird, but it does not promise "at most 1% of normal traffic will ever score this high." Turning a score into a controlled false-alarm rate is the job of **calibration**, and the cleanest tool for it is **conformal anomaly detection**.
+
+The idea is disarmingly simple. Hold out a clean **calibration set** of known-normal points and record their anomaly scores. For a new point with score $s$, the **conformal p-value** is the fraction of calibration scores at least as extreme:
+
+$$p(x) = \frac{1 + |\{i : s_i \ge s(x)\}|}{n + 1}.$$
+
+**In words:** ask "out of my pile of normal examples, what fraction looked at least this anomalous?" — if almost none did, the p-value is tiny and the point is a confident anomaly.
+**Also written:** $p(x) = \dfrac{1 + \#\{\text{calibration scores} \ge s(x)\}}{n+1}$, the empirical right-tail rank of the new score among $n$ calibration scores, smoothed by the $+1$ so it can never be exactly zero.
+
+The payoff is a **distribution-free guarantee**: if you flag every point with $p(x) \le \alpha$, then on genuinely normal data you raise at most a fraction $\alpha$ of false alarms, *whatever* the underlying score distribution — no Gaussian assumption, no tuning. Set $\alpha = 0.01$ and you have pinned your false-positive rate to 1% by construction, which is exactly the knob a security team wants when its alert budget is fixed.
+
+<svg viewBox="0 0 340 170" xmlns="http://www.w3.org/2000/svg">
+  <line x1="40" y1="140" x2="320" y2="140" stroke="#888" stroke-width="1"/>
+  <text x="250" y="158" font-size="10" fill="#888">anomaly score →</text>
+  <path d="M45,140 C90,40 130,40 165,90 C190,125 220,138 300,139" fill="#6366f1" fill-opacity="0.18" stroke="#6366f1" stroke-width="1.5"/>
+  <line x1="255" y1="140" x2="255" y2="30" stroke="#e8554c" stroke-width="1.5" stroke-dasharray="4 3"/>
+  <text x="225" y="26" font-size="9" fill="#e8554c">α-quantile cutoff</text>
+  <text x="262" y="80" font-size="9" fill="#e8554c">flag (p ≤ α)</text>
+  <text x="90" y="110" font-size="9" fill="#6366f1">calibration scores (normal)</text>
+</svg>
+
+```python
+import numpy as np
+# scores on a held-out CLEAN calibration set, and on new points
+cal = model.score_samples(X_cal) * -1        # higher = more anomalous
+new = model.score_samples(X_new) * -1
+# conformal p-value: right-tail rank of each new score among calibration scores
+p = (1 + (cal[None, :] >= new[:, None]).sum(axis=1)) / (len(cal) + 1)
+flagged = p <= 0.01                          # guaranteed <= 1% false-alarm rate
+```
+
+::: {.callout-tip}
+Conformal calibration cleanly separates the two decisions you were silently mixing before: the *model* decides how to score, and $\alpha$ decides how aggressive to be — with a real false-positive guarantee attached. When normal traffic drifts, the calibration set's scores drift with it, so re-fitting the quantile periodically keeps the rate honest.
+:::
+
+## 27.14 — Drift Detection and Active Learning
+
+Two slow leaks sink anomaly systems that look healthy on launch day, and both deserve their own machinery. The intuition: the world moves underneath a frozen detector (today's "normal" is not last quarter's), and the labels you need to improve it are scarce and expensive — so you must both *notice* when the ground shifts and *spend your few labels wisely*.
+
+The first leak is **concept drift**: the distribution of normal behavior changes — a holiday spending surge, a new product line, a migrated data pipeline — and a detector tuned to the old normal starts crying wolf (or going quiet). You catch it by watching the *score distribution itself*, not the rare labels. A practical, label-free monitor compares the recent window of anomaly scores against a reference window with a two-sample test such as **Kolmogorov–Smirnov** or **population stability index (PSI)**; a significant shift means "normal has moved, re-baseline." This is cheaper and faster than waiting for chargebacks to reveal that recall collapsed weeks ago.
+
+```python
+from scipy.stats import ks_2samp
+# reference vs. recent windows of the detector's own scores (no labels needed)
+stat, pval = ks_2samp(ref_scores, recent_scores)
+if pval < 0.01:                  # score distribution shifted -> normal drifted
+    trigger_rebaseline()         # refit calibration quantile / retrain detector
+```
+
+The second leak is the **label famine**: confirmed anomalies trickle in slowly, so you cannot afford to label at random. **Active learning** closes the gap by sending the *most informative* cases to your analysts — and the natural choice in detection is the band of points sitting right at the decision boundary, where the model is least sure. Each analyst verdict on a borderline case sharpens the threshold and feeds the supervised layer far faster than labeling obvious cases would.
+
+```{mermaid}
+flowchart LR
+    SC[score every event] --> B{near threshold?<br/>uncertain}
+    B -->|yes| Q[queue for analyst<br/>active-learning sample]
+    B -->|clearly low| OK[allow]
+    B -->|clearly high| BL[block + review]
+    Q --> LB[label]
+    BL --> LB
+    LB -.retrain / re-calibrate.-> SC
+```
+
+The two mechanisms reinforce each other: drift detection tells you *when* the model has gone stale, and active learning gives you the *cheapest path* to refreshing it — a label budget spent on the cases that move the boundary most. Together they turn a static detector into one that survives an adversary who is, by design, always changing the game.
+
+::: {.callout-warning}
+Drift monitoring and baseline poisoning (Section 27.11) pull in opposite directions: you want the model to adapt to *benign* drift but resist *adversarial* drift. Gate adaptation on confirmed-normal data and cap the update rate, so a patient attacker cannot smuggle the new "normal" past your KS test one small step at a time.
+:::
+
+## 27.15 — Explaining and Acting on Alerts
 
 A detector that fires without saying *why* is operationally useless: an analyst staring at a flagged transaction needs a reason before they can confirm, dispute, or escalate it, and a customer whose card is declined deserves a defensible explanation. The intuition is that a score is a verdict, but an investigation needs evidence — so a production system must turn each high score into a short, human-readable story of which features drove it.
 
@@ -607,7 +677,7 @@ Beyond the single alert, two operational realities shape the whole system. The f
 Treat explanations as part of the model's output, not an afterthought. An alert shipped with its top three driving features is one an analyst can action in seconds; a bare score is one they must reverse-engineer — and under a tight alert budget, that difference decides whether the system is usable at all.
 :::
 
-## 27.14 — Key takeaways
+## 27.16 — Key takeaways
 
 - Anomaly detection means **modeling normal and measuring deviation** — reach for it when positives are rare, undefined, or unlabeled, precisely where ordinary classification breaks.
 - **Statistical methods** (z-score, Gaussian/Mahalanobis, EWMA) are simple, fast, and often enough; log-transform or use robust stats (median/MAD) on skewed, heavy-tailed data.
@@ -618,9 +688,11 @@ Treat explanations as part of the model's output, not an afterthought. An alert 
 - Match the **type** to the method: point (single odd value), contextual (odd given time or place), collective (odd as a sequence) — and aggregate into windows before hunting collective anomalies.
 - Under extreme imbalance, judge models by **PR-AUC and the precision–recall curve**, never accuracy or ROC-AUC, and treat the **threshold as a business decision** tied to alert capacity and asymmetric costs.
 - Fraud and intrusion are **adversarial and streaming**: score in real time, adapt to drift, guard against baseline poisoning, and loop confirmed labels back into the model.
+- **Calibrate the threshold** with a clean calibration set — **conformal p-values** convert a raw score into a distribution-free false-alarm guarantee, pinning the FP rate to your alert budget without any Gaussian assumption.
+- **Watch for drift** in the score distribution itself (KS test / PSI) so you re-baseline before recall quietly collapses, and spend scarce labels with **active learning** on the uncertain points near the boundary.
 - Ship each alert with an **explanation** (SHAP or top deviating features) and a **graded action tier**, since an unexplained, all-or-nothing alert is rarely usable under a real review budget.
 
-## 27.15 — See also
+## 27.17 — See also
 
 - **Classification Algorithms** — supervised detectors, support-vector machines, and decision boundaries.
 - **Ensemble Methods** — gradient-boosted trees for the supervised fraud layer, and the forest idea behind Isolation Forest.
@@ -633,6 +705,8 @@ Treat explanations as part of the model's output, not an afterthought. An alert 
 - **Interpretability & Explainability** — SHAP and per-prediction attribution for turning scores into actionable alerts.
 - **ML Across Industries** — fraud, security, and fault detection deployed in real production settings.
 - **MLOps & Deployment** — streaming inference, monitoring, drift handling, and retraining loops.
+- **Uncertainty & Calibration** — conformal prediction and distribution-free p-values for turning raw scores into guaranteed error rates.
+- **Active Learning** — querying the most informative points to spend a scarce labeling budget where it sharpens the model most.
 
 ------------------------------------------------------------------------
 

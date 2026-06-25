@@ -286,6 +286,37 @@ print(grid.best_params_, grid.best_score_)
 
 The `clf__n_estimators` double-underscore syntax reaches *into* a named step — `<step>__<param>` — so you tune a deeply nested component from the top level. The whole search, leakage-safe preprocessing included, is one object you can `joblib.dump` and ship.
 
+### Gradient-boosting libraries: the tabular workhorses
+
+Here is a fact that surprises people who arrive from deep learning: on ordinary **tabular** data — the spreadsheets, transaction logs, and customer tables that make up most real business problems — a **gradient-boosted decision tree** usually beats a neural network, trains in seconds, and needs almost no tuning. So while scikit-learn ships its own boosting, three specialized libraries dominate this corner: **XGBoost**, **LightGBM**, and **CatBoost**. They all implement the same core idea (covered in depth in the *Ensemble Methods* chapter): build trees one after another, each new tree correcting the errors the running total still makes.
+
+The intuition for *why* they win on tables: trees split on thresholds (`amount > 500?`), so they handle mixed scales, skewed distributions, and irrelevant columns gracefully — no standardization needed, no sensitivity to a feature measured in millions sitting next to one measured in fractions. Boosting then stacks many shallow trees into a strong learner. The three libraries differ mainly in engineering tradeoffs:
+
+| Library | Distinctive trick | Sweet spot |
+|---|---|---|
+| **XGBoost** | regularized objective, level-wise trees, battle-tested | the safe default; Kaggle staple |
+| **LightGBM** | histogram bucketing + leaf-wise growth = very fast | large datasets, many features |
+| **CatBoost** | native categorical handling, ordered boosting | many categorical columns, less tuning |
+
+All three expose a scikit-learn-compatible `fit`/`predict`, so they drop straight into a Pipeline or `GridSearchCV`:
+
+```python
+from xgboost import XGBClassifier          # pip install xgboost
+from sklearn.model_selection import cross_val_score
+
+clf = XGBClassifier(
+    n_estimators=300, max_depth=4, learning_rate=0.1,
+    subsample=0.8, eval_metric="logloss")
+print(cross_val_score(clf, X, y, cv=5).mean())
+
+# LightGBM is a near drop-in replacement, usually faster on big data:
+# from lightgbm import LGBMClassifier; clf = LGBMClassifier(n_estimators=300)
+```
+
+::: {.callout-tip}
+**Rule of thumb:** if your data is a table (rows and columns, not images/text/audio), reach for gradient boosting *before* a neural net. It is the strongest baseline you can stand up in five minutes, and often the final model too. Save the deep network for unstructured data.
+:::
+
 ## 31.2 — Deep learning frameworks
 
 Classical ML stops where you need to hand-build a network and have its gradients computed for you. That is the job of a deep learning framework. Both major frameworks rest on the same two pillars: **tensors** (NumPy-like arrays that also live on GPUs, so the same array math runs thousands of multiplies in parallel) and **autograd** (automatic differentiation that records every operation and replays it backward to compute gradients — the chain rule, mechanized; see the *Calculus & Differentiation* chapter). They differ mainly in *when* the computation graph is built and *where* they are strongest in production.
@@ -644,23 +675,63 @@ This is the bridge to **online learning** (a model that updates incrementally as
 **Common mistake:** computing a streaming feature differently from its batch (training) version — a slightly different window edge, or different null-handling. The model then sees inputs at serving time that never appeared in training. This **train/serve skew** is the top cause of "great offline, broken online" models; share *one* feature definition across both the batch and stream paths.
 :::
 
-## 31.5 — Key takeaways
+## 31.5 — Experiment tracking & model packaging
+
+There is a stage between "I wrote a training loop" and "this model serves real users" that the tools above quietly skip over: keeping track of *what you ran*. Train fifty variants over a week — different learning rates, feature sets, random seeds — and a folder of `model_final_v3_REALLY_final.pt` files becomes a graveyard you cannot reason about. **Experiment tracking** and **model packaging** tools fix this, and the dominant one is **MLflow** (with **Weights & Biases** a popular hosted alternative).
+
+The intuition: a lab notebook for machine learning. A chemist does not trust memory for which reagent concentration gave which yield — they write every run in a notebook. An experiment tracker is that notebook, automated: for each run it records the **parameters** you chose, the **metrics** you got, and the **artifacts** you produced (the trained model file, plots, the exact data version), all queryable later so you can ask "which run had the best validation AUC, and what learning rate did it use?"
+
+```{mermaid}
+flowchart LR
+  R[Training run] -->|log_param| P[params: lr, depth]
+  R -->|log_metric| M[metrics: auc, loss]
+  R -->|log_model| A[artifact: model + env]
+  P --> T[(Tracking store<br/>queryable history)]
+  M --> T
+  A --> Reg[(Model Registry<br/>staging → production)]
+  style T fill:#cde,stroke:#369
+  style Reg fill:#dec,stroke:#393
+```
+
+The everyday MLflow idiom is a context manager wrapping your training, with three log calls:
+
+```python
+import mlflow
+
+with mlflow.start_run():
+    mlflow.log_params({"lr": 0.1, "max_depth": 4})   # what you chose
+    model.fit(X_train, y_train)
+    auc = score(model, X_val, y_val)
+    mlflow.log_metric("val_auc", auc)                # what you got
+    mlflow.sklearn.log_model(model, "model")         # the artifact, with its deps
+```
+
+Two ideas earn their keep here. **Reproducibility**: a run logs not just the model but the code version, the parameters, and the Python environment, so a result is re-runnable months later rather than a one-time fluke. And the **Model Registry**: trained artifacts get versioned and promoted through stages (`Staging` → `Production`), so deployment pulls "the current production model" by name instead of someone hand-copying a file. That handoff — from the experiment notebook to a named, versioned, served model — is exactly the seam where this chapter's tooling meets the *MLOps & Deployment* chapter.
+
+::: {.callout-tip}
+**Rule of thumb:** start logging from your very first serious run, not after the mess. The cost is three lines per run; the payoff is never again wondering which checkpoint produced the number in last month's slide deck.
+:::
+
+## 31.6 — Key takeaways
 
 - The Python ML stack layers cleanly: **NumPy** (typed n-dimensional arrays, vectorized via broadcasting) → **Pandas** (labeled, index-aligned tabular data, `groupby` split-apply-combine) → **scikit-learn** (the uniform `fit`/`predict`/`transform` estimator API).
 - A scikit-learn **Pipeline** chains transformers and a final estimator into one object; fitting it per cross-validation fold prevents **data leakage** from preprocessing. **`ColumnTransformer`** routes numeric vs categorical columns, and **`GridSearchCV`** tunes the whole thing leakage-safely.
+- For **tabular** data, **gradient-boosting** libraries (XGBoost, LightGBM, CatBoost) are the strongest fast baseline — often beating neural nets — and drop into the scikit-learn API.
 - Deep learning frameworks share two pillars: **GPU tensors** and **autograd** (the mechanized chain rule, triggered by `.backward()`).
 - **PyTorch** uses a dynamic graph and an explicit four-step loop (`zero_grad → forward → backward → step`) and dominates research. **Keras/TensorFlow** hide the loop behind `compile`/`fit` and lead on edge/mobile/browser deployment (TFLite, TF.js). **JAX** offers functional autograd (`grad`/`jit`/`vmap`) for TPU and high-performance research. All export to **ONNX**, the framework-agnostic interchange format that decouples training from serving.
 - The **Hugging Face** ecosystem (`transformers`, `datasets`, `peft`) makes downloading a pretrained model the default; **LoRA** adapts a giant model by training tiny low-rank matrices ($W + BA$) instead of all its weights.
 - **Streaming** treats data as unbounded events. **Kafka** is the durable, replayable log (transport); **Spark Streaming** computes in micro-batches (~seconds); **Flink** computes per-event with event-time windows (~milliseconds).
 - The recurring real-time challenge is **feature freshness** and avoiding **train/serve skew** — share one feature definition across batch and stream.
+- **Experiment tracking** (MLflow, W&B) is the lab notebook for ML: log params, metrics, and artifacts per run, and promote versioned models through a **registry** for reproducible, named deployment.
 
-## 31.6 — See also
+## 31.7 — See also
 
 - **Data Preprocessing** — what the Pandas and scikit-learn transformers actually do to features.
+- **Ensemble Methods** — the boosting and bagging theory behind XGBoost, LightGBM, and CatBoost.
 - **Calculus & Differentiation** — the chain rule that autograd mechanizes.
 - **Neural Networks (Core)** — the `nn.Module` layers and training dynamics framed here as code.
 - **Transformers & Attention** — the architecture behind most Hugging Face models, and where LoRA fine-tuning is applied.
-- **MLOps & Deployment** — feature stores, model serving, and the production lifecycle around these tools.
+- **MLOps & Deployment** — feature stores, model serving, experiment tracking, and the production lifecycle around these tools.
 - **AI Infrastructure & Efficient Inference** — GPUs, ONNX, and serving the tensors these frameworks produce.
 - **Model Evaluation & Tuning** — cross-validation, the setting where Pipelines prevent leakage.
 - **Recommender Systems** and **Anomaly & Fraud Detection** — canonical consumers of streaming features and online inference.

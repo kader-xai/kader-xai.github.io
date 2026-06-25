@@ -170,6 +170,8 @@ The cat photo is far closer to "a cat" than to "a car" — exactly the alignment
 **Intuition:** a shared space turns "is this image about cats?" into "is this image's vector near the word *cat*'s vector?" — a plain dot product. Once everything is a vector in one space, cross-modal problems collapse into nearest-neighbor lookups.
 :::
 
+**The alignment gap.** One subtlety worth naming early: even in a well-trained shared space, image vectors and text vectors do not perfectly overlap. They tend to occupy two slightly separated *cones* — image embeddings cluster among themselves, text embeddings among themselves, with a narrow gap between the clusters. This **modality gap** is partly a consequence of random initialization and the temperature in contrastive training, and it is usually harmless (cosine ranking still works fine within a modality-to-modality comparison), but it explains why naive tricks like averaging an image vector with a text vector can land you in an empty no-man's-land between the cones.
+
 ## 24.2 — CLIP: Contrastive Image–Text Pretraining
 
 The famous model that made the shared space practical at scale is **CLIP** (Contrastive Language–Image Pre-training, OpenAI 2021). Its recipe is almost embarrassingly direct: scrape ~400 million (image, caption) pairs from the web, and train two encoders so that **each image lands near its own caption and far from everyone else's**.
@@ -184,6 +186,10 @@ $$\mathcal{L} = -\frac{1}{N}\sum_{i=1}^{N} \log \frac{\exp(\text{sim}(I_i, T_i)/
 **Also written:** with rows L2-normalized this is a cross-entropy on logits $\tfrac{1}{\tau} I N^\top$ with targets on the diagonal — $\mathcal{L} = \tfrac{1}{N}\sum_i \text{CE}\big(\text{softmax}_j(\text{sim}(I_i,T_j)/\tau),\, y_i = i\big)$ — and the full CLIP loss averages this image→text term with its symmetric text→image counterpart.
 
 where $\tau$ is a learned **temperature** that sharpens or softens the distribution. Read it as a classification problem: "given image $i$, which of the $N$ captions is the right one?"
+
+::: {.callout-note appearance="simple"}
+**Why bigger batches help.** The other captions in the batch *are* the negatives, so a batch of $N$ gives each image $N-1$ things to contrast against. Double the batch and every example sees twice as many distractors — which is exactly why CLIP-style training is so hungry for large batches (tens of thousands of pairs) and why much of the engineering effort goes into fitting those batches across many GPUs.
+:::
 
 ```{mermaid}
 flowchart TB
@@ -280,13 +286,43 @@ with torch.no_grad():
 print(labels[int(probs.argmax())], float(probs.max()))
 ```
 
-This same trick powers **semantic image search** (encode a query sentence, find nearest image vectors), **content moderation**, and the text-conditioning inside many generators. The wording of the prompt matters — "a photo of a dog" usually beats the bare word "dog," a quirk called **prompt engineering** for CLIP.
+This same trick powers **semantic image search** (encode a query sentence, find nearest image vectors), **content moderation**, and the text-conditioning inside many generators. The wording of the prompt matters — "a photo of a dog" usually beats the bare word "dog," a quirk called **prompt engineering** for CLIP. A common refinement is **prompt ensembling**: encode the same class through many templates ("a photo of a {}", "a blurry photo of a {}", "a close-up of a {}"), average the resulting text vectors, and classify against that mean — a free accuracy bump that smooths over any single template's quirks.
 
 ::: {.callout-warning}
 CLIP inherits the biases and noise of web data, and it is **bag-of-concepts**, not compositional: it often scores "a red cube on a blue sphere" and "a blue cube on a red sphere" almost identically because it keys on *which* concepts are present more than *how they relate*. Don't assume CLIP understands spatial or relational structure.
 :::
 
-## 24.3 — Vision-Language Models & Multimodal LLMs
+## 24.3 — Binding Many Modalities Through One Anchor
+
+CLIP aligns *two* modalities by training on paired data. But what if you want six modalities — image, text, audio, depth, thermal, motion — in one space? Collecting aligned data for *every* pair (image–audio, audio–depth, depth–thermal, …) explodes combinatorially. The elegant fix, popularized by Meta's **ImageBind (2023)**, is to bind everything to a *single anchor modality*.
+
+**Intuition.** Think of a train station with one central hub. You don't need a direct track between every pair of towns; you just need every town connected to the hub. Route through the hub and any town can reach any other. ImageBind makes **images** the hub: it trains image↔text, image↔audio, image↔depth, and so on — always pairing each modality with images, never with each other. The surprise is **emergent alignment**: because audio was pulled toward images and text was pulled toward images, audio and text end up aligned *too*, even though no audio–text pairs were ever shown.
+
+```{mermaid}
+flowchart TB
+  IMG((🖼️ Image\nanchor)) --- T[📝 Text]
+  IMG --- A[🔊 Audio]
+  IMG --- D[🌐 Depth]
+  IMG --- TH[🌡️ Thermal]
+  IMG --- M[📈 IMU motion]
+  T -. emergent .- A
+  A -. emergent .- D
+```
+
+The mechanism is just CLIP-style contrastive training, repeated once per (image, X) pairing, all sharing the *same* image encoder so every modality is pulled into one common frame of reference:
+
+$$\mathcal{L}_{\text{bind}} = \sum_{X \in \{\text{text, audio, depth, ...}\}} \mathcal{L}_{\text{InfoNCE}}\big(f_{\text{img}}, f_X\big)$$
+
+**In words:** for each non-image modality, run the usual "match each image to its partner" contrastive loss against images, and add them all up — one shared image encoder anchors them all.
+**Also written:** $\mathcal{L}_{\text{bind}} = \sum_X \tfrac{1}{N}\sum_i \text{CE}\big(\text{softmax}_j \text{sim}(f_{\text{img}}(I_i), f_X(x_j))/\tau,\; y_i=i\big)$ — a sum of per-modality CLIP losses sharing the anchor encoder $f_{\text{img}}$.
+
+The practical payoff is **cross-modal arithmetic and retrieval you never trained for**: hum a tune and retrieve matching images, or add an image embedding of a beach to an audio embedding of waves to query a generator. Once modalities share a hub, you compose them like word vectors. This anchor-and-bind pattern is the conceptual generalization of CLIP from a two-tower model to an *n*-tower one.
+
+::: {.callout-tip}
+**Intuition:** you don't need every pairwise bridge — you need one good hub. Bind every modality to a shared anchor (images, because image data co-occurs with almost everything), and the rest of the alignment comes for free.
+:::
+
+## 24.4 — Vision-Language Models & Multimodal LLMs
 
 CLIP can *match* an image to text but cannot *talk* about it. To get fluent description and reasoning, we bolt vision onto a language model, producing a **vision-language model (VLM)** — also called a **multimodal LLM**. The core question is mechanical: an LLM consumes a sequence of token embeddings, so **how do we turn an image into tokens the LLM will accept?**
 
@@ -340,15 +376,17 @@ Two flagship tasks fall out of this design. **Image captioning** asks the model 
 
 Training is typically two-stage. First **alignment pretraining**: freeze the vision encoder and the LLM, and train *only* the projector on image–caption pairs so the soft tokens land in meaningful regions of the LLM's space — cheap, because few parameters move. Then **instruction tuning** on multimodal conversations ("look at this and answer…") so the model learns to *follow visual instructions*, not just caption.
 
+**The token-count tax.** A practical cost that bites in production: image tokens are *expensive*. A single high-resolution image can expand into hundreds or thousands of soft tokens, all of which sit in the LLM's context window and incur attention cost. This is why resampler designs (Q-Former, Perceiver) that *compress* many patches into a few query tokens matter — and why feeding a VLM ten images can blow your context budget faster than ten paragraphs of text. When latency or cost is tight, downscale the image or pick a model with an aggressive resampler.
+
 ::: {.callout-tip}
 **Rule of thumb:** a VLM is "an LLM with extra eyes." Almost all the heavy lifting is the frozen vision encoder and the frozen LLM; the learnable bridge between them (the projector) is small. That is why you can build a capable VLM on a modest budget by reusing two strong pretrained pieces.
 :::
 
-## 24.4 — Text-to-Image and Text-to-Video
+## 24.5 — Text-to-Image and Text-to-Video
 
 Run the shared space in reverse and you get **generation**: instead of mapping an image *to* text, you synthesize an image *from* text. Modern **text-to-image** systems are overwhelmingly **diffusion models** (the full mechanism — forward noising, the denoising network, samplers, and latent diffusion — is the subject of Chapter 18). Here we cover only the multimodal hinge: **how the words steer the pixels.**
 
-The link is **conditioning**. The denoiser is not asked to remove noise blindly; it removes noise *given a text embedding*. A text encoder (often the CLIP text encoder of §24.2, or a T5 language model) turns the prompt into a sequence of vectors, and the denoising U-Net or transformer attends to them via **cross-attention** (§24.6) at every step. The text acts as a steering wheel nudging each denoising step toward images consistent with the prompt.
+The link is **conditioning**. The denoiser is not asked to remove noise blindly; it removes noise *given a text embedding*. A text encoder (often the CLIP text encoder of §24.2, or a T5 language model) turns the prompt into a sequence of vectors, and the denoising U-Net or transformer attends to them via **cross-attention** (§24.7) at every step. The text acts as a steering wheel nudging each denoising step toward images consistent with the prompt.
 
 ```{mermaid}
 flowchart LR
@@ -368,6 +406,24 @@ $$\hat{\epsilon} = \epsilon_{\varnothing} + w\,(\epsilon_{\text{text}} - \epsilo
 **Also written:** $\hat{\epsilon} = (1-w)\,\epsilon_{\varnothing} + w\,\epsilon_{\text{text}}$ — a linear blend (an *extrapolation* once $w>1$) of the unconditioned and text-conditioned predictions.
 
 The **guidance scale** $w$ trades faithfulness against diversity: $w=1$ ignores the extrapolation (looser, more varied), while $w=7$–$12$ pulls hard toward the prompt (sharper adherence, but risks over-saturated or unnatural images). It is the single knob users feel most.
+
+The doodle below shows the extrapolation geometry: the final direction overshoots the text-conditioned guess, away from the unconditioned one.
+
+<svg viewBox="0 0 360 180" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <marker id="ah" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto">
+      <path d="M0,0 L6,3 L0,6 Z" fill="currentColor"/>
+    </marker>
+  </defs>
+  <circle cx="60" cy="130" r="5" fill="#6366f1"/>
+  <text x="20" y="150" font-size="10" fill="currentColor">ε∅ (no prompt)</text>
+  <line x1="60" y1="130" x2="200" y2="80" stroke="#22c55e" stroke-width="2" marker-end="url(#ah)"/>
+  <circle cx="200" cy="80" r="5" fill="#22c55e"/>
+  <text x="150" y="70" font-size="10" fill="currentColor">ε_text (prompt)</text>
+  <line x1="60" y1="130" x2="320" y2="36" stroke="#f59e0b" stroke-width="2.5" stroke-dasharray="5 3" marker-end="url(#ah)"/>
+  <text x="250" y="30" font-size="10" fill="currentColor">ε̂ (w·extrapolate)</text>
+  <text x="100" y="172" font-size="9" fill="#888">guidance pushes past the prompt direction (w &gt; 1)</text>
+</svg>
 
 ```python
 # classifier-free guidance: blend conditioned and unconditioned predictions
@@ -401,11 +457,11 @@ image.save("fox.png")
 Push the guidance scale too high and images "burn" — garish colors, fried contrast, mangled hands and text. More guidance is not more quality; it is more *obedience*, and past a point obedience destroys realism. Tune $w$, don't max it.
 :::
 
-## 24.5 — Audio-Language and Any-to-Any Models
+## 24.6 — Audio-Language and Any-to-Any Models
 
 Sound fits the shared-space recipe just as cleanly as images. The trick is to make audio *look like* something a transformer already eats. Most systems first convert a waveform into a **spectrogram** — a 2-D image of frequency (vertical) versus time (horizontal) — and then treat it almost exactly like a picture (the audio front-end, spectrograms, and speech specifics live in Chapter 21).
 
-**Audio-language models** pair an audio encoder with a text encoder in one space, mirroring CLIP. **CLAP** (Contrastive Language–Audio Pretraining) trains on (sound, description) pairs so that the clip of a barking dog lands near the text "a dog barking," giving zero-shot **audio classification** and text-to-sound retrieval. On the generation side, **Whisper** maps speech-spectrograms to text (transcription/translation), while text-to-audio diffusion models like AudioLDM run §24.4 in the sound domain to synthesize effects and music from prompts.
+**Audio-language models** pair an audio encoder with a text encoder in one space, mirroring CLIP. **CLAP** (Contrastive Language–Audio Pretraining) trains on (sound, description) pairs so that the clip of a barking dog lands near the text "a dog barking," giving zero-shot **audio classification** and text-to-sound retrieval. On the generation side, **Whisper** maps speech-spectrograms to text (transcription/translation), while text-to-audio diffusion models like AudioLDM run §24.5 in the sound domain to synthesize effects and music from prompts.
 
 **With a real framework.** Whisper transcription is one pipeline call:
 
@@ -435,17 +491,17 @@ This unification is what lets a model take a spoken question about a photo and r
 **Intuition:** "tokens are a universal currency." Once an image, a sound, and a sentence are all sequences of integers from one vocabulary, the difference between captioning, transcription, and text-to-image is just *which* tokens you feed in and *which* you ask the model to produce.
 :::
 
-## 24.6 — Fusion Strategies: Early, Late, and Cross-Attention
+## 24.7 — Fusion Strategies: Early, Late, and Cross-Attention
 
 A recurring design choice underlies every model so far: **at what point do the modalities meet?** This is the question of **fusion**, and there are three canonical answers, each with a different cost–power tradeoff.
 
 A kitchen analogy keeps them straight. **Early fusion** is throwing every ingredient into one pot from the start — flavors blend completely, but you can't take the soup apart again. **Late fusion** is plating two finished dishes side by side and judging them together — clean and reusable, but they never actually mixed. **Cross-attention** is letting one dish *taste* the other and adjust its seasoning — they influence each other where it matters, while staying distinct dishes.
 
-**Early fusion** combines modalities at the *input* — concatenate raw features or tokens and feed one joint stream to a single model (as in the any-to-any transformers of §24.5). This is maximally expressive, because the model can mix the modalities at every layer, but it is heavy: everything must be processed together, and the two streams cannot be reused independently.
+**Early fusion** combines modalities at the *input* — concatenate raw features or tokens and feed one joint stream to a single model (as in the any-to-any transformers of §24.6). This is maximally expressive, because the model can mix the modalities at every layer, but it is heavy: everything must be processed together, and the two streams cannot be reused independently.
 
 **Late fusion** keeps the modalities *separate* through their own encoders and combines them only at the *end* — concatenating or averaging the final vectors before a small head, or just comparing them as in CLIP. It is modular and efficient (encode each modality once, even offline) and lets you swap encoders, but it can only model *shallow* interactions, since the streams never see each other internally.
 
-**Cross-attention fusion** is the middle path that dominates modern VLMs. One modality forms the **queries** and attends *into* the other modality's **keys and values**, so information flows between streams at chosen layers without fully merging them. In a VLM, text tokens (queries) attend to image patches (keys/values); in diffusion (§24.4), image features attend to text. Attention computes, for query $\mathbf{q}$ over keys $K$ and values $V$:
+**Cross-attention fusion** is the middle path that dominates modern VLMs. One modality forms the **queries** and attends *into* the other modality's **keys and values**, so information flows between streams at chosen layers without fully merging them. In a VLM, text tokens (queries) attend to image patches (keys/values); in diffusion (§24.5), image features attend to text. Attention computes, for query $\mathbf{q}$ over keys $K$ and values $V$:
 
 $$\text{Attn}(\mathbf{q}, K, V) = \text{softmax}\!\left(\frac{\mathbf{q}K^\top}{\sqrt{d}}\right)V$$
 
@@ -482,7 +538,60 @@ flowchart TB
 Don't reflexively reach for early fusion because it is "most powerful." It multiplies compute and destroys modularity — you can no longer precompute and cache image embeddings for fast retrieval. For search at scale, late fusion's reusable vectors are the *right* answer; save cross-attention for tasks that truly need fine-grained interaction.
 :::
 
-## 24.7 — Evaluating Multimodal Models
+## 24.8 — Multimodal Retrieval-Augmented Generation
+
+A VLM knows only what its weights absorbed in training — it cannot recall *your* product catalog, *this* patient's prior scans, or yesterday's news photo. **Multimodal retrieval-augmented generation (multimodal RAG)** fixes that by bolting the shared embedding space (§24.1) onto a generative model: *retrieve* relevant items across modalities, then *condition* the generator on them.
+
+**Intuition.** It is an open-book exam. Instead of forcing the VLM to answer a question about a photo from memory, you first let it pull the most relevant pages — images, captions, table rows — out of a library, lay them on the desk, and answer with the book open. The shared space is what makes "most relevant" computable across formats: encode the query (text or image), find nearest neighbors among indexed items *of any modality*, and feed the winners to the model.
+
+```{mermaid}
+flowchart LR
+  Q[📝/🖼️ Query] --> E[Encoder → query vector]
+  E --> R[Nearest-neighbor search]
+  DB[(Vector index:\nimages + text + tables)] --> R
+  R --> K[Top-k items across modalities]
+  K --> G[VLM generator]
+  Q --> G
+  G --> A[📝 Grounded answer]
+```
+
+The pipeline has two halves. **Index (offline):** encode every catalog image, document page, and caption with a CLIP-style encoder and store the vectors in an approximate-nearest-neighbor index (FAISS, a vector DB). **Query (online):** encode the user's query into the *same* space, retrieve the top-$k$ neighbors, and splice them into the VLM's prompt as context. Because everything shares one space, a text query can retrieve images and vice versa — true cross-modal recall.
+
+```python
+# multimodal RAG: index images, retrieve by text query, then generate
+import numpy as np, open_clip, torch, faiss
+from PIL import Image
+
+model, _, prep = open_clip.create_model_and_transforms(
+    "ViT-B-32", pretrained="laion2b_s34b_b79k")
+tok = open_clip.get_tokenizer("ViT-B-32")
+
+def embed_image(path):
+    with torch.no_grad():
+        v = model.encode_image(prep(Image.open(path)).unsqueeze(0))
+    return (v / v.norm(dim=-1, keepdim=True)).numpy().astype("float32")
+
+# --- offline: build the index ---
+paths = ["a.jpg", "b.jpg", "c.jpg"]
+index = faiss.IndexFlatIP(512)                 # inner product on unit vectors = cosine
+index.add(np.vstack([embed_image(p) for p in paths]))
+
+# --- online: retrieve by a text query ---
+with torch.no_grad():
+    q = model.encode_text(tok(["a dog playing in snow"]))
+    q = (q / q.norm(dim=-1, keepdim=True)).numpy().astype("float32")
+scores, ids = index.search(q, k=2)             # top-2 nearest images
+retrieved = [paths[i] for i in ids[0]]
+# → feed `retrieved` images + the question into a VLM (e.g. LLaVA) to answer
+```
+
+The payoff is **grounded, updatable, attributable** generation. Update the knowledge by re-indexing, not retraining; cut hallucination (§24.10) because the model answers *from retrieved evidence* rather than priors; and cite *which* retrieved image or page an answer came from. Real systems use it for visual product search ("find the lamp in this photo, in stock under \$80"), document QA over scanned PDFs with figures, and medical report drafting against a library of prior cases.
+
+::: {.callout-tip}
+**Intuition:** retrieval is how you give a frozen model fresh, private, or rare knowledge without touching its weights. The shared embedding space is the quiet engine — it is what lets a sentence fetch a picture and a picture fetch a paragraph from the very same index.
+:::
+
+## 24.9 — Evaluating Multimodal Models
 
 Once you have built a captioner or a VQA system, an immediate question follows: **how good is it, and how would you know?** Multimodal evaluation is genuinely harder than single-modality evaluation, because a "correct" caption is not unique — a photo can be described in a hundred valid ways — and because a model can be right for the wrong reasons (guessing "tennis" whenever it sees a green court, with no real grounding).
 
@@ -514,7 +623,7 @@ print(clip_score(images, captions).item())   # higher = caption fits image bette
 n-gram metrics (BLEU, CIDEr) reward *sounding like* the references, not being *true to the image*. A caption can score well while hallucinating, or score poorly while being a perfectly valid alternative phrasing. Never report a single number — pair an overlap metric with a grounding-aware one (CLIPScore) and spot-check with human eyes.
 :::
 
-## 24.8 — Applications and Challenges: Grounding & Cross-Modal Hallucination
+## 24.10 — Applications and Challenges: Grounding & Cross-Modal Hallucination
 
 The shared-space toolkit powers a wide application surface: **semantic search** over mixed media, **automatic captioning** and alt-text for accessibility, **visual question answering** for documents and charts, **content moderation**, **robotics** (mapping camera + instruction to action), medical-image reporting, and creative **text-to-image/video** tools. But two hard problems recur, and both trace back to the same root — the model has the *words* without a firm hold on the *referents*.
 
@@ -530,24 +639,26 @@ flowchart TB
   OUT --> NOTE[Hallucination: language prior overrode the pixels]
 ```
 
-Mitigations attack the imbalance between priors and evidence: stronger visual grounding so the model must *attend to* the region it describes; training that penalizes ungrounded claims; **retrieval or tool use** to verify facts; and asking the model to cite *where* in the image it looked. None fully solve it, so the practical rule is to treat multimodal outputs as **drafts to verify**, especially in high-stakes settings — a misread medical scan or a fabricated detail in a legal document carries real cost.
+Mitigations attack the imbalance between priors and evidence: stronger visual grounding so the model must *attend to* the region it describes; training that penalizes ungrounded claims; **retrieval or tool use** to verify facts (the multimodal RAG of §24.8 is a direct lever here — answering from retrieved evidence rather than memory); and asking the model to cite *where* in the image it looked. None fully solve it, so the practical rule is to treat multimodal outputs as **drafts to verify**, especially in high-stakes settings — a misread medical scan or a fabricated detail in a legal document carries real cost.
 
 ::: {.callout-warning}
 A multimodal model's fluency is *not* evidence of faithfulness. The most dangerous failure is a perfectly worded sentence about something that isn't there. Always ask whether a claim is **grounded** in the actual input before trusting it.
 :::
 
-## 24.9 — Key Takeaways
+## 24.11 — Key Takeaways
 
 - **Shared embedding space** is the unifying idea: map every modality into one vector space where distance = semantic similarity, then cross-modal tasks become nearest-neighbor lookups.
-- **CLIP** trains two encoders contrastively on web image–text pairs (pull true pairs together, push mismatches apart via InfoNCE), enabling **zero-shot classification** by comparing an image to text prompts.
-- **Vision-language models / multimodal LLMs** turn image patches into **soft tokens** via a vision encoder + projector, insert them into an LLM's prompt, and so do captioning and visual QA; train the cheap projector first, then instruction-tune.
+- **CLIP** trains two encoders contrastively on web image–text pairs (pull true pairs together, push mismatches apart via InfoNCE), enabling **zero-shot classification** by comparing an image to text prompts; the other items in the batch are the negatives, so big batches help.
+- **Binding through one anchor** (ImageBind) generalizes CLIP from two towers to many: bind every modality to a shared hub (images), and cross-modal alignment between the *other* modalities emerges for free.
+- **Vision-language models / multimodal LLMs** turn image patches into **soft tokens** via a vision encoder + projector, insert them into an LLM's prompt, and so do captioning and visual QA; train the cheap projector first, then instruction-tune. Image tokens are costly — resamplers compress them.
 - **Text-to-image** is diffusion (Ch. 18) **conditioned** on text via cross-attention, steered by **classifier-free guidance** $w$; **text-to-video** adds temporal attention for frame consistency.
 - **Audio-language** models (CLAP, Whisper) reuse the recipe on spectrograms; **any-to-any** models tokenize every modality into one shared vocabulary so a single transformer handles all input/output combinations.
 - **Fusion** has three modes — early (input, deep, costly), late (output, shallow, modular/cacheable), cross-attention (middle, deep + selective) — and cross-attention dominates modern VLMs.
+- **Multimodal RAG** retrieves relevant items across modalities from a shared-space index, then conditions the generator on them — giving fresh, private, attributable, hallucination-resistant answers without retraining.
 - **Evaluation** is two-sided: discriminative tasks use accuracy and Recall@K; generative tasks need overlap metrics (BLEU/CIDEr), grounding-aware scores (CLIPScore, FID), and human judgment — never a single number.
 - **Grounding** (tying words to referents) and **cross-modal hallucination** (language priors overriding pixels) are the central open challenges; treat fluent multimodal output as a draft to verify.
 
-## 24.10 — See also
+## 24.12 — See also
 
 - **Attention & Transformers** — the attention mechanism behind cross-attention fusion and VLM backbones.
 - **Generative Models (Diffusion)** — the full diffusion machinery underlying text-to-image and text-to-video.
@@ -556,6 +667,7 @@ A multimodal model's fluency is *not* evidence of faithfulness. The most dangero
 - **Large Language Models** — the LLM backbones that multimodal LLMs extend with vision and audio.
 - **Speech & Audio Processing** — spectrograms and the audio front-ends reused by audio-language models.
 - **Dimensionality Reduction & Embeddings** — embeddings and vector spaces, the mathematical home of the shared space.
+- **Retrieval-Augmented Generation & Vector Search** — nearest-neighbor indexes and the retrieve-then-generate pattern behind multimodal RAG.
 - **Explainable AI & Interpretability** — methods for probing grounding and diagnosing hallucination.
 
 ------------------------------------------------------------------------

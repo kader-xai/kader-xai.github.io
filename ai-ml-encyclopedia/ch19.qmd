@@ -160,6 +160,8 @@ flowchart LR
 
 **Image classification** is the foundational vision task: given a whole image, output a single category label. "Is this a cat or a dog?" The model never says *where* the cat is — it commits to one answer for the entire frame. This is the rung everything else is built on, because the features a classifier learns (edges, textures, parts, objects) are reused by detectors and segmenters.
 
+Two architectures dominate, and the difference is easiest to feel as a contrast in *how they look*. A CNN is like reading a page through a small magnifying glass slid across it — it sees a little neighborhood at a time and builds up understanding locally. A Vision Transformer is more like glancing at the whole page and letting every word talk to every other word at once. The CNN's local habit is a built-in head start (nearby pixels usually belong together); the ViT's everything-sees-everything freedom needs more data to pay off but then surpasses it.
+
 The dominant tool for two decades has been the **convolutional neural network (CNN)** — a stack of learned filters that slide across the image detecting local patterns, getting more abstract with depth (Chapter 15 owns the mechanics). More recently the **Vision Transformer (ViT)** chops the image into a grid of patches, treats each patch like a word token, and runs self-attention over them (Chapter 17 owns attention). CNNs bake in the assumption that nearby pixels matter most (a strong, data-efficient *inductive bias*); ViTs drop that assumption and instead learn relationships from large data, winning when data is plentiful.
 
 **How the output works.** The final layer produces one **logit** (raw score) per class. A **softmax** turns the logits into probabilities that sum to 1:
@@ -1058,7 +1060,144 @@ best = masks[scores.argmax()]                   # boolean (H, W) mask
 The pattern uniting CLIP and SAM is **prompting a general model** instead of training a narrow one. It mirrors what happened in NLP: a few huge, broadly-trained models, steered at inference by text or clicks, increasingly replace a zoo of task-specific networks. For a new vision problem in 2024+, the lazy-but-strong first move is often "can a foundation model already do this zero-shot?" before you label a single image.
 :::
 
-## 19.11 — Key takeaways
+## 19.11 — Self-Supervised Pretraining for Vision
+
+Transfer learning (§19.1) assumes you have a big *labelled* dataset like ImageNet to pretrain on. But labels are the expensive part — the internet has billions of images and almost no labels. **Self-supervised learning (SSL)** sidesteps this: it invents a "pretext" task whose answer is hidden in the image itself, so the model learns rich features from raw pixels with *zero human labels*, then transfers them to your real task with only a small labelled set.
+
+The intuition: if a model can solve a hard puzzle about an image — "which crop of this photo matches which other crop?" or "what was under this erased patch?" — it must have learned what objects, textures, and parts look like. Those learned features are exactly what a downstream classifier or detector wants.
+
+Two families dominate modern vision SSL.
+
+**Contrastive / joint-embedding** methods (SimCLR, MoCo, DINO) take one image, make two random augmented views of it (crop, flip, color-jitter), and train the network so the two views of the *same* image land close in embedding space while views of *different* images land far apart. It is the same geometric idea as the triplet loss in §19.1, scaled to whole batches. The pretext label — "these two crops are the same photo" — is free.
+
+**Masked image modeling** (MAE, "Masked Autoencoder") borrows the trick that made BERT work in NLP: hide a large fraction (MAE masks ~75%) of the image patches, and train the model to reconstruct the missing pixels from the few that remain. To inpaint a cat's hidden ear, the network must understand cats. It is the visual analogue of fill-in-the-blank.
+
+```{mermaid}
+flowchart LR
+  subgraph Contrastive[Contrastive: SimCLR / DINO]
+    A[One image] --> V1[View 1: crop+jitter]
+    A --> V2[View 2: crop+jitter]
+    V1 --> E1[Encoder]
+    V2 --> E2[Encoder]
+    E1 -.->|pull together| E2
+  end
+  subgraph Masked[Masked: MAE]
+    M[Image] --> MM[Mask 75% of patches]
+    MM --> ENC[Encode visible]
+    ENC --> DEC[Decode → reconstruct pixels]
+  end
+```
+
+The SimCLR contrastive objective for a positive pair $(i, j)$ is the **NT-Xent** (normalized temperature-scaled cross-entropy) loss — pick the true partner out of all other views in the batch:
+
+$$\mathcal{L}_{i,j} = -\log \frac{e^{\,\text{sim}(z_i, z_j)/\tau}}{\sum_{k \ne i} e^{\,\text{sim}(z_i, z_k)/\tau}}$$
+
+**In words:** out of every other embedding in the batch, the model must score this view's true augmentation-partner highest — a softmax over cosine similarities, sharpened by temperature $\tau$.
+
+**Also written:** with $\text{sim}(u,v) = u^\top v / (\lVert u\rVert\lVert v\rVert)$ the cosine similarity; this is the same form as CLIP's loss (§19.10), except the "positive pair" comes from two augmentations of one image rather than an image and its caption.
+
+```python
+import torch, torch.nn.functional as F
+def nt_xent(z, temperature=0.5):
+    # z: (2N, d) — rows 0..N-1 are view-1, rows N..2N-1 are view-2 of the same images
+    z = F.normalize(z, dim=1)
+    sim = z @ z.t() / temperature                 # (2N, 2N) cosine-sim matrix
+    N = z.shape[0] // 2
+    targets = torch.arange(2*N).roll(N)           # partner of i is i±N
+    sim.fill_diagonal_(float("-inf"))             # never match a view to itself
+    return F.cross_entropy(sim, targets)
+
+z = torch.randn(8, 128)                            # 4 images × 2 views
+print(nt_xent(z).item())                           # one scalar loss to minimize
+```
+
+::: {.callout-tip}
+SSL is *why* foundation models like DINOv2 and CLIP exist — they are pretrained on web-scale unlabelled (or weakly-labelled) data and then used off-the-shelf. The practical takeaway: before you label thousands of images, check whether a self-supervised backbone (DINOv2, MAE-pretrained ViT) already gives features strong enough that a tiny linear head on top solves your task.
+:::
+
+## 19.12 — Robustness, Adversarial Examples & Explainability
+
+A vision model can hit 99% test accuracy and still be brittle and inscrutable in ways that matter the moment it leaves the lab. Two practical concerns close the loop on this chapter: **can the model be fooled?** and **can we see why it decided what it did?**
+
+### Adversarial examples
+
+The unsettling fact: for most trained vision models you can take a correctly-classified image, add a perturbation so small a human can't see it, and flip the prediction to anything you like. These are **adversarial examples** — the image looks identical, but a "panda" becomes a "gibbon" with high confidence.
+
+The intuition is geometric. A neural net carves the input space into decision regions with high-dimensional, often razor-thin boundaries. In hundreds of thousands of pixel dimensions, the *nearest* boundary can be astonishingly close even though it's invisible along any single direction you'd naturally look. The attacker simply walks the image straight toward that boundary by following the loss gradient.
+
+The simplest attack, **FGSM (Fast Gradient Sign Method)**, nudges every pixel by a tiny fixed step in the direction that *increases* the loss:
+
+$$x_{\text{adv}} = x + \epsilon \cdot \text{sign}\big(\nabla_x \mathcal{L}(\theta, x, y)\big)$$
+
+**In words:** for each pixel, ask "does brightening or darkening it raise the model's error?" and move it that way by a tiny amount $\epsilon$ — a coordinated, imperceptible shove that piles up into a wrong answer.
+
+**Also written:** the perturbation $\delta = \epsilon\,\text{sign}(\nabla_x \mathcal{L})$ is the largest-loss step inside an $\ell_\infty$ ball of radius $\epsilon$ (no pixel changes by more than $\epsilon$); iterating it in small steps gives the stronger **PGD** attack.
+
+<svg viewBox="0 0 420 130" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif" font-size="11">
+  <text x="6" y="14" fill="currentColor">FGSM: clean + tiny gradient-sign noise = fooled</text>
+  <rect x="20" y="30" width="70" height="70" fill="#6366f1" fill-opacity="0.35" stroke="currentColor"/>
+  <text x="30" y="118" fill="currentColor">"panda" 99%</text>
+  <text x="100" y="70" fill="currentColor" font-size="16">+</text>
+  <rect x="120" y="30" width="70" height="70" fill="#f59e0b" fill-opacity="0.3" stroke="currentColor"/>
+  <text x="118" y="118" fill="currentColor">ε·sign(∇ₓL)</text>
+  <text x="200" y="70" fill="currentColor" font-size="16">=</text>
+  <rect x="220" y="30" width="70" height="70" fill="#6366f1" fill-opacity="0.35" stroke="#ec4899" stroke-width="2"/>
+  <text x="226" y="118" fill="#ec4899">"gibbon" 99%</text>
+  <text x="305" y="62" fill="currentColor" font-size="11">looks identical</text>
+  <text x="305" y="78" fill="currentColor" font-size="11">to a human →</text>
+</svg>
+
+```python
+import torch
+def fgsm(model, x, y, eps=0.03):
+    x = x.clone().detach().requires_grad_(True)
+    loss = torch.nn.functional.cross_entropy(model(x), y)
+    loss.backward()                                  # gradient w.r.t. the pixels
+    x_adv = x + eps * x.grad.sign()                  # step that raises the loss
+    return x_adv.clamp(0, 1).detach()                # keep it a valid image
+```
+
+The standard defense is **adversarial training**: generate adversarial examples on the fly during training and include them in the loss, so the model learns boundaries that don't bend under small shoves. It is the most reliable defense, at the cost of more compute and usually a small drop in clean accuracy. For safety-critical vision (autonomous driving, medical, security), assume an adversary exists and test against one.
+
+::: {.callout-warning}
+Adversarial examples are not a lab curiosity. Printed stickers on a stop sign, patterned glasses that fool face recognition, and subtle audio noise have all been demonstrated in the physical world. Robustness is a *security* property, not just an accuracy one — and high clean accuracy tells you nothing about it.
+:::
+
+### Explainability: seeing what the model looked at
+
+When a model says "tumor" or "stop sign," you often need to know *which pixels* drove that call — for trust, for debugging, and for catching the classic failure where a model "detects boats" by actually detecting water. **Saliency** and **class-activation** methods produce a heatmap over the image showing where the evidence for a class came from.
+
+**Grad-CAM (Gradient-weighted Class Activation Mapping)** is the workhorse. The intuition: the last convolutional layer holds feature maps that still have spatial layout ("there's fur here, an ear there"). Grad-CAM asks how much each feature map *raised the score* for the target class, then sums the feature maps weighted by that importance — producing a coarse heatmap that lights up the regions the class relied on.
+
+$$L^c_{\text{Grad-CAM}} = \text{ReLU}\!\Big(\sum_k \alpha^c_k\, A^k\Big), \qquad \alpha^c_k = \frac{1}{Z}\sum_{u,v} \frac{\partial y^c}{\partial A^k_{uv}}$$
+
+**In words:** weight each feature map $A^k$ by how strongly bumping it up increases the class score $y^c$ (that weight $\alpha^c_k$ is the averaged gradient), add them up, and keep only the positive evidence — that's the heatmap.
+
+**Also written:** $\alpha^c_k$ is the global-average-pooled gradient of the class score with respect to feature map $k$; the $\text{ReLU}$ discards regions that argue *against* the class, leaving only what supports it.
+
+```python
+import torch, torch.nn.functional as F
+# register a hook to grab activations + gradients of the last conv layer
+acts, grads = {}, {}
+layer = model.layer4[-1]                              # last conv block of a ResNet
+layer.register_forward_hook(lambda m, i, o: acts.__setitem__("a", o))
+layer.register_full_backward_hook(lambda m, gi, go: grads.__setitem__("g", go[0]))
+
+logits = model(x)                                     # x: (1,3,H,W)
+logits[0, logits.argmax()].backward()                 # backprop the top class
+weights = grads["g"].mean(dim=(2, 3), keepdim=True)   # α: pooled gradients
+cam = F.relu((weights * acts["a"]).sum(1))            # weighted sum + ReLU
+cam = F.interpolate(cam[None], size=x.shape[2:], mode="bilinear")[0, 0]
+cam = (cam - cam.min()) / (cam.max() + 1e-8)          # normalize to [0,1] heatmap
+```
+
+Overlaying `cam` on the input shows, in warm colors, the pixels that justified the prediction. It is the fastest way to catch a model that learned the wrong cue — the snow behind the husky, the watermark on the stock photo, the ruler beside the skin lesion.
+
+::: {.callout-tip}
+Run Grad-CAM (or a saliency map) on a handful of correct *and* incorrect predictions before trusting any classifier in production. Right answers for the wrong reasons are the bugs that pass every accuracy check and then fail catastrophically on data that lacks the spurious cue.
+:::
+
+## 19.13 — Key takeaways
 
 - A digital image is just a grid of numbers (color = three stacked grids); every vision model is a function from that grid to a structured answer.
 - Vision tasks form a ladder of spatial precision: **classification** (one label/image) → **detection** (box + label/object) → **segmentation** (label/pixel). Pick the lightest one that solves your problem.
@@ -1073,8 +1212,11 @@ The pattern uniting CLIP and SAM is **prompting a general model** instead of tra
 - **Multi-view geometry** (pinhole projection, intrinsics/extrinsics, calibration, epipolar geometry, stereo, SfM) recovers 3D from 2D; **NeRF** and **3D Gaussian Splatting** turn posed photos into renderable scenes.
 - **Set prediction with bipartite matching** (DETR, Mask2Former) replaces anchors and NMS with one general recipe spanning detection and panoptic segmentation.
 - **Foundation models** — **CLIP** for open-vocabulary recognition, **SAM** for promptable segmentation — increasingly let you solve new tasks zero-shot instead of training a narrow model.
+- **Self-supervised learning** (contrastive: SimCLR/DINO; masked: MAE) learns strong features from *unlabelled* images, powering modern foundation backbones — try one before labelling a large dataset.
+- **Adversarial examples** flip predictions with imperceptible, gradient-aligned noise (FGSM/PGD); high clean accuracy implies nothing about robustness — defend with **adversarial training** for safety-critical use.
+- **Explainability** with **Grad-CAM** heatmaps reveals which pixels drove a decision — the fastest way to catch "right answer, wrong reason" before deployment.
 
-## 19.12 — See also
+## 19.14 — See also
 
 - **Convolutional Neural Networks** — the backbone mechanics (filters, pooling, receptive fields) behind every model here.
 - **Attention & Transformers** — how Vision Transformers tokenize and attend over image patches.

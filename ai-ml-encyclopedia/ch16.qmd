@@ -117,6 +117,9 @@ A **recurrent neural network (RNN)** processes a sequence $x_1, x_2, \dots, x_T$
 
 $$h_t = \tanh(W_{xh}\,x_t + W_{hh}\,h_{t-1} + b_h), \qquad y_t = W_{hy}\,h_t + b_y$$
 
+**In words:** the new memory is a squashed mix of *this step's input* and *last step's memory*; the output is a linear read-out of that memory.
+**Also written:** $h_t = \tanh\!\big(W_{xh} x_t + W_{hh} h_{t-1} + b_h\big)$ is often compressed to $h_t = \tanh\!\big(W[h_{t-1}, x_t] + b\big)$, where $W = [\,W_{hh}\;\;W_{xh}\,]$ is the two matrices stacked side by side and $[h_{t-1}, x_t]$ is the two vectors concatenated.
+
 The crucial detail is that the **same weight matrices** $W_{xh}, W_{hh}, W_{hy}$ are reused at every time step. This **weight sharing** is what lets an RNN handle sequences of *any* length with a fixed number of parameters — exactly the way a convolutional filter (Chapter 15) shares weights across space, an RNN shares weights across time.
 
 Think of reading a sentence. Your understanding after word 5 ($h_5$) depends on word 5 plus your understanding after word 4 ($h_4$). You apply the same "reading process" to every word; the running interpretation is the hidden state.
@@ -156,11 +159,51 @@ def rnn_forward(xs, Wxh, Whh, Why, bh, by):
     return np.array(ys), h
 ```
 
+The same cell exists ready-made in every framework. In PyTorch the whole loop above is one module — you hand it the full sequence and it unrolls internally:
+
+```python
+import torch, torch.nn as nn
+rnn = nn.RNN(input_size=8, hidden_size=16, num_layers=1, batch_first=True)
+x = torch.randn(4, 10, 8)           # (batch, time, features)
+outputs, h_n = rnn(x)               # outputs: (4, 10, 16); h_n: last hidden state
+```
+
 **Backpropagation through time (BPTT).** To train, we unroll the network across the whole sequence and run ordinary backpropagation on that deep graph. Because $W_{hh}$ is shared, its gradient is the *sum* of the contributions from every time step:
 
 $$\frac{\partial L}{\partial W_{hh}} = \sum_{t=1}^{T} \frac{\partial L_t}{\partial W_{hh}}$$
 
+**In words:** the recurrent weight is used at every time step, so its total gradient is the pile-up of one gradient per step.
+**Also written:** $\nabla_{W_{hh}} L = \sum_{t=1}^{T} \nabla_{W_{hh}} L_t$ — a sum over the shared parameter's many uses, the same accumulation rule any tied/weight-shared parameter obeys.
+
 This is **BPTT**. Its great weakness lives in how the gradient travels from a late step $T$ back to an early step $1$: at every step it is multiplied by $W_{hh}^\top\,\mathrm{diag}(\tanh')$. In the **scalar case** — a one-dimensional hidden state with recurrent weight $w$ — that factor is just one number $w\cdot\tanh'$, so the gradient reaching step $1$ is roughly that number raised to the $T$-th power. If it is smaller than 1, repeated multiplication drives the gradient toward zero — the **vanishing gradient** — so the RNN effectively forgets distant inputs. If it is larger than 1, the gradient **explodes**. In the full vector case the same thing happens, governed by the largest singular value of $W_{hh}$ instead of a single number. This one problem is the reason gated architectures (next sections) exist.
+
+The two failure modes are easy to picture: trace one number back through the unrolled chain and watch it shrink to nothing or blow up.
+
+<svg viewBox="0 0 460 150" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif" font-size="11">
+  <text x="10" y="18" fill="currentColor">gradient flowing backward, ×w each step</text>
+  <!-- vanishing row -->
+  <text x="10" y="55" fill="#ec4899">w = 0.6</text>
+  <g fill="#ec4899">
+    <rect x="80" y="40" width="50" height="20" rx="2" opacity="0.85"/>
+    <rect x="150" y="44" width="50" height="12" rx="2" opacity="0.6"/>
+    <rect x="220" y="47" width="50" height="6" rx="2" opacity="0.4"/>
+    <rect x="290" y="49" width="50" height="2" rx="1" opacity="0.25"/>
+  </g>
+  <text x="350" y="54" fill="#ec4899" font-size="10">→ vanishes</text>
+  <!-- exploding row -->
+  <text x="10" y="115" fill="#f59e0b">w = 1.4</text>
+  <g fill="#f59e0b">
+    <rect x="80" y="105" width="50" height="6" rx="2" opacity="0.4"/>
+    <rect x="150" y="100" width="50" height="16" rx="2" opacity="0.55"/>
+    <rect x="220" y="92" width="50" height="32" rx="2" opacity="0.75"/>
+    <rect x="290" y="80" width="50" height="56" rx="2" opacity="0.9"/>
+  </g>
+  <text x="350" y="112" fill="#f59e0b" font-size="10">→ explodes</text>
+  <g stroke="currentColor" fill="none" opacity="0.5" marker-end="url(#bk)">
+    <path d="M340 70 H70"/>
+  </g>
+  <defs><marker id="bk" markerWidth="7" markerHeight="7" refX="6" refY="3" orient="auto"><path d="M6 0 L0 3 L6 6 z" fill="currentColor"/></marker></defs>
+</svg>
 
 ::: {.callout-tip}
 **Intuition:** an RNN is a `for` loop with learnable weights. Picture the unrolled graph, not the self-loop — every confusing thing about RNNs (BPTT, vanishing gradients, truncation) is obvious once you see it as a very deep, weight-shared network.
@@ -170,7 +213,65 @@ This is **BPTT**. Its great weakness lives in how the gradient travels from a la
 **Common mistake:** treating long-range dependencies as "just a bit harder" for a vanilla RNN. In practice a plain $\tanh$ RNN struggles to connect events more than ~10–20 steps apart. If your task needs longer memory, reach for an LSTM/GRU or attention rather than a deeper vanilla RNN.
 :::
 
-## 16.2 — Long Short-Term Memory (LSTM)
+## 16.2 — Sequence Task Shapes & Truncated BPTT
+
+Before the gated cells, it helps to name *what* you are asking a recurrent net to do and *how* you actually train it on long streams — two practical pieces every textbook covers and that decide how you wire the model.
+
+**The four task shapes.** RNNs are flexible because input and output lengths can differ independently. Karpathy's classic picture sorts almost every sequence task into one of four patterns:
+
+| Shape | Input → Output | Example | How to read the RNN |
+|---|---|---|---|
+| **one-to-many** | one vector → sequence | image → caption | feed input once, generate until a stop token |
+| **many-to-one** | sequence → one vector | review → sentiment | run to the end, use the **last** hidden state |
+| **many-to-many (aligned)** | sequence → same-length sequence | tag each word (POS) | emit one output per step |
+| **many-to-many (seq2seq)** | sequence → different-length sequence | translate a sentence | encoder then decoder (§16.5) |
+
+```{mermaid}
+flowchart LR
+    subgraph one_to_many["one-to-many"]
+      a1["x"] --> a2["■■■■"]
+    end
+    subgraph many_to_one["many-to-one"]
+      b1["■■■■"] --> b2["y"]
+    end
+    subgraph aligned["many-to-many aligned"]
+      c1["■■■■"] --> c2["■■■■"]
+    end
+```
+
+The lesson is purely about *plumbing*: the cell is the same RNN/LSTM/GRU in every case — what changes is which hidden states you read out and feed back. A sentiment classifier ignores all outputs but the last; a tagger keeps every output; a caption generator feeds each emitted token back as the next input.
+
+**Truncated BPTT.** A document or audio stream can be tens of thousands of steps long. Unrolling that whole thing to compute gradients would blow up memory and run impossibly slowly. **Truncated BPTT** chops the stream into chunks of, say, 100 steps: you backpropagate gradients only *within* a chunk, but you **carry the hidden state forward** (detached from the graph) into the next chunk. So the forward memory still spans the whole sequence, while the backward gradient sees only one chunk.
+
+$$\frac{\partial L}{\partial W_{hh}} \;\approx\; \sum_{t=T-k}^{T} \frac{\partial L_t}{\partial W_{hh}}$$
+
+**In words:** instead of summing gradient contributions over *all* time steps, only sum over the last $k$ — the recent window you actually unrolled.
+**Also written:** "TBPTT($k_1, k_2$)" — process $k_1$ new steps then backpropagate $k_2$ steps back; the simple version above takes $k_1 = k_2 = k$.
+
+```python
+# truncated BPTT: carry h across chunks, but detach so grads stop at the chunk boundary
+h = None
+for chunk in stream_chunks(data, length=100):     # each chunk is (batch, 100, feat)
+    if h is not None:
+        h = h.detach()                            # cut the graph; keep the values
+    out, h = rnn(chunk, h)
+    loss = criterion(head(out), targets_for(chunk))
+    loss.backward()                               # only unrolls within this chunk
+    optimizer.step(); optimizer.zero_grad()
+```
+
+**Gradient clipping** is the standard partner fix for the *exploding* side of §16.1. Whenever the global gradient norm exceeds a threshold $\tau$, rescale the whole gradient down so its norm is exactly $\tau$ — direction preserved, magnitude capped:
+
+$$g \leftarrow g \cdot \frac{\tau}{\max(\|g\|, \tau)}$$
+
+**In words:** if the gradient is too long, shrink it back to length $\tau$ without changing where it points; otherwise leave it alone.
+**Also written:** $g \leftarrow \min\!\big(1, \tfrac{\tau}{\|g\|}\big)\, g$ — equivalent, and in PyTorch literally `torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=tau)`.
+
+::: {.callout-tip}
+**Rule of thumb:** vanishing gradients are an *architecture* problem (use a gated cell); exploding gradients are a *training* problem (clip the norm). Reach for the matching tool — clipping a vanilla RNN will not give it long memory.
+:::
+
+## 16.3 — Long Short-Term Memory (LSTM)
 
 The **LSTM** (Hochreiter & Schmidhuber, 1997) solves vanishing gradients with one elegant idea: alongside the hidden state, carry a **cell state** $c_t$ — a memory "conveyor belt" that runs straight down the sequence with only minor, *additive* interactions. Because information moves along $c_t$ mostly by addition rather than repeated matrix multiplication, gradients can flow across hundreds of steps without vanishing.
 
@@ -190,6 +291,9 @@ o_t &= \sigma(W_o[h_{t-1}, x_t] + b_o) \\
 h_t &= o_t \odot \tanh(c_t)
 \end{aligned}
 $$
+
+**In words:** decide how much old memory to keep ($f_t$) and how much new candidate to add ($i_t$); the cell becomes *kept old + added new*; the hidden state is a gated ($o_t$) window onto that cell.
+**Also written:** the central update $c_t = f_t \odot c_{t-1} + i_t \odot \tilde c_t$ is a **leaky accumulator** — equivalently $c_t = c_{t-1} + \big(i_t \odot \tilde c_t - (1-f_t)\odot c_{t-1}\big)$, i.e. old value plus a correction, which is why the gradient path along $c$ is near-identity when $f_t \approx 1$.
 
 Here $\odot$ is element-wise multiplication and $[h_{t-1}, x_t]$ is the two vectors concatenated. The line $c_t = f_t \odot c_{t-1} + i_t \odot \tilde c_t$ is the heart of it: keep a fraction of the old memory, add a fraction of the new candidate.
 
@@ -231,13 +335,30 @@ def lstm_step(x, h, c, P):           # P holds all weight matrices/biases
     return h, c
 ```
 
+In production you never hand-roll this — a one-line `nn.LSTM` runs the optimized, cuDNN-backed version, and a tiny head turns the sequence into a prediction:
+
+```python
+import torch, torch.nn as nn
+
+class Tagger(nn.Module):              # many-to-one: classify a whole sequence
+    def __init__(self, vocab, emb=64, hid=128, classes=2):
+        super().__init__()
+        self.embed = nn.Embedding(vocab, emb)
+        self.lstm  = nn.LSTM(emb, hid, batch_first=True)
+        self.head  = nn.Linear(hid, classes)
+    def forward(self, x):             # x: (batch, time) token ids
+        e = self.embed(x)
+        out, (h_n, c_n) = self.lstm(e)
+        return self.head(h_n[-1])     # use the final hidden state
+```
+
 In words, the worked sentence "The *keys* that I left on the table by the door … *are* on the floor" is exactly this trick at scale: the LSTM writes "plural" into a cell dimension via the input gate, holds the forget gate near 1 so it survives every intervening word untouched, then opens the output gate when the verb is needed. A vanilla RNN would have washed that signal out long before "are."
 
 ::: {.callout-tip}
 **Intuition:** the cell state is a notebook. The forget gate erases lines, the input gate writes new ones, the output gate decides which lines you read aloud right now. Addition (not multiplication) along that notebook is the trick that keeps gradients alive.
 :::
 
-## 16.3 — Gated Recurrent Unit (GRU)
+## 16.4 — Gated Recurrent Unit (GRU)
 
 The **GRU** (Cho et al., 2014) is a streamlined LSTM: it merges the cell and hidden state into one vector and uses just **two** gates instead of three, giving fewer parameters and faster training with usually comparable accuracy.
 
@@ -252,6 +373,9 @@ r_t &= \sigma(W_r[h_{t-1}, x_t]) \\
 h_t &= (1 - z_t)\odot h_{t-1} + z_t \odot \tilde h_t
 \end{aligned}
 $$
+
+**In words:** one gate ($z_t$) decides how much of the new candidate to mix into the old state; another ($r_t$) decides how much past to use *while building* that candidate.
+**Also written:** the blend $h_t = (1-z_t)\odot h_{t-1} + z_t\odot\tilde h_t$ is an **exponential-moving-average** update with a learned, per-dimension rate $z_t$ — the same convex-combination form as $\text{new} = (1-\alpha)\,\text{old} + \alpha\,\text{fresh}$.
 
 The final line is a **convex blend**: when $z_t \approx 0$ the unit copies the previous state verbatim (perfect long-term memory, gradient passes through untouched); when $z_t \approx 1$ it overwrites with the fresh candidate. One gate, both behaviors.
 
@@ -274,6 +398,14 @@ flowchart LR
 
 This is the same keep-or-write choice the LSTM splits across its forget and input gates, here collapsed into a single number. The reset gate $r_t$ plays a different role: it only affects *how the candidate is built* — set $r_t \approx 0$ and the candidate $\tilde h_t$ ignores the past entirely, letting the unit start a fresh representation when a sequence boundary arrives.
 
+Swapping LSTM for GRU in a framework is a one-word change — same call shape, fewer parameters under the hood:
+
+```python
+import torch.nn as nn
+gru = nn.GRU(input_size=64, hidden_size=128, num_layers=2,
+             batch_first=True, dropout=0.2)   # drop-in replacement for nn.LSTM
+```
+
 | Property | Vanilla RNN | LSTM | GRU |
 |---|---|---|---|
 | Gates | 0 | 3 (f, i, o) | 2 (z, r) |
@@ -288,11 +420,14 @@ The honest practical takeaway: GRU and LSTM perform similarly on most tasks. Sta
 **Common mistake:** assuming more gates always means more accuracy. On small or moderate datasets the GRU often *matches or beats* the LSTM precisely because it has fewer parameters to overfit. Let validation performance, not gate count, decide.
 :::
 
-## 16.4 — Bidirectional & Deep RNNs
+## 16.5 — Bidirectional & Deep RNNs
 
 A standard RNN reads strictly left-to-right, so $h_t$ knows the past but not the future. Yet in many tasks the future disambiguates the present: in "I left my *bank* …", the right word — riverbank or financial — depends on what comes *after*. A **bidirectional RNN (BiRNN)** runs two independent RNNs, one forward and one backward, then concatenates their hidden states at each position so every output sees the *whole* sequence:
 
 $$h_t = [\,\overrightarrow{h_t}\,;\,\overleftarrow{h_t}\,]$$
+
+**In words:** glue together what a forward reader knows after position $t$ and what a backward reader knows up to position $t$, so the combined state has seen the entire sequence.
+**Also written:** $h_t = \overrightarrow{h_t} \,\Vert\, \overleftarrow{h_t}$, where $\Vert$ denotes concatenation; if each direction has width $d$, the combined $h_t$ has width $2d$.
 
 ```{mermaid}
 flowchart LR
@@ -353,11 +488,20 @@ Bidirectionality and depth combine freely, and that combination — the **stacke
   </defs>
 </svg>
 
+A stacked BiLSTM is, again, one constructor call — `bidirectional=True` builds both directions and concatenates them for you:
+
+```python
+import torch.nn as nn
+bilstm = nn.LSTM(input_size=100, hidden_size=128, num_layers=2,
+                 batch_first=True, bidirectional=True)
+# output width = 2 * hidden_size = 256 (forward ‖ backward), per time step
+```
+
 ::: {.callout-tip}
 **Rule of thumb:** use bidirectional when you have the whole sequence up front and need maximum accuracy; use unidirectional when you must produce outputs as data streams in. Stack 2–3 layers before reaching for anything fancier.
 :::
 
-## 16.5 — Sequence-to-Sequence / Encoder–Decoder
+## 16.6 — Sequence-to-Sequence / Encoder–Decoder
 
 Many tasks map an input sequence to an output sequence of a *different* length: translation (English → French), summarization (long → short), speech-to-text. The **sequence-to-sequence (seq2seq)** architecture (Sutskever et al., 2014) handles this with two RNNs.
 
@@ -378,6 +522,16 @@ flowchart LR
     d1 --> y1["The"]
     d2 --> y2["cat"]
     d3 --> y3["sleeps"]
+```
+
+**Teacher forcing.** A practical wrinkle: at training time, what does the decoder feed back as the "previous output"? If you feed back the decoder's *own* prediction and it is wrong early on, the error compounds and training barely moves. **Teacher forcing** instead feeds back the *ground-truth* previous token during training, so the decoder always conditions on a correct prefix and learns fast. The mismatch — train on gold prefixes, test on self-generated ones — is called **exposure bias**, and is usually softened by mixing the two (sometimes feeding the model's own prediction with some probability).
+
+```python
+# one decoder step with teacher forcing (training)
+dec_input = target[:, t-1]          # ground-truth previous token, not the prediction
+emb = embed(dec_input)
+out, hidden = decoder(emb, hidden)
+logits_t = out_head(out)            # compared against target[:, t] in the loss
 ```
 
 **Worked intuition — and the bottleneck.** To translate "Le chat dort" → "The cat sleeps," the encoder squeezes all three French words into one vector $c$; the decoder unpacks it into three English words. This works for short sentences. But notice the structural flaw: *every* input sentence — three words or fifty — must be crushed into the *same* fixed-size $c$. This is the **fixed-context bottleneck**.
@@ -406,16 +560,17 @@ As sentences grow, this single vector becomes a crippling information funnel —
 **Common mistake:** scaling a vanilla seq2seq to long documents and blaming the RNN cell. The limiter is usually the fixed-size context vector, not the LSTM/GRU inside it. The cure is attention (Chapter 17), not a bigger hidden state.
 :::
 
-## 16.6 — Key takeaways
+## 16.7 — Key takeaways
 
 - An **RNN** carries a **hidden state** updated by the *same* weights at every step; unrolled, it is a deep weight-shared network trained by **backpropagation through time**.
-- Vanilla RNNs suffer **vanishing/exploding gradients** — in the scalar case the recurrent factor raised to the sequence length — so they forget dependencies beyond ~10–20 steps.
+- Vanilla RNNs suffer **vanishing/exploding gradients** — in the scalar case the recurrent factor raised to the sequence length — so they forget dependencies beyond ~10–20 steps. Vanishing is fixed by *architecture* (gated cells); exploding is fixed by *training* (**gradient clipping**).
+- Sequence tasks come in **four shapes** (one-to-many, many-to-one, many-to-many aligned, seq2seq); the cell is identical — only which states you read out and feed back changes. Long streams are trained with **truncated BPTT**, carrying the hidden state forward but backpropagating only within a chunk.
 - The **LSTM** adds a **cell state** with forget/input/output **gates**; with $f_t=1, i_t=0$ a memory is copied verbatim, and that additive path lets gradients survive across hundreds of steps.
 - The **GRU** is a lighter LSTM with two gates and no separate cell state; its update gate $z_t$ alone toggles between keep ($z_t\!\approx\!0$) and overwrite ($z_t\!\approx\!1$) — a strong, cheaper default. Let validation, not gate count, choose between them.
 - **Bidirectional** RNNs read both directions (offline only); **deep/stacked** RNNs build temporal hierarchy. A stacked BiLSTM was the pre-Transformer NLP workhorse.
-- **Seq2seq** encoder–decoder maps variable-length input to variable-length output, but its single **fixed-context vector** is a bottleneck on long inputs — the problem that motivated **attention**.
+- **Seq2seq** encoder–decoder maps variable-length input to variable-length output (trained with **teacher forcing**), but its single **fixed-context vector** is a bottleneck on long inputs — the problem that motivated **attention**.
 
-## 16.7 — See also
+## 16.8 — See also
 
 - **Neural Networks (Core)** — backpropagation, activations, and the feedforward machinery RNNs unroll into.
 - **Convolutional Neural Networks** — the spatial counterpart to weight sharing across time.

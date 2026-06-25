@@ -115,13 +115,19 @@ Convolutional Neural Networks (CNNs) are the family of deep models built to unde
 
 The core problem with feeding an image into a plain neural network is size. A modest 224×224 colour image has 224 × 224 × 3 ≈ 150,000 numbers. Connect that to even one hidden layer of 1,000 neurons and you already have 150 million weights — for one layer. That is wasteful, because a cat in the top-left corner and a cat in the bottom-right corner are the *same* pattern, yet a dense network has to learn them twice with separate weights.
 
-A **convolution** fixes this with two ideas: **local connectivity** (a neuron only looks at a small patch, not the whole image) and **parameter sharing** (the same small patch-detector is reused at every position). The patch-detector is a tiny grid of weights called a **kernel** or **filter** — typically 3×3 or 5×5.
+**The everyday analogy.** Think of looking for a friend's face in a "spot the difference" puzzle. You don't memorise the whole page at once; you slide your attention across it with a small mental template ("does *this* little patch look like an eye?"), reusing the *same* template everywhere you look. A convolution is exactly that: one small template, slid across the whole image, asking the same question at every spot.
+
+A **convolution** fixes the size problem with two ideas: **local connectivity** (a neuron only looks at a small patch, not the whole image) and **parameter sharing** (the same small patch-detector is reused at every position). The patch-detector is a tiny grid of weights called a **kernel** or **filter** — typically 3×3 or 5×5.
 
 The operation itself is simple. Slide the kernel over the image; at each position, multiply the overlapping numbers element-wise, add them up, and write the single result into an output grid called a **feature map** (or **activation map**). That sum is the dot product of the filter with the local patch.
 
 $$
 \text{out}[i,j] = \sum_{m}\sum_{n} \text{input}[i+m,\; j+n]\cdot \text{kernel}[m,n]
 $$
+
+**In words:** the value at output position $(i,j)$ is what you get by laying the kernel down with its corner at $(i,j)$, multiplying each overlapping pair of numbers, and adding everything up.
+
+**Also written:** $\;(\text{input} * \text{kernel})[i,j] = \sum_{m,n} \text{input}[i+m,\,j+n]\,\text{kernel}[m,n]$, where $*$ denotes the (cross-correlation) convolution operator used by deep-learning libraries.
 
 The SVG below shows a 3×3 kernel sliding over a 5×5 input, producing one cell of the output.
 
@@ -179,6 +185,17 @@ assert o[0,0] == 4                        # matches the hand calc above
 print(o)
 ```
 
+The same operation in a real framework is a single layer. PyTorch's `Conv2d` handles the channel bookkeeping (§15.7), the sliding, and the learnable weights for you:
+
+```python
+import torch, torch.nn as nn
+x = torch.randn(1, 3, 32, 32)             # batch=1, 3 channels, 32×32
+conv = nn.Conv2d(in_channels=3, out_channels=16, kernel_size=3, padding=1)
+y = conv(x)
+print(y.shape)                            # torch.Size([1, 16, 32, 32])
+print(conv.weight.shape)                  # [16, 3, 3, 3]  = out×in×Kh×Kw
+```
+
 ::: {.callout-tip}
 **Intuition:** a convolution layer is a stack of pattern-stamps. Each filter stamps across the whole image asking "is my pattern here?" — and parameter sharing means it learns that pattern *once* and detects it *everywhere*.
 :::
@@ -228,6 +245,14 @@ Pooling has **no learnable parameters** — it is a fixed rule. A 2×2 window wi
 | Effect on noise | passes spikes through | dampens spikes |
 | Where used | throughout VGG/AlexNet | global pool head in ResNet |
 
+```python
+import torch, torch.nn as nn
+x = torch.tensor([[[[1.,3,2,1],[4,2,0,1],[0,1,5,2],[1,2,3,0]]]])  # 1×1×4×4
+print(nn.MaxPool2d(2)(x).squeeze())       # tensor([[4., 2.], [2., 5.]])
+print(nn.AvgPool2d(2)(x).squeeze())       # tensor([[2.5, 1.0], [1.0, 2.5]])
+print(nn.AdaptiveAvgPool2d(1)(x).item())  # global average → one number
+```
+
 ::: {.callout-tip}
 **Intuition:** max pooling is a tolerance buffer for *where* a feature sits. As long as the strongest response lands somewhere in the window, the exact pixel stops mattering — that is what makes the later layers care about *what* is present, not *precisely where*.
 :::
@@ -243,6 +268,10 @@ The output size along one dimension is:
 $$
 O = \left\lfloor \frac{W - K + 2P}{S} \right\rfloor + 1
 $$
+
+**In words:** start with the input width $W$, subtract the kernel width $K$, add the padding on both sides $2P$, divide by the stride $S$ to count how many full steps fit, round down, and add one for the starting position.
+
+**Also written:** $\;O = \left\lfloor \dfrac{W + 2P - K}{S} \right\rfloor + 1$ — the same expression with the terms reordered; some texts write $W_{\text{in}}$ and $W_{\text{out}}$ for clarity.
 
 where $W$ = input size, $K$ = kernel size, $P$ = padding, $S$ = stride.
 
@@ -261,7 +290,42 @@ For "same" padding with stride 1, the border you need is $P = (K-1)/2$ — so $1
 **Common mistake:** forgetting the floor. With $W=7,\,K=3,\,P=0,\,S=2$ the formula gives $\lfloor 4/2\rfloor + 1 = 3$, not $4$. When the stride does not divide evenly, the rightmost pixels are simply dropped — a silent off-by-one that breaks shape assertions deep in a network.
 :::
 
-## 15.4 — CNN architectures (LeNet, AlexNet, VGG, ResNet)
+## 15.4 — The receptive field
+
+**Intuition first.** Picture a periscope made of stacked lenses. A neuron deep in the network can only "see" the input through the chain of filters below it — and each layer widens the cone of pixels that feed into it. The **receptive field** is the size of that cone: the patch of the *original image* that influences one value in a feature map. Early layers see a tiny window; deep layers see most of the picture, which is why they can recognise whole objects rather than just edges.
+
+For a stack of convolutions, the receptive field grows by $(K-1)$ per layer, scaled by the product of all earlier strides. The recurrence is:
+
+$$
+R_{\ell} = R_{\ell-1} + (K_{\ell}-1)\prod_{i=1}^{\ell-1} S_i
+$$
+
+**In words:** the receptive field at layer $\ell$ equals the previous layer's receptive field plus the new kernel's extra reach $(K_\ell-1)$, magnified by how much everything below has already downsampled (the product of earlier strides).
+
+**Also written:** with all strides equal to 1, this collapses to the simple sum $R_L = 1 + \sum_{\ell=1}^{L}(K_\ell - 1)$ — e.g. three stacked 3×3 convs give $1 + 3\times2 = 7$, matching one 7×7 filter.
+
+<svg viewBox="0 0 520 180" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif" font-size="12">
+  <text x="20" y="16" fill="#555">Stacked 3×3 convs widen the receptive field</text>
+  <rect x="20" y="30" width="140" height="120" fill="#6366f122" stroke="#6366f1"/>
+  <text x="60" y="170" fill="#6366f1">input 7×7</text>
+  <rect x="40" y="50" width="100" height="80" fill="#22c55e22" stroke="#22c55e"/>
+  <rect x="60" y="70" width="60" height="40" fill="#f59e0b33" stroke="#f59e0b"/>
+  <rect x="80" y="86" width="20" height="8" fill="#ec4899" stroke="#ec4899"/>
+  <text x="300" y="60" fill="#ec4899">pink = 1 output value of conv-3</text>
+  <text x="300" y="84" fill="#f59e0b">amber = its 3×3 reach in conv-2</text>
+  <text x="300" y="108" fill="#22c55e">green = 5×5 reach in conv-1</text>
+  <text x="300" y="132" fill="#6366f1">indigo = 7×7 reach in the input</text>
+</svg>
+
+This is the deeper reason VGG stacks small filters (§15.5): two 3×3 layers reach as far as one 5×5 but with fewer parameters and an extra non-linearity. When a task needs a large receptive field cheaply — segmentation, audio — **dilated (atrous) convolutions** insert gaps between kernel taps, expanding the field exponentially without adding weights or losing resolution.
+
+```python
+import torch.nn as nn
+# dilation=2 makes a 3×3 kernel reach across a 5×5 span, same 9 weights
+nn.Conv2d(64, 64, kernel_size=3, padding=2, dilation=2)
+```
+
+## 15.5 — CNN architectures (LeNet, AlexNet, VGG, ResNet)
 
 CNN design history is a story of going deeper while keeping training stable. Four landmarks tell most of it.
 
@@ -286,6 +350,10 @@ $$
 y = F(x) + x
 $$
 
+**In words:** the block's output is whatever transformation $F$ computes from $x$, *plus the original $x$ carried straight through* — so the layers only have to learn the *adjustment* to $x$, not rebuild it from scratch.
+
+**Also written:** $\;y = x + F(x;\,W)$, where $F(x;W)$ is the stacked conv–ReLU–conv path with learnable weights $W$; the two forms are identical since addition commutes.
+
 Instead of forcing the block to learn the full mapping, it only has to learn the **residual** $F(x)$ — the *change* to apply to $x$. If the best thing a block can do is nothing, learning $F(x)=0$ is trivial, so adding depth never hurts. The $+x$ term also gives gradients a clean highway straight back through the network.
 
 ```{mermaid}
@@ -295,7 +363,37 @@ flowchart LR
     add --> R["ReLU"] --> y(["y = F(x) + x"])
 ```
 
-## 15.5 — Convolutional neural networks in general
+## 15.6 — Batch normalization
+
+**Intuition first.** Imagine a relay race where each runner is handed a baton whose weight keeps changing run to run — they can never settle into a rhythm. Deep layers face the same problem: as the weights below them update, the *distribution* of inputs each layer receives keeps shifting (often called **internal covariate shift**), so every layer is forever chasing a moving target. **Batch normalization** hands each layer a baton of standardised weight: it re-centres and re-scales each feature to roughly zero mean and unit variance, using the statistics of the current mini-batch.
+
+For a feature $x$ over a mini-batch $\mathcal{B}$:
+
+$$
+\hat{x} = \frac{x - \mu_{\mathcal{B}}}{\sqrt{\sigma_{\mathcal{B}}^2 + \epsilon}}, \qquad y = \gamma\,\hat{x} + \beta
+$$
+
+**In words:** subtract the batch mean and divide by the batch standard deviation to standardise the feature, then let the network rescale and re-shift it with two learnable knobs $\gamma$ (scale) and $\beta$ (shift) so it can undo the normalisation if that helps.
+
+**Also written:** $\;y = \gamma\,\dfrac{x-\mu_{\mathcal{B}}}{\sqrt{\sigma_{\mathcal{B}}^2+\epsilon}} + \beta$, where $\epsilon$ is a tiny constant ($\sim10^{-5}$) that prevents division by zero.
+
+The payoffs are large: training tolerates **higher learning rates**, is **less sensitive to weight initialisation**, and BatchNorm acts as a mild **regulariser** (the batch noise nudges activations around). At inference time there is no batch, so the layer switches to running averages of $\mu$ and $\sigma^2$ collected during training — a frequent source of bugs if you forget to put the model in `eval()` mode.
+
+```python
+import torch.nn as nn
+block = nn.Sequential(
+    nn.Conv2d(64, 64, 3, padding=1, bias=False),  # bias is redundant before BN
+    nn.BatchNorm2d(64),                           # normalize the 64 channels
+    nn.ReLU(),
+)
+# model.train() uses batch stats; model.eval() uses running averages
+```
+
+::: {.callout-note}
+**Where it sits:** the standard order is **Conv → BatchNorm → ReLU**. Because BatchNorm re-centres the output, the conv's bias term becomes redundant, so it is usually disabled (`bias=False`). Related variants — **LayerNorm**, **GroupNorm**, **InstanceNorm** — normalise over different axes and are preferred when batches are tiny or the task is style transfer.
+:::
+
+## 15.7 — Convolutional neural networks in general
 
 Step back and look at the whole pipeline. A CNN processes an image in two phases: a **feature extractor** of stacked conv + activation + pooling blocks that turns raw pixels into increasingly abstract feature maps, followed by a **classifier head** (a global pool plus one or two dense layers) that maps those features to class scores.
 
@@ -310,21 +408,55 @@ flowchart LR
     GAP --> FC["Dense → softmax 1000 classes"]
 ```
 
-A single filter's parameter count is $K_h \times K_w \times C_{in} + 1$ (the $+1$ is the bias); a layer with $C_{out}$ filters has $C_{out}$ times that. Note this is independent of image size — the same filter handles a 32×32 or a 512×512 input. That is the parameter-sharing payoff from §15.1, made concrete.
+A single filter's parameter count is $K_h \times K_w \times C_{in} + 1$ (the $+1$ is the bias); a layer with $C_{out}$ filters has $C_{out}$ times that.
 
-## 15.6 — Transfer learning (reusing pretrained backbones)
+$$
+\#\text{params} = (K_h \times K_w \times C_{in} + 1)\times C_{out}
+$$
+
+**In words:** each filter has one weight per cell of its $K_h\times K_w$ window across every input channel $C_{in}$, plus one bias; multiply that per-filter count by how many filters $C_{out}$ the layer holds.
+
+**Also written:** $\;\#\text{params} = C_{out}\,(C_{in}K_hK_w + 1)$ — the bias term drops to $C_{out}\,C_{in}K_hK_w$ when bias is disabled (e.g. before BatchNorm, §15.6).
+
+Note this is independent of image size — the same filter handles a 32×32 or a 512×512 input. That is the parameter-sharing payoff from §15.1, made concrete.
+
+**The 1×1 convolution.** A filter of size 1×1 looks at a single pixel but *all* its channels — it is a tiny dense layer applied identically at every spatial location. Its job is to mix and **re-project channels**: turn 256 channels into 64 (cheap dimensionality reduction) or 64 into 256, without touching spatial size. This "bottleneck" trick is what lets ResNet-50 stay affordable, and it underpins the Inception and MobileNet families.
+
+```python
+import torch.nn as nn
+nn.Conv2d(256, 64, kernel_size=1)   # squeeze 256 channels → 64, per pixel
+```
+
+## 15.8 — Transfer learning (reusing pretrained backbones)
 
 Training a deep CNN from scratch needs millions of labelled images and a lot of GPU time. Almost nobody does it. The early-to-middle layers of any vision CNN learn *generic* features — edges, textures, shapes — that are useful for nearly every image task. **Transfer learning** reuses those layers.
+
+**The everyday analogy.** Hiring someone who already speaks the language and just needs to learn your company's jargon beats training a newborn from scratch. A pretrained backbone already "speaks vision"; you only teach it your handful of labels.
 
 The recipe: take a network already trained on a huge dataset (ImageNet, 1.2M images), call its feature extractor the **backbone**, discard its original classifier head, and attach a fresh small head for your task. Then either **freeze** the backbone and train only the head (fast, needs little data), or **fine-tune** — unfreeze some top layers and train them too at a small learning rate, for a bit more accuracy when you have more data.
 
 ```python
-# pseudo-PyTorch: reuse a pretrained ResNet for a 5-class problem
-backbone = resnet50(pretrained=True)
+# real PyTorch / torchvision: reuse a pretrained ResNet for a 5-class problem
+import torch.nn as nn
+from torchvision.models import resnet50, ResNet50_Weights
+
+backbone = resnet50(weights=ResNet50_Weights.IMAGENET1K_V2)
 for p in backbone.parameters():
     p.requires_grad = False                 # freeze generic features
 backbone.fc = nn.Linear(2048, 5)            # new head, only this trains
-# train head; optionally later unfreeze last block at lr=1e-4 to fine-tune
+# train head; optionally later unfreeze layer4 at lr=1e-4 to fine-tune
+```
+
+The scikit-learn / Keras equivalent follows the same shape — load weights, drop the top, add a head:
+
+```python
+from tensorflow.keras.applications import ResNet50
+from tensorflow.keras import layers, Model
+
+base = ResNet50(weights="imagenet", include_top=False, pooling="avg")
+base.trainable = False                       # freeze backbone
+out = layers.Dense(5, activation="softmax")(base.output)
+model = Model(base.input, out)
 ```
 
 **Rule of thumb for choosing:** small dataset + similar to ImageNet → freeze, train head only. Large dataset or a very different domain (medical scans, satellite) → fine-tune more layers.
@@ -333,9 +465,9 @@ backbone.fc = nn.Linear(2048, 5)            # new head, only this trains
 **Intuition:** a pretrained backbone has already learned to *see*. You are only teaching it the vocabulary of your specific labels — a few hundred examples often suffice, versus the millions needed to learn vision from zero.
 :::
 
-## 15.7 — Worked size calculation (end to end)
+## 15.9 — Worked size calculation (end to end)
 
-Let us trace a tensor's shape through a small VGG-style block so the formulas from §15.3 and the channel rules from §15.5 click together. Input: a 32×32 RGB image, shape **32×32×3**.
+Let us trace a tensor's shape through a small VGG-style block so the formulas from §15.3 and the channel rules from §15.7 click together. Input: a 32×32 RGB image, shape **32×32×3**.
 
 | Layer | K, P, S, filters | Output H×W | Channels | Why |
 |---|---|---|---|---|
@@ -361,20 +493,34 @@ assert W*W*32 == 2048                     # flattened length
 
 Now count Conv1's parameters: $3\times3\times3$ weights per filter $+1$ bias $= 28$, times $16$ filters $= 448$. Tiny — and that number would be identical whether the input were 32×32 or 4000×4000. That size-independence is the whole reason CNNs scale to real images.
 
+The very same block, written as a runnable PyTorch module, lets the framework verify every shape for you:
+
+```python
+import torch, torch.nn as nn
+net = nn.Sequential(
+    nn.Conv2d(3, 16, 3, padding=1), nn.ReLU(), nn.MaxPool2d(2),
+    nn.Conv2d(16, 32, 3, padding=1), nn.ReLU(), nn.MaxPool2d(2),
+    nn.Flatten(), nn.Linear(2048, 10),
+)
+print(net(torch.randn(1, 3, 32, 32)).shape)   # torch.Size([1, 10])
+```
+
 ::: {.callout-warning}
 **Common mistake:** mismatching the flattened length when you change image size or padding. If you swap Conv1 to "valid" padding, every downstream shape shifts and the Dense layer's input dimension breaks. Re-run the size formula end-to-end after *any* change to K, P, S, or input size.
 :::
 
-## 15.8 — Key takeaways
+## 15.10 — Key takeaways
 
 - A **convolution** slides a small **filter** over the input; **local connectivity** + **parameter sharing** make it efficient and translation-aware — one pattern learned once, detected everywhere.
 - **Pooling** downsamples feature maps; **max** keeps the strongest activation (default), **average** smooths (used for global pooling heads). No learnable parameters.
 - Output size is $O = \lfloor (W - K + 2P)/S \rfloor + 1$; "same" padding needs $P=(K-1)/2$, and the **floor** silently drops leftover pixels.
+- The **receptive field** is the input patch one deep neuron sees; it grows with depth, and **dilated** convs enlarge it cheaply.
 - Architectures went deeper over time — **LeNet → AlexNet → VGG → ResNet** — and **residual connections** ($y=F(x)+x$) made very deep nets trainable.
-- A CNN = **feature extractor** (conv/pool blocks, spatial size shrinks while **channels** grow) + **classifier head**; filters span all input channels.
+- **Batch normalization** standardises each layer's inputs ($\hat{x}=(x-\mu)/\sqrt{\sigma^2+\epsilon}$, then rescaled by $\gamma,\beta$), enabling higher learning rates and steadier training; remember `eval()` mode at inference.
+- A CNN = **feature extractor** (conv/pool blocks, spatial size shrinks while **channels** grow) + **classifier head**; filters span all input channels, and **1×1 convs** re-project channels cheaply.
 - **Transfer learning** reuses a pretrained **backbone**: freeze for small/similar data, fine-tune for large/different data — the standard way to build vision models.
 
-## 15.9 — See also
+## 15.11 — See also
 
 - **Neural Networks (Core)** — activations, backprop, dropout, and the dense layers CNNs build on.
 - **Computer Vision** — detection, segmentation, and the tasks CNNs power.

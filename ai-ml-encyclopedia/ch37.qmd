@@ -334,7 +334,7 @@ A handy way to remember which way conditioning flips the switch: a **fork or cha
   <text x="210" y="124" fill="#f59e0b">blocked ✕ (until you condition)</text>
 </svg>
 
-A quick way to feel the collider effect: let talent and luck both independently cause a startup to get funded ($K$). In the whole population talent and luck are unrelated. But *among funded startups only* — conditioning on $K$ — a low-talent founder must have been lucky, and a lucky one needn't be talented, so the two become negatively correlated out of thin air. That manufactured correlation is the danger of "controlling for everything."
+A quick way to feel the collider effect: let talent and luck both independently cause a startup to get funded ($K$). In the whole population talent and luck are unrelated. But *among funded startups only* — conditioning on $K$ — a low-talent founder must have been lucky, and a lucky one needn't be talented, so the two become negatively correlated out of thin air. That manufactured correlation is the danger of "controlling for everything." (This same mechanism is **collider / selection bias**: studying only hospital patients, only funded startups, or only users who clicked silently conditions on a collider and can flip the sign of an effect.)
 
 The **do-operator** $do(X{=}x)$ is Pearl's notation for *intervention*: reach into the system, set $X$ to $x$, and — crucially — **delete every arrow pointing into $X$** (you overrode its natural causes). The interventional distribution $P(Y \mid do(X{=}x))$ is what an action produces, and it generally differs from the observational $P(Y\mid X{=}x)$. The entire game of causal inference from data is: *re-express the do-quantity you want in terms of do-free observational quantities you can estimate.* When that is possible, the effect is **identifiable**.
 
@@ -505,7 +505,69 @@ Concretely, if a state raises its minimum wage and employment there moves from 2
 Every observational method rests on an *untestable* assumption (ignorability, instrument validity, parallel trends, continuity). The data cannot confirm it — only domain knowledge and the DAG can defend it. State the assumption explicitly and stress-test it; a "causal estimate" with an unstated assumption is just a correlation in a lab coat.
 :::
 
-## 37.9 — Uplift and treatment-effect modeling
+## 37.9 — Sensitivity analysis: how wrong can the assumption be?
+
+Every observational estimate (37.8) leans on an untestable assumption — usually "no unmeasured confounding." You cannot *prove* it. But you *can* ask the next-best question: **how strong would a hidden confounder have to be to overturn my conclusion?** That is **sensitivity analysis**, and it converts an all-or-nothing leap of faith into a measurable margin of safety.
+
+Plain-language version: instead of swearing there's no puppeteer, you ask "if there *were* a hidden puppeteer, how hard would it have to pull to flip my answer from 'the drug helps' to 'the drug does nothing'?" A finding that survives only a feather-light hidden confounder is fragile; one that needs a confounder stronger than any *measured* variable is robust.
+
+A widely used, model-light summary is the **E-value**: the minimum strength of association (on the risk-ratio scale) that an unmeasured confounder would need with *both* treatment and outcome to fully explain away the observed effect.
+
+$$\text{E-value} = \text{RR} + \sqrt{\text{RR}\,(\text{RR}-1)},$$
+
+for an observed risk ratio $\text{RR} \ge 1$ (for $\text{RR}<1$, apply the formula to $1/\text{RR}$).
+
+**In words:** take the effect you measured, and report the smallest "hidden-cause strength" — how strongly some unmeasured variable must move *both* the treatment and the outcome — that could be hiding the truth that there's really no effect.
+
+**Also written:** equivalently $\text{E-value} = \text{RR} + \sqrt{\text{RR}^2 - \text{RR}}$ — the same quantity, just factoring $\text{RR}(\text{RR}-1)$ under the root.
+
+**Worked example.** You observe a risk ratio of $\text{RR}=2.0$. Then $\text{E-value} = 2 + \sqrt{2(2-1)} = 2 + \sqrt{2} \approx 3.41$. Reading: a hidden confounder would have to be associated with both treatment and outcome by a risk ratio of at least 3.41 — *more than doubling the observed effect's strength* — to reduce the true effect to nothing. If none of your measured covariates come anywhere near a 3.41 association, an unmeasured one that strong is implausible, and the finding is robust. If your strongest measured confounder already sits at 3, an unmeasured peer could plausibly erase it.
+
+```python
+import numpy as np
+def e_value(rr):
+    rr = rr if rr >= 1 else 1/rr        # work on the >=1 side
+    return rr + np.sqrt(rr*(rr-1))
+print(round(e_value(2.0), 2))           # 3.41
+```
+
+The classic companion technique is **Rosenbaum bounds** for matched studies, which report the hidden-bias magnitude $\Gamma$ (how unequal two matched units' treatment odds could secretly be) at which the result stops being significant. Same spirit, different scale.
+
+::: {.callout-tip}
+Report a sensitivity number *alongside* every observational point estimate. "ATE = 0.4, E-value 3.4" is a far more honest claim than "ATE = 0.4," because it tells the reader exactly how much unmeasured confounding the conclusion can absorb before it breaks.
+:::
+
+## 37.10 — Mediation: direct vs indirect effects
+
+Backdoor adjustment answers "*does* $T$ affect $Y$, and by how much?" **Mediation analysis** answers the next question managers and scientists actually care about: "*how* does it work — through which channel?" It splits the total effect into the part that flows *through* a mediator $M$ and the part that goes around it.
+
+Intuition: a wellness program ($T$) lowers sick days ($Y$). Some of that works *because* the program improves sleep ($M$) — the **indirect** path $T\to M\to Y$. The rest works through everything else — better diet, stress, morale — the **direct** path $T\to Y$. Knowing the split tells you whether to double down on the sleep component or look elsewhere.
+
+The **total effect** decomposes (in the simple linear, no-interaction case) as a sum:
+
+$$\underbrace{\text{TE}}_{\text{total}} = \underbrace{\text{NDE}}_{\text{direct, around }M} + \underbrace{\text{NIE}}_{\text{indirect, through }M},$$
+
+where NDE is the **natural direct effect** and NIE the **natural indirect effect**.
+
+**In words:** the whole effect of the treatment equals the bit that reaches the outcome *bypassing* the mediator, plus the bit that reaches it *by moving* the mediator first.
+
+**Also written:** in a linear model $M = \alpha\,T + \dots$ and $Y = \beta\,T + \gamma\,M + \dots$, the indirect effect is the product $\alpha\gamma$ and the direct effect is $\beta$, so $\text{TE} = \beta + \alpha\gamma$ — the celebrated "product-of-coefficients" (Baron–Kenny) form.
+
+```{mermaid}
+flowchart LR
+  T["T (treatment)"] -->|"direct β (NDE)"| Y["Y (outcome)"]
+  T -->|"α"| M["M (mediator)"]
+  M -->|"γ"| Y
+  T -. "indirect = α·γ (NIE)" .- Y
+```
+
+**Worked example.** Fit $M = 0.5\,T + \varepsilon$ and $Y = 0.2\,T + 0.6\,M + \varepsilon$. Indirect effect $=\alpha\gamma = 0.5\times0.6 = 0.30$; direct effect $=\beta = 0.20$; total $=0.50$. So **60%** of the treatment's benefit is mediated through $M$ — a quantitative answer to "how much of the program's win comes through sleep?"
+
+::: {.callout-warning}
+Mediation is treacherous: the mediator $M$ is itself an outcome of $T$, so any confounder of the $M\to Y$ link (even one *unrelated* to $T$) biases the split — and you must *not* simply "adjust for $M$" the way you adjust for a confounder. Modern **causal mediation** (Pearl, Imai) defines NDE/NIE through nested counterfactuals and needs stronger assumptions than a total-effect estimate. Treat a clean 60/40 split as a hypothesis, not a verdict.
+:::
+
+## 37.11 — Uplift and treatment-effect modeling
 
 The ATE is one number for the whole population, but interventions are usually *targeted*: you want to act on the units the action actually *helps*. **Uplift modeling** (a.k.a. treatment-effect or heterogeneous-effect modeling) estimates the **Conditional Average Treatment Effect**:
 
@@ -562,7 +624,7 @@ quadrantChart
 Evaluate uplift models with a **Qini curve** (cumulative incremental gain as you treat from highest predicted uplift downward), not accuracy. Accuracy rewards predicting *who buys*; Qini rewards predicting *whom your action changes* — the only thing that pays for the campaign.
 :::
 
-## 37.10 — Causal discovery: learning the graph from data
+## 37.12 — Causal discovery: learning the graph from data
 
 So far the DAG has fallen from the sky — drawn by hand from domain knowledge. But what if you *don't* know the arrows? **Causal discovery** (a.k.a. structure learning) tries to recover the graph, or at least the parts of it the data can pin down, from observational (and sometimes interventional) data.
 
@@ -586,7 +648,7 @@ cg.draw_pydot_graph(labels=list(df.columns))
 Discovered graphs are *hypotheses*, not facts. They rest on assumptions (faithfulness, often no hidden confounders, correct independence tests) that are as untestable as the ones in 37.8. Treat the output as a candidate DAG to argue with and validate against domain knowledge — never as ground truth handed down by the algorithm.
 :::
 
-## 37.11 — Why causal thinking matters for robust, fair, actionable AI
+## 37.13 — Why causal thinking matters for robust, fair, actionable AI
 
 Causal reasoning is not an academic luxury bolted onto ML — it is what makes a model survive contact with the real world.
 
@@ -607,7 +669,7 @@ flowchart LR
 The one-line test before deploying any model to *drive a decision*: "Am I asking what *is*, or what *would happen if I act*?" If it's the second, you need a causal estimand and the assumptions to identify it — predictive accuracy alone will not save you.
 :::
 
-## 37.12 — Key takeaways
+## 37.14 — Key takeaways
 
 - $P(Y\mid X)$ (observing) and $P(Y\mid do(X))$ (acting) are different objects; ML learns the first, decisions need the second. Pearl's ladder — seeing, doing, imagining — names the climb.
 - A **confounder** drives both treatment and outcome and fakes an effect; **Simpson's paradox** is confounding so strong the trend reverses on aggregation.
@@ -615,11 +677,13 @@ The one-line test before deploying any model to *drive a decision*: "Am I asking
 - **Randomized experiments / A/B tests** are the gold standard because randomization neutralizes even *unmeasured* confounders.
 - **DAGs + the do-operator** turn identification into graph-reading (graph surgery cuts arrows into $X$); the **backdoor criterion** adjusts for confounders, the **frontdoor** routes the effect through a mediator, and **colliders** warn that adjusting for the wrong variable *creates* bias.
 - **Observational methods** (matching, propensity scores / IPW, IV, difference-in-differences, regression discontinuity) each approximate an experiment by trading data for one *untestable* assumption — state it; prefer doubly-robust estimators when you can.
+- **Sensitivity analysis** (E-value, Rosenbaum bounds) quantifies how strong an unmeasured confounder would have to be to overturn a finding — report it alongside every observational estimate.
+- **Mediation analysis** splits a total effect into direct and indirect (through-the-mediator) paths, answering *how* a treatment works — but needs stronger assumptions than estimating the total effect.
 - **Uplift / CATE models** estimate *per-unit* effects to target persuadables and avoid sleeping dogs; meta-learners and causal forests scale this, and you evaluate with Qini, not accuracy.
 - **Causal discovery** can propose a graph from data, but only up to a Markov equivalence class — treat the output as a hypothesis.
 - Causal thinking is what makes AI **robust** (stable under shift), **fair** (counterfactual fairness), and **actionable** (recourse and policy are $do$-queries).
 
-## 37.13 — See also
+## 37.15 — See also
 
 - **Probability & Statistics** — distributions, expectation, hypothesis testing, the foundation for ATE estimation and A/B significance.
 - **Probabilistic Graphical Models** — Bayesian networks and d-separation, the machinery behind DAGs and the backdoor criterion.
