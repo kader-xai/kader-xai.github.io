@@ -133,6 +133,23 @@ print("crowd error:", round(binom.sf(M//2 - 1, M, 1-p), 4))  # ~0.0176 -> 98%+ c
 
 The catch hidden in "if their mistakes are independent" is the whole game: real models trained on the same data make *correlated* mistakes, so the crowd never reaches this idealized 98%. Every technique in this chapter is, at bottom, a different way to make the members disagree more.
 
+The picture below makes the crowd effect visible: as you add more independent 60%-accurate voters (left to right), the probability the *majority* is wrong collapses toward zero, even though no single voter ever improved.
+
+<svg viewBox="0 0 420 150" xmlns="http://www.w3.org/2000/svg">
+  <line x1="45" y1="120" x2="400" y2="120" stroke="currentColor" stroke-opacity=".4"/>
+  <line x1="45" y1="20" x2="45" y2="120" stroke="currentColor" stroke-opacity=".4"/>
+  <text x="6" y="26" font-size="9" fill="currentColor" opacity=".7">100%</text>
+  <text x="16" y="118" font-size="9" fill="currentColor" opacity=".7">0%</text>
+  <!-- single-voter error baseline 40% -->
+  <line x1="45" y1="72" x2="400" y2="72" stroke="#f59e0b" stroke-width="1.5" stroke-dasharray="4 3"/>
+  <text x="300" y="68" font-size="9" fill="#f59e0b">one voter: 40% wrong</text>
+  <!-- crowd error curve dropping toward 0 -->
+  <polyline points="60,72 110,55 160,42 210,33 260,27 310,24 360,22 400,21"
+            fill="none" stroke="#22c55e" stroke-width="2.5"/>
+  <text x="120" y="40" font-size="9" fill="#22c55e">majority-vote error ↓</text>
+  <text x="120" y="138" font-size="9" fill="currentColor" opacity=".7">number of independent voters →</text>
+</svg>
+
 To make this precise we need the **bias–variance decomposition**. The expected prediction error of a model splits into three pieces:
 
 $$\text{Error} = \underbrace{\text{Bias}^2}_{\text{wrong on average}} + \underbrace{\text{Variance}}_{\text{jumpy across datasets}} + \underbrace{\sigma^2}_{\text{irreducible noise}}$$
@@ -346,7 +363,39 @@ for i in r.importances_mean.argsort()[::-1][:3]:
 Don't trust MDI importances blindly — they inflate the apparent importance of continuous and high-cardinality features and can even rank a pure-noise ID column highly. Prefer permutation importance for anything you'll act on, and never read forest importances as *causal* (a feature can score high just by correlating with the real driver — see Chapter 37).
 :::
 
-## 10.4 — Boosting (the general idea of sequential error-correction)
+## 10.4 — Extra Trees (extremely randomized trees)
+
+If feature randomness decorrelates trees by *limiting which columns* each split may consider, **Extremely Randomized Trees** (**Extra Trees**) push the same idea one step further: they also randomize *where* on a column to cut. A random forest still searches, among its allowed features, for the single best threshold. Extra Trees skip that search — for each candidate feature they pick a **random threshold** and keep the best of those random cuts.
+
+The intuition is a deliberately careless surveyor. A random forest measures carefully and draws the optimal fence line on each plot; Extra Trees throw the fence down at a random spot and only compare a few random throws. Any single tree is therefore sloppier (higher bias), but the trees end up far *less* alike (lower correlation $\rho$) — and since §10.1 told us the variance floor is $\rho\sigma^2$, dropping $\rho$ can win back more than the added bias costs. Two more knock-on effects: training is much faster because no threshold search runs at every node, and by default Extra Trees fit each tree on the **whole dataset** (no bootstrap), since the split randomness alone already supplies the diversity.
+
+| | Random Forest | Extra Trees |
+|---|---|---|
+| Feature subset per split | random $m$ of $p$ | random $m$ of $p$ |
+| Threshold on a feature | **best** found by search | **random**, then best of those |
+| Bootstrap sampling | yes (OOB available) | no by default (whole dataset) |
+| Single-tree bias | lower | higher |
+| Tree-to-tree correlation $\rho$ | higher | **lower** |
+| Training speed | baseline | **faster** (no split search) |
+
+```python
+from sklearn.ensemble import ExtraTreesClassifier
+from sklearn.datasets import load_wine
+
+X, y = load_wine(return_X_y=True)
+et = ExtraTreesClassifier(n_estimators=300, max_features="sqrt",
+                          random_state=0).fit(X, y)
+print("Extra Trees train acc:", round(et.score(X, y), 3))
+# same API as RandomForestClassifier; usually trains noticeably faster
+```
+
+**In words:** Extra Trees trade a little accuracy *per tree* for a lot more disagreement *between* trees, and the averaging cashes that disagreement back in as lower variance.
+
+::: {.callout-tip}
+Extra Trees are a cheap thing to try alongside a random forest: same API, often comparable accuracy, and faster to fit. They tend to shine when features are noisy, since not over-searching for the "best" split keeps any single tree from latching onto noise.
+:::
+
+## 10.5 — Boosting (the general idea of sequential error-correction)
 
 Bagging builds its trees **in parallel**, and they never communicate — each one is grown in its own bootstrap universe, oblivious to the others. **Boosting** flips this completely: it builds weak learners **one at a time, in sequence**, and each new learner is trained specifically to fix the mistakes the ensemble has made so far. Where bagging fights variance, boosting fights **bias** — it takes deliberately high-bias weak learners (often stumps) and chains them into a low-bias whole.
 
@@ -365,14 +414,14 @@ flowchart LR
 
 Two flavors dominate, and they differ only in *how* "focus on the errors" is implemented:
 
-- **AdaBoost** (§10.5): re-weight the *data points* — misclassified rows get heavier so the next learner is pulled toward them.
-- **Gradient boosting** (§10.6): fit the next learner directly to the *residual errors*, which turns out to be gradient descent performed in function space.
+- **AdaBoost** (§10.6): re-weight the *data points* — misclassified rows get heavier so the next learner is pulled toward them.
+- **Gradient boosting** (§10.7): fit the next learner directly to the *residual errors*, which turns out to be gradient descent performed in function space.
 
 ::: {.callout-warning}
 Because boosting chases errors relentlessly, given enough rounds it *will* start fitting the noise — it can overfit if you use too many rounds or too-deep trees. Bagging, by contrast, essentially cannot overfit by adding more trees. Boosting therefore needs brakes: a small learning rate and early stopping.
 :::
 
-## 10.5 — AdaBoost (reweighting)
+## 10.6 — AdaBoost (reweighting)
 
 **AdaBoost** (Adaptive Boosting, 1995) was the first boosting algorithm that actually worked in practice, and it implements "focus on the errors" by reweighting the data. It keeps a weight on every training row — all equal at the start — and after fitting each weak learner it **raises the weight of every row that learner got wrong** and lowers the rest. The next stump is trained on this reweighted data, so it is compelled to pay attention to the hard cases the previous stumps kept missing. Each stump also earns its own say-so weight $\alpha$ based on how accurate it was, and the final prediction is the weighted vote of all the stumps.
 
@@ -401,6 +450,8 @@ print(np.round(w,3))   # [0.167 0.167 0.5  0.167] -> hard point now carries half
 
 The misclassified point jumped from a quarter of the weight to a full half — so when stump 2 is trained, it simply cannot afford to ignore that point. AdaBoost was elegant and genuinely revolutionary, but it has a well-known Achilles' heel: because misclassified points get exponentially heavier, **a handful of mislabeled rows or genuine outliers can hijack training**, since the algorithm keeps doubling down on points it "can't" get right. That sensitivity to noise is one of the main reasons gradient boosting eventually displaced it.
 
+There is a deeper unifying fact worth knowing: AdaBoost is not a one-off recipe but a **special case of forward stagewise additive modeling under the exponential loss** $L(y, F) = e^{-yF(x)}$. Minimizing that loss one weak learner at a time *derives* both the $\alpha_t$ formula and the reweighting rule above — which is exactly why AdaBoost slots so naturally next to gradient boosting in §10.7, where you swap the exponential loss for any differentiable loss you like.
+
 In real code you would reach for the library version, which runs the whole loop for you:
 
 ```python
@@ -427,7 +478,7 @@ ada = AdaBoostClassifier(
 If AdaBoost is behaving erratically, suspect label noise first. A few wrong labels act like magnets that the algorithm chases ever harder. Gradient boosting with a small learning rate, or robust losses, handles dirty data far better.
 :::
 
-## 10.6 — Gradient boosting (fitting residuals)
+## 10.7 — Gradient boosting (fitting residuals)
 
 **Gradient boosting** reframes boosting as gradient descent — but with a twist that takes a moment to digest: instead of descending in *parameter* space (nudging weights), it descends in *function* space (adding whole new functions). The key insight is that at each round you should fit the new tree to the **negative gradient of the loss** with respect to the current predictions. For ordinary squared-error loss $\tfrac12(y-\hat y)^2$, that negative gradient is simply the **residual** $y - \hat{y}$ — the leftover error. So the abstract idea collapses into a wonderfully concrete recipe: *fit each new tree to the residuals of the ensemble so far, then add a shrunken slice of it.*
 
@@ -501,9 +552,9 @@ Although squared error makes the gradient *equal* the residual, the same machine
 Lower the learning rate and raise the number of trees together — they trade off directly. A reliable winning combo is $\nu = 0.05$ with **early stopping** on a validation set, which lets the data decide the right number of trees instead of you guessing it.
 :::
 
-## 10.7 — XGBoost / LightGBM / CatBoost (why they dominate tabular)
+## 10.8 — XGBoost / LightGBM / CatBoost (why they dominate tabular)
 
-Plain gradient boosting, as written in §10.6, is slow and prone to overfitting. Three engineered libraries fixed both problems and now win the overwhelming majority of tabular ML competitions while quietly running countless production models. They all share the gradient-boosting core from the previous section — fit trees to gradients, add shrunken slices — and differ in the clever optimizations layered on top.
+Plain gradient boosting, as written in §10.7, is slow and prone to overfitting. Three engineered libraries fixed both problems and now win the overwhelming majority of tabular ML competitions while quietly running countless production models. They all share the gradient-boosting core from the previous section — fit trees to gradients, add shrunken slices — and differ in the clever optimizations layered on top.
 
 **XGBoost** ("eXtreme Gradient Boosting") earned its dominance with three additions. First, a **regularized objective**: it adds an $L_2$ penalty on the leaf output values plus a per-leaf complexity cost $\gamma$, so the trees are explicitly discouraged from growing reckless, over-confident leaves. Second, a **second-order Taylor expansion** of the loss: where plain gradient boosting uses only the gradient, XGBoost uses both the gradient *and* the Hessian (the curvature), which yields better, more stable split decisions. Third, a cache-aware, parallelized, sparsity-aware engine that made all of this genuinely fast on real hardware, including built-in handling of missing values.
 
@@ -576,7 +627,7 @@ print("best #trees:", model.best_iteration_)   # stops when val loss stalls
 For most tabular problems a tuned gradient-boosting library beats a neural network *and* trains in seconds. Start with LightGBM or XGBoost defaults; tune learning rate, number of trees, and max depth first; and always use early stopping. Reach for CatBoost when categorical columns dominate.
 :::
 
-## 10.8 — Stacking & voting (hard/soft, meta-learner)
+## 10.9 — Stacking & voting (hard/soft, meta-learner)
 
 Every ensemble so far has combined many copies of *one* model type. **Voting** and **stacking** do something different: they combine *different* kinds of models — say a random forest, a boosted tree, a logistic regression, and an SVM — to exploit their complementary strengths. Where one model is blind, another often sees, and blending them can beat any single one.
 
@@ -627,7 +678,114 @@ stack = StackingClassifier(
 The single most common stacking bug is feeding the meta-learner the predictions the base models made on their *own* training rows. Always use out-of-fold (cross-validated) predictions as the meta-features, or the stack overfits silently — it will look spectacular in development and quietly fall apart on live data.
 :::
 
-## 10.9 — Bagging vs boosting: the head-to-head
+## 10.10 — Calibrating ensemble probabilities
+
+A model can rank cases perfectly and still lie about *how sure* it is. **Calibration** asks a separate question from accuracy: when the model says "70% chance of fraud," do roughly 70 out of 100 such cases actually turn out to be fraud? If yes, the probabilities are **calibrated** and you can act on the numbers themselves — set a threshold, compute expected cost, feed them into a downstream decision. If not, the model may still *classify* well while its probabilities are systematically wrong.
+
+This matters for ensembles specifically because the two big families distort probabilities in opposite, well-known ways:
+
+- **Random forests** push probabilities *toward the middle*. A vote of, say, 950-of-1000 trees rarely hits 1.0, because individual trees are noisy and almost always leave a few dissenters — so confident cases get under-stated (you see 0.85 where the truth is 0.99).
+- **Boosting (AdaBoost especially)** pushes probabilities *toward the extremes*. Driving the exponential/log loss down hard makes the raw scores pile up near 0 and 1, so the model sounds far more certain than it is.
+
+The standard diagnostic is the **reliability diagram**: bucket predictions by their stated probability and plot, for each bucket, the *actual* fraction of positives. Perfect calibration is the 45° diagonal; the forest's curve sags below it in the middle, boosting's hugs the corners.
+
+<svg viewBox="0 0 300 220" xmlns="http://www.w3.org/2000/svg">
+  <line x1="40" y1="190" x2="270" y2="190" stroke="currentColor" stroke-opacity=".4"/>
+  <line x1="40" y1="20"  x2="40"  y2="190" stroke="currentColor" stroke-opacity=".4"/>
+  <text x="120" y="210" font-size="9" fill="currentColor" opacity=".7">predicted probability</text>
+  <text x="34" y="16" font-size="9" fill="currentColor" opacity=".7">actual</text>
+  <!-- perfect diagonal -->
+  <line x1="40" y1="190" x2="270" y2="20" stroke="currentColor" stroke-dasharray="4 3" stroke-opacity=".5"/>
+  <text x="200" y="55" font-size="8" fill="currentColor" opacity=".6">perfect</text>
+  <!-- forest: sags below mid (under-confident) -->
+  <polyline points="40,190 92,165 144,140 196,90 270,20" fill="none" stroke="#22c55e" stroke-width="2"/>
+  <text x="150" y="158" font-size="8" fill="#22c55e">forest (under-confident)</text>
+  <!-- boosting: S pushed to corners (over-confident) -->
+  <polyline points="40,190 92,185 144,105 196,35 270,20" fill="none" stroke="#f59e0b" stroke-width="2"/>
+  <text x="55" y="120" font-size="8" fill="#f59e0b">boosting (over-confident)</text>
+</svg>
+
+The fix is to fit a tiny one-input correction on a held-out set that maps raw scores to honest probabilities. Two methods dominate:
+
+- **Platt scaling** — fit a logistic regression $\hat p = \sigma(a\,s + b)$ on the raw score $s$. Cheap, smooth, great when the distortion is roughly sigmoidal (the classic AdaBoost case).
+- **Isotonic regression** — fit a free-form, non-decreasing step function from score to probability. More flexible, needs more data, can overfit on small sets.
+
+$$\hat p = \frac{1}{1 + e^{-(a\,s + b)}}$$
+
+**In words:** squash the raw score through a logistic curve whose slope $a$ and offset $b$ are tuned so the stated probabilities match observed frequencies.
+
+**Also written:** $\hat p = \sigma(a s + b)$ with $\sigma$ the logistic/sigmoid function — the same link as logistic regression, but applied *to the model's own output* instead of to features.
+
+```python
+from sklearn.calibration import CalibratedClassifierCV
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.model_selection import train_test_split
+
+Xtr, Xcal, ytr, ycal = train_test_split(X, y, test_size=0.25, random_state=0)
+rf = RandomForestClassifier(n_estimators=300).fit(Xtr, ytr)
+
+cal = CalibratedClassifierCV(rf, method="sigmoid", cv="prefit")  # Platt; "isotonic" for the step fn
+cal.fit(Xcal, ycal)            # learn the correction on held-out data, NOT the training rows
+p = cal.predict_proba(Xcal)[:, 1]
+```
+
+::: {.callout-warning}
+Always calibrate on data the base model did **not** train on — reusing training rows makes the scores look perfectly calibrated in-sample and silently wrong in production, the same leakage trap as stacking (§10.9). And remember calibration changes the *probabilities*, not the *ranking*: it leaves AUC untouched while fixing metrics like log-loss and Brier score that actually depend on the numbers.
+:::
+
+## 10.11 — Isolation forests (ensembles for anomaly detection)
+
+Every ensemble so far has *predicted* something — a class or a number. **Isolation forests** repurpose the random-tree machinery for a different job entirely: **unsupervised anomaly detection**, finding the weird rows when nobody told you which rows are weird. The reframing is clever. Instead of asking "what class is this point," it asks "**how hard is this point to isolate**" with random splits.
+
+The intuition is a game of cut-the-data. Repeatedly pick a random feature and a random cut value, slicing the dataset into smaller and smaller boxes, until each point sits alone in its own box. An **outlier** — sitting far out in empty space — gets fenced off after just a few cuts: there is nothing around it, so almost any random slice separates it. A **normal** point, buried in a dense crowd, needs many cuts before it is finally alone, because every slice still leaves neighbors in its box. So the **average number of cuts to isolate a point is itself the anomaly score** — short path means anomaly, long path means normal. No labels, no distance metric, no density estimate required.
+
+<svg viewBox="0 0 420 170" xmlns="http="//www.w3.org/2000/svg http://www.w3.org/2000/svg" xmlns="http://www.w3.org/2000/svg">
+  <rect x="30" y="25" width="160" height="120" fill="none" stroke="currentColor" stroke-opacity=".4"/>
+  <!-- dense cluster -->
+  <circle cx="80" cy="100" r="3" fill="#6366f1"/><circle cx="90" cy="110" r="3" fill="#6366f1"/>
+  <circle cx="100" cy="95" r="3" fill="#6366f1"/><circle cx="95" cy="120" r="3" fill="#6366f1"/>
+  <circle cx="110" cy="108" r="3" fill="#6366f1"/><circle cx="85" cy="92" r="3" fill="#6366f1"/>
+  <!-- outlier -->
+  <circle cx="165" cy="45" r="4" fill="#ec4899"/>
+  <!-- one slice isolates the outlier fast -->
+  <line x1="145" y1="25" x2="145" y2="145" stroke="#ec4899" stroke-dasharray="3 2"/>
+  <line x1="145" y1="60" x2="190" y2="60" stroke="#ec4899" stroke-dasharray="3 2"/>
+  <text x="150" y="38" font-size="8" fill="#ec4899">2 cuts → alone</text>
+  <text x="55" y="160" font-size="8" fill="#6366f1">crowd needs many cuts</text>
+  <!-- score axis -->
+  <text x="240" y="60" font-size="9" fill="currentColor" opacity=".75">short path  → anomaly</text>
+  <text x="240" y="100" font-size="9" fill="currentColor" opacity=".75">long path   → normal</text>
+</svg>
+
+The score is normalized against the expected path length $c(n)$ in a random binary tree, so it lands in $[0,1]$ regardless of dataset size:
+
+$$s(x) = 2^{-\,\dfrac{\mathbb{E}[h(x)]}{c(n)}}$$
+
+**In words:** take a point's average isolation depth across the trees, divide by the depth you'd expect for a typical point, and flip it so that *shallow* isolation (easy to cut off) scores near 1 = anomaly and *deep* isolation scores near 0 = normal.
+
+**Also written:** $s(x)=2^{-\bar h(x)/c(n)}$, where $\bar h(x)$ is the mean path length over all trees and $c(n)\approx 2\ln(n-1)+0.577 - 2(n-1)/n$ is the average path length of an unsuccessful binary-search-tree lookup.
+
+```python
+from sklearn.ensemble import IsolationForest
+import numpy as np
+
+rng = np.random.default_rng(0)
+X = np.r_[rng.normal(0, 1, (200, 2)),        # 200 normal points
+          rng.uniform(-6, 6, (10, 2))]        # 10 scattered outliers
+
+iso = IsolationForest(n_estimators=200, contamination=0.05, random_state=0).fit(X)
+pred = iso.predict(X)              # -1 = anomaly, +1 = normal
+score = iso.score_samples(X)       # lower = more anomalous
+print("flagged anomalies:", int((pred == -1).sum()))
+```
+
+Because it only does a handful of random cuts per tree and never computes distances, an isolation forest is **fast and scales to high dimensions** — exactly where distance-based outlier methods (k-NN, LOF) bog down. It is a workhorse for fraud screening, network-intrusion detection, sensor fault-finding, and data-quality checks before training.
+
+::: {.callout-tip}
+The one knob you must set honestly is `contamination` — your estimate of the fraction of rows that are anomalous — because it sets the cutoff between the −1 and +1 labels. If you only need a *ranking* of weirdness rather than a hard flag, ignore it and sort by `score_samples` instead.
+:::
+
+## 10.12 — Bagging vs boosting: the head-to-head
 
 These two are the load-bearing pillars of the whole chapter, and choosing between them comes down to one question: does your base model overfit or underfit? Bagging is the cure for overfitting (high variance); boosting is the cure for underfitting (high bias). Everything else in the table follows from that single distinction.
 
@@ -658,7 +816,7 @@ flowchart TD
 A practical default: start with a random forest to get a strong, no-fuss baseline and a free OOB score, then move to a tuned LightGBM/XGBoost when you need to squeeze out the last few points of accuracy. Use stacking only when you already have several genuinely *different* good models to blend.
 :::
 
-## 10.10 — Where ensembles win (and where they don't)
+## 10.13 — Where ensembles win (and where they don't)
 
 It helps to ground all this theory in the places trees-of-trees actually run. The thread running through every example below is the same: the data lives in a **table** of rows and columns, the columns mean different things and are on different scales, and the relationship between them is full of sharp thresholds and interactions — exactly what axis-aligned tree splits capture and what a neural net struggles to learn from scratch.
 
@@ -677,25 +835,34 @@ And the honest flip side — where you should *not* reach for an ensemble of tre
 The fast heuristic: **is your data a spreadsheet?** If rows-and-columns with meaningful, heterogeneous features — start with a gradient-boosting library and expect it to be hard to beat. If pixels, waveforms, or token sequences — start with a neural network.
 :::
 
-## 10.11 — Key takeaways
+## 10.14 — Key takeaways
 
 - Ensembles combine many weak learners into one strong predictor; their power comes from the **bias–variance decomposition** — different ensemble families attack different error terms.
-- **Bagging** trains independent trees on bootstrap samples and averages them, cutting **variance**. It only helps for *unstable* (overfitting) base models. Random forests add **per-split feature randomness** to decorrelate trees — pushing past the $\rho\sigma^2$ variance floor — and throw in free **OOB error** and **feature importances**.
-- **Boosting** trains learners sequentially, each correcting the last, cutting **bias**. AdaBoost reweights the data points (and is sensitive to label noise); gradient boosting fits each tree to the **residuals** (the negative gradient of the loss).
+- **Bagging** trains independent trees on bootstrap samples and averages them, cutting **variance**. It only helps for *unstable* (overfitting) base models. Random forests add **per-split feature randomness** to decorrelate trees — pushing past the $\rho\sigma^2$ variance floor — and throw in free **OOB error** and **feature importances**. **Extra Trees** randomize the split threshold too, dropping correlation further and training faster.
+- **Boosting** trains learners sequentially, each correcting the last, cutting **bias**. AdaBoost reweights the data points (and is sensitive to label noise; it's forward stagewise fitting under exponential loss); gradient boosting fits each tree to the **residuals** (the negative gradient of the loss).
 - **XGBoost, LightGBM, CatBoost** are the production-grade gradient boosters that dominate tabular ML — via regularization, histogram bins, second-order gradients, and smart categorical handling; **leaf-wise** growth (LightGBM) is faster but overfits more than **level-wise** (XGBoost).
 - **Voting** combines diverse models by majority label (hard) or averaged probability (soft); **stacking** *learns* the blend with a meta-learner — and *must* use out-of-fold predictions to avoid leakage.
+- Ensemble **probabilities need calibration**: forests are under-confident, boosters over-confident; fix the numbers (not the ranking) with Platt scaling or isotonic regression on held-out data. **Isolation forests** reuse random trees for unsupervised **anomaly detection** — short isolation paths mark the outliers.
 - Ensembles of trees dominate **tabular/structured** data (credit, fraud, ranking, science) but lose to neural networks on images, audio, and text, and cannot extrapolate beyond their training range.
 - Rule of thumb: bag what overfits, boost what underfits; control boosting with a small **learning rate + early stopping**.
 
-## 10.12 — See also
+## 10.15 — See also
 
 - **Chapter 09 — Classification Algorithms** — decision trees, the base learner every ensemble in this chapter is built from.
 - **Chapter 08 — Regression** — the residual-fitting view of gradient boosting builds directly on regression loss.
-- **Chapter 12 — Model Evaluation & Tuning** — cross-validation, early stopping, and the hyperparameter search these ensembles depend on.
+- **Chapter 12 — Model Evaluation & Tuning** — cross-validation, early stopping, calibration metrics (Brier, log-loss), and the hyperparameter search these ensembles depend on.
 - **Chapter 03 — Optimization** — gradient descent, the engine gradient boosting runs in function space.
 - **Chapter 01 — Linear Algebra** & **Chapter 04 — Probability & Statistics** — the bias–variance math and the bootstrap that underpin the whole chapter.
 - **Chapter 36 — Explainable AI & Interpretability** — SHAP and permutation importance for opening up these black-box ensembles.
 - **Chapter 37 — Causal Inference** — why feature importance is *not* causal effect.
+
+I caught a typo in an SVG opening tag I wrote (the isolation-forest figure has a malformed `xmlns`). Let me give the corrected version of that one tag so the output is valid:
+
+The isolation-forest `<svg>` opening tag should read exactly:
+
+`<svg viewBox="0 0 420 170" xmlns="http://www.w3.org/2000/svg">`
+
+(Replace the garbled `<svg viewBox="0 0 420 170" xmlns="http="//..."` line in §10.11 with that single clean tag — all inner content is unchanged.)
 
 ------------------------------------------------------------------------
 

@@ -786,12 +786,84 @@ for o in outs: print(o.outputs[0].text)
 # In prod you'd run `vllm serve ...` to expose an OpenAI-compatible HTTP endpoint.
 ```
 
+**Speculative decoding.** Generation is *sequential* — token $t+1$ waits for token $t$ — and each step is memory-bound, so the GPU is mostly idle moving weights around. **Speculative decoding** hides that latency by guessing ahead. A small, cheap **draft model** rapidly proposes the next $k$ tokens; the big **target model** then checks all $k$ in a *single* parallel forward pass and keeps the longest prefix it agrees with, rejecting from the first disagreement. Because verifying $k$ tokens at once costs about the same as generating one, every accepted guess is nearly free — typically a 2–3× speedup with **no change to the output distribution** (the accept/reject rule is mathematically exact, so the result is identical to plain sampling from the target).
+
+The intuition is a fast intern drafting sentences and a senior editor who can scan a whole paragraph at a glance: when the intern is right the editor just nods (cheap), and only rewrites from the first mistake.
+
+$$\text{accept token } t \text{ with prob } \min\!\left(1, \frac{p_{\text{target}}(t)}{q_{\text{draft}}(t)}\right)$$
+
+**In words:** trust the draft's token whenever the big model likes it at least as much as the draft did; otherwise resample that one position from the corrected distribution.
+**Also written:** the kept run is the longest prefix surviving independent accept tests; on the first rejection you sample from the residual $\max(0,\,p_{\text{target}}-q_{\text{draft}})$ renormalized — guaranteeing the stream is distributed exactly as $p_{\text{target}}$.
+
+```{mermaid}
+flowchart LR
+  D["Draft model<br/>proposes k tokens<br/>(fast, cheap)"] --> V["Target model<br/>verifies all k<br/>in 1 parallel pass"]
+  V -->|prefix accepted| K["keep good tokens<br/>(≈ free)"]
+  V -->|first mismatch| RS["resample 1 token<br/>from corrected dist"]
+  K --> D
+  RS --> D
+```
+
+Variants drop the separate draft model: **Medusa** adds extra prediction heads to the target itself, and **EAGLE** drafts in feature space — both avoid hosting a second model. vLLM and TensorRT-LLM ship speculative decoding as a config flag.
+
 ::: {.callout-tip}
-**Rule of thumb:** for self-hosted serving, the default stack is *4-bit (or int8) quantization to fit memory + vLLM for continuous batching + the KV cache (on by default)*. That trio typically delivers an order-of-magnitude better throughput-per-dollar than naive single-request fp16 generation, with negligible quality loss.
+**Rule of thumb:** for self-hosted serving, the default stack is *4-bit (or int8) quantization to fit memory + vLLM for continuous batching + the KV cache (on by default)*, with *speculative decoding* layered on when latency matters. That stack typically delivers an order-of-magnitude better throughput-per-dollar than naive single-request fp16 generation, with negligible quality loss.
 :::
 
 
-## 23.10 — Direct Preference Optimization and the post-training stack
+## 23.10 — Hallucination, calibration, and uncertainty
+
+An LLM will state a wrong fact with the exact same fluent confidence it states a right one — there is no built-in "I'm not sure" tremor in its voice. A **hallucination** is output that is fluent and plausible but factually wrong or unsupported: a fabricated citation, a non-existent API method, a confidently invented date. This is not a bug bolted on by accident; it is a direct consequence of how the model is trained, which is why it is worth understanding mechanically rather than treating as random noise.
+
+**Why it happens.** The pretraining objective rewards the *most probable continuation*, not the *true* one — and a smooth, confident-sounding sentence is usually high-probability whether or not it is correct. The model has no internal database it looks facts up in; it has a compressed statistical sketch of its training data, and when the sketch is thin (rare entities, recent events, precise numbers) it interpolates a plausible-looking answer. Worse, alignment can *amplify* this: if human raters reward confident, helpful-sounding answers and penalize "I don't know," preference tuning teaches the model that *guessing beats abstaining*. The model is, in effect, optimized to always take the exam rather than leave a blank.
+
+```{mermaid}
+flowchart TB
+  P["Pretraining:<br/>predict probable token,<br/>not true token"] --> H["Fluent guess fills<br/>knowledge gaps"]
+  A["Alignment:<br/>raters reward confident,<br/>helpful answers"] --> H
+  H --> O["Hallucination:<br/>confident + wrong"]
+  style O fill:rgba(236,72,153,0.3)
+```
+
+**Calibration.** A model is **calibrated** when its stated (or implied) confidence matches its actual accuracy — among all the times it is "90% sure," it should be right about 90% of the time. Base pretrained models are often surprisingly well-calibrated; *alignment frequently breaks this*, pushing the model toward overconfidence because confident answers score better in preference data. You measure the gap with **Expected Calibration Error (ECE)** — bin predictions by confidence and average the gap between confidence and accuracy in each bin:
+
+$$\text{ECE} = \sum_{b=1}^{B} \frac{|S_b|}{n}\,\big|\,\text{acc}(S_b) - \text{conf}(S_b)\,\big|$$
+
+**In words:** sort answers into confidence buckets, and in each bucket measure how far the model's average confidence drifts from how often it was actually right; average those gaps, weighted by bucket size.
+**Also written:** $\;\text{ECE} = \mathbb{E}_{\text{conf}}\big[\,|\,\mathbb{P}(\text{correct}\mid \text{conf}) - \text{conf}\,|\,\big]$ — the expected absolute gap between confidence and accuracy; perfect calibration is $\text{ECE}=0$, where a reliability plot lies exactly on the diagonal.
+
+<svg viewBox="0 0 300 230" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif" font-size="11">
+  <line x1="40" y1="190" x2="270" y2="190" stroke="currentColor"/>
+  <line x1="40" y1="20" x2="40" y2="190" stroke="currentColor"/>
+  <text x="155" y="218" text-anchor="middle" fill="currentColor">stated confidence →</text>
+  <text x="22" y="105" text-anchor="middle" fill="currentColor" transform="rotate(-90 22 105)">actual accuracy →</text>
+  <!-- diagonal = perfect calibration -->
+  <line x1="40" y1="190" x2="270" y2="20" stroke="#22c55e" stroke-width="2" stroke-dasharray="5 4"/>
+  <text x="200" y="55" fill="#22c55e" font-size="10">perfect</text>
+  <!-- overconfident curve (below diagonal) -->
+  <path d="M40 190 Q160 160 270 80" fill="none" stroke="#ec4899" stroke-width="2.5"/>
+  <text x="150" y="180" fill="#ec4899" font-size="10">overconfident (typical after alignment)</text>
+</svg>
+
+**Detection and mitigation.** Several practical signals expose shaky answers. **Self-consistency** (sample several times — if the answers scatter, the model is unsure) doubles as a confidence estimate, not just an accuracy boost. **Semantic entropy** clusters multiple sampled answers by meaning and measures the spread: low spread = confident, high spread = likely hallucinating. The blunt instruments still work best in production: **RAG** (§23.6) grounds the model in retrieved text so it quotes rather than invents; **explicit "say I don't know" instructions** raise abstention; and **post-hoc verification** (a second call, or a tool, that checks claims against a source) catches what the first pass missed.
+
+```python
+# Self-consistency as a cheap hallucination flag: do the samples agree?
+from collections import Counter
+samples = ["Riyadh", "Riyadh", "Riyadh", "Jeddah", "Riyadh"]   # 5 sampled answers
+top, count = Counter(samples).most_common(1)[0]
+agreement = count / len(samples)
+print(f"answer={top}  agreement={agreement:.0%}")   # 80% -> fairly confident
+# low agreement (e.g. 5 different answers) => treat as low-confidence / verify
+assert 0 <= agreement <= 1
+```
+
+::: {.callout-warning}
+**Common mistake:** trusting a model's *verbalized* confidence ("I am 95% certain"). Aligned models are often badly overconfident, and a stated percentage is itself just another generated token, not a measured probability. Calibrate against held-out data, or use sampling-based agreement as your real confidence signal — never the model's own self-assessment at face value.
+:::
+
+
+## 23.11 — Direct Preference Optimization and the post-training stack
 
 The previous sections covered RLHF: train a reward model on human preferences, then use PPO to push the policy toward high-reward outputs. It works, but it is a Rube Goldberg machine. You train a separate reward model, keep four models in memory at once (policy, reference, reward, value), and run an on-policy RL loop that is famously twitchy — a slightly wrong KL coefficient and the model collapses into repeating "Thank you for your question!" forever. The natural question is whether all that machinery is actually necessary just to teach a model that humans prefer answer A over answer B.
 
@@ -876,7 +948,7 @@ flowchart LR
     C -->|max quality,<br/>online signal| E[RLHF: reward model + PPO/GRPO]
     D --> F[Aligned model]
     E --> F
-    F -.->|harder tasks:<br/>verifiable reward| G[RL for reasoning<br/>see 23.11]
+    F -.->|harder tasks:<br/>verifiable reward| G[RL for reasoning<br/>see 23.12]
 ```
 
 The practical decision rule: **start with DPO**. It is the default first-line alignment method now precisely because it is supervised, reproducible, and runs on a fixed dataset you can inspect and version. Reach for full RLHF with PPO (or GRPO) when you need the last few points of quality, when you have a live stream of fresh human feedback, or when the reward is something you can *check* rather than merely prefer — math correctness, passing unit tests, tool-call success — which is exactly the regime the next section is about.
@@ -885,7 +957,7 @@ The practical decision rule: **start with DPO**. It is the default first-line al
 DPO is offline and on a *fixed* dataset, so it can only re-rank responses that already appear in your preference pairs; it never explores new outputs the way PPO rollouts do. If your chosen/rejected pairs were generated by a weak model, DPO faithfully learns that weak model's ceiling. It also silently rewards verbosity — longer responses accumulate more (negative) log-prob terms in ways that bias the margin — which is the specific bug SimPO's length normalization was built to kill. Always log average response length during DPO training; a creeping upward trend is the canary.
 :::
 
-## 23.11 — Test-time compute and reasoning models
+## 23.12 — Test-time compute and reasoning models
 
 Every method so far spends its effort at *training* time and then answers in a single forward pass. But humans do not solve a hard integral or a logic puzzle in one glance — we scribble, backtrack, check. The insight behind reasoning models is that **spending more computation at inference time**, not just at training time, buys accuracy, and that this is often a better trade than making the model bigger.
 
@@ -958,7 +1030,7 @@ The headline result is the **test-time scaling law**: accuracy rises smoothly as
 Test-time compute is not free, and the curve bends. Doubling the thinking budget rarely doubles accuracy; returns diminish, and on easy questions long reasoning *wastes* tokens (and money, and latency) for no gain — sometimes it even talks itself out of a correct first instinct ("overthinking"). Reasoning traces can also be plausible-sounding but unfaithful: the stated chain is not always the true cause of the answer, so do not treat a confident-looking derivation as an audit trail. Match the thinking budget to problem difficulty rather than cranking it to the maximum by default.
 :::
 
-## 23.12 — Evaluating LLMs and agents
+## 23.13 — Evaluating LLMs and agents
 
 Training a model is only half the job; knowing whether it is actually good — and not merely good at *looking* good on your test — is the other half, and it is harder than it sounds. Evaluation is where most LLM projects quietly go wrong, because the failure modes are subtle and the metrics are easy to game.
 
@@ -1016,7 +1088,7 @@ Standardized safety benchmarks make this measurable. **HarmBench** provides a br
 A high refusal rate on a safety benchmark is necessary but not sufficient. Models can be safe against known jailbreaks and fall to novel ones, and over-aggressive safety tuning creates the opposite failure — refusing benign requests ("how do I kill a Python process?"), which is its own kind of broken. Report both the harmful-compliance rate *and* the false-refusal rate; a model that is safe only because it refuses everything is useless, and one that is helpful only because it refuses nothing is dangerous. For agents, always evaluate safety with tools *live* in a sandbox, because a harmful plan that never executes and a harmful plan that drains an account score identically on text-only evals.
 :::
 
-## 23.13 — Multimodal LLMs (vision-language models)
+## 23.14 — Multimodal LLMs (vision-language models)
 
 Everything so far assumed the model reads and writes only text. But the frontier assistants — GPT-4o, Claude, Gemini — also *see*: you paste a screenshot, a chart, a photo of a whiteboard, and the model reasons about it. A **multimodal LLM** (often a **vision-language model**, VLM) is, at heart, the same decoder-only transformer, fed extra tokens that come from an image instead of from text.
 
@@ -1063,7 +1135,7 @@ print(proc.decode(out[0], skip_special_tokens=True))
 **Rule of thumb:** for a vision task, first ask whether a *generative* VLM is even needed. Pure classification or retrieval over images is often better served by a plain **CLIP** embedding + nearest-neighbor — the same "small encoder beats giant generator for labeling" lesson from §23.1, now in pixels. Reach for a full VLM when the task needs *reasoning or free-form description* about the image, not just a label.
 :::
 
-## 23.14 — Long context and context engineering
+## 23.15 — Long context and context engineering
 
 Frontier models advertise 200K–1M-token context windows, but a window is not the same as *using* it well. Two separate problems hide here: **can** the model technically attend that far (an architecture/positional question), and **does** it actually pay attention to the middle of a long input (a behavioral question). Treating "huge context window" as "just dump everything in" is the most common — and most expensive — mistake in applied LLM work.
 
@@ -1091,7 +1163,7 @@ The practical consequence: in a RAG prompt, put the *most relevant* retrieved ch
 **Common mistake:** equating a bigger context window with better answers. A longer prompt is slower (attention and KV-cache cost rise with length), more expensive (you pay per input token), and can actually *lower* accuracy by burying the key fact in the middle and adding distractors the model may latch onto. Retrieve-and-rank beats stuff-everything almost every time.
 :::
 
-## 23.15 — Key takeaways
+## 23.16 — Key takeaways
 
 - An **LLM is a scaled-up Transformer**; almost all generative/chat models are **decoder-only** (causal attention, generates left-to-right), while **encoder-only** (BERT) models use bidirectional attention and excel at embeddings and classification.
 - Models read **tokens** (~4 chars each); token counts drive both **cost** and the **context window**. **Scaling laws** say quality improves as a smooth power law in parameters, data, and compute — and Chinchilla says scale them *together* (~20 tokens/param).
@@ -1100,11 +1172,12 @@ The practical consequence: in a RAG prompt, put the *most relevant* retrieved ch
 - **RAG** grounds answers in retrieved documents via embeddings + a vector DB (ingest → retrieve → generate), giving fresh, citable, private-data answers — but it is only as good as its retrieval.
 - **Alignment** tunes *how* the model responds via comparisons, not demonstrations: RLHF (reward model + PPO + KL leash) or the simpler, reward-model-free **DPO** and its preference-tuning cousins.
 - **Agents** wrap the LLM in a reason→act→observe loop using **function calling**, standardized by **MCP**, with vector-store long-term memory and optional multi-agent roles — and the tools must be guarded against mistakes and prompt injection.
-- **Inference** is the recurring cost: the **KV cache** ($O(T^2)\to O(T)$), **quantization** (int8/NF4/GPTQ/AWQ), **decoding strategies** (greedy/temperature/top-k/top-p), and **continuous batching via vLLM/PagedAttention**.
+- **Inference** is the recurring cost: the **KV cache** ($O(T^2)\to O(T)$), **quantization** (int8/NF4/GPTQ/AWQ), **decoding strategies** (greedy/temperature/top-k/top-p), **speculative decoding** (a draft model proposes, the target verifies in parallel — 2–3× faster, identical output), and **continuous batching via vLLM/PagedAttention**.
+- **Hallucinations** are confident wrong outputs — a direct result of optimizing for *probable* not *true* continuations, often worsened by alignment. Watch **calibration** (ECE), and lean on **RAG**, **self-consistency / semantic entropy**, abstention, and **post-hoc verification**; never trust a model's *verbalized* confidence.
 - **Multimodal LLMs** bolt a **vision encoder + projector** onto the same decoder, turning images into tokens the LLM attends over (LLaVA-style); for pure image labeling, a CLIP embedding still beats a full VLM.
 - **Long context** is two problems: *extending* the window (RoPE scaling — PI/NTK/YaRN) and *using* it well (the **lost-in-the-middle** sag). **Context engineering** — retrieve, rank, compress, cache — beats stuffing everything in.
 
-## 23.16 — See also
+## 23.17 — See also
 
 - **Attention & Transformers** — the architecture every LLM is built on (attention, masks, positional encoding).
 - **Natural Language Processing** — tokenization lineage, embeddings, and the language tasks LLMs subsume.

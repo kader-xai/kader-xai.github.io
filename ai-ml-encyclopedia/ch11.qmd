@@ -113,13 +113,21 @@ Most of the data in the world arrives without labels: customers without segments
 
 ## 11.1 — k-Means clustering
 
+**Plain intuition:** imagine scattering $k$ magnets onto a table covered with iron filings. Each filing sticks to its nearest magnet; then you slide each magnet to the middle of the pile it collected; the filings re-stick; you slide again. After a few rounds nothing moves, and each magnet sits at the heart of a tidy clump. That is k-Means: the magnets are **centroids**, the sliding is averaging, and the clumps are clusters.
+
 **k-Means** is the "centre of gravity" algorithm. You decide in advance on $k$ groups, and the method finds $k$ centre points (**centroids**) so that every data point belongs to the nearest centre and the total squared distance from points to their centres is as small as possible. The intuition: a good cluster is a tight ball around a central point, and the centre is just the average of the cluster's members.
 
 Formally, k-Means minimises the **within-cluster sum of squares** (WCSS), also called inertia:
 
 $$ J = \sum_{i=1}^{k} \sum_{x \in C_i} \lVert x - \mu_i \rVert^2 $$
 
-where $\mu_i$ is the centroid of cluster $C_i$. There is no closed-form solution, so it alternates two cheap steps until nothing moves — an instance of coordinate descent known as **Lloyd's algorithm**:
+where $\mu_i$ is the centroid of cluster $C_i$.
+
+**In words:** add up, for every point, the squared straight-line distance to its own cluster's centre; a smaller total means tighter, better clusters.
+
+**Also written:** $J = \sum_{j=1}^{n} \lVert x_j - \mu_{c(j)} \rVert^2$, where $c(j)$ is the index of the cluster point $x_j$ is assigned to — the same sum, re-indexed over points instead of over clusters.
+
+There is no closed-form solution, so it alternates two cheap steps until nothing moves — an instance of coordinate descent known as **Lloyd's algorithm**:
 
 ```{mermaid}
 flowchart TD
@@ -147,6 +155,20 @@ for _ in range(10):
     lab = d.argmin(1)                           # nearest centroid index
     c = np.array([X[lab==j].mean() for j in (0,1)]).reshape(-1,1)
 print(lab, c.ravel())                           # [0 0 0 1 1 1] [3.33 11.67]
+```
+
+In practice you reach for scikit-learn rather than hand-rolling the loop — it bundles k-means++ seeding, multiple restarts, and the inertia/silhouette diagnostics:
+
+```python
+from sklearn.cluster import KMeans
+from sklearn.preprocessing import StandardScaler
+from sklearn.metrics import silhouette_score
+
+Xs = StandardScaler().fit_transform(X)            # always scale first
+km = KMeans(n_clusters=2, init="k-means++", n_init=10, random_state=0).fit(Xs)
+print(km.labels_, km.cluster_centers_.ravel())
+print("inertia:", km.inertia_)                    # the WCSS J above
+print("silhouette:", silhouette_score(Xs, km.labels_))
 ```
 
 **Choosing $k$.** k-Means cannot tell you the number of clusters — you must supply it. Two standard diagnostics help. The **elbow method** plots WCSS against $k$: it always falls as $k$ grows (more centres can only fit tighter), but the rate of improvement bends sharply at the "right" $k$, forming an elbow. The **silhouette score** measures, for each point, how much closer it is to its own cluster ($a$, the mean distance to fellow members) than to the nearest other cluster ($b$, the mean distance to the closest neighbouring cluster): $s = (b - a) / \max(a, b)$, ranging from $-1$ to $+1$. Average silhouette near $1$ means tight, well-separated clusters; near $0$ means overlapping ones; negative means points are likely in the wrong cluster.
@@ -179,7 +201,39 @@ Always standardise features before k-Means. It uses Euclidean distance, so a fea
 k-Means assumes clusters are roughly spherical and equally sized. Give it crescents, rings, or one giant blob beside one tiny blob and it will slice them wrongly — it can only draw straight-line (Voronoi) boundaries. For non-convex shapes, reach for DBSCAN or spectral clustering below.
 :::
 
-## 11.2 — Hierarchical clustering
+## 11.2 — Mini-Batch k-Means & scaling to large data
+
+**Plain intuition:** full k-Means re-reads the *entire* dataset on every single update — like recounting all the votes in the country after each new ballot. **Mini-Batch k-Means** instead samples a small random handful of points each round, nudges the centroids a little toward that sample, and repeats. Each step is noisier but enormously cheaper, and the centroids still drift to almost the same place.
+
+When you have millions of points, the classic Lloyd loop becomes the bottleneck: every iteration touches all $n$ points at cost $O(nkd)$. Mini-Batch k-Means draws a random batch $B$ of size $b \ll n$ per iteration and updates only the centroids that batch touches, using a running per-centroid count to shrink the step over time:
+
+$$ \mu_i \leftarrow \mu_i + \frac{1}{n_i}\,(x - \mu_i) $$
+
+**In words:** when a batch point $x$ lands in cluster $i$, move that centroid a fraction of the way toward $x$ — and the fraction shrinks ($1/n_i$) as the centroid accumulates more members, so early points move it a lot and later points only fine-tune it.
+
+**Also written:** with learning rate $\eta_i = 1/n_i$, the update is $\mu_i \leftarrow (1-\eta_i)\,\mu_i + \eta_i\,x$ — a convex blend of the old centroid and the new point.
+
+The trade-off is quality for speed: mini-batch inertia is typically a few percent worse than full k-Means, but it runs an order of magnitude faster and streams data that does not fit in memory.
+
+| Variant | Per-iteration cost | Best when |
+|---|---|---|
+| Lloyd (full) | $O(nkd)$ | data fits in memory, $n$ up to ~$10^5$ |
+| Mini-Batch | $O(bkd)$, $b \ll n$ | $n$ in the millions, or streaming |
+
+```python
+from sklearn.cluster import MiniBatchKMeans
+mbk = MiniBatchKMeans(n_clusters=8, batch_size=1024,
+                      n_init=3, random_state=0).fit(X_big)
+print(mbk.inertia_)        # close to full KMeans, computed far faster
+```
+
+::: {.callout-warning}
+**Curse of dimensionality.** Every distance-based clusterer here — k-Means, DBSCAN, hierarchical — degrades in very high dimensions, because distances *concentrate*: the gap between the nearest and farthest neighbour shrinks toward zero, so "nearest centroid" stops being meaningful (see Chapter 7). The standard fix is to reduce dimensions first (PCA, UMAP) and cluster in the compact space.
+:::
+
+## 11.3 — Hierarchical clustering
+
+**Plain intuition:** think of a family tree built backwards. Start with everyone as their own twig; repeatedly join the two closest twigs into a branch; keep joining branches until a single trunk holds the whole family. The picture of who-merged-with-whom-and-when is the tree, and slicing it across at some height gives you a chosen number of family groups.
 
 Instead of committing to a fixed $k$, **hierarchical clustering** builds a whole *tree* of nested groupings, from every point in its own cluster up to one giant cluster containing everything. You then cut the tree at whatever height gives the number of clusters you want. The most common form is **agglomerative** (bottom-up): start with $n$ singleton clusters and repeatedly merge the two closest clusters until one remains. The mirror image is **divisive** (top-down): start with everything in one cluster and recursively split — rarer, because the splitting choice is more expensive.
 
@@ -204,6 +258,14 @@ The key choice is the **linkage** — how you measure the distance between two *
 | Average | mean over all cross-pairs | a balance of the two |
 | Ward | increase in total within-cluster variance after merging | round, k-Means-like clusters |
 
+Written out, the three geometric linkages between clusters $A$ and $B$ are:
+
+$$ d_{\text{single}}(A,B) = \min_{a\in A,\,b\in B} d(a,b), \quad d_{\text{complete}}(A,B) = \max_{a\in A,\,b\in B} d(a,b), \quad d_{\text{average}}(A,B) = \frac{1}{|A||B|}\sum_{a\in A}\sum_{b\in B} d(a,b) $$
+
+**In words:** single linkage rates two clusters by their *friendliest* pair, complete linkage by their *most distant* pair, and average linkage by the *typical* pair — which is why single chains along bridges, complete keeps clusters tight, and average sits between them.
+
+**Also written:** Ward linkage instead minimises $\Delta = \frac{|A||B|}{|A|+|B|}\,\lVert \mu_A - \mu_B \rVert^2$, the variance *increase* a merge would cause — favouring round, balanced clusters.
+
 **Worked example (single linkage).** Four points with pairwise distances: $d(A,B)=0.5$, $d(C,D)=0.7$, and all A/B-to-C/D distances around $2.4$–$3.0$. Merge the closest pair first: $A,B$ at height $0.5$. Next closest: $C,D$ at $0.7$. Finally the two clusters merge at the smallest cross-distance, $2.4$. Cutting the dendrogram anywhere between heights $0.7$ and $2.4$ yields exactly two clusters: $\{A,B\}$ and $\{C,D\}$.
 
 ```python
@@ -224,9 +286,11 @@ No need to guess $k$ up front: build the tree once, then read off the natural nu
 Single linkage suffers from **chaining**: a thin bridge of intermediate points can fuse two otherwise-distinct clusters into one straggly chain. When clusters may be connected by stray points, prefer complete or Ward linkage.
 :::
 
-## 11.3 — DBSCAN & density-based clustering
+## 11.4 — DBSCAN & density-based clustering
 
 k-Means and hierarchical clustering force *every* point into a cluster and struggle with odd shapes. **DBSCAN** (Density-Based Spatial Clustering of Applications with Noise) takes a completely different view: a cluster is a *dense region* of points separated from other dense regions by sparse gaps. Points in sparse regions are simply labelled **noise** and belong to no cluster — which makes DBSCAN a natural outlier detector too.
+
+**Plain intuition:** picture a satellite photo of a country at night. Cities glow as dense blobs of light, suburbs trail off into dimmer pixels at their edges, and a lone farmhouse twinkles in the dark countryside. DBSCAN walks the lit pixels: a pixel surrounded by enough close-by neighbours anchors a city (core), a dim edge pixel still touching a city joins it (border), and the isolated farmhouse is noise.
 
 It needs just two parameters: **eps** ($\varepsilon$), the neighbourhood radius, and **minPts**, the minimum number of points required within that radius for a region to count as dense. Each point is then classified:
 
@@ -257,6 +321,14 @@ flowchart LR
   <text x="218" y="32" text-anchor="middle" fill="#2b8a3e">border point joins core</text>
 </svg>
 
+The core-point test, stated as a formula over the $\varepsilon$-neighbourhood $N_\varepsilon(p) = \{q : d(p,q) \le \varepsilon\}$:
+
+$$ p \text{ is core} \iff |N_\varepsilon(p)| \ge \text{minPts} $$
+
+**In words:** a point is a core point exactly when at least *minPts* points (itself included) lie within radius $\varepsilon$ of it.
+
+**Also written:** $\sum_{q} \math[d(p,q) \le \varepsilon] \ge \text{minPts}$, counting how many points fall inside the ball of radius $\varepsilon$ around $p$.
+
 **Worked example.** Set $\varepsilon = 1.0$, $\text{minPts} = 3$. Points $\{(0,0),(0.5,0),(0,0.5),(0.5,0.5)\}$ each have $\geq 3$ neighbours within radius 1 → all core, all one cluster. A lone point at $(9,9)$ has zero neighbours → labelled noise. DBSCAN found one cluster and one outlier without ever being told there were two groups.
 
 ```python
@@ -269,17 +341,89 @@ print("core:", core, " noise:", [p for p in range(len(X)) if p not in core])
 # core: [0,1,2,3]  noise: [4]
 ```
 
+In production you call the library version, which returns `-1` for noise points:
+
+```python
+from sklearn.cluster import DBSCAN
+db = DBSCAN(eps=1.0, min_samples=3).fit(X)
+print(db.labels_)        # [0 0 0 0 -1]  → one cluster, last point is noise
+```
+
 Its great strengths: it finds **arbitrarily shaped** clusters (crescents, rings, spirals), discovers the number of clusters automatically, and isolates noise. Its weakness: a single global $\varepsilon$ struggles when clusters have very different densities, and choosing $\varepsilon$ in high dimensions is hard (distances concentrate — see Chapter 7). A common heuristic is to plot the sorted distance to each point's $k$-th nearest neighbour and set $\varepsilon$ at the "knee" of that curve.
 
 ::: {.callout-warning}
 A border point can be reachable from two different clusters; which one it lands in depends on processing order, so DBSCAN's labelling is not fully deterministic at the edges. The variant **HDBSCAN** removes the brittle global $\varepsilon$ by varying density thresholds across the data, and is usually the better modern default.
 :::
 
-## 11.4 — Spectral clustering
+## 11.5 — Mean-Shift clustering
+
+**Plain intuition:** drop a marble anywhere on a hilly landscape and it rolls uphill to the nearest peak. Mean-Shift does the same with data density: each point repeatedly steps toward the local "centre of mass" of its neighbours, climbing the density hill until it reaches a peak (a **mode**). Every point that climbs to the same peak forms one cluster — and you never had to say how many peaks there are.
+
+**Mean-Shift** is a density-based method like DBSCAN, but instead of growing clusters from dense seeds it *hunts for the modes* (peaks) of the underlying density. For each point $x$, it computes a weighted average of the points inside a window of radius (bandwidth) $h$, jumps the point to that average, and repeats until it stops moving. The single update is the **mean-shift vector**:
+
+$$ m(x) = \frac{\sum_{i} K\!\left(\frac{\lVert x - x_i \rVert}{h}\right) x_i}{\sum_{i} K\!\left(\frac{\lVert x - x_i \rVert}{h}\right)} - x $$
+
+**In words:** look at all neighbours within the window, weight nearer ones more heavily (via kernel $K$), take their weighted average position, and the shift is the move from where you are to that average — i.e. step toward the densest direction.
+
+**Also written:** the update is simply $x \leftarrow \dfrac{\sum_i K_i\,x_i}{\sum_i K_i}$ with $K_i = K(\lVert x - x_i\rVert / h)$ — replace each point with the kernel-weighted mean of its neighbourhood, then iterate.
+
+The only real knob is the **bandwidth** $h$: small $h$ finds many sharp modes (many clusters), large $h$ smooths the landscape into few broad ones. Like DBSCAN it discovers $k$ automatically and handles non-spherical blobs, but unlike DBSCAN it assigns *every* point to a mode (no noise label) and is markedly slower — roughly $O(n^2)$ per iteration.
+
+```{mermaid}
+flowchart TD
+    A[Place a window on each point] --> B[Compute kernel-weighted<br/>mean inside window]
+    B --> C[Shift point to that mean]
+    C --> D{Moved more<br/>than tolerance?}
+    D -- yes --> B
+    D -- no --> E[Points landing on the<br/>same mode = one cluster]
+```
+
+<svg viewBox="0 0 360 160" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif" font-size="10">
+  <path d="M20,140 C80,140 90,40 140,40 C190,40 200,140 250,140 C300,140 320,80 345,80" fill="none" stroke="#6366f1" stroke-width="2"/>
+  <circle cx="60" cy="140" r="4" fill="#f59e0b"/>
+  <circle cx="100" cy="100" r="4" fill="#f59e0b"/>
+  <circle cx="140" cy="40" r="6" fill="#ec4899"/>
+  <text x="140" y="28" text-anchor="middle" fill="#ec4899">mode (peak)</text>
+  <path d="M64,138 L96,104" stroke="#f59e0b" stroke-dasharray="2 2"/>
+  <path d="M104,98 L134,46" stroke="#f59e0b" stroke-dasharray="2 2"/>
+  <text x="180" y="155" text-anchor="middle" fill="currentColor">points climb the density curve to the peak</text>
+</svg>
+
+**Worked example (1-D).** Points $\{1, 2, 3, 9, 10, 11\}$ with a flat window of radius $h=2$. Start a tracker at $x=1$: its neighbours within 2 are $\{1,2,3\}$, mean $=2$, so it jumps to 2; from 2 the neighbours are again $\{1,2,3\}$, mean $2$ — settled on the mode $2$. A tracker starting at $9$ similarly converges to $10$. Two modes, $2$ and $10$ → two clusters, discovered without specifying $k$.
+
+```python
+from sklearn.cluster import MeanShift, estimate_bandwidth
+import numpy as np
+X = np.array([1,2,3,9,10,11], float).reshape(-1,1)
+bw = estimate_bandwidth(X, quantile=0.3)      # auto-pick a sensible h
+ms = MeanShift(bandwidth=bw).fit(X)
+print(ms.labels_)                              # [0 0 0 1 1 1]
+print(ms.cluster_centers_.ravel())             # ≈ [2. 10.]  the two modes
+```
+
+::: {.callout-tip}
+Mean-Shift's mode-finding is also the engine behind classic image segmentation and video object tracking (the "camshift" tracker): there each pixel is a point in colour-position space, and the modes are the coherent regions.
+:::
+
+::: {.callout-warning}
+Bandwidth $h$ is everything and there is no automatic best value — `estimate_bandwidth` is a heuristic, not an oracle. Too small fragments one cluster into many tiny modes; too large fuses distinct clusters. And at $O(n^2)$ per pass it does not scale to large $n$ without approximate nearest-neighbour tricks.
+:::
+
+## 11.6 — Spectral clustering
 
 Some clusters are obvious to the eye yet invisible to k-Means: two interlocking crescents, or three concentric rings. The points within a ring are *connected* (each near its neighbours) even though the ring's two ends are far apart in straight-line distance. **Spectral clustering** captures exactly this notion of connectivity by treating the data as a **graph** and clustering the graph rather than the raw coordinates.
 
+**Plain intuition:** forget distances on a map; think of a social network. Two people in the same tight friend-circle are "close" even if they live in different cities, because they are linked through mutual friends. Spectral clustering builds that friendship graph and then asks: where are the few weak links you could cut to split the network into well-connected communities?
+
 The recipe: build a similarity graph (e.g. connect each point to its $k$ nearest neighbours, or weight edges by a Gaussian $w_{ij} = \exp(-\lVert x_i - x_j\rVert^2 / 2\sigma^2)$). Form the **graph Laplacian** $L = D - W$, where $W$ is the weighted **adjacency matrix** and $D$ is the diagonal **degree matrix** ($D_{ii} = \sum_j w_{ij}$). Then take the eigenvectors of $L$ corresponding to its smallest eigenvalues, stack them as columns to give each point a new low-dimensional coordinate, and run plain k-Means on those coordinates.
+
+The Gaussian edge weight itself is worth reading:
+
+$$ w_{ij} = \exp\!\left(-\frac{\lVert x_i - x_j \rVert^2}{2\sigma^2}\right) $$
+
+**In words:** two points are strongly linked (weight near 1) when they sit close together, and the link fades smoothly toward 0 as they get farther apart, with $\sigma$ setting how quickly "far" kicks in.
+
+**Also written:** $w_{ij} = e^{-\gamma\,\lVert x_i - x_j\rVert^2}$ with $\gamma = 1/(2\sigma^2)$ — the same radial-basis (Gaussian) kernel used by RBF-kernel SVMs in Chapter 9.
 
 ```{mermaid}
 flowchart LR
@@ -305,6 +449,15 @@ print(np.round(vals,3))          # two ~0 eigenvalues → two clusters
 print(np.sign(np.round(vecs[:,1],3)))  # splits 1-3 from 4-6
 ```
 
+scikit-learn wraps the whole pipeline — graph construction, eigendecomposition, and the final k-Means — in one estimator:
+
+```python
+from sklearn.cluster import SpectralClustering
+sc = SpectralClustering(n_clusters=2, affinity="nearest_neighbors",
+                        n_neighbors=10, random_state=0).fit(X)
+print(sc.labels_)        # recovers tangled, non-convex clusters
+```
+
 | Aspect | k-Means | Spectral |
 |---|---|---|
 | Cluster shape | convex blobs only | any connectivity-defined shape |
@@ -320,11 +473,15 @@ The eigengap is a handy $k$-picker: count how many eigenvalues sit near zero bef
 Spectral clustering's eigendecomposition costs roughly $O(n^3)$, so it does not scale to very large $n$ without approximations (Nyström sampling, sparse neighbour graphs). It also inherits k-Means' need for a chosen $k$ and is sensitive to the similarity scale $\sigma$.
 :::
 
-## 11.5 — Gaussian Mixture Models & the EM algorithm
+## 11.7 — Gaussian Mixture Models & the EM algorithm
 
 k-Means makes **hard assignments**: a point belongs to exactly one cluster, full stop. But a customer might be 70% "budget shopper" and 30% "occasional splurger." A **Gaussian Mixture Model** (GMM) embraces this by modelling the data as having been generated from a blend of $k$ Gaussian (bell-curve) distributions, each with its own mean $\mu_i$, covariance $\Sigma_i$, and mixing weight $\pi_i$. Every point then gets a **soft assignment** — a probability of belonging to each component.
 
 $$ p(x) = \sum_{i=1}^{k} \pi_i \, \mathcal{N}(x \mid \mu_i, \Sigma_i), \qquad \sum_i \pi_i = 1 $$
+
+**In words:** the chance of seeing a point anywhere is a weighted stack of $k$ bell curves — each bell contributes in proportion to its mixing weight $\pi_i$, and the weights sum to 1 because every point must come from *some* component.
+
+**Also written:** as a two-step generative story — first draw a component $z \sim \text{Categorical}(\pi_1,\dots,\pi_k)$, then draw the point $x \sim \mathcal{N}(\mu_z, \Sigma_z)$; marginalising out $z$ gives the sum above.
 
 Because the covariance $\Sigma_i$ can be elongated and tilted, GMM clusters can be stretched ellipses, not just k-Means' spheres — a strict generalisation (k-Means is the limiting case of a GMM with identical spherical covariances and hard assignments).
 
@@ -342,6 +499,11 @@ We fit it with the **Expectation–Maximisation (EM)** algorithm, which mirrors 
 
 - **E-step** — given current parameters, compute each point's **responsibility** $\gamma_{ij}$, the posterior probability that component $i$ generated point $j$:
 $$ \gamma_{ij} = \frac{\pi_i\,\mathcal{N}(x_j \mid \mu_i, \Sigma_i)}{\sum_{l} \pi_l\,\mathcal{N}(x_j \mid \mu_l, \Sigma_l)} $$
+
+**In words:** how much credit does component $i$ get for point $j$? Take that component's bell-curve value at the point, scaled by its weight, and divide by the same quantity summed over *all* components so the credits add to 1.
+
+**Also written:** $\gamma_{ij} = P(z_j = i \mid x_j)$ — the Bayes posterior that hidden label $z_j$ equals $i$, with prior $\pi_i$ and likelihood $\mathcal{N}(x_j \mid \mu_i, \Sigma_i)$.
+
 - **M-step** — re-estimate each $\pi_i, \mu_i, \Sigma_i$ as responsibility-weighted averages over all points.
 
 Iterate; the data log-likelihood increases every round until convergence.
@@ -366,6 +528,17 @@ for x in (2.0, 5.0, 8.0):
 # 2→γ1≈1.000  5→γ1=0.500  8→γ1≈0.000
 ```
 
+The scikit-learn estimator fits the full EM loop and exposes both hard labels and the soft responsibilities, plus BIC for choosing $k$:
+
+```python
+from sklearn.mixture import GaussianMixture
+gmm = GaussianMixture(n_components=2, covariance_type="full",
+                      n_init=5, random_state=0).fit(X)
+hard = gmm.predict(X)               # most-likely component per point
+soft = gmm.predict_proba(X)         # the γ responsibilities, shape (n, k)
+print("BIC:", gmm.bic(X))           # lower BIC → better k (penalises extra components)
+```
+
 ::: {.callout-tip}
 Use a GMM when you want *calibrated uncertainty* about cluster membership, when clusters overlap, or when they are elliptical rather than round. Pick $k$ with an information criterion (BIC/AIC) that penalises extra components, not the elbow.
 :::
@@ -374,13 +547,17 @@ Use a GMM when you want *calibrated uncertainty* about cluster membership, when 
 EM only climbs to a *local* optimum, so the random initialisation matters (a common trick is to seed it with a k-Means run). With too little data per component, a Gaussian can collapse onto a single point — variance $\to 0$, likelihood $\to \infty$ — so regularise the covariances (a small floor on the diagonal).
 :::
 
-## 11.6 — Association rule mining (Apriori)
+## 11.8 — Association rule mining (Apriori)
 
 Clustering groups *rows* (data points); **association rule mining** instead finds patterns among *columns* — which items tend to co-occur. The classic setting is **market-basket analysis**: from thousands of shopping baskets, discover rules like "customers who buy bread and butter also buy milk." A rule is written $\{ \text{bread, butter} \} \Rightarrow \{ \text{milk} \}$, with an **antecedent** (left) and **consequent** (right).
 
 Three metrics judge a rule. For an itemset, **support** is the fraction of all baskets containing it. **Confidence** of $A \Rightarrow B$ is the fraction of baskets with $A$ that also contain $B$ — i.e. $P(B \mid A)$. **Lift** divides confidence by the baseline frequency of $B$, measuring how much *more* often $B$ appears given $A$ than by chance:
 
 $$ \text{supp}(A) = \frac{\#(A)}{N}, \quad \text{conf}(A\!\Rightarrow\!B) = \frac{\text{supp}(A \cup B)}{\text{supp}(A)}, \quad \text{lift} = \frac{\text{conf}(A\!\Rightarrow\!B)}{\text{supp}(B)} $$
+
+**In words:** support is how popular an itemset is overall; confidence is "given they bought $A$, how often do they also buy $B$"; lift compares that to how often $B$ sells anyway — above 1 means $A$ genuinely boosts $B$, not just that $B$ is popular.
+
+**Also written:** in probability terms, $\text{supp}(A)=P(A)$, $\text{conf}(A\Rightarrow B)=P(B\mid A)$, and $\text{lift}=\dfrac{P(A\cap B)}{P(A)\,P(B)}$ — the lift is exactly the ratio of the joint to the product of marginals, so lift $=1$ is statistical independence.
 
 Lift $> 1$ means positive association (they attract), $= 1$ means independence, $< 1$ means they repel.
 
@@ -420,13 +597,26 @@ conf=supp(A|B)/supp(A); lift=conf/supp(B)
 print(round(supp(A),2),round(conf,2),round(lift,2))  # 0.6 0.67 0.83
 ```
 
+At realistic scale you use the `mlxtend` library, which runs Apriori (or the faster FP-Growth) over a one-hot basket table and returns ranked rules:
+
+```python
+import pandas as pd
+from mlxtend.frequent_patterns import apriori, association_rules
+df = pd.DataFrame([{i:(i in b) for i in {'bread','butter','milk'}} for b in baskets])
+freq = apriori(df, min_support=0.4, use_colnames=True)
+rules = association_rules(freq, metric="lift", min_threshold=1.0)
+print(rules[["antecedents","consequents","support","confidence","lift"]])
+```
+
 ::: {.callout-warning}
 Confidence alone is misleading: a rule predicting a very common consequent (milk in 80% of baskets) will look "confident" even when the antecedent adds nothing. Always check lift (or the related *conviction*) to confirm a genuine, non-spurious association.
 :::
 
-## 11.7 — Self-Organizing Maps
+## 11.9 — Self-Organizing Maps
 
 A **Self-Organizing Map** (SOM), or Kohonen map, is a small neural network that does clustering *and* dimensionality reduction at once, with a twist the previous methods lack: it preserves **topology**. It lays out a fixed grid (say 10×10) of neurons, each carrying a weight vector the same size as your input. Through training, nearby neurons on the grid come to respond to similar inputs — so the grid becomes a 2-D map where neighbouring cells mean "similar," turning high-dimensional data into a picture you can read.
+
+**Plain intuition:** it is like flattening a globe onto a paper map. The globe (your high-dimensional data) gets pressed onto a 2-D sheet of cells, and the press is done so carefully that places near each other on the globe stay near each other on the paper. You lose exact distances but keep the *neighbourhoods* — which is exactly what makes a map readable.
 
 Training is **competitive learning**. For each input $x$:
 
@@ -434,6 +624,10 @@ Training is **competitive learning**. For each input $x$:
 2. Pull the BMU's weights toward $x$, *and* pull its grid-neighbours along too, by an amount that decays with grid distance and with time:
 $$ w_i \leftarrow w_i + \alpha(t)\, h_{bi}(t)\,(x - w_i) $$
 where $\alpha(t)$ is a shrinking learning rate and $h_{bi}(t)$ is a neighbourhood function (often Gaussian) centred on the BMU $b$, also shrinking over time. Early on, broad neighbourhoods organise the global layout; later, narrow ones fine-tune local detail.
+
+**In words:** every neuron near the winning cell on the grid takes a step toward the input — a big step if it is the winner or its close neighbour, a small step if it is far on the grid or it is late in training.
+
+**Also written:** $w_i \leftarrow (1 - \alpha h_{bi})\,w_i + \alpha h_{bi}\,x$ — a weighted blend of the neuron's old weight and the input, with blend strength $\alpha(t)\,h_{bi}(t)$.
 
 ```{mermaid}
 flowchart TD
@@ -469,17 +663,77 @@ for i in range(len(w)):
 print(w)                                        # [3.  5.5 8. ]
 ```
 
+For real maps the `minisom` library handles the grid, Gaussian neighbourhood, and decay schedules:
+
+```python
+from minisom import MiniSom
+import numpy as np
+som = MiniSom(x=10, y=10, input_len=X.shape[1], sigma=1.0, learning_rate=0.5)
+som.random_weights_init(X)
+som.train_random(X, num_iteration=1000)
+winners = np.array([som.winner(xi) for xi in X])   # (row,col) grid cell per point
+```
+
 SOMs shine for *visualising* high-dimensional data (gene expression, document collections, sensor states) on an interpretable 2-D grid, and unlike t-SNE or UMAP (Chapter 7) the trained map can place new points instantly. The cost is that the grid size and shape are hyperparameters, training is stochastic, and the resulting map is qualitative rather than a crisp partition.
 
 ::: {.callout-tip}
 Read a trained SOM like a terrain map: a **U-matrix** colours each cell by how different its weights are from its neighbours', so cluster boundaries show up as "ridges" of high difference between smooth "valleys" of similar cells.
 :::
 
-## 11.8 — Evaluating clusters: internal and external validation
+## 11.10 — Choosing an algorithm: cluster assumptions
+
+**Plain intuition:** there is no single "best" clusterer — each one quietly *assumes* a shape for what a cluster looks like, and it shines only when the data agrees. k-Means assumes round balls; DBSCAN assumes dense islands in a sparse sea; spectral assumes connected webs; GMM assumes overlapping ellipses. The skill is matching the assumption to the data, not memorising one default.
+
+Before picking, ask four questions: (1) Do I know $k$? (2) Are clusters convex blobs or arbitrary shapes? (3) Is there noise/outliers to isolate? (4) How big is the data? The table maps answers to methods:
+
+| Method | Needs $k$? | Cluster shape | Handles noise | Scale | Soft labels |
+|---|---|---|---|---|---|
+| k-Means | yes | convex, equal-size balls | no | very large (Mini-Batch) | no |
+| Hierarchical | no (cut later) | linkage-dependent | no | small–medium ($O(n^2)$) | no |
+| DBSCAN | no | arbitrary | yes (noise label) | medium–large | no |
+| Mean-Shift | no | arbitrary (density modes) | no | small ($O(n^2)$) | no |
+| Spectral | yes | any connected shape | no | small–medium ($O(n^3)$) | no |
+| GMM (EM) | yes (BIC) | ellipses | weakly (low-prob tail) | medium | yes |
+| SOM | grid size | topology map | no | medium–large | grid coords |
+
+```{mermaid}
+flowchart TD
+    A{Know k roughly?} -- no, want noise --> D[DBSCAN / HDBSCAN]
+    A -- no, want a tree --> H[Hierarchical]
+    A -- no, want modes --> M[Mean-Shift]
+    A -- yes --> B{Cluster shape?}
+    B -- round balls --> K[k-Means / Mini-Batch]
+    B -- ellipses + uncertainty --> G[GMM + EM]
+    B -- tangled / connected --> S[Spectral]
+```
+
+**Worked example (matching shape to method).** Two interleaved crescents: k-Means and a plain GMM both fail (they cut a straight or elliptical boundary through the middle), while DBSCAN and spectral clustering recover the two arcs cleanly. Three concentric rings: only DBSCAN and spectral succeed; the rings share a centre, so any centroid-based method collapses them. Three well-separated round Gaussian blobs of different sizes: k-Means may mis-slice the size imbalance, but a GMM with full covariances nails it and even reports membership probabilities.
+
+```python
+from sklearn.datasets import make_moons
+from sklearn.cluster import KMeans, DBSCAN
+from sklearn.metrics import adjusted_rand_score
+X, y = make_moons(n_samples=300, noise=0.05, random_state=0)
+print("k-Means ARI:", round(adjusted_rand_score(y, KMeans(2, n_init=10).fit_predict(X)),2))
+print("DBSCAN  ARI:", round(adjusted_rand_score(y, DBSCAN(eps=0.2).fit_predict(X)),2))
+# k-Means ARI ≈ 0.24 (cuts the crescents) ;  DBSCAN ARI ≈ 1.0 (recovers them)
+```
+
+::: {.callout-tip}
+When unsure, run two or three methods with different assumptions and compare on a validation metric (next section). Agreement across methods is a strong signal the structure is real; sharp disagreement tells you the cluster shape is unusual — and points you toward the density- or graph-based options.
+:::
+
+## 11.11 — Evaluating clusters: internal and external validation
 
 Unlike supervised learning, clustering has no answer key — so how do you know a clustering is *good*? Two families of metrics help. **Internal validation** uses only the data and the cluster labels, rewarding clusters that are tight inside and well-separated outside. **External validation** compares the clustering against known ground-truth labels (when you happen to have them, e.g. for benchmarking an algorithm).
 
-The most-used internal score is the **silhouette** (introduced in 11.1): for each point, $s = (b - a)/\max(a,b)$ where $a$ is its mean intra-cluster distance and $b$ the mean distance to the nearest other cluster; average over all points. Two more internal indices are common: the **Davies–Bouldin index** (average ratio of within-cluster scatter to between-cluster separation — *lower* is better) and the **Calinski–Harabasz index** (ratio of between-cluster to within-cluster variance — *higher* is better).
+The most-used internal score is the **silhouette** (introduced in 11.1): for each point, $s = (b - a)/\max(a,b)$ where $a$ is its mean intra-cluster distance and $b$ the mean distance to the nearest other cluster; average over all points.
+
+**In words:** compare how far a point sits from its own clustermates ($a$) against how far it sits from the nearest rival cluster ($b$); if the rival is much farther, $s$ is near $+1$ (good fit), if they tie, $s$ is near $0$ (on the border).
+
+**Also written:** $s = \begin{cases} 1 - a/b & a < b \\ 0 & a = b \\ b/a - 1 & a > b \end{cases}$ — the same formula, unpacked by which distance dominates.
+
+Two more internal indices are common: the **Davies–Bouldin index** (average ratio of within-cluster scatter to between-cluster separation — *lower* is better) and the **Calinski–Harabasz index** (ratio of between-cluster to within-cluster variance — *higher* is better).
 
 When ground truth exists, the **Adjusted Rand Index (ARI)** measures how often pairs of points are grouped consistently between your clustering and the truth, corrected for chance (1 = perfect, 0 = random). **Normalized Mutual Information (NMI)** instead measures how much knowing one labelling tells you about the other, scaled to $[0,1]$.
 
@@ -506,23 +760,39 @@ def sil(i):
 print([round(sil(i),2) for i in range(3)])   # [0.9, 0.9, 0.0]
 ```
 
+scikit-learn provides all five out of the box, so you can score a clustering in one line each:
+
+```python
+from sklearn.metrics import (silhouette_score, davies_bouldin_score,
+                             calinski_harabasz_score, adjusted_rand_score,
+                             normalized_mutual_info_score)
+print(silhouette_score(X2d, labels))            # internal, higher better
+print(davies_bouldin_score(X2d, labels))        # internal, lower  better
+print(calinski_harabasz_score(X2d, labels))     # internal, higher better
+print(adjusted_rand_score(y_true, labels))      # external, needs ground truth
+print(normalized_mutual_info_score(y_true, labels))
+```
+
 ::: {.callout-warning}
 Internal metrics encode their own bias: silhouette and Davies–Bouldin both reward compact, convex clusters, so they will rate a k-Means solution highly even when DBSCAN found the *truer* crescent-shaped clusters. Match the metric to the cluster shape you expect, and never trust a single number alone.
 :::
 
-## 11.9 — Key takeaways
+## 11.12 — Key takeaways
 
 - **Unsupervised learning finds structure without labels;** clustering is its core task — pick a similarity notion, then let geometry, density, graph connectivity, or probability reveal the groups.
 - **k-Means** is fast and simple but assumes spherical, equal-sized clusters and needs $k$; use k-means++ seeding and the elbow/silhouette to choose $k$.
+- **Mini-Batch k-Means** trades a little accuracy for an order-of-magnitude speed-up, making centroid clustering practical on millions of points and streams.
 - **Hierarchical clustering** builds a dendrogram you cut at any level — no $k$ needed up front — with linkage controlling cluster shape; $O(n^2)$ limits scale.
 - **DBSCAN** finds arbitrary shapes and labels noise via density (eps, minPts), with no preset $k$, but struggles with widely varying densities.
+- **Mean-Shift** climbs the density landscape to its modes, discovering $k$ automatically and handling non-spherical blobs, at $O(n^2)$ cost driven entirely by the bandwidth.
 - **Spectral clustering** clusters a similarity graph via the Laplacian's eigenvectors, recovering tangled, non-convex clusters that defeat k-Means — at $O(n^3)$ cost.
 - **GMMs + EM** give soft, probabilistic memberships and elliptical clusters, generalising k-Means; watch for local optima and collapsing variances.
 - **Apriori** mines association rules (support, confidence, lift) from transactions, pruning via downward closure; trust **lift**, not confidence alone.
 - **SOMs** are neural grids that cluster *and* preserve topology, ideal for 2-D visualisation of high-dimensional data.
+- **Choosing an algorithm** is choosing an assumption about cluster shape — match the method (and its validation metric) to round blobs, dense islands, or connected webs; run a few and compare.
 - **Validation** has no answer key: use internal scores (silhouette, Davies–Bouldin, Calinski–Harabasz) for structure and external ones (ARI, NMI) when ground truth exists — and match the metric to the expected cluster shape.
 
-## 11.10 — See also
+## 11.13 — See also
 
 - **Dimensionality Reduction** — PCA, t-SNE, and UMAP, the standard preprocessing and visualisation companions to clustering.
 - **AI, ML & the Learning Process** — where unsupervised learning fits among supervised and reinforcement paradigms.

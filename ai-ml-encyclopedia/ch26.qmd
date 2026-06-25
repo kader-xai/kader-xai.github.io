@@ -111,9 +111,24 @@ Recommender systems are the algorithms that decide what shows up next: the films
 🧭 **In context:** Applied ML Systems · used to predict which items a user will like and rank them · the one key idea: learn from the *pattern* of past interactions, not just item content — taste is contagious across similar users and items.
 :::
 
+**The big picture first.** Imagine a giant spreadsheet where every row is a person and every column is a movie, and almost every cell is blank because nobody watches everything. A recommender's whole job is to make smart guesses about the blanks, then show each person the items it guessed they'd love most. Every technique in this chapter — from averaging your neighbors' opinions, to factoring the spreadsheet into hidden "taste axes," to billion-item neural retrieval — is a different strategy for filling those blanks well and ranking the top few fast.
+
+```{mermaid}
+flowchart LR
+  IN[Sparse who-liked-what] --> CF[Collaborative filtering]
+  IN --> CB[Content-based]
+  CF --> HY[Hybrid]
+  CB --> HY
+  HY --> FUN[Retrieve then rank]
+  FUN --> EV[Evaluate top-k, A/B test]
+  EV --> SHOW[Personalized ranked list]
+```
+
 ## 26.1 — Collaborative filtering
 
 **Collaborative filtering (CF)** is the founding idea: recommend to you what *people like you* already liked, using only the matrix of past interactions — no knowledge of what the items actually *are*. The name says it: many users collaborate, by rating, to filter the catalog for each other.
+
+**Intuition first.** Think of how you ask friends for movie tips. You don't ask *everyone* — you ask the friends whose taste has matched yours before, and you weight a recommendation from your taste-twin more than one from a friend you usually disagree with. Collaborative filtering is exactly that instinct, turned into arithmetic and run over millions of "friends" you've never met.
 
 Everything starts from the **user–item matrix** $R$. Rows are users, columns are items, and entry $R_{ui}$ is the rating (or interaction) user $u$ gave item $i$. The defining feature is that it is **sparse** — most users have touched a tiny fraction of items, so most cells are empty. Recommendation is, formally, **matrix completion**: fill in the blanks, then recommend the highest predicted entries that are still empty.
 
@@ -135,6 +150,10 @@ $$
 \hat R_{ui}=\bar r_u+\frac{\sum_{v\in N}\text{sim}(u,v)\,(R_{vi}-\bar r_v)}{\sum_{v\in N}\lvert\text{sim}(u,v)\rvert}.
 $$
 
+**In words:** my predicted rating for an item is my own average rating, nudged up or down by how my similar neighbors rated that item *relative to their own averages*, with more-similar neighbors getting more say.
+
+**Also written:** $\hat R_{ui}=\bar r_u+\dfrac{\sum_{v\in N} s_{uv}\,d_{vi}}{\sum_{v\in N}|s_{uv}|}$ where $s_{uv}=\text{sim}(u,v)$ and $d_{vi}=R_{vi}-\bar r_v$ is neighbor $v$'s mean-centered rating of item $i$.
+
 Suppose we want Ann's rating of *Alien*. Bo has $\text{sim}=0.97$ and rated *Alien* a 1 (Bo's mean $\bar r_{Bo}=2.75$, so a deviation of $-1.75$); Cy has $\text{sim}=0.42$ and rated *Alien* a 5 (Cy's mean $3.75$, deviation $+1.25$). With Ann's mean $\bar r_{Ann}=3.33$:
 
 $$
@@ -153,19 +172,45 @@ flowchart LR
   E --> F[Predicted rating -> rank empties]
 ```
 
+```python
+# Item-based CF from scratch with scikit-learn cosine similarity
+import numpy as np
+from sklearn.metrics.pairwise import cosine_similarity
+
+R = np.array([[5,4,0,1,0],[4,5,1,0,1],[1,0,5,4,5],[0,1,4,5,4]], float)
+item_sim = cosine_similarity(R.T)             # 5x5 item-item similarity
+def predict(u, i):                            # weighted avg over items u has rated
+    rated = R[u] > 0
+    w = item_sim[i, rated]
+    return (w @ R[u, rated]) / (np.abs(w).sum() + 1e-9)
+print(round(predict(0, 2), 2))                # Ann x Alien
+```
+
 ### Matrix factorization / latent factors
 
-Neighborhood methods compare raw rows or columns. **Matrix factorization (MF)** instead compresses the matrix. It assumes each user and each item lives in the same small **latent factor** space of dimension $k$ (think hidden axes like "action ↔ drama," "mainstream ↔ niche"). User $u$ becomes a vector $p_u\in\mathbb{R}^k$, item $i$ a vector $q_i\in\mathbb{R}^k$, and the predicted rating is their dot product:
+Neighborhood methods compare raw rows or columns. **Matrix factorization (MF)** instead compresses the matrix.
+
+**Intuition first.** Instead of comparing whole rows of the spreadsheet, MF guesses a handful of *hidden dials* behind everyone's taste — say a "how much action vs. drama" dial and a "mainstream vs. niche" dial. Each person is a setting of those dials, and so is each movie. If your dials and a movie's dials line up, you'll probably like it. MF learns both sets of dials at once, using only the cells we actually observed.
+
+It assumes each user and each item lives in the same small **latent factor** space of dimension $k$ (think hidden axes like "action ↔ drama," "mainstream ↔ niche"). User $u$ becomes a vector $p_u\in\mathbb{R}^k$, item $i$ a vector $q_i\in\mathbb{R}^k$, and the predicted rating is their dot product:
 
 $$
 \hat R_{ui}=p_u\cdot q_i=\sum_{f=1}^{k}p_{uf}\,q_{if}.
 $$
+
+**In words:** how much I'll like an item is how well my hidden-taste vector lines up with the item's hidden-trait vector — multiply the matching dials and add them up.
+
+**Also written:** $\hat R_{ui}=p_u^\top q_i=\langle p_u, q_i\rangle$; stacked over all users and items this is the matrix product $\hat R = PQ^\top$.
 
 We learn $p,q$ only from *observed* entries by minimizing squared error with regularization (this is the famous form from the Netflix Prize):
 
 $$
 \min_{p,q}\sum_{(u,i)\in\text{observed}}\big(R_{ui}-p_u\cdot q_i\big)^2+\lambda\big(\lVert p_u\rVert^2+\lVert q_i\rVert^2\big).
 $$
+
+**In words:** choose the user and item vectors that make the predicted ratings match the ratings we actually saw as closely as possible, while penalizing oversized vectors so the model doesn't overfit.
+
+**Also written:** $\min_{P,Q}\;\lVert M\odot(R-PQ^\top)\rVert_F^2+\lambda(\lVert P\rVert_F^2+\lVert Q\rVert_F^2)$, where $M$ is the 0/1 observed-mask, $\odot$ is elementwise product, and $\lVert\cdot\rVert_F$ is the Frobenius norm.
 
 ```python
 import numpy as np
@@ -183,6 +228,24 @@ print((P@Q.T).round(1))          # full matrix, blanks now filled
 
 The magic: two users who never rated the *same* film can still match, because both map to nearby latent vectors. MF generalizes where neighborhood methods see no overlap. Under the hood this is the same low-rank idea as the SVD in **Dimensionality Reduction** — we are finding a few hidden axes that explain most of the rating variance, just fit only on the cells we actually observed.
 
+In practice you rarely hand-roll SGD. A library like `surprise` (or `implicit` for the implicit case in §26.4) gives you a tuned, bias-aware SVD in a few lines:
+
+```python
+# Same idea, production-style, with the `surprise` library
+from surprise import SVD, Dataset, Reader
+from surprise.model_selection import cross_validate
+reader = Reader(rating_scale=(1, 5))
+data = Dataset.load_builtin('ml-100k')        # MovieLens 100k
+algo = SVD(n_factors=50, reg_all=0.05)        # biased matrix factorization
+cross_validate(algo, data, measures=['RMSE'], cv=3, verbose=True)
+```
+
+A common refinement adds **bias terms** so the model can say "this user rates everything high" or "this item is universally loved" separately from the taste match: $\hat R_{ui}=\mu+b_u+b_i+p_u\cdot q_i$.
+
+**In words:** start from the global average rating, add an offset for how generous this user is and an offset for how well-liked this item is, then add the taste-match on top.
+
+**Also written:** $\hat R_{ui}=\mu+b_u+b_i+q_i^\top p_u$, with $\mu$ the overall mean and $b_u, b_i$ scalar user/item biases learned alongside the vectors.
+
 ### Cold-start
 
 The Achilles heel of all CF is **cold-start**: a brand-new user or item has an empty row or column, so there is nothing to collaborate on. A new movie nobody has rated cannot be matrix-factorized into a meaningful $q_i$. The standard escapes are to fall back to content features (next section), to popularity defaults, or to ask a few onboarding questions to seed the user vector.
@@ -195,6 +258,8 @@ Rule of thumb: start item-based and MF-based for warm users, but always keep a n
 
 **Content-based filtering** ignores the crowd and looks at the *items themselves*. Each item gets a feature vector — genres, tags, the TF-IDF of its description, brand, price band — and each user gets a **profile** built from the features of items they liked. Recommend items whose feature vectors are closest to the profile.
 
+**Intuition first.** This is the "you liked sci-fi, here's more sci-fi" friend — the one who recommends based on *what a thing is*, not who else liked it. It builds a little dossier of your tastes ("loves animated family films, hates horror") and matches new items against that dossier, never needing a single other person's opinion.
+
 Concretely: represent *Up* as `[animated=1, family=1, adventure=1, horror=0]`. If Ann liked *Up* and *Toy Story*, her profile is the average of their vectors, leaning heavily "family/animated." A new film is scored by cosine similarity to that profile. Crucially this needs **no other users**, so it sidesteps item cold-start — a brand-new movie with known genres can be recommended on day one.
 
 Walk it through with numbers. Say Ann liked two films with feature vectors *Up* $=[1,1,1,0]$ and *Toy Story* $=[1,1,0,0]$ over axes `[animated, family, adventure, horror]`. Her profile is the average, $[1,1,0.5,0]$. Now score two candidates: a kids' film *Coco* $=[1,1,1,0]$ and a slasher *Saw* $=[0,0,0,1]$.
@@ -205,6 +270,22 @@ $$
 $$
 
 *Coco* scores near-perfect, *Saw* scores zero — exactly the right ordering, computed without a single other user's data.
+
+A real text-based content recommender almost always builds those vectors with **TF-IDF** over item descriptions, then ranks by cosine — a handful of scikit-learn lines:
+
+```python
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.metrics.pairwise import cosine_similarity
+import numpy as np
+
+descs = ["animated family adventure", "animated family toys",
+         "gory slasher horror", "space horror thriller"]
+X = TfidfVectorizer().fit_transform(descs)          # item feature vectors
+liked = [0, 1]                                        # user liked items 0,1
+profile = np.asarray(X[liked].mean(axis=0))          # average of liked items
+scores = cosine_similarity(profile, X).ravel()
+print(scores.argsort()[::-1])                        # ranked item indices
+```
 
 The flip side is **over-specialization**: content-based systems keep serving more of what you already chose and rarely surprise you, because nothing in the model knows that fans of *Up* also unexpectedly love a certain documentary. It also can only use features you bothered to encode.
 
@@ -224,9 +305,13 @@ The common recipes:
 
 - **Weighted** — score = $\alpha\cdot\text{CF} + (1-\alpha)\cdot\text{content}$.
 - **Switching** — use content-based while a user/item is cold, switch to CF once enough interactions accumulate.
-- **Feature combination / model-based** — feed both collaborative signals (latent factors) and content features into one model (the wide-and-deep and two-tower architectures in §26.5 are exactly this).
+- **Feature combination / model-based** — feed both collaborative signals (latent factors) and content features into one model (the wide-and-deep and two-tower architectures in §26.6 are exactly this).
 
 A quick weighted example: for a candidate film, the CF model predicts a normalized score of $0.8$ and the content model $0.5$. With $\alpha=0.7$ the blend is $0.7(0.8)+0.3(0.5)=0.56+0.15=0.71$. As the user accumulates history you can dial $\alpha$ up toward CF, which is exactly the switching pattern made continuous.
+
+**In words:** the final score is a tunable mix of the crowd-based and content-based scores; the more you trust the crowd, the higher you set $\alpha$.
+
+**Also written:** $s_{ui}=\alpha\,s^{\text{CF}}_{ui}+(1-\alpha)\,s^{\text{content}}_{ui}$, a convex combination with $\alpha\in[0,1]$.
 
 ```{mermaid}
 flowchart TD
@@ -246,6 +331,8 @@ This switching pattern is the practical answer to cold-start from §26.1: lean o
 
 **Implicit feedback** is behavior you observe: clicks, watch time, purchases, dwell. It is abundant, but treacherous in two ways. First, there are **no true negatives**: not watching a film might mean dislike — or that the user never saw it. Absence is ambiguous. Second, a click is a noisy proxy for "liked."
 
+**Intuition first.** Explicit feedback is someone telling you "I loved it" (rare but clear). Implicit feedback is watching what they *do* — which is like inferring taste from a security camera: you see them pick up a product, but you can't tell if the products they *walked past* were rejected or simply never noticed. So implicit models trust the strong "did it a lot" signals and stay humble about the silent "never touched it" majority.
+
 So implicit models reframe the task. Instead of predicting a rating value, they predict a **preference** (interacted = 1) weighted by a **confidence** that grows with how much the user engaged. The classic objective (implicit-ALS) is:
 
 $$
@@ -254,13 +341,76 @@ $$
 
 where $r_{ui}$ is raw count (plays, clicks) and $\text{pref}_{ui}=\mathbb{1}[r_{ui}>0]$. Watched 50 times → high confidence it's a 1; never watched → low-confidence 0, not a hard "hates it."
 
+**In words:** push the model hard to predict 1 for things a user engaged with a lot, push it gently on things they never touched, and let a confidence weight (rising with engagement) decide how hard "hard" is.
+
+**Also written:** with $p_{ui}=\mathbb{1}[r_{ui}>0]$ and confidence $c_{ui}=1+\alpha r_{ui}$, minimize $\sum_{u,i} c_{ui}(p_{ui}-x_u^\top y_i)^2+\lambda(\sum_u\lVert x_u\rVert^2+\sum_i\lVert y_i\rVert^2)$ (Hu–Koren–Volinsky).
+
 Concretely with $\alpha=40$: a song played 3 times has confidence $c=1+40(3)=121$; a song played once has $c=41$; a never-played song has $c=1$. All three un-played and lightly-played items push the model, but the heavily-played one pushes ~120× harder — so the fit bends toward getting the strong signals right and barely cares about the ambiguous zeros.
+
+```python
+# Implicit-feedback MF with the `implicit` library (ALS), the production default
+import numpy as np, scipy.sparse as sp
+from implicit.als import AlternatingLeastSquares
+
+# rows = items, cols = users, values = interaction counts (plays/clicks)
+counts = sp.csr_matrix(np.array([[3,0,1],[0,5,0],[1,1,0],[0,0,8]], float))
+model = AlternatingLeastSquares(factors=16, regularization=0.1, alpha=40)
+model.fit(counts)                              # confidence c = 1 + alpha*count
+ids, scores = model.recommend(0, counts.T.tocsr()[0], N=2)  # for user 0
+print(ids, scores.round(2))
+```
 
 ::: {.callout-warning}
 Treating implicit data like explicit ratings — feeding raw click counts into a rating-prediction model and treating every un-clicked item as a confident 0 — is the most common beginner mistake. Un-observed is *not* negative. Use confidence weighting or sampled negatives instead.
 :::
 
-## 26.5 — Deep recommenders
+## 26.5 — Learning to rank: pointwise, pairwise, listwise
+
+Everything so far quietly predicted a *number* per item (a rating, a probability) and sorted by it. But a recommender is only ever judged on the **order** of its list, not on the raw scores — and optimizing per-item accuracy is a roundabout way to get a good order. **Learning to rank (LTR)** optimizes the ordering directly.
+
+**Intuition first.** Predicting exact ratings to sort a list is like measuring everyone's height to the millimeter just to line them up tallest-to-shortest — you only needed to know *who is taller than whom*. LTR skips the millimeters and learns the comparisons that actually determine the line-up.
+
+There are three flavors, differing in how much of the list each training signal sees:
+
+- **Pointwise** — score each item alone (regression/classification: "will this be clicked?"), then sort by score. Simplest; this is plain MF or a click-probability model. It optimizes the score, not the order.
+- **Pairwise** — learn from *pairs*: for a given user, the clicked item should outrank the un-clicked one. The loss penalizes every mis-ordered pair. **BPR (Bayesian Personalized Ranking)** is the canonical implicit-feedback version; **RankNet** the neural one.
+- **Listwise** — optimize a whole-list metric (like NDCG, §26.7) directly. **LambdaMART** — gradient-boosted trees driven by NDCG-aware gradients — is the long-time competition winner and a production staple.
+
+The BPR objective makes the pairwise idea concrete. For a user $u$, a positive (interacted) item $i$, and a sampled negative item $j$:
+
+$$
+\min_{\Theta}\;-\sum_{(u,i,j)}\ln\sigma\big(\hat x_{ui}-\hat x_{uj}\big)+\lambda\lVert\Theta\rVert^2.
+$$
+
+**In words:** make the model score the item the user actually engaged with higher than a random item they ignored, for as many such pairs as possible.
+
+**Also written:** maximize $\sum_{(u,i,j)}\ln\sigma(\hat x_{uij})$ with $\hat x_{uij}=\hat x_{ui}-\hat x_{uj}$ and $\sigma(z)=\tfrac{1}{1+e^{-z}}$ the logistic function — the log-likelihood that positives outrank sampled negatives.
+
+```python
+# Pairwise BPR-style ranking loss in PyTorch (the core of the idea)
+import torch, torch.nn.functional as F
+n_users, n_items, k = 100, 500, 32
+U = torch.nn.Embedding(n_users, k); I = torch.nn.Embedding(n_items, k)
+def bpr_loss(u, pos, neg):                     # u, pos, neg are id batches
+    s_pos = (U(u) * I(pos)).sum(1)             # score user-positive
+    s_neg = (U(u) * I(neg)).sum(1)             # score user-negative
+    return -F.logsigmoid(s_pos - s_neg).mean() # want s_pos > s_neg
+# sample a (user, clicked, not-clicked) triple per step and minimize this
+```
+
+```{mermaid}
+flowchart LR
+  P[Pointwise: score each item] --> S1[sort by score]
+  PA[Pairwise: clicked > skipped] --> S2[fewest mis-ordered pairs]
+  L[Listwise: optimize NDCG] --> S3[best whole-list order]
+  S1 --> O[Ranked list]
+  S2 --> O
+  S3 --> O
+```
+
+The rule of thumb: pointwise is the easy baseline, pairwise (BPR) is the implicit-feedback default, and listwise (LambdaMART) wins when you can afford to optimize the served metric end to end.
+
+## 26.6 — Deep recommenders
 
 When you have rich features and huge catalogs, neural networks take over. Four architectures dominate.
 
@@ -282,13 +432,35 @@ flowchart LR
   IE -.precomputed.-> ANN[(ANN index)]
 ```
 
+```python
+# Two-tower retrieval: each tower maps features into a shared embedding space
+import torch, torch.nn as nn
+class Tower(nn.Module):
+    def __init__(self, n_feat, d=64):
+        super().__init__()
+        self.net = nn.Sequential(nn.Linear(n_feat,128), nn.ReLU(), nn.Linear(128,d))
+    def forward(self, x): return nn.functional.normalize(self.net(x), dim=-1)
+
+user_tower, item_tower = Tower(20), Tower(40)
+u_emb = user_tower(torch.randn(1, 20))         # embed the request user once
+cat_emb = item_tower(torch.randn(100000, 40))  # precompute offline for catalog
+scores = u_emb @ cat_emb.T                      # ANN index does this at serve time
+top = scores.topk(10).indices
+```
+
 **Sequence / session-based** models treat your recent activity as an ordered sequence and predict the next item — RNNs (GRU4Rec) or, now dominant, self-attention (SASRec, BERT4Rec, borrowing the machinery of **Attention & Transformers**). These shine when intent is *temporal*: what you want next depends on what you just did, even within an anonymous session with no long-term profile.
 
 **Wide-and-deep** trains two halves jointly: a **wide** linear part that memorizes specific feature crosses ("installed app X *and* viewing app Y"), and a **deep** part that generalizes via embeddings. Memorization plus generalization in one model — Google's recipe for app and play-store ranking.
 
-## 26.6 — Candidate generation vs ranking
+::: {.callout-note appearance="simple"}
+🧩 **Where each fits:** NCF and wide-and-deep are usually **ranking** models (precise scores on a short list); two-tower is a **retrieval** model (fast recall over the whole catalog); sequence models can play either role. The next section is the funnel that ties them together.
+:::
+
+## 26.7 — Candidate generation vs ranking
 
 You cannot score a billion items per request with a heavy model. Production recommenders are therefore a **funnel** of two (or more) stages.
+
+**Intuition first.** It's hiring for one job with a million applicants. You don't interview everyone — a cheap résumé filter cuts the pile to a few hundred (don't accidentally drop a great candidate), then expensive in-depth interviews carefully rank the finalists. Recommenders do the same: a cheap recall stage, then a costly precision stage.
 
 **Candidate generation (retrieval)** cheaply narrows billions to a few hundred — two-tower ANN lookups, item-based co-occurrence, simple recall rules. Optimized for *recall*: don't miss good items; a few junk ones are fine.
 
@@ -303,7 +475,16 @@ flowchart LR
 
 The split is purely about compute economics: spend cheap models on the many, expensive models on the few. Put rough numbers on it: a heavy ranker costing 1 ms per item over a billion items would be $10^6$ seconds (~12 days) per request — absurd. Retrieve 500 cheap candidates first and the same ranker spends 500 ms, which is shippable. That single funnel decision is what makes web-scale recommendation possible at all.
 
-## 26.7 — Evaluation: precision@k, recall@k, NDCG, MAP
+<svg viewBox="0 0 360 200" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif" font-size="11">
+  <polygon points="20,20 340,20 250,70 110,70" fill="#6366f1" fill-opacity="0.25" stroke="currentColor"/>
+  <polygon points="110,75 250,75 205,125 155,125" fill="#22c55e" fill-opacity="0.3" stroke="currentColor"/>
+  <polygon points="155,130 205,130 190,175 170,175" fill="#f59e0b" fill-opacity="0.35" stroke="currentColor"/>
+  <text x="180" y="45" text-anchor="middle" fill="currentColor">Catalog ~1e9 — cheap retrieval (recall)</text>
+  <text x="180" y="105" text-anchor="middle" fill="currentColor">~500 — heavy ranker (precision)</text>
+  <text x="180" y="160" text-anchor="middle" fill="currentColor">~10 shown</text>
+</svg>
+
+## 26.8 — Evaluation: precision@k, recall@k, NDCG, MAP
 
 Recommenders are evaluated on the **top-$k$** list a user actually sees, not on every prediction. We hide some of a user's known-liked items, generate a ranked list, and ask how well the list recovers them.
 
@@ -311,6 +492,16 @@ Recommenders are evaluated on the **top-$k$** list a user actually sees, not on 
 - **Recall@k** — of all relevant items, what fraction made the top $k$. "Did we catch the good ones?"
 - **MAP (Mean Average Precision)** — averages precision measured at each relevant hit, rewarding putting hits *earlier*; then averaged over users.
 - **NDCG (Normalized Discounted Cumulative Gain)** — the rank-sensitive gold standard. Each hit's gain is discounted by $1/\log_2(\text{rank}+1)$, so a hit at position 1 counts far more than at position 10, then normalized by the ideal ordering so the score is in $[0,1]$.
+
+**The NDCG formula, made explicit.** With relevance $rel_r$ at rank $r$:
+
+$$
+\text{DCG@}k=\sum_{r=1}^{k}\frac{rel_r}{\log_2(r+1)},\qquad \text{NDCG@}k=\frac{\text{DCG@}k}{\text{IDCG@}k}.
+$$
+
+**In words:** add up the relevance of each recommended item, but shrink each item's contribution the further down the list it sits; then divide by the best score a perfect ordering could have gotten, so 1.0 means flawless.
+
+**Also written:** for binary relevance, $\text{DCG@}k=\sum_{r=1}^{k}\frac{\mathbb{1}[\text{hit at }r]}{\log_2(r+1)}$, and IDCG is the same sum evaluated on the ideal ranking (all relevant items first).
 
 **Worked example.** Recommend 5 items; relevant set is `{B, D, E}`. The list is `[A, B, C, D, F]` → hits at ranks 2 and 4.
 
@@ -338,21 +529,50 @@ def ndcg_at_k(rec, rel, k):
 print(round(ndcg_at_k(['A','B','C','D','F'], {'B','D','E'}, 5), 2))  # 0.5
 ```
 
+<svg viewBox="0 0 360 170" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif" font-size="10">
+  <text x="10" y="14" fill="currentColor">DCG weight by rank: 1/log2(r+1) — earlier hits count more</text>
+  <g>
+    <rect x="20"  y="30" width="40" height="100" fill="#22c55e" fill-opacity="0.5" stroke="currentColor"/>
+    <rect x="75"  y="55" width="40" height="75"  fill="#38bdf8" fill-opacity="0.5" stroke="currentColor"/>
+    <rect x="130" y="80" width="40" height="50"  fill="#6366f1" fill-opacity="0.5" stroke="currentColor"/>
+    <rect x="185" y="95" width="40" height="35"  fill="#f59e0b" fill-opacity="0.5" stroke="currentColor"/>
+    <rect x="240" y="105" width="40" height="25" fill="#ec4899" fill-opacity="0.5" stroke="currentColor"/>
+  </g>
+  <text x="40"  y="145" text-anchor="middle" fill="currentColor">r1: 1.00</text>
+  <text x="95"  y="145" text-anchor="middle" fill="currentColor">r2: 0.63</text>
+  <text x="150" y="145" text-anchor="middle" fill="currentColor">r3: 0.50</text>
+  <text x="205" y="145" text-anchor="middle" fill="currentColor">r4: 0.43</text>
+  <text x="260" y="145" text-anchor="middle" fill="currentColor">r5: 0.39</text>
+</svg>
+
 ### Pitfalls: popularity bias, filter bubbles, feedback loops
 
 Good offline numbers can hide structural rot. **Popularity bias**: the easiest way to score well is to recommend blockbusters everyone likes, which buries the long tail and makes the system useless for niche taste. **Filter bubbles**: content-based and over-tuned personalization keep narrowing what you see until you're trapped in your own echo. **Feedback loops** are the deepest trap — the model recommends an item, that recommendation *causes* the click, the click becomes training data confirming the model, and the bias compounds. The system trains on data it generated. Counter with diversity terms, exploration (showing uncertain items to gather honest signal), de-biasing of logged data, and — non-negotiably — **online A/B tests**, because offline metrics computed on biased logs flatter the very behavior that produced them.
+
+```{mermaid}
+flowchart LR
+  M[Model recommends item] --> C[User clicks what was shown]
+  C --> L[Click logged as 'liked']
+  L --> T[Trains the next model]
+  T --> M
+  T -.bias compounds each cycle.-> B[Long tail buried]
+```
 
 ::: {.callout-warning}
 A model that scores high offline on logged clicks may simply have learned to re-rank what was *already shown*. Offline metrics are necessary but never sufficient — confirm lift with a live A/B test before trusting it.
 :::
 
-## 26.8 — A worked similarity example
+## 26.9 — A worked similarity example
 
 Similarity is the atom under both neighborhood CF and content-based filtering, so it is worth computing one by hand. The default for sparse preference vectors is **cosine similarity** — the angle between two vectors, ignoring magnitude:
 
 $$
 \cos(a,b)=\frac{a\cdot b}{\lVert a\rVert\,\lVert b\rVert}.
 $$
+
+**In words:** measure how aligned two preference vectors point, regardless of how long they are — 1 means identical direction (same taste), 0 means unrelated, and the magnitudes (how much someone rates overall) are divided out.
+
+**Also written:** $\cos(a,b)=\dfrac{\sum_i a_i b_i}{\sqrt{\sum_i a_i^2}\,\sqrt{\sum_i b_i^2}}=\hat a\cdot\hat b$, the dot product of the unit-normalized vectors $\hat a=a/\lVert a\rVert$, $\hat b=b/\lVert b\rVert$.
 
 Take three users over four films, rated 1–5 (0 = unseen):
 
@@ -388,17 +608,18 @@ A practical refinement: subtract each user's mean rating before taking cosine (*
 Pick the metric to match the data: centered cosine (Pearson) for explicit ratings to cancel rater bias; plain cosine or Jaccard for implicit binary clicks where there is no scale to center.
 :::
 
-## 26.9 — Key takeaways
+## 26.10 — Key takeaways
 
 - Collaborative filtering learns from the **user–item matrix** alone; recommendation is **matrix completion** over a very sparse matrix.
 - **Matrix factorization** maps users and items into a shared **latent space**; a dot product predicts ratings and generalizes across users with no overlapping items.
 - **Content-based** uses item features (handles new items, no crowd needed) but over-specializes; **hybrid** systems blend or switch to cover each method's blind spot — including **cold-start**.
 - **Implicit feedback** has no true negatives: weight by confidence, never treat un-clicked as a confident dislike.
+- **Learning to rank** optimizes the *order* directly — pointwise (baseline), pairwise (BPR), listwise (LambdaMART) — because a recommender is judged on its ranking, not its raw scores.
 - Scale demands a **funnel**: cheap **candidate generation** (two-tower + ANN) for recall, then an expensive **ranking** model for top-precision.
 - Evaluate on the top-$k$ list with **precision@k, recall@k, MAP, NDCG** — but offline scores are corrupted by **popularity bias and feedback loops**, so confirm lift with **online A/B tests**.
 - **Cosine / centered-cosine similarity** is the shared primitive under neighborhood CF and content filtering.
 
-## 26.10 — See also
+## 26.11 — See also
 
 - **[Dimensionality Reduction]** — matrix factorization and latent factors are the same SVD-flavored idea applied to ratings.
 - **[Attention & Transformers]** — the engine behind modern sequence/session recommenders (SASRec, BERT4Rec).

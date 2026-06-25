@@ -119,6 +119,10 @@ Formally, we want to minimize a **loss function** $L(\theta)$ over parameters $\
 
 $$\theta_{t+1} = \theta_t - \eta \, \nabla L(\theta_t)$$
 
+**In words:** the next parameter value is the current one nudged a small amount $\eta$ *against* the slope, because the gradient points uphill and we want to go down.
+
+**Also written:** $\theta \leftarrow \theta - \eta\, g$ where $g = \partial L/\partial \theta$ (assignment form), or componentwise $\theta_{t+1}^{(j)} = \theta_t^{(j)} - \eta\,\frac{\partial L}{\partial \theta^{(j)}}$.
+
 The scalar $\eta > 0$ is the **learning rate** (or step size): how big a step we take. Too small and we crawl; too large and we overshoot and diverge.
 
 **Worked example.** Minimize $L(\theta) = \theta^2$, whose gradient is $L'(\theta) = 2\theta$ with a minimum at $\theta^\* = 0$. Start at $\theta_0 = 4$ with $\eta = 0.1$:
@@ -154,10 +158,24 @@ print(gd(lambda t: 2*t, 4.0))   # -> ~0.046, heading to 0
 
 For a convex bowl GD is guaranteed to reach the global minimum given a small enough $\eta$. For the bumpy, non-convex surfaces of deep learning it finds a *local* minimum — which, empirically, is usually good enough.
 
+A useful theoretical anchor: if $L$ is convex and **$\beta$-smooth** (its gradient does not change faster than $\beta$), then any fixed step size $\eta \le 1/\beta$ guarantees the loss never increases and converges. This is why the maximum safe learning rate is tied to the curvature of the loss — the steeper the curvature, the smaller the safe step.
+
 ::: {.callout-tip}
 **Rule of thumb:** if your loss oscillates or explodes, your learning rate is too high — cut it by 3–10×. If it decreases painfully slowly in a smooth line, it is too low.
 :::
 
+```python
+# PyTorch: the same downhill step, but autograd computes the gradient for you
+import torch
+theta = torch.tensor([4.0], requires_grad=True)
+opt = torch.optim.SGD([theta], lr=0.1)
+for _ in range(20):
+    opt.zero_grad()
+    loss = (theta**2).sum()   # L(theta) = theta^2
+    loss.backward()           # fills theta.grad with dL/dtheta = 2*theta
+    opt.step()                # theta <- theta - lr * theta.grad
+print(theta.item())           # -> heading to 0
+```
 
 ::: {.viz-wrap}
 **🎮 Try it — Objective Functions**
@@ -185,9 +203,17 @@ If the loss is an average over examples, $L(\theta) = \frac{1}{N}\sum_{i=1}^N \e
 
 $$\theta_{t+1} = \theta_t - \eta \, \nabla \ell_{i_t}(\theta_t)$$
 
+**In words:** instead of averaging the slope over all examples, look at just one randomly-picked example, trust its slope, and step. On average those single-example slopes point the same way as the true one.
+
+**Also written:** $\theta \leftarrow \theta - \eta\, g_{i}$ with $g_i = \nabla \ell_i(\theta)$ and $i \sim \text{Uniform}(1,\dots,N)$.
+
 In practice we use a **mini-batch** of $B$ examples (say 32–512) — a middle ground that smooths the noise and exploits vectorized hardware:
 
 $$\theta_{t+1} = \theta_t - \eta \,\frac{1}{B}\sum_{i\in \mathcal{B}_t} \nabla \ell_i(\theta_t)$$
+
+**In words:** average the slope over a small handful of examples rather than one or all; the average is steadier than a single example but far cheaper than the whole dataset.
+
+**Also written:** $\theta \leftarrow \theta - \eta\,\bar g_{\mathcal{B}}$ where $\bar g_{\mathcal{B}} = \frac{1}{B}\sum_{i\in\mathcal{B}} g_i$ is the batch-mean gradient.
 
 **Why the noise helps.** The randomness is not just a cost — it is a feature. The jitter lets the optimizer escape shallow local minima and saddle points that would trap exact GD, and it acts as a mild regularizer. The picture below contrasts the smooth, deliberate GD path with the jittery SGD path; both reach the basin, but SGD does it with far cheaper steps.
 
@@ -218,6 +244,12 @@ The trade-off is variance: pure SGD ($B=1$) is cheap but jumpy, requiring a deca
 **Common mistake:** forgetting to shuffle the data between epochs. If batches always contain the same examples in the same order, the gradient noise becomes correlated and the model can learn the *ordering* rather than the signal.
 :::
 
+```python
+# scikit-learn: SGDClassifier is mini-batch SGD under the hood for linear models
+from sklearn.linear_model import SGDClassifier
+clf = SGDClassifier(loss="log_loss", learning_rate="optimal", max_iter=50)
+clf.fit(X_train, y_train)   # logistic regression trained by SGD
+```
 
 ::: {.viz-wrap}
 **🎮 Try it — SGD**
@@ -239,11 +271,19 @@ We keep a **velocity** vector $v$ that is an exponentially decaying running aver
 
 $$v_{t+1} = \beta v_t + \nabla L(\theta_t), \qquad \theta_{t+1} = \theta_t - \eta\, v_{t+1}$$
 
+**In words:** keep a running "memory" of which way you have been heading (the velocity), refresh it with the new slope, and step along that memory rather than along the raw slope. Steady directions build up speed; jittery ones cancel.
+
+**Also written:** as a single line, $\theta_{t+1} = \theta_t - \eta(\beta v_t + g_t)$; some libraries fold $\eta$ into the velocity, $v_{t+1} = \beta v_t + \eta g_t$, then $\theta_{t+1} = \theta_t - v_{t+1}$.
+
 The **momentum coefficient** $\beta$ (typically $0.9$) controls how much past velocity is retained. Consistent gradients add up, so along the valley floor the effective step grows; oscillating gradients across the walls cancel, so the zig-zag dampens. A rough intuition: with $\beta=0.9$ the velocity averages roughly the last $1/(1-\beta)=10$ gradients, so the effective step along a steady direction is up to ~10× larger than a single gradient step.
 
 **Nesterov accelerated gradient (NAG)** is a sharper variant. Instead of measuring the gradient where we currently stand, it first takes the momentum step to a *lookahead* point $\theta_t - \eta\beta v_t$ and measures the gradient *there*. This "look before you leap" correction lets it respond to upcoming curvature and brakes earlier when overshooting:
 
 $$v_{t+1} = \beta v_t + \nabla L(\theta_t - \eta\beta v_t), \qquad \theta_{t+1} = \theta_t - \eta v_{t+1}$$
+
+**In words:** peek ahead to where momentum is about to carry you, measure the slope *there* instead of where you are now, and use that more up-to-date slope — so you can hit the brakes before overshooting.
+
+**Also written:** equivalently, with the substitution $\tilde\theta_t = \theta_t - \eta\beta v_t$, NAG is often implemented as a "look-ahead" gradient evaluated at $\tilde\theta_t$.
 
 <svg viewBox="0 0 420 170" xmlns="http://www.w3.org/2000/svg">
   <path d="M30,150 Q210,150 390,150" fill="none" stroke="#ccc"/>
@@ -265,6 +305,12 @@ def momentum(grad, theta, lr=0.01, beta=0.9, steps=100):
 
 The cost is one extra parameter and a velocity buffer the size of $\theta$. The benefit is often a 5–10× speedup in ill-conditioned valleys, which is why momentum (and its descendants) underlie nearly every modern optimizer.
 
+```python
+# PyTorch: momentum and Nesterov are flags on the standard SGD optimizer
+import torch
+opt   = torch.optim.SGD(model.parameters(), lr=0.01, momentum=0.9)
+opt_n = torch.optim.SGD(model.parameters(), lr=0.01, momentum=0.9, nesterov=True)
+```
 
 ::: {.viz-wrap}
 **🎮 Try it — Momentum**
@@ -286,11 +332,19 @@ So far every parameter shares one global learning rate. But features differ wild
 
 $$G_t = G_{t-1} + g_t^2, \qquad \theta_{t+1} = \theta_t - \frac{\eta}{\sqrt{G_t}+\epsilon}\, g_t$$
 
+**In words:** keep a per-parameter running total of how big its gradients have been; the bigger that total, the more you shrink that parameter's step. Busy parameters slow down, quiet ones keep moving.
+
+**Also written:** elementwise, $\theta^{(j)}_{t+1} = \theta^{(j)}_t - \eta\,g^{(j)}_t \big/ \big(\sqrt{\textstyle\sum_{s\le t}(g^{(j)}_s)^2}+\epsilon\big)$.
+
 (all operations elementwise; $\epsilon\approx 10^{-8}$ avoids division by zero). Frequently-updated parameters accumulate a large $G$ and slow down; rarely-seen ones keep large steps. The fatal flaw: $G_t$ only ever grows, so the effective learning rate decays monotonically to zero and learning stalls.
 
 **RMSProp** fixes this by replacing the running *sum* with an exponentially-decaying *average*, so old gradients are forgotten:
 
 $$E[g^2]_t = \rho\, E[g^2]_{t-1} + (1-\rho)\, g_t^2, \qquad \theta_{t+1} = \theta_t - \frac{\eta}{\sqrt{E[g^2]_t}+\epsilon}\, g_t$$
+
+**In words:** track a *recent* average of squared gradients instead of an all-time sum, so the brake forgets stale history and never grinds to a halt.
+
+**Also written:** $\theta \leftarrow \theta - \eta\, g / (\text{RMS}(g)+\epsilon)$, where $\text{RMS}(g)=\sqrt{E[g^2]}$ is the root-mean-square of recent gradients — hence the name.
 
 with decay $\rho\approx 0.9$. The denominator now tracks *recent* gradient magnitude, so the step size adapts without dying. **AdaDelta** goes further and removes the global $\eta$ entirely by also tracking a running average of squared *updates*, making the method scale-free.
 
@@ -316,6 +370,13 @@ def rmsprop(grad, theta, lr=0.01, rho=0.9, eps=1e-8, steps=100):
 **Intuition:** the denominator $\sqrt{E[g^2]}$ is a per-parameter "volatility" estimate. Noisy, large-gradient directions get damped; quiet directions get amplified — an automatic, dimension-by-dimension learning-rate tuner.
 :::
 
+```python
+# PyTorch built-ins for the same family
+import torch
+opt_ada  = torch.optim.Adagrad(model.parameters(), lr=0.01)
+opt_rms  = torch.optim.RMSprop(model.parameters(), lr=0.01, alpha=0.9)  # alpha == rho
+opt_adel = torch.optim.Adadelta(model.parameters())                     # no lr needed
+```
 
 ::: {.viz-wrap}
 **🎮 Try it — AdaGrad**
@@ -337,9 +398,17 @@ It maintains two EMAs:
 
 $$m_t = \beta_1 m_{t-1} + (1-\beta_1) g_t, \qquad v_t = \beta_2 v_{t-1} + (1-\beta_2) g_t^2$$
 
+**In words:** keep two running averages — one of the gradient itself (which way am I heading?) and one of its square (how big and noisy is it?). The first gives momentum; the second gives a per-parameter brake.
+
+**Also written:** $m_t = \text{EMA}_{\beta_1}(g)$ and $v_t = \text{EMA}_{\beta_2}(g^2)$, the exponentially-weighted means of $g$ and $g^2$.
+
 Because $m$ and $v$ start at zero, they are biased toward zero early on. Adam applies a **bias correction** to undo this:
 
 $$\hat m_t = \frac{m_t}{1-\beta_1^t}, \qquad \hat v_t = \frac{v_t}{1-\beta_2^t}, \qquad \theta_{t+1} = \theta_t - \frac{\eta}{\sqrt{\hat v_t}+\epsilon}\,\hat m_t$$
+
+**In words:** early on the averages start near zero and underestimate the truth, so divide each by how much "warm-up" has happened ($1-\beta^t$) to rescale it back up, then step like momentum but with a per-parameter brake.
+
+**Also written:** the effective per-step rule is $\theta \leftarrow \theta - \eta\,\hat m_t / (\sqrt{\hat v_t}+\epsilon)$, i.e. a momentum step divided by a recent-volatility estimate.
 
 Typical defaults — $\beta_1=0.9$, $\beta_2=0.999$, $\eta=10^{-3}$ — work remarkably often, which is why Adam is the go-to first try.
 
@@ -363,6 +432,12 @@ def adam(grad, theta, lr=1e-3, b1=0.9, b2=0.999, eps=1e-8, steps=200):
 **Common mistake:** assuming Adam always beats SGD. For many vision tasks, well-tuned SGD-with-momentum generalizes *better* than Adam, even if Adam trains faster. A frequent fix is **AdamW**, which decouples weight decay from the adaptive step and often closes the gap.
 :::
 
+```python
+# PyTorch: Adam and its sibling AdamW (decoupled weight decay) are one-liners
+import torch
+opt  = torch.optim.Adam(model.parameters(),  lr=1e-3, betas=(0.9, 0.999))
+optw = torch.optim.AdamW(model.parameters(), lr=1e-3, weight_decay=0.01)  # transformer default
+```
 
 ::: {.viz-wrap}
 **🎮 Try it — Adam**
@@ -383,6 +458,10 @@ The learning rate is the single most important hyperparameter, and it rarely sho
 **Decay** schedules shrink $\eta$ as training proceeds. Common forms: **step decay** (multiply by $0.1$ every $K$ epochs), **exponential decay** ($\eta_t = \eta_0 e^{-\lambda t}$), and the popular **cosine annealing**, which eases the rate smoothly down to near zero along a cosine curve:
 
 $$\eta_t = \eta_{\min} + \tfrac{1}{2}(\eta_0-\eta_{\min})\left(1+\cos\frac{\pi t}{T}\right)$$
+
+**In words:** glide the learning rate from its starting value down to almost nothing along the smooth shape of a cosine curve — fast at first, gentle near the end, with no abrupt drops.
+
+**Also written:** with $\eta_{\min}=0$ this simplifies to $\eta_t = \tfrac{\eta_0}{2}\left(1+\cos\frac{\pi t}{T}\right)$, a half-cosine from $\eta_0$ down to $0$ over $T$ steps.
 
 **Warmup** does the opposite at the very start: it ramps $\eta$ up linearly from near zero over the first few hundred steps. Why? Early gradients (especially in transformers, where Adam's second-moment estimate is noisy at step 1) can be wild; a gentle warmup prevents an early blow-up. Warmup-then-cosine-decay is the standard recipe for training large models.
 
@@ -412,6 +491,15 @@ def cosine_warmup(step, base=1e-3, warmup=500, total=10000):
 **Rule of thumb (LR range test):** train for a few hundred steps while increasing $\eta$ exponentially and plot loss vs $\eta$. Pick a base rate a notch below where the loss starts to climb — a fast, reliable way to find a good starting point.
 :::
 
+```python
+# PyTorch: schedulers wrap any optimizer; step() them once per iteration/epoch
+import torch
+opt   = torch.optim.AdamW(model.parameters(), lr=1e-3)
+sched = torch.optim.lr_scheduler.CosineAnnealingLR(opt, T_max=10000)
+for step in range(10000):
+    opt.zero_grad(); loss = compute_loss(); loss.backward()
+    opt.step(); sched.step()      # decay the LR along a cosine curve
+```
 
 ::: {.viz-wrap}
 **🎮 Try it — Learning Rate Scheduling**
@@ -439,6 +527,10 @@ For a multivariate loss, the curvature is the **Hessian** $H = \nabla^2 L$, the 
 
 $$\theta_{t+1} = \theta_t - H^{-1}\, \nabla L(\theta_t)$$
 
+**In words:** instead of just stepping against the slope, first ask how the slope itself is bending (the curvature), and use that to rescale the step — big steps where the bowl is flat, small steps where it is sharply curved.
+
+**Also written:** $\theta \leftarrow \theta - H^{-1} g$; in 1-D this is the familiar Newton root-finding step $\theta \leftarrow \theta - L'(\theta)/L''(\theta)$.
+
 Multiplying by $H^{-1}$ rescales and rotates the gradient to account for the curvature — so it sails straight down a stretched valley that would make plain GD zig-zag. **Worked example:** for $L(\theta)=\tfrac12\theta^\top A\theta$ with $A$ positive-definite, $\nabla L = A\theta$ and $H=A$, so $\theta_1 = \theta_0 - A^{-1}(A\theta_0) = 0$ — Newton reaches the exact minimum of any quadratic in a *single* step.
 
 The catch: the Hessian is $n\times n$ for $n$ parameters. For a model with a million weights that is $10^{12}$ entries to form and invert — utterly infeasible. **Quasi-Newton** methods sidestep this by *building up an approximation* of $H^{-1}$ from the sequence of gradients observed, never computing the true Hessian.
@@ -452,6 +544,13 @@ The catch: the Hessian is $n\times n$ for $n$ parameters. For a model with a mil
 | BFGS | approx Hessian | $O(n^2)$ | medium smooth problems |
 | L-BFGS | approx (last $m$ steps) | $O(mn)$ | large smooth, full-batch |
 
+```python
+# scipy: L-BFGS-B is the standard smooth-objective solver; pass loss and gradient
+from scipy.optimize import minimize
+res = minimize(loss_fn, x0, jac=grad_fn, method="L-BFGS-B")
+print(res.x, res.fun)   # optimum and its loss value
+```
+
 ::: {.callout-warning}
 **Common mistake:** reaching for L-BFGS on a deep network trained with mini-batches. Its curvature estimate assumes consistent gradients; mini-batch noise corrupts it, and it usually underperforms plain Adam there.
 :::
@@ -462,9 +561,21 @@ Two classical ideas refine how we choose a direction and how far to step.
 
 **Line search** answers "how far?". Given a descent direction $d_t$, instead of a fixed $\eta$ we *search along the ray* $\theta_t + \alpha d_t$ for a step length $\alpha$ that decreases the loss enough. We rarely solve this exactly; instead we accept any $\alpha$ satisfying the **Wolfe conditions** — the **Armijo (sufficient decrease)** condition ensures the loss drops proportionally to the step, and the **curvature condition** rejects steps that are too short. A common implementation is **backtracking**: start with a big $\alpha$ and halve it until sufficient decrease holds.
 
+The Armijo sufficient-decrease condition, the workhorse of practical line search, reads
+
+$$L(\theta_t + \alpha d_t)\ \le\ L(\theta_t) + c_1\,\alpha\, \nabla L(\theta_t)^\top d_t,\qquad 0 < c_1 < 1$$
+
+**In words:** accept a step only if it actually lowers the loss by at least a small fraction $c_1$ of what the slope *predicted* it would — this rejects steps that are too greedy and barely help.
+
+**Also written:** with $\phi(\alpha)=L(\theta_t+\alpha d_t)$ and slope $\phi'(0)=\nabla L^\top d_t<0$, the condition is $\phi(\alpha)\le\phi(0)+c_1\alpha\,\phi'(0)$.
+
 **Conjugate gradient (CG)** answers "which direction?". The problem with steepest descent on an elongated quadratic is that consecutive gradient directions undo each other's progress. CG instead picks directions that are **conjugate** with respect to the Hessian $A$ — meaning $d_i^\top A\, d_j = 0$ for $i\neq j$ — so that optimizing along a new direction never spoils the gains from previous ones. The remarkable result: CG minimizes an $n$-dimensional quadratic in at most $n$ steps, using only gradients and vector operations (never forming $A^{-1}$). Each new direction blends the current gradient with the previous direction:
 
 $$d_{t+1} = -g_{t+1} + \beta_t d_t, \qquad \beta_t = \frac{g_{t+1}^\top g_{t+1}}{g_t^\top g_t}\ \text{(Fletcher–Reeves)}$$
+
+**In words:** the next search direction is "go downhill from here, but bend it a little toward the way you just came," with $\beta_t$ measuring how much the gradient shrank since the last step.
+
+**Also written:** the Polak–Ribière variant uses $\beta_t = \frac{g_{t+1}^\top (g_{t+1}-g_t)}{g_t^\top g_t}$, often more robust on non-quadratic losses.
 
 <svg viewBox="0 0 420 190" xmlns="http://www.w3.org/2000/svg">
   <ellipse cx="250" cy="100" rx="150" ry="55" fill="none" stroke="#ddd"/>
@@ -479,9 +590,21 @@ $$d_{t+1} = -g_{t+1} + \beta_t d_t, \qquad \beta_t = \frac{g_{t+1}^\top g_{t+1}}
 
 CG is the standard solver for large sparse linear systems $Ax=b$ (equivalently, minimizing a quadratic) and powers many scientific computing workloads. Nonlinear CG extends the idea to general losses, where it pairs naturally with line search.
 
+```python
+# scipy: conjugate gradient for a linear system, and nonlinear CG for general losses
+from scipy.sparse.linalg import cg
+x, info = cg(A, b)                                   # solve Ax = b
+from scipy.optimize import minimize
+res = minimize(loss_fn, x0, jac=grad_fn, method="CG")  # nonlinear CG
+```
+
 ## 3.9 — Convex optimization & duality
 
 A problem is **convex** if its objective is a convex function over a convex feasible set. A **convex function** is one that lies below any chord connecting two of its points — formally $f(\lambda x + (1-\lambda)y) \le \lambda f(x) + (1-\lambda)f(y)$ — a bowl with no bumps. Convexity is the dividing line between "easy" and "hard" optimization for one reason: **every local minimum of a convex function is a global minimum.** There are no traps; any downhill method that stops has found *the* answer.
+
+**In words:** pick any two points on the curve and draw the straight line between them; for a convex function the curve never pokes above that line. That "no bumps" shape is exactly what guarantees a single bottom.
+
+**Also written:** twice-differentiable functions are convex iff their Hessian is positive semidefinite everywhere, $\nabla^2 f(x)\succeq 0$ for all $x$.
 
 <svg viewBox="0 0 420 170" xmlns="http://www.w3.org/2000/svg">
   <path d="M30,150 Q120,-10 210,150" fill="none" stroke="#4c78a8" stroke-width="2"/>
@@ -500,6 +623,15 @@ Many cornerstone ML models are convex in their parameters — linear and ridge r
 **Why ML practitioners care:** if you can cast your problem as convex, you get guarantees — a unique global optimum, reproducible results, and a duality gap that *certifies* optimality. Deep learning gives those up in exchange for expressive power.
 :::
 
+```python
+# cvxpy: state a convex problem declaratively and a solver finds the global optimum
+import cvxpy as cp
+x = cp.Variable(2)
+prob = cp.Problem(cp.Minimize(cp.sum_squares(A @ x - b)),  # convex least squares
+                  [x >= 0, cp.sum(x) == 1])                # convex constraints
+prob.solve()
+print(x.value, prob.value)
+```
 
 ::: {.viz-wrap}
 **🎮 Try it — Convex Optimization**
@@ -520,6 +652,10 @@ How do you minimize a function when the answer must satisfy constraints — stay
 To minimize $f(x)$ subject to $g(x)=0$, form the **Lagrangian** by attaching the constraint with a multiplier $\lambda$:
 
 $$\mathcal{L}(x,\lambda) = f(x) + \lambda\, g(x)$$
+
+**In words:** glue the constraint onto the objective with a "price" $\lambda$ for breaking it, turning a constrained problem into an ordinary unconstrained one whose stationary points obey both the objective and the rule.
+
+**Also written:** for several constraints, $\mathcal{L}(x,\boldsymbol\lambda) = f(x) + \sum_k \lambda_k\, g_k(x)$.
 
 Setting $\nabla_x \mathcal{L}=0$ gives $\nabla f = -\lambda \nabla g$ (gradients parallel), and $\nabla_\lambda \mathcal{L}=0$ recovers the constraint $g(x)=0$. Solve the system for the constrained optimum.
 
@@ -543,6 +679,10 @@ Most methods move all parameters at once along the gradient. **Coordinate descen
 The appeal is that a one-dimensional minimization is frequently trivial even when the full problem is messy. The classic example is **LASSO** (L1-regularized regression). The L1 penalty $\lambda\sum|\theta_j|$ is non-differentiable at zero, which complicates gradient methods, but along a single coordinate the optimum has a clean closed form via the **soft-thresholding** operator:
 
 $$\theta_j \leftarrow \operatorname{sign}(z_j)\,\max(|z_j| - \lambda,\ 0)$$
+
+**In words:** take the unconstrained best value for one coordinate, then pull it toward zero by $\lambda$ — and if that pull would cross zero, snap it exactly to zero. That snapping is what makes LASSO drop features.
+
+**Also written:** the same operator is $S_\lambda(z) = \operatorname{sign}(z)\,(|z|-\lambda)_+$, where $(\cdot)_+ = \max(\cdot,0)$ is the positive part.
 
 where $z_j$ is the least-squares solution for coordinate $j$ holding the rest fixed. This shrinks small coefficients exactly to zero — automatically producing the sparse models LASSO is famous for. Sweeping over coordinates until convergence is the basis of **glmnet**, one of the fastest LASSO solvers in existence.
 
@@ -569,11 +709,22 @@ def coord_descent_lasso(X, y, lam, iters=100):
 
 Coordinate descent shines when per-coordinate updates are cheap and closed-form (LASSO, some SVMs). Its weakness: on problems where coordinates are strongly coupled, axis-aligned moves stall, and a gradient method that moves diagonally wins.
 
+```python
+# scikit-learn: Lasso is solved by coordinate descent internally
+from sklearn.linear_model import Lasso
+model = Lasso(alpha=0.1).fit(X, y)   # alpha plays the role of lambda
+print((model.coef_ != 0).sum(), "nonzero features")   # sparsity
+```
+
 ## 3.12 — Constrained optimization & linear programming
 
 When both the objective and all constraints are *linear*, the problem is a **linear program (LP)** — one of the most studied and widely deployed optimization models, running quietly behind logistics, scheduling, portfolio allocation, and network flow. The standard form is
 
 $$\min_x\ c^\top x \quad \text{subject to}\quad Ax \le b,\ \ x \ge 0$$
+
+**In words:** find the cheapest mix $x$ (cost-per-unit $c$) that respects a set of "no more than" limits and uses no negative quantities.
+
+**Also written:** maximization is the same problem with $-c$; the constraints $Ax\le b$ stack one inequality $a_i^\top x\le b_i$ per row $i$.
 
 The geometry is elegant. Each linear inequality carves out a half-space; their intersection is a convex polytope — a many-faceted gem — called the **feasible region**. The objective $c^\top x$ is a flat plane being pushed in the direction $-c$, and the key theorem is that an optimum always sits at a **vertex** (corner) of the polytope. So the search reduces to examining corners.
 
@@ -590,6 +741,14 @@ The geometry is elegant. Each linear inequality carves out a half-space; their i
 </svg>
 
 The **simplex method** (Dantzig, 1947) does exactly this: it walks from vertex to adjacent vertex, always improving the objective, until no neighbor is better. It is exponential in the worst case but blazingly fast in practice. **Interior-point methods** take a different route, cutting *through* the polytope's interior toward the optimum, with provable polynomial-time guarantees. When variables must be whole numbers (you cannot ship half a truck), it becomes an **integer program** — far harder (NP-hard), solved by branch-and-bound. LPs connect directly to the duality and KKT theory of the previous sections: every LP has a dual LP, and their optima coincide.
+
+```python
+# scipy: linprog solves LPs in standard min form (it minimizes c^T x)
+from scipy.optimize import linprog
+# maximize 3x+2y  ->  minimize -3x-2y, with x+y<=4 and x<=3
+res = linprog(c=[-3, -2], A_ub=[[1, 1], [1, 0]], b_ub=[4, 3], bounds=[(0, None)]*2)
+print(res.x, -res.fun)   # -> [3, 1]  optimum 11
+```
 
 ## 3.13 — Evolutionary / genetic optimization
 
@@ -624,7 +783,97 @@ Relatives include **evolution strategies** (mutating real-valued vectors, used f
 **Common mistake:** reaching for a genetic algorithm when a gradient is available. If you *can* differentiate the objective, gradient methods are orders of magnitude more sample-efficient — save evolution for the truly black-box cases.
 :::
 
-## 3.14 — Key takeaways
+```python
+# scipy: differential evolution optimizes a black-box objective with no gradient
+from scipy.optimize import differential_evolution
+res = differential_evolution(lambda v: (v[0]-2)**2 + (v[1]+1)**2, bounds=[(-5, 5)]*2)
+print(res.x, res.fun)   # -> ~[2, -1], near 0
+```
+
+## 3.14 — Subgradient & proximal methods
+
+Several of the most important ML losses are **not differentiable everywhere**: the L1 penalty $|\theta|$ has a corner at zero, the hinge loss of an SVM has a kink, ReLU networks have non-smooth points. Plain gradient descent stalls or oscillates at these corners because the gradient is undefined. Two ideas rescue us.
+
+**Subgradient descent** generalizes the gradient to a *set* of valid slopes at a kink. The intuition: at a corner of $|\theta|$ you can lay any line that stays below the function — every such slope is a legal "subgradient," and stepping against *any* of them still goes downhill. Formally a vector $g$ is a **subgradient** of convex $f$ at $x$ if
+
+$$f(y)\ \ge\ f(x) + g^\top(y-x)\quad\text{for all } y$$
+
+**In words:** $g$ is a subgradient if the straight line through $x$ with slope $g$ never rises above the function — a supporting line from below. At a smooth point there is exactly one such line (the gradient); at a corner there are many.
+
+**Also written:** the set of all such $g$ is the **subdifferential** $\partial f(x)$; for $f(\theta)=|\theta|$, $\partial f(0) = [-1, 1]$. The update is just $\theta_{t+1} = \theta_t - \eta_t\, g_t$ with $g_t \in \partial f(\theta_t)$.
+
+Subgradient descent works but is slow — it needs a decaying step size and has no real notion of "stop when the gradient is zero." **Proximal methods** are sharper: they split the loss into a smooth part $f$ and a simple non-smooth part $h$ (e.g. the L1 penalty), take an ordinary gradient step on $f$, then apply $h$ exactly through its **proximal operator**:
+
+$$\theta_{t+1} = \operatorname{prox}_{\eta h}\!\big(\theta_t - \eta\,\nabla f(\theta_t)\big),\qquad \operatorname{prox}_{\eta h}(z) = \arg\min_\theta\Big(h(\theta) + \tfrac{1}{2\eta}\|\theta - z\|^2\Big)$$
+
+**In words:** take a normal downhill step on the smooth part, then "clean up" with the messy part by finding the point that balances obeying $h$ against not moving too far from where you landed.
+
+**Also written:** this is **proximal gradient descent** (a.k.a. ISTA for LASSO); when $h=\lambda\|\theta\|_1$ the prox operator *is* the soft-thresholding $S_{\eta\lambda}$ of Section 3.11, which is why coordinate descent and proximal methods agree on LASSO.
+
+<svg viewBox="0 0 420 170" xmlns="http://www.w3.org/2000/svg">
+  <path d="M40,140 L210,30 L380,140" fill="none" stroke="#6366f1" stroke-width="2.5"/>
+  <line x1="120" y1="150" x2="300" y2="20" stroke="#f59e0b" stroke-width="1.6" stroke-dasharray="5 3"/>
+  <line x1="90" y1="135" x2="330" y2="120" stroke="#22c55e" stroke-width="1.6" stroke-dasharray="5 3"/>
+  <circle cx="210" cy="30" r="4" fill="#ec4899"/>
+  <text x="150" y="22" font-size="11" fill="#ec4899">kink: many supporting lines</text>
+  <text x="40" y="160" font-size="11" fill="#6366f1">f(θ) = |θ|</text>
+</svg>
+
+```python
+# Proximal gradient (ISTA) for LASSO: smooth step on the fit, soft-threshold the L1
+def ista_lasso(X, y, lam, lr=0.01, steps=500):
+    theta = np.zeros(X.shape[1])
+    for _ in range(steps):
+        grad = X.T @ (X @ theta - y)               # gradient of smooth part
+        z = theta - lr*grad                        # plain gradient step
+        theta = np.sign(z)*np.maximum(np.abs(z) - lr*lam, 0)  # prox = soft-threshold
+    return theta
+```
+
+Proximal methods are the backbone of modern sparse-learning and signal-processing solvers (LASSO, group LASSO, total-variation denoising); accelerated versions (**FISTA**) add Nesterov momentum on top for a further speedup.
+
+## 3.15 — Gradient checking & numerical gradients
+
+Every optimizer in this chapter is only as good as the gradient it is fed. A subtle bug in a hand-derived or hand-coded gradient produces an optimizer that *runs* and *reduces some loss* but converges to the wrong place — one of the most maddening failures in ML, because nothing crashes. **Gradient checking** is the cheap, decisive sanity test.
+
+The intuition: the derivative is the limit of "rise over run," so we can estimate it by literally nudging a parameter a tiny bit and measuring the change in loss. The **centered finite-difference** estimate is far more accurate than a one-sided one:
+
+$$\frac{\partial L}{\partial \theta_j}\ \approx\ \frac{L(\theta + \varepsilon e_j) - L(\theta - \varepsilon e_j)}{2\varepsilon}$$
+
+**In words:** to estimate the slope along one parameter, bump it up by a hair and down by a hair, see how much the loss moved, and divide by the total nudge — symmetric bumping cancels the leading error.
+
+**Also written:** with $e_j$ the unit vector for coordinate $j$, this is the second-order-accurate stencil; the one-sided version $\big(L(\theta+\varepsilon e_j)-L(\theta)\big)/\varepsilon$ is simpler but less accurate ($O(\varepsilon)$ vs $O(\varepsilon^2)$ error).
+
+Compute the analytic gradient $g_{\text{analytic}}$ and the numerical estimate $g_{\text{num}}$, then compare with a *relative* error (absolute error is meaningless across scales):
+
+$$\text{rel.err} = \frac{\|g_{\text{analytic}} - g_{\text{num}}\|}{\|g_{\text{analytic}}\| + \|g_{\text{num}}\| + \delta}$$
+
+A relative error below $\sim 10^{-7}$ means the gradient is almost certainly correct; above $\sim 10^{-4}$ signals a bug. Use $\varepsilon\approx 10^{-5}$: too large and the approximation is crude, too small and floating-point round-off dominates.
+
+```python
+def grad_check(loss, grad, theta, eps=1e-5):
+    g_analytic = grad(theta)
+    g_num = np.zeros_like(theta)
+    for j in range(len(theta)):
+        e = np.zeros_like(theta); e[j] = eps
+        g_num[j] = (loss(theta + e) - loss(theta - e)) / (2*eps)  # centered diff
+    rel = np.linalg.norm(g_analytic - g_num) / (
+          np.linalg.norm(g_analytic) + np.linalg.norm(g_num) + 1e-12)
+    return rel    # expect << 1e-5 if the analytic gradient is correct
+
+# PyTorch ships a rigorous checker for autograd-defined functions:
+# torch.autograd.gradcheck(fn, inputs, eps=1e-6, atol=1e-4)
+```
+
+::: {.callout-tip}
+**Practical workflow:** gradient-check on a *tiny* random input with double precision before any real training run. It is slow ($O(n)$ extra loss evaluations) so you do it once, not every step — but it catches the bug that would otherwise cost you a week of confusing experiments.
+:::
+
+::: {.callout-warning}
+**Common mistake:** gradient-checking through non-smooth points (ReLU at 0, L1 at 0) and panicking at the mismatch. Finite differences straddle the kink and disagree with the subgradient there — test at smooth points, or nudge inputs away from exact zeros.
+:::
+
+## 3.16 — Key takeaways
 
 - **Gradient descent** is the master algorithm: step in the negative-gradient direction; the **learning rate** is the make-or-break knob.
 - **SGD with mini-batches** trades exact gradients for cheap, noisy ones — the noise is both a speedup and a regularizer, and it is the default for deep learning.
@@ -633,9 +882,11 @@ Relatives include **evolution strategies** (mutating real-valued vectors, used f
 - **Newton/quasi-Newton (L-BFGS)** exploit curvature for fast convergence on smooth, full-batch problems but falter on noisy mini-batch training.
 - **Convexity** guarantees a global optimum; **duality** and the **KKT conditions** certify optimality and underpin SVMs and linear programming.
 - **Coordinate descent** wins when per-coordinate updates are closed-form (LASSO); **linear programming** solves linear-objective, linear-constraint problems at polytope vertices.
+- **Subgradient and proximal methods** handle non-smooth losses (L1, hinge); the prox operator for L1 is exactly soft-thresholding, tying together LASSO solvers.
+- **Gradient checking** with centered finite differences is the cheap insurance against a silently wrong gradient — verify once before trusting any optimizer.
 - **Evolutionary algorithms** are the fallback for black-box, non-differentiable objectives — general but sample-hungry.
 
-## 3.15 — See also
+## 3.17 — See also
 
 - **Calculus & Differentiation** — gradients, Hessians, and the chain rule that make these methods computable.
 - **Linear Algebra** — vectors, matrices, and the conditioning that determines how hard a loss surface is to optimize.

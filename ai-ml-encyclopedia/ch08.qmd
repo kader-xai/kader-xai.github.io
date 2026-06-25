@@ -121,6 +121,10 @@ Formally, with a data matrix $X$ (one row per example, a leading column of 1s fo
 
 $$ \text{RSS}(\beta) = \sum_{i=1}^{n} (y_i - x_i^\top \beta)^2 = \lVert y - X\beta \rVert^2 $$
 
+**In words:** add up the squared vertical misses between every point and the line, and pick the line that makes that total as small as possible.
+
+**Also written:** $\text{RSS}(\beta) = (y - X\beta)^\top (y - X\beta)$ — the same sum of squares expressed as a single dot product of the residual vector with itself.
+
 A **residual** is the leftover error $y_i - \hat{y}_i$ for one point — what the model failed to explain.
 
 Here is a fitted line over five points, with the residuals drawn as the vertical sticks OLS is shrinking:
@@ -151,6 +155,10 @@ The **normal equation** sets the gradient to zero and solves in closed form:
 
 $$ \hat{\beta} = (X^\top X)^{-1} X^\top y $$
 
+**In words:** the best coefficients are found by "undoing" the feature correlations ($X^\top X$) applied to how each feature lines up with the target ($X^\top y$).
+
+**Also written:** $\hat{\beta} = X^{+} y$, where $X^{+} = (X^\top X)^{-1}X^\top$ is the **Moore–Penrose pseudoinverse** — the same solution stated as a single projection of $y$ onto the column space of $X$.
+
 This is exact and needs no tuning, but inverting $X^\top X$ costs roughly $O(p^3)$ and the matrix can be ill-conditioned when features are collinear. It shines for small-to-medium $p$.
 
 **Gradient descent** instead walks downhill: start anywhere, repeatedly nudge $\beta$ opposite the gradient $-2X^\top(y - X\beta)$ scaled by a learning rate. It costs $O(np)$ per step and scales to millions of features, but you must choose the step size and number of iterations. (See **Optimization** for the full theory.)
@@ -168,6 +176,20 @@ print(X @ beta - y)    # residuals, should be small
 ```
 
 The fitted $\hat\beta \approx [44.4, 7.9]$ reads cleanly: a student studying zero hours is predicted ~44, and **each coefficient** is the change in $y$ per one-unit change in that feature, holding the others fixed — here +7.9 points per extra hour.
+
+In practice you reach for a library rather than hand-rolling the algebra. The scikit-learn equivalent handles the intercept, numerical stability, and prediction in three lines:
+
+```python
+from sklearn.linear_model import LinearRegression
+import numpy as np
+
+hours = np.array([1,2,3,4,5]).reshape(-1, 1)   # no manual 1s column needed
+score = np.array([52, 60, 67, 76, 84.])
+
+model = LinearRegression().fit(hours, score)
+print(model.intercept_, model.coef_)   # ~44.4, [~7.9]
+print(model.predict([[6]]))            # extrapolate to 6 hours -> ~91.8
+```
 
 **Assumptions** (the fine print that makes OLS valid and its uncertainty estimates trustworthy): linearity of the relationship; independent errors; **homoscedasticity** (constant error variance across the range — not a fan that widens); and roughly normal errors for inference. Violate them and the line may still predict, but p-values and confidence intervals lie.
 
@@ -209,21 +231,102 @@ The picture below shows the same noisy points fit three ways — the stiff line,
 
 The fix is not "never use high degree" but "test on data the model never saw." Choose the degree by cross-validation; the right complexity is the one that minimizes error on a held-out set, not on the training set. (Full treatment in **Model Evaluation & Tuning**.)
 
+In scikit-learn, the clean way to do polynomial regression is to chain feature expansion and a linear fit in a `Pipeline`, so the squared/cubed columns are generated automatically and consistently at predict time:
+
+```python
+from sklearn.pipeline import make_pipeline
+from sklearn.preprocessing import PolynomialFeatures
+from sklearn.linear_model import LinearRegression
+import numpy as np
+
+x = np.linspace(0, 1, 30).reshape(-1, 1)
+y = np.sin(2*np.pi*x).ravel() + 0.1*np.random.randn(30)
+
+model = make_pipeline(PolynomialFeatures(degree=4), LinearRegression())
+model.fit(x, y)
+print(model.predict([[0.25]]))   # curve can now bend to follow the sine
+```
+
 ::: {.callout-warning}
 A polynomial that fits training data perfectly is a red flag, not a trophy. Zero training error with a degree near $n-1$ almost always means you have fit noise and will generalize terribly.
 :::
 
-## 8.3 — Ridge / Lasso / Elastic Net
+## 8.3 — The bias–variance decomposition
 
-When you have many features (especially correlated ones), plain OLS coefficients can blow up to huge, unstable values — flip one data point and they swing wildly. **Regularization** fights this by adding a penalty on coefficient size to the loss, telling the model "fit the data, but keep yourself small." This deliberately accepts a little bias to cut a lot of variance.
+Sections 8.1–8.2 kept appealing to "bias" and "variance" as the two enemies of a good fit. Here is the precise statement that names them — the single most quoted equation for *why* models fail to generalize, and the lens through which every regularizer, ensemble, and cross-validation choice in this book is justified.
+
+The intuition: imagine refitting your model on many different random training sets drawn from the same world, then asking how it does on one fixed test point. Two things can go wrong. The model's *average* prediction across all those fits can sit off-target (**bias** — it is systematically wrong, like a bathroom scale that always reads 2 kg light). Or the predictions can scatter wildly from fit to fit (**variance** — the scale gives a different number each time you step on it). On top of both sits **irreducible noise** the data itself carries, which no model can ever remove.
+
+For squared-error loss, the *expected* test error at a point $x$ decomposes exactly into those three pieces:
+
+$$ \mathbb{E}\big[(y - \hat f(x))^2\big] = \underbrace{\big(\text{Bias}[\hat f(x)]\big)^2}_{\text{systematic miss}} + \underbrace{\text{Var}[\hat f(x)]}_{\text{instability}} + \underbrace{\sigma^2}_{\text{irreducible noise}} $$
+
+**In words:** how wrong you expect to be on a fresh point equals how far off your model is *on average*, squared, plus how much your model *jiggles* between training sets, plus the noise baked into the data that nobody can predict away.
+
+**Also written:** with $\text{Bias}[\hat f(x)] = \mathbb{E}[\hat f(x)] - f(x)$, the formula is $\big(\mathbb{E}[\hat f(x)] - f(x)\big)^2 + \mathbb{E}\big[(\hat f(x) - \mathbb{E}[\hat f(x)])^2\big] + \sigma^2$ — the same three terms written out as a squared average-miss, an expected squared deviation from the average, and the noise floor.
+
+The decomposition explains the whole over/underfitting story as a tug-of-war: simple models (low-degree polynomials, heavy regularization) have *high bias, low variance*; flexible models (high degree, no penalty) have *low bias, high variance*. Total error is a U-shaped curve, and the sweet spot is the bottom of the U — never zero, because $\sigma^2$ is a hard floor.
+
+<svg viewBox="0 0 340 200" xmlns="http://www.w3.org/2000/svg">
+  <line x1="40" y1="170" x2="320" y2="170" stroke="#888"/>
+  <line x1="40" y1="170" x2="40" y2="20" stroke="#888"/>
+  <path d="M50 40 Q150 150 310 165" stroke="#6366f1" stroke-width="2" fill="none"/>
+  <path d="M50 165 Q170 150 310 40" stroke="#f59e0b" stroke-width="2" fill="none"/>
+  <path d="M50 70 Q175 30 310 70" stroke="#e53e3e" stroke-width="2.5" fill="none"/>
+  <circle cx="178" cy="48" r="4" fill="#22c55e"/>
+  <text x="150" y="188" font-size="11" fill="#444">model complexity →</text>
+  <text x="8" y="100" font-size="11" fill="#444" transform="rotate(-90 12,100)">error</text>
+  <text x="245" y="160" font-size="9" fill="#6366f1">bias²</text>
+  <text x="250" y="48" font-size="9" fill="#f59e0b">variance</text>
+  <text x="120" y="40" font-size="9" fill="#e53e3e">total error</text>
+  <text x="150" y="44" font-size="9" fill="#22c55e">sweet spot</text>
+</svg>
+
+A small worked feel for the numbers: suppose at some test point your model is biased by $+3$ (predicts 3 too high on average), its predictions vary with standard deviation $4$ (variance $16$), and the data noise has $\sigma^2 = 5$. Expected squared error $= 3^2 + 16 + 5 = 9 + 16 + 5 = 30$. Halve the variance (e.g. by adding mild regularization, accepting bias rising to $4$) and you get $4^2 + 8 + 5 = 29$ — a *net win* even though you made the model more biased. That single trade is the entire justification for Ridge, Lasso, and bagging.
+
+```python
+import numpy as np
+from sklearn.tree import DecisionTreeRegressor
+
+# Estimate bias/variance empirically by refitting on many bootstrap samples.
+rng = np.random.default_rng(0)
+f = lambda x: np.sin(2*np.pi*x)            # true function
+x_test = np.array([[0.4]])
+preds = []
+for _ in range(200):
+    x = rng.random((40, 1))
+    y = f(x).ravel() + 0.1*rng.standard_normal(40)
+    preds.append(DecisionTreeRegressor(max_depth=8).fit(x, y).predict(x_test)[0])
+
+preds = np.array(preds)
+bias2 = (preds.mean() - f(x_test)[0,0])**2
+var   = preds.var()
+print(round(bias2, 4), round(var, 4))   # deep tree: tiny bias, large variance
+```
+
+::: {.callout-tip}
+You cannot measure bias and variance from a single train/test split — they are defined over the *distribution* of training sets. In practice cross-validation estimates their *sum* (the U-curve), and you tune complexity to minimize it. Lowering one term usually raises the other; the goal is the smallest total, not zero of either.
+:::
+
+## 8.4 — Ridge / Lasso / Elastic Net
+
+When you have many features (especially correlated ones), plain OLS coefficients can blow up to huge, unstable values — flip one data point and they swing wildly. **Regularization** fights this by adding a penalty on coefficient size to the loss, telling the model "fit the data, but keep yourself small." This deliberately accepts a little bias to cut a lot of variance — exactly the trade the previous section made precise.
 
 **Ridge regression (L2)** penalizes the sum of *squared* coefficients:
 
 $$ \min_\beta \; \lVert y - X\beta \rVert^2 + \lambda \sum_j \beta_j^2 $$
 
+**In words:** fit the data well *and* keep the coefficients small at the same time, with $\lambda$ deciding how much you care about smallness versus fit.
+
+**Also written:** $\min_\beta \lVert y - X\beta\rVert_2^2 + \lambda\lVert\beta\rVert_2^2$ — the penalty is the squared L2 norm of the coefficient vector.
+
 The strength $\lambda \ge 0$ is a knob: $\lambda = 0$ recovers OLS, large $\lambda$ shrinks all coefficients smoothly toward zero (but never exactly to zero). Ridge even has a closed form, $\hat\beta = (X^\top X + \lambda I)^{-1}X^\top y$ — the added $\lambda I$ also cures the non-invertibility that breaks OLS under collinearity.
 
 **Lasso (L1)** penalizes the sum of *absolute* values, $\lambda \sum_j |\beta_j|$. The kink in the absolute value at zero does something Ridge cannot: it drives many coefficients to *exactly* zero, performing automatic **feature selection** — the model hands you a shorter, sparser equation.
+
+**In words:** Lasso adds up the raw sizes (no squaring) of the coefficients and penalizes that, which has the side effect of switching weak features fully off.
+
+**Also written:** the full objective is $\min_\beta \lVert y - X\beta\rVert_2^2 + \lambda\lVert\beta\rVert_1$, where $\lVert\beta\rVert_1 = \sum_j|\beta_j|$ is the L1 norm.
 
 Why the geometry differs: the penalty defines a constraint region the solution must live in. L2's region is a circle (smooth), so the loss contours touch it at a slanted point with both coefficients nonzero. L1's region is a diamond with sharp corners on the axes, so contours tend to touch *at* a corner — where a coefficient is zero. That is the whole sparsity story in one picture:
 
@@ -244,6 +347,10 @@ Why the geometry differs: the penalty defines a constraint region the solution m
 
 **Elastic Net** simply adds both penalties, $\lambda(\alpha \sum|\beta_j| + (1-\alpha)\sum \beta_j^2)$. It gets Lasso's sparsity while handling groups of correlated features more gracefully (Lasso alone tends to pick one of a correlated group arbitrarily; Elastic Net keeps them together).
 
+**In words:** mix a little of both penalties — the L1 part still zeroes weak features, the L2 part stops correlated features from being dropped at random.
+
+**Also written:** $\min_\beta \lVert y - X\beta\rVert_2^2 + \lambda\big(\alpha\lVert\beta\rVert_1 + (1-\alpha)\lVert\beta\rVert_2^2\big)$, with the mixing parameter $\alpha\in[0,1]$ sliding from pure Ridge ($\alpha=0$) to pure Lasso ($\alpha=1$).
+
 ```python
 import numpy as np
 np.random.seed(0)
@@ -259,6 +366,19 @@ print(ridge(X, y, 0.0).round(2))   # OLS: noisy on the zero features
 print(ridge(X, y, 10.0).round(2))  # shrunk toward 0, smaller & stable
 ```
 
+The same experiment in scikit-learn shows Lasso's killer feature — it sets the four useless coefficients to *exactly* zero, recovering the sparse truth, and `LassoCV` even picks $\lambda$ for you by cross-validation:
+
+```python
+from sklearn.linear_model import LassoCV
+from sklearn.preprocessing import StandardScaler
+from sklearn.pipeline import make_pipeline
+
+# standardize first — penalties are scale-sensitive
+model = make_pipeline(StandardScaler(), LassoCV(cv=5)).fit(X, y)
+print(model[-1].coef_.round(2))   # ~[3, 0, 0, -2, 0, 0]: junk features zeroed
+print(model[-1].alpha_)           # the λ chosen by cross-validation
+```
+
 ::: {.callout-tip}
 Rule of thumb: reach for **Lasso** when you suspect most features are useless and want an interpretable subset; reach for **Ridge** when many features each contribute a little and are correlated; reach for **Elastic Net** when you want both and are unsure.
 :::
@@ -267,11 +387,15 @@ Rule of thumb: reach for **Lasso** when you suspect most features are useless an
 Regularization penalties depend on feature scale, so you *must* standardize features first — otherwise the penalty silently punishes large-unit features (like "income in dollars") far more than small-unit ones. Also, never penalize the intercept.
 :::
 
-## 8.4 — Logistic regression
+## 8.5 — Logistic regression
 
 Despite the name, **logistic regression** is a *classification* algorithm. The trick: instead of predicting a class directly, it predicts the *probability* of the positive class, then thresholds. To turn the unbounded linear score $z = x^\top\beta$ (which can be any real number) into a probability in $[0,1]$, it passes $z$ through the **sigmoid** (logistic) function:
 
 $$ \sigma(z) = \frac{1}{1 + e^{-z}}, \qquad \hat p = \sigma(x^\top\beta) $$
+
+**In words:** take the linear score, and squash it smoothly so that very negative scores become near-0 probabilities and very positive scores become near-1 probabilities.
+
+**Also written:** $\sigma(z) = \frac{e^{z}}{1 + e^{z}}$ — multiply top and bottom by $e^{z}$ to get the equivalent form often seen in textbooks.
 
 The sigmoid is an S-curve: very negative $z \to 0$, very positive $z \to 1$, and $z=0 \to 0.5$.
 
@@ -296,6 +420,10 @@ We do not fit it with least squares; we maximize the likelihood of the observed 
 
 $$ \mathcal{L}(\beta) = -\sum_i \big[ y_i \log \hat p_i + (1-y_i)\log(1-\hat p_i) \big] $$
 
+**In words:** punish the model by how surprised it is at the true labels — a confident wrong prediction (saying 0.99 when the answer was 0) is penalized enormously, a confident right one barely at all.
+
+**Also written:** $\mathcal{L}(\beta) = -\sum_i \log \hat p_i^{(y_i)}$, where $\hat p_i^{(y_i)}$ is the probability the model assigned to the *correct* class — the negative log-likelihood of the data.
+
 ```python
 import numpy as np
 def sigmoid(z): return 1/(1+np.exp(-z))
@@ -314,15 +442,33 @@ print(sigmoid(X @ beta).round(2))  # predicted pass-probabilities
 
 The gradient $X^\top(\hat p - y)$ is strikingly the same shape as linear regression's — predicted minus actual, times the inputs. That elegant parallel is no accident; both are members of the next section's family.
 
+In production you would call scikit-learn, which adds L2 regularization by default, multi-class support, and calibrated probabilities:
+
+```python
+from sklearn.linear_model import LogisticRegression
+import numpy as np
+
+hours = np.array([1,2,3,4,5,6]).reshape(-1, 1)
+passed = np.array([0,0,0,1,1,1])
+
+clf = LogisticRegression().fit(hours, passed)
+print(clf.predict_proba([[3.5]]))   # P(fail), P(pass) at the boundary region
+print(clf.coef_, clf.intercept_)    # slope = log-odds per study hour
+```
+
 ::: {.callout-warning}
 Logistic regression outputs probabilities, but with imbalanced classes the default 0.5 threshold can be terrible. Tune the threshold to your costs, and judge with ROC-AUC or precision/recall, not raw accuracy (see **Classification Algorithms** and **Model Evaluation & Tuning**).
 :::
 
-## 8.5 — Generalized Linear Models
+## 8.6 — Generalized Linear Models
 
 Linear and logistic regression look different but share a skeleton. **Generalized Linear Models (GLMs)** name that skeleton: every GLM keeps a *linear predictor* $\eta = x^\top\beta$, then connects it to the mean of the target through a **link function** $g$, with the target drawn from a chosen distribution suited to its type.
 
 $$ g(\mathbb{E}[y]) = x^\top\beta $$
+
+**In words:** run the features through a weighted sum as usual, but first pass the target's *mean* through a transform $g$ so the unbounded linear scale can match a probability, a count, or any constrained quantity.
+
+**Also written:** $\mathbb{E}[y] = g^{-1}(x^\top\beta)$ — the same relationship solved for the mean, where $g^{-1}$ (the *inverse link* or *mean function*) maps the linear score back to the response scale.
 
 The link function is the adapter that maps the constrained mean (a probability in $[0,1]$, a count $\ge 0$) onto the unbounded linear scale. Pick the distribution to match your target, and the link follows naturally:
 
@@ -335,6 +481,8 @@ The link function is the adapter that maps the constrained mean (a probability i
 
 **Poisson regression** is the everyday workhorse for counts — number of website visits, insurance claims, defects per batch. Because counts cannot be negative, it models $\log \mathbb{E}[y] = x^\top\beta$, so $\mathbb{E}[y] = e^{x^\top\beta}$ is always positive. A coefficient now reads multiplicatively: $e^{\beta_j}$ is the factor by which the expected count multiplies per unit of feature $j$ — e.g. $\beta=0.4$ means $e^{0.4}\approx 1.5$, a 50% increase in expected events.
 
+A concrete use: an insurer modeling claim counts per policy-year against driver age and mileage uses Poisson regression precisely because most policies file 0 or 1 claims, the data is right-skewed, and predictions must stay nonnegative — an ordinary linear fit would happily predict $-0.3$ claims.
+
 ```{mermaid}
 graph LR
   X[features x] --> L["linear predictor<br/>η = xᵀβ"]
@@ -346,11 +494,25 @@ graph LR
 
 The payoff of the GLM view is unification: one fitting procedure (maximum likelihood, solved by iteratively reweighted least squares), one mental model, swap the distribution and link to fit the data you actually have. It is the bridge from this chapter's specific models to a single principled framework.
 
+Swapping models in code is just as cheap as swapping them in theory — scikit-learn exposes `PoissonRegressor`, `GammaRegressor`, and `TweedieRegressor` with the same API as `LinearRegression`:
+
+```python
+from sklearn.linear_model import PoissonRegressor
+import numpy as np
+
+X = np.array([[1.],[2.],[3.],[4.],[5.]])
+y = np.array([1, 1, 2, 4, 8])             # counts
+
+glm = PoissonRegressor(alpha=0.0).fit(X, y)
+print(glm.coef_, glm.intercept_)          # slope read multiplicatively
+print(glm.predict([[6]]))                 # expected count, guaranteed > 0
+```
+
 ::: {.callout-tip}
 Choosing a GLM is mostly choosing the right distribution for your target: bounded 0/1 → Bernoulli/logit; nonnegative counts → Poisson/log; strictly positive skewed amounts (costs, durations) → Gamma. The link then almost picks itself.
 :::
 
-## 8.6 — Regression evaluation metrics
+## 8.7 — Regression evaluation metrics
 
 A fitted model is only as good as its error on data it has not seen — but "error" has several flavors, each telling a different story. Suppose a model predicts house prices with these five test cases (truth vs. prediction, in \$k):
 
@@ -364,6 +526,10 @@ A fitted model is only as good as its error on data it has not seen — but "err
 
 **MSE (Mean Squared Error)** averages the squared errors: $\frac1n\sum(y_i-\hat y_i)^2 = \frac{100+400+25+900+100}{5} = 305$. Squaring punishes big misses hard, so MSE is dominated by the worst predictions — good when large errors are especially costly, but sensitive to outliers, and its units are dollars-*squared*, which is hard to feel.
 
+**In words:** square every miss, average them; one big blunder counts far more than several small ones.
+
+**Also written:** $\text{MSE} = \frac1n\lVert y - \hat y\rVert_2^2$ — the squared length of the error vector, divided by the number of points.
+
 **RMSE (Root MSE)** takes the square root, $\sqrt{305} \approx 17.5$, returning to the original units (k\$). It is the most quoted regression metric: roughly "typical error size," in the units you care about, still outlier-sensitive.
 
 **MAE (Mean Absolute Error)** averages absolute errors: $\frac{10+20+5+30+10}{5} = 15$. It treats all errors proportionally, so it is robust to outliers and reads as "on average we are off by \$15k." When MAE ≪ RMSE, a few large errors are inflating RMSE.
@@ -372,11 +538,19 @@ A fitted model is only as good as its error on data it has not seen — but "err
 
 $$ R^2 = 1 - \frac{\sum_i (y_i - \hat y_i)^2}{\sum_i (y_i - \bar y)^2} = 1 - \frac{\text{SS}_{\text{res}}}{\text{SS}_{\text{tot}}} $$
 
+**In words:** compare your model's leftover error against the error of a dumb baseline that always guesses the average; $R^2$ is the fraction of that baseline error you managed to remove.
+
+**Also written:** $R^2 = 1 - \frac{\text{MSE}_{\text{model}}}{\text{Var}(y)}$ — dividing top and bottom by $n$ turns the sums into the model's mean squared error over the variance of the target.
+
 With $\bar y = 270$, $\text{SS}_{\text{tot}} = 70^2+20^2+30^2+10^2+50^2 = 9400$ and $\text{SS}_{\text{res}}=1525$, so $R^2 = 1 - 1525/9400 \approx 0.84$ — the model explains about 84% of the variation in price.
 
 **Adjusted $R^2$** fixes a flaw: plain $R^2$ never *decreases* when you add a feature, even a useless random one, so it tempts overfitting. Adjusted $R^2$ docks you for each predictor $p$ relative to sample size $n$:
 
 $$ R^2_{\text{adj}} = 1 - (1-R^2)\frac{n-1}{n-p-1} $$
+
+**In words:** start from $R^2$, then pay a tax for every feature you added — if a feature did not improve the fit enough to cover its tax, the adjusted score drops.
+
+**Also written:** $R^2_{\text{adj}} = 1 - \frac{\text{SS}_{\text{res}}/(n-p-1)}{\text{SS}_{\text{tot}}/(n-1)}$ — the same formula seen as $1$ minus a ratio of *variance estimates* that each divide by their degrees of freedom.
 
 It rises only if the new feature earns its keep, making it the honest metric for comparing models of different size.
 
@@ -391,6 +565,20 @@ r2   = 1 - np.sum(err**2)/np.sum((y-y.mean())**2)
 print(round(mse,1), round(rmse,2), mae, round(r2,3))  # 305.0 17.46 15.0 0.838
 ```
 
+scikit-learn ships all of these so you do not re-derive them, and they double as scoring functions for cross-validation and grid search:
+
+```python
+from sklearn.metrics import mean_squared_error, mean_absolute_error, r2_score
+import numpy as np
+
+y    = np.array([200,250,300,280,320.])
+yhat = np.array([190,270,295,250,330.])
+print(mean_squared_error(y, yhat))                 # 305.0
+print(mean_squared_error(y, yhat) ** 0.5)          # RMSE ≈ 17.46
+print(mean_absolute_error(y, yhat))                # 15.0
+print(r2_score(y, yhat))                           # ≈ 0.838
+```
+
 ::: {.callout-tip}
 Report at least two metrics: an error in real units (RMSE or MAE) for "how wrong on average," and $R^2$ for "how much better than guessing the mean." The gap between RMSE and MAE tells you how outlier-driven your errors are.
 :::
@@ -399,8 +587,81 @@ Report at least two metrics: an error in real units (RMSE or MAE) for "how wrong
 $R^2$ on the *training* set always flatters the model and rises with every added feature — never select models by training $R^2$. Compare on held-out data, and use adjusted $R^2$ or cross-validated error when models differ in number of features.
 :::
 
+## 8.8 — Quantile and robust regression
 
-## 8.7 — Generalized Linear Models from the Exponential Family
+Everything so far has quietly assumed two things: that you want to predict the *average* outcome, and that a few wild data points will not wreck the fit. Both assumptions break in the real world. A delivery service does not care about the *average* delivery time — it cares that 95% of orders arrive within the promised window. And one fat-fingered data-entry error (a \$2,000,000 house typed as \$20,000,000) can yank an OLS line clean off the cloud of honest points, because squaring makes that one residual dominate the whole loss. Two close cousins of linear regression fix these.
+
+**Quantile regression** predicts a chosen *percentile* instead of the mean. Where OLS minimizes squared error (which targets the mean), quantile regression minimizes an asymmetric, tilted absolute loss called the **pinball loss** that targets the $\tau$-th quantile:
+
+$$ \mathcal{L}_\tau(r) = \begin{cases} \tau \, r & \text{if } r \ge 0 \\ (\tau - 1)\, r & \text{if } r < 0 \end{cases}, \qquad r = y - \hat y $$
+
+**In words:** charge a price $\tau$ for every unit you predict *too low* and a price $1-\tau$ for every unit you predict *too high*; the line that minimizes the total bill sits at the $\tau$-th quantile.
+
+**Also written:** $\mathcal{L}_\tau(r) = r\big(\tau - \mathbb{1}[r < 0]\big) = \max\big(\tau r,\ (\tau-1)r\big)$ — the same V-shaped loss with its two arms tilted by $\tau$.
+
+Set $\tau = 0.5$ and the two penalties are equal: you recover ordinary **least-absolute-deviations** regression, whose target is the *median*. Set $\tau = 0.9$ and underestimates cost nine times as much as overestimates, so the fit rides high — exactly the line you want for "the time 90% of deliveries beat." Fitting the same data at several $\tau$ values traces out a fan of prediction bands without ever assuming the noise is Gaussian:
+
+<svg viewBox="0 0 320 180" xmlns="http://www.w3.org/2000/svg">
+  <line x1="40" y1="160" x2="300" y2="160" stroke="#888"/>
+  <line x1="40" y1="160" x2="40" y2="15" stroke="#888"/>
+  <circle cx="70" cy="120" r="3" fill="#444"/><circle cx="100" cy="135" r="3" fill="#444"/>
+  <circle cx="120" cy="95" r="3" fill="#444"/><circle cx="150" cy="110" r="3" fill="#444"/>
+  <circle cx="170" cy="70" r="3" fill="#444"/><circle cx="200" cy="100" r="3" fill="#444"/>
+  <circle cx="225" cy="55" r="3" fill="#444"/><circle cx="255" cy="80" r="3" fill="#444"/>
+  <path d="M50 95 L295 35" stroke="#ec4899" stroke-width="2" fill="none"/>
+  <path d="M50 125 L295 70" stroke="#6366f1" stroke-width="2" fill="none"/>
+  <path d="M50 150 L295 105" stroke="#38bdf8" stroke-width="2" fill="none"/>
+  <text x="250" y="32" font-size="9" fill="#ec4899">τ=0.9</text>
+  <text x="250" y="67" font-size="9" fill="#6366f1">τ=0.5 (median)</text>
+  <text x="250" y="118" font-size="9" fill="#38bdf8">τ=0.1</text>
+</svg>
+
+**Robust regression** keeps the goal of predicting the mean but changes the loss so outliers stop dominating. The most famous choice is the **Huber loss**: squared error for small residuals (so it behaves like OLS near the bulk of the data), switching to linear error once a residual exceeds a threshold $\delta$ (so a giant outlier contributes its size, not its size *squared*):
+
+$$ \mathcal{L}_\delta(r) = \begin{cases} \tfrac12 r^2 & |r| \le \delta \\ \delta\,(|r| - \tfrac12\delta) & |r| > \delta \end{cases} $$
+
+**In words:** treat ordinary misses with the usual squared penalty, but for any miss bigger than $\delta$ stop squaring and grow only linearly — so one monster outlier can no longer hijack the fit.
+
+**Also written:** $\mathcal{L}_\delta(r) = \tfrac12\min(r^2,\ 2\delta|r| - \delta^2)$ — a single expression that automatically picks the smaller of the quadratic and the linear arm.
+
+The two loss shapes side by side make the difference obvious — squared error rockets upward on big residuals, Huber flattens to a constant slope:
+
+<svg viewBox="0 0 300 170" xmlns="http://www.w3.org/2000/svg">
+  <line x1="150" y1="150" x2="290" y2="150" stroke="#888"/>
+  <line x1="150" y1="150" x2="10" y2="150" stroke="#888"/>
+  <line x1="150" y1="150" x2="150" y2="15" stroke="#888"/>
+  <path d="M30 30 Q150 150 270 30" stroke="#e53e3e" stroke-width="2" fill="none"/>
+  <path d="M30 70 L110 130 Q150 150 190 130 L270 70" stroke="#22c55e" stroke-width="2" fill="none"/>
+  <text x="60" y="40" font-size="9" fill="#e53e3e">squared (OLS)</text>
+  <text x="195" y="78" font-size="9" fill="#22c55e">Huber</text>
+  <text x="120" y="165" font-size="9" fill="#444">residual r</text>
+</svg>
+
+```python
+from sklearn.linear_model import QuantileRegressor, HuberRegressor
+import numpy as np
+
+rng = np.random.default_rng(0)
+X = np.sort(rng.random((40, 1)), axis=0)
+y = (3*X.ravel() + rng.standard_normal(40)*0.3)
+y[5] += 8.0      # inject a wild outlier
+
+# robust: outlier barely moves the line vs. plain OLS
+print(HuberRegressor().fit(X, y).coef_)              # slope stays near 3
+
+# quantile: predict the 90th-percentile outcome, not the mean
+print(QuantileRegressor(quantile=0.9, alpha=0).fit(X, y).coef_)
+```
+
+::: {.callout-tip}
+Use **quantile regression** when the *spread* matters — service-level targets ("p95 latency"), demand planning ("stock for the high-demand day"), or any prediction interval you must guarantee. Use **robust regression** when you trust the *shape* of the relationship but not the cleanliness of every data point.
+:::
+
+::: {.callout-warning}
+Robustness is not free. Huber's threshold $\delta$ must be chosen (scikit-learn's `epsilon` defaults to 1.35, calibrated for Gaussian noise), and if "outliers" are actually a real second regime in your data, downweighting them throws away signal. Always plot residuals before deciding a point is noise.
+:::
+
+## 8.9 — Generalized Linear Models from the Exponential Family
 
 Up to now the regression models in this chapter have looked like separate inventions. Ordinary least squares assumes the response is a continuous number with constant-variance Gaussian noise. Logistic regression assumes the response is a 0/1 label. Poisson regression — the natural tool for counts — has its own likelihood again. It is tempting to memorize each as its own recipe.
 
@@ -415,6 +676,10 @@ A distribution belongs to the exponential family if its density (or mass) for a 
 $$
 p(y \mid \theta, \phi) = \exp\!\left( \frac{y\,\theta - b(\theta)}{a(\phi)} + c(y, \phi) \right).
 $$
+
+**In words:** any exponential-family distribution is "an exponential of (data times a parameter, minus a normalizer), scaled by a spread term" — a single mould that Gaussian, Bernoulli, and Poisson all pour into.
+
+**Also written:** $p(y\mid\theta,\phi) = h(y,\phi)\,\exp\!\big(\frac{y\theta - b(\theta)}{a(\phi)}\big)$, pulling the base measure out as a multiplicative factor $h(y,\phi)=e^{c(y,\phi)}$.
 
 Each piece has a name and a job:
 
@@ -431,6 +696,10 @@ The magic is in $b(\theta)$. Two clean identities fall straight out of the requi
 $$
 \mathbb{E}[y] = \mu = b'(\theta), \qquad \operatorname{Var}[y] = a(\phi)\,b''(\theta).
 $$
+
+**In words:** differentiate the normalizer once to get the mean, twice to get the variance (up to the spread factor) — no integrals required.
+
+**Also written:** $\mu = \frac{db}{d\theta}$ and $\operatorname{Var}[y] = a(\phi)\frac{d^2 b}{d\theta^2}$, the first and second derivatives (cumulants) of $b$.
 
 So the *mean* is the first derivative of the log-partition, and the *variance* is the second derivative times the dispersion. The factor $b''(\theta)$, written as a function of $\mu$, is called the **variance function** $V(\mu)$ — it tells you how the noise scales with the mean. For a Gaussian it is constant; for a Poisson it equals the mean itself. That single difference is why count data fans out as it grows.
 
@@ -463,6 +732,10 @@ The link function $g$ is the bridge between the linear world and the mean of the
 $$
 g(\mu) = \eta = \mathbf{x}^\top\boldsymbol\beta.
 $$
+
+**In words:** transform the mean by $g$ so it lands on the same unbounded scale as the weighted sum of features.
+
+**Also written:** $\mu = g^{-1}(\mathbf{x}^\top\boldsymbol\beta)$ — solving for the mean with the inverse link, also called the *activation* or *mean function*.
 
 You are always free to pick any monotonic, differentiable $g$. But there is one *canonical* choice that makes the math line up beautifully: set the link equal to the map from mean to natural parameter, so that
 
@@ -503,6 +776,10 @@ $$
 \frac{\partial \ell}{\partial \boldsymbol\beta} = \sum_{i=1}^n \frac{(y_i - \mu_i)}{V(\mu_i)\,g'(\mu_i)}\,\mathbf{x}_i = \mathbf{0}.
 $$
 
+**In words:** at the best fit, the features must be uncorrelated with the residuals — but each residual is first reweighted by how noisy that point is and how steep the link is there.
+
+**Also written:** $\mathbf{X}^\top \mathbf{W}(\mathbf{y} - \boldsymbol\mu)^{*} = \mathbf{0}$, the score in matrix form, where the per-point factor $\frac{1}{V(\mu_i)g'(\mu_i)}$ rolls into a diagonal weight applied to each scaled residual.
+
 Notice the shape: every term is a **residual** $y_i - \mu_i$, reweighted by how noisy that point is ($V(\mu_i)$) and how steep the link is there ($g'(\mu_i)$). Unlike OLS, there is no closed-form solution in general — the $\mu_i$ depend nonlinearly on $\boldsymbol\beta$. So we solve it iteratively.
 
 The standard solver is **Iteratively Reweighted Least Squares (IRLS)**, which is just Newton's method (with Fisher scoring) wearing a disguise. At each step you linearize, build a *working response* $z$ and *working weights* $w$, and solve an ordinary weighted least-squares problem:
@@ -513,6 +790,10 @@ $$
 $$
 \boldsymbol\beta^{\text{new}} = (\mathbf{X}^\top \mathbf{W}\mathbf{X})^{-1}\mathbf{X}^\top \mathbf{W}\mathbf{z}.
 $$
+
+**In words:** pretend, for this one step, that the problem is ordinary weighted least squares with a faked-up target $z$ and weights $w$, solve it, then recompute and repeat until nothing moves.
+
+**Also written:** the update is the weighted normal equation $\boldsymbol\beta^{\text{new}} = \arg\min_\beta \sum_i w_i (z_i - \mathbf{x}_i^\top\beta)^2$ — every IRLS step is literally one weighted OLS fit.
 
 The working response $z$ is the current linear prediction nudged toward the data; the weights $w$ downweight observations the model thinks are noisy. You recompute $\mu$, $z$, and $w$ and repeat until $\boldsymbol\beta$ stops moving. Each iteration is one weighted OLS fit — code you already have.
 
@@ -556,21 +837,36 @@ print("fitted mu =", np.exp(X @ beta))
 
 In a handful of iterations the slope settles near $0.49$, meaning each unit of $x$ multiplies the expected count by $e^{0.49}\approx 1.64$ — the multiplicative interpretation that the log link guarantees. The fitted means stay positive automatically, something an identity-link linear fit could never promise on counts. Swap two lines — `mu = 1/(1+np.exp(-eta))`, `w = mu*(1-mu)` — and the *same loop* fits logistic regression. That reuse is the entire point of the GLM framework: one algorithm, parameterized by the distribution's variance function and link.
 
+For real work you would lean on `statsmodels`, which gives you the same fit plus standard errors, deviance, and the full inference table that maximum likelihood affords:
+
+```python
+import numpy as np
+import statsmodels.api as sm
+
+x = np.array([1.,2.,3.,4.,5.]); y = np.array([1,1,2,4,8])
+X = sm.add_constant(x)
+glm = sm.GLM(y, X, family=sm.families.Poisson()).fit()   # IRLS under the hood
+print(glm.params)        # ~[-0.40, 0.49], matching the hand-rolled loop
+print(glm.summary())     # std errors, deviance, p-values for free
+```
+
 ::: {.callout-warning}
 IRLS can diverge or stall when the model is near-separable (logistic data perfectly split by a feature) or when extreme fitted means make weights overflow. Watch for coefficients sprinting toward $\pm\infty$, add a tiny ridge penalty to $\mathbf{X}^\top\mathbf{W}\mathbf{X}$, or fall back to a damped Newton step. These are not flaws in the data so much as the likelihood honestly reporting that the maximum lies at infinity.
 :::
 
-## 8.8 — Key takeaways
+## 8.10 — Key takeaways
 
 - **OLS** fits a hyperplane by minimizing squared residuals; solve it exactly via the **normal equation** $(X^\top X)^{-1}X^\top y$ for small $p$, or by **gradient descent** at scale.
 - A **coefficient** is the change in the target per one-unit change in its feature, others held fixed — interpretable only when features are comparably scaled.
 - **Polynomial regression** is still linear-in-coefficients; degree controls the **bias–variance** trade — pick it by held-out error, never training error.
+- The **bias–variance decomposition** splits expected error into bias², variance, and an irreducible noise floor $\sigma^2$ — the reason every regularizer trades a little bias for a lot of variance.
 - **Ridge (L2)** shrinks coefficients smoothly; **Lasso (L1)** zeroes some out for feature selection; **Elastic Net** blends both. Always standardize first and never penalize the intercept.
 - **Logistic regression** is *classification*: sigmoid turns a linear score into a probability, coefficients are **log-odds**, and the boundary $x^\top\beta=0$ is linear.
-- **GLMs** unify all of the above as a linear predictor plus a **link function** and a target distribution (Gaussian/identity, Bernoulli/logit, Poisson/log).
+- **GLMs** unify all of the above as a linear predictor plus a **link function** and a target distribution (Gaussian/identity, Bernoulli/logit, Poisson/log), fit by maximum likelihood via **IRLS** — one weighted-OLS loop per step.
+- **Quantile regression** (pinball loss) predicts percentiles, not means; **robust regression** (Huber loss) keeps outliers from hijacking the fit.
 - Evaluate with **RMSE/MAE** (real units), **$R^2$** (variance explained), and **adjusted $R^2$** when comparing models of different size.
 
-## 8.9 — See also
+## 8.11 — See also
 
 - **Optimization** — gradient descent, convexity, and the machinery behind fitting these losses.
 - **Linear Algebra** — matrices, projections, and the normal equation's geometry.

@@ -255,6 +255,13 @@ The **TD error** $\delta_t$ is the surprise: how much better or worse things tur
 
 **TD(λ)** interpolates between the two. Instead of looking one step ahead (TD) or all the way to the end (MC), it blends $n$-step returns with geometrically decaying weights controlled by $\lambda \in [0,1]$. $\lambda=0$ gives TD(0); $\lambda=1$ gives MC. **Eligibility traces** make this efficient online by keeping a fading memory of recently visited states, so a surprise now can update them all at once.
 
+The whole MC↔TD spectrum is really one knob — **how many real reward steps you trust before falling back on a bootstrap guess**. The general $n$-step return makes the knob explicit:
+
+$$G_t^{(n)} = r_{t+1} + \gamma r_{t+2} + \cdots + \gamma^{n-1} r_{t+n} + \gamma^n V(s_{t+n})$$
+
+**In words:** take $n$ real rewards as they actually came in, then stitch on your value estimate for wherever you ended up after those $n$ steps.
+**Also written:** $n=1$ recovers the TD(0) target $r_{t+1}+\gamma V(s_{t+1})$; $n\to\infty$ (run to the end) recovers the Monte-Carlo return $G_t$. TD(λ) is just the geometric average $G_t^\lambda = (1-\lambda)\sum_{n\ge 1}\lambda^{n-1}G_t^{(n)}$ of all of these.
+
 ```{mermaid}
 flowchart TD
     S[Update target for V s_t] --> M{Method}
@@ -403,6 +410,15 @@ obs, _ = env.reset()
 action, _ = model.predict(obs, deterministic=True)
 ```
 
+A family of refinements stacks on top of vanilla DQN, each fixing one weakness; **Rainbow** is the well-known combination that fuses all of them and beats every piece alone:
+
+| Extension | Problem it fixes | One-line idea |
+|---|---|---|
+| **Double DQN** | maximisation bias (overestimated $Q$) | online net *picks* the next action, target net *scores* it |
+| **Dueling DQN** | many actions share a state's value | split the head into a state-value $V(s)$ and an advantage $A(s,a)$ |
+| **Prioritised replay** | rare, high-error transitions seen too seldom | sample from the buffer in proportion to TD-error size |
+| **Noisy nets** | $\varepsilon$-greedy explores blindly | learnable noise in the weights gives *state-dependent* exploration |
+
 ::: {.callout-tip}
 The two tricks attack the same disease — instability — from different angles: replay decorrelates *inputs*, the target network stabilises *outputs*. Remove either and DQN often diverges. Most later improvements (Double DQN, Dueling, Prioritised Replay, Rainbow) keep both and refine the details.
 :::
@@ -469,7 +485,56 @@ For RLHF on language models, the same PPO loop lives inside Hugging Face **TRL**
 Policy gradients are **on-policy**: each batch of data is valid only for the policy that generated it, so you cannot freely reuse old experience as DQN does. PPO stretches this with a few epochs of reuse per batch, but throughput, not sample count, is usually its bottleneck.
 :::
 
-## 25.7 — Exploration vs Exploitation & Bandits
+## 25.7 — Generalized Advantage Estimation
+
+The advantage $A_t = G_t - V(s_t)$ from the last section hides one of the most consequential dials in modern policy-gradient RL — and the SB3 code above silently set it (`gae_lambda=0.95`). The question it answers: **how do you estimate the advantage?** It is the exact MC-vs-TD tension from Section 25.3, now wearing a different hat.
+
+**Intuition.** You can measure "how much better than expected was this action" two ways. Use the *full Monte-Carlo return* and the estimate is honest (unbiased) but jittery (high variance) — one lucky reward twenty steps later swings it. Use a *one-step TD bootstrap* and it is steady (low variance) but leans on your possibly-wrong value estimate (biased). **Generalized Advantage Estimation (GAE)** dials smoothly between the two, just as TD(λ) did for value learning.
+
+The building block is the one-step TD error of the critic, $\delta_t = r_{t+1} + \gamma V(s_{t+1}) - V(s_t)$. GAE sums these errors into the future with an exponential decay $\lambda$:
+
+$$\hat{A}_t^{\text{GAE}(\gamma,\lambda)} = \sum_{l=0}^{\infty} (\gamma\lambda)^l\,\delta_{t+l}$$
+
+**In words:** the advantage is a discounted running total of every "surprise" from now onward — recent surprises count fully, distant ones fade — with $\lambda$ controlling how far into the future the surprises still matter.
+**Also written:** recursively (the form actually coded), $\hat{A}_t = \delta_t + \gamma\lambda\,\hat{A}_{t+1}$ — today's advantage is today's TD error plus a decayed copy of tomorrow's advantage.
+
+The two extremes recover old friends: $\lambda = 0$ gives $\hat{A}_t = \delta_t$, the pure one-step (low-variance, biased) advantage; $\lambda = 1$ gives $\hat{A}_t = G_t - V(s_t)$, the full Monte-Carlo (unbiased, high-variance) advantage. Values like $\lambda = 0.95$ sit just shy of MC — keeping most of the unbiasedness while shaving off the worst of the variance — which is why nearly every PPO and A2C run uses it.
+
+<svg viewBox="0 0 460 160" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif" font-size="11">
+  <text x="10" y="16" font-weight="bold" fill="currentColor">GAE: trading bias for variance with λ</text>
+  <line x1="40" y1="130" x2="430" y2="130" stroke="currentColor" stroke-width="1"/>
+  <text x="40" y="148" fill="currentColor">λ=0</text>
+  <text x="400" y="148" fill="currentColor">λ=1</text>
+  <text x="200" y="148" text-anchor="middle" fill="currentColor">λ ≈ 0.95 (typical)</text>
+  <!-- bias curve: high at left, low at right -->
+  <path d="M40 50 C 160 60, 300 115, 430 122" fill="none" stroke="#f59e0b" stroke-width="2.5"/>
+  <text x="60" y="44" fill="#f59e0b">bias (TD)</text>
+  <!-- variance curve: low at left, high at right -->
+  <path d="M40 122 C 170 118, 300 70, 430 40" fill="none" stroke="#6366f1" stroke-width="2.5"/>
+  <text x="330" y="36" fill="#6366f1">variance (MC)</text>
+  <line x1="385" y1="30" x2="385" y2="130" stroke="#22c55e" stroke-width="1.5" stroke-dasharray="4 3"/>
+</svg>
+
+```python
+import numpy as np
+# GAE-lambda from a rollout: rewards r, values V (len T+1, V[-1] bootstraps), masks.
+def gae(r, V, gamma=0.99, lam=0.95, done=None):
+    T = len(r); A = np.zeros(T); gae_t = 0.0
+    done = np.zeros(T) if done is None else done
+    for t in reversed(range(T)):
+        nonterminal = 1.0 - done[t]
+        delta = r[t] + gamma * V[t+1] * nonterminal - V[t]   # one-step TD error
+        gae_t = delta + gamma * lam * nonterminal * gae_t     # recursive accumulation
+        A[t]  = gae_t
+    returns = A + V[:T]                                        # critic target = advantage + baseline
+    return A, returns
+```
+
+::: {.callout-tip}
+GAE is the single most impactful "free" tuning knob in actor-critic RL. If PPO is learning but unstable, nudge $\lambda$ *down* (less variance, more bias); if it is stable but slow and biased, nudge it *up*. The $\gamma\lambda$ product, not $\lambda$ alone, sets the effective horizon of credit assignment.
+:::
+
+## 25.8 — Exploration vs Exploitation & Bandits
 
 Every RL agent faces the same dilemma: **exploit** the best-known action to earn reward now, or **explore** an uncertain action that might be better. Always exploiting locks in early mistakes; always exploring never cashes in. The cleanest setting to study this is the **multi-armed bandit** — a one-state MDP, just $k$ slot-machine arms with unknown payout distributions, where you maximise total reward over many pulls.
 
@@ -523,7 +588,7 @@ print(N)   # most pulls land on arm 2 (the best)
 Bandits are not just a toy: they run A/B testing, ad selection, and clinical trials. When there is genuinely one state (no consequences carrying forward), reach for a bandit algorithm before a full RL stack — it converges far faster.
 :::
 
-## 25.8 — Multi-Agent RL
+## 25.9 — Multi-Agent RL
 
 So far the environment was a fixed, indifferent world. In **multi-agent RL (MARL)** several learning agents share an environment, and each one's reward depends on what the others do. This breaks a core assumption: from any single agent's view the environment is **non-stationary**, because the other agents are *also* changing their policies as they learn. A strategy that was optimal yesterday can be terrible today — the target keeps moving.
 
@@ -547,7 +612,7 @@ The most powerful tool here is **self-play**: an agent improves by playing again
 Naive independent learners (each running its own DQN, treating others as part of the environment) often fail to converge in MARL precisely because of non-stationarity. Techniques like centralised training with decentralised execution (CTDE) — share information while learning, act independently at test time — are the practical workaround.
 :::
 
-## 25.9 — Landmark Systems: AlphaGo, AlphaZero, MuZero
+## 25.10 — Landmark Systems: AlphaGo, AlphaZero, MuZero
 
 DeepMind's Alpha series is the showcase for how the pieces in this chapter combine, and it traces a clean arc of *removing human input and removing the model*.
 
@@ -563,14 +628,14 @@ flowchart LR
     AZ --> MZ[MuZero<br/>learns the model too]
 ```
 
-The unifying engine is **MCTS guided by learned networks**: the value network supplies the bootstrapped estimate (Section 25.3), the policy network biases exploration the way UCB does (Section 25.7), and self-play provides the non-stationary curriculum (Section 25.8). Every theme in the chapter shows up at once.
+The unifying engine is **MCTS guided by learned networks**: the value network supplies the bootstrapped estimate (Section 25.3), the policy network biases exploration the way UCB does (Section 25.8), and self-play provides the non-stationary curriculum (Section 25.9). Every theme in the chapter shows up at once.
 
 ::: {.callout-tip}
 The throughline is removal: AlphaGo removed the handcrafted evaluation, AlphaZero removed human data, MuZero removed the known model. Each step generalises the system to more problems — the practical payoff of methods that learn from interaction rather than instruction.
 :::
 
 
-## 25.10 — Imitation learning: learning to act by watching
+## 25.11 — Imitation learning: learning to act by watching
 
 The cleanest way to teach a skill is often to demonstrate it. A driving instructor does not hand you a reward function and tell you to maximize discounted future safety; they drive, you watch, you copy. Imitation learning formalizes that idea: instead of learning from a scalar reward signal, the agent learns from a dataset of expert trajectories — sequences of states paired with the actions the expert took there.
 
@@ -663,7 +728,7 @@ IRL is far more expensive than behavioral cloning: the classic formulation runs 
 | DAgger | no | yes | yes | yes | no |
 | Inverse RL | learns it | yes | no | yes (via re-solve) | yes |
 
-## 25.11 — Bandits and exploration, made precise
+## 25.12 — Bandits and exploration, made precise
 
 Strip a reinforcement learning problem down until there is only one state, and what remains is a **multi-armed bandit**. You face $K$ slot machines ("arms"); pulling arm $a$ returns a reward drawn from an unknown distribution with mean $\mu_a$. Each round you pick one arm, see its reward, and want to maximize total reward over $n$ rounds. There is no state transition to reason about — only the pure tension between *exploiting* the arm that looks best so far and *exploring* arms you haven't sampled enough to trust.
 
@@ -747,7 +812,7 @@ print(round(regret)) # grows like log(n), not linearly
 A fixed exploration rate is the most common bandit mistake: constant $\epsilon$ never stops paying the exploration tax, so its regret grows *linearly* and average reward never reaches the optimum. Either decay $\epsilon$ over time or use an uncertainty-aware method (UCB / Thompson) whose exploration shrinks automatically as evidence accumulates.
 :::
 
-## 25.12 — POMDPs: acting when you can't see the whole state
+## 25.13 — POMDPs: acting when you can't see the whole state
 
 Every method so far quietly assumed you can see the true state. Reality rarely cooperates. A robot's camera is occluded, a medical test is noisy, a poker opponent's cards are hidden. A **partially observable Markov decision process** (POMDP) is the honest model: the world still has a true state $s$ that evolves as a Markov process, but you never observe it directly. Instead, after each action you receive an **observation** $o$ drawn from $O(o \mid s', a)$ — a noisy, partial clue about where you ended up.
 
@@ -844,7 +909,7 @@ QMDP's pitfall is concrete: it cannot plan to gather information. A QMDP robot u
 | POMCP / DESPOT | online | yes (with simulator) | yes | per-step |
 | QMDP | offline | yes (MDP-sized) | **no** | cheap |
 
-## 25.13 — Optimal control and LQR: the continuous cousin of RL
+## 25.14 — Optimal control and LQR: the continuous cousin of RL
 
 Reinforcement learning grew up alongside an older, more mathematical sibling: **optimal control**. Both ask the same question — choose actions over time to optimize a long-run objective — but control theory studies the case where the dynamics are *known* and the state and action are *continuous*. Where RL says "state, action, reward, policy, value," control says "state, control input, cost, controller, cost-to-go." Same animal, different dialect; and one special case, the **linear-quadratic regulator** (LQR), is so clean it can be solved in closed form, making it the bedrock example that links the two fields.
 
@@ -932,9 +997,67 @@ LQR is the Rosetta Stone between control and RL. It shows, in a case you can sol
 The cleanest way to internalize the RL–control link: an MDP with linear dynamics and quadratic reward *is* LQR, and its "learned" optimal policy is exactly the Riccati feedback law. If your real problem is nearly linear near the operating point, do not reach for deep RL — linearize and solve the Riccati equation. It is faster, exact, and comes with stability guarantees that learned policies cannot promise.
 :::
 
-## 25.14 — Influence diagrams, Dec-POMDPs, and Markov games
+## 25.15 — Model-based RL: learn the world, then plan in it
 
-We close with the decision-theoretic frame that sits *above* all the single-agent machinery and the multi-agent extensions that generalize it. Three ideas: a graphical language for one-shot decisions (influence diagrams), the value of gathering information before deciding, and what changes when *multiple* agents decide at once — cooperatively (Dec-POMDPs) or competitively (Markov games).
+Every algorithm so far has been **model-free**: it learns a value or a policy straight from reward, never building an explicit picture of how the environment works. **Model-based RL** takes the other road. First learn a **dynamics model** $\hat{P}(s' \mid s, a)$ and reward model $\hat{R}(s,a)$ from experience, then use that learned model to *plan* — to imagine the consequences of actions without paying for them in the real world.
+
+**Intuition.** Model-free RL is learning to drive purely by crashing until you stop crashing — every lesson costs a real collision. Model-based RL is building a mental simulator of the car and the road, then practicing thousands of turns in your head between real drives. The mental rehearsals are nearly free, so you need far fewer real ones. That is the whole appeal: **sample efficiency**. Model-free methods can need millions of environment steps; a good model lets you squeeze far more learning out of each real interaction — decisive when real steps are slow, costly, or dangerous (robots, healthcare, industrial control).
+
+The price is **model bias**: the learned model is wrong, and a planner is ruthless about exploiting its errors. Plan a long rollout inside a slightly-off model and the imagined trajectory drifts into fantasy — the planner finds an "amazing" action that only works because the model is hallucinating. Managing this trade-off between cheap imagined data and untrustworthy imagined data is the central craft of the field.
+
+```{mermaid}
+flowchart LR
+    ENV[Real environment] -->|real transitions| D[(Experience)]
+    D -->|fit dynamics + reward| M[Learned model P̂, R̂]
+    M -->|imagined rollouts| PLAN[Plan / improve policy]
+    PLAN -->|action| ENV
+```
+
+### Two ways to use a model
+
+A learned model buys you two distinct things, and most systems pick one:
+
+**Background planning — generate fake data to train on.** The classic is **Dyna-Q**: interleave real Q-learning updates with extra updates on transitions *imagined* by the model. Each real step is amplified into many cheap synthetic ones, so the value function converges in far fewer real steps. The update is the ordinary Q-learning backup, just fed model-generated $(s,a,r,s')$:
+
+$$Q(s,a) \leftarrow Q(s,a) + \alpha\big[\hat{R}(s,a) + \gamma \max_{a'} Q(s',a') - Q(s,a)\big]$$
+
+**In words:** run the exact same Q-learning update you already know, but on a transition the *model dreamed up* instead of one you actually lived — free practice between real moves.
+**Also written:** identical to the Section 25.4 backup with the real environment swapped for $(\hat{R}, \hat{P})$; Dyna simply runs $n$ of these planning updates per real step.
+
+**Decision-time planning — look ahead from the current state.** Instead of pre-baking a policy, plan *on demand*: from where you are right now, use the model to simulate candidate futures and pick the best first action, then re-plan next step. **MCTS** (the engine inside AlphaZero, Section 25.10) is the discrete case; for continuous control, **Model Predictive Control (MPC)** with samplers like **CEM** or **MPPI** rolls out many action sequences through the model, keeps the best-scoring ones, and executes only the first action before re-planning.
+
+### The modern crop
+
+| System | What it models | Plans by | Domain |
+|---|---|---|---|
+| **Dyna-Q** | tabular $\hat{P},\hat{R}$ | extra Q-updates on imagined data | small discrete |
+| **PETS** | ensemble of probabilistic nets | MPC + CEM over model rollouts | continuous control |
+| **MuZero** | *latent* dynamics (value-relevant only) | MCTS in latent space | games + Atari |
+| **Dreamer** | latent "world model" (RSSM) | train actor-critic *inside* imagined latent rollouts | pixels, continuous |
+
+The frontier idea, shared by MuZero and Dreamer, is the **world model**: rather than predicting raw next pixels (hard and mostly irrelevant), learn a compact *latent* state and predict dynamics there — modelling only what matters for reward and value. Dreamer trains its entire actor-critic on rollouts hallucinated inside this latent space, touching the real environment only to refresh the model.
+
+```python
+# Dyna-Q core: one real step, then n cheap planning steps from a learned model.
+import random
+def dyna_q(Q, model, env_step, s, alpha=0.1, gamma=0.9, n=10):
+    a = epsilon_greedy(Q, s)
+    s2, r = env_step(s, a)                       # ONE real interaction
+    Q[s][a] += alpha*(r + gamma*max(Q[s2]) - Q[s][a])
+    model[(s, a)] = (r, s2)                      # remember the transition
+    for _ in range(n):                           # n FREE imagined updates
+        (sp, ap), (rp, s2p) = random.choice(list(model.items()))
+        Q[sp][ap] += alpha*(rp + gamma*max(Q[s2p]) - Q[sp][ap])
+    return s2
+```
+
+::: {.callout-warning}
+Model-based RL trades sample efficiency for robustness: it learns from far fewer real steps but can be wrecked by model bias, and it is more complex to build and debug. Rule of thumb — reach for it when real environment steps are *expensive* (robotics, healthcare) and you can afford a careful model; stick with model-free PPO/SAC when steps are cheap (a fast simulator) and you just want something that reliably works.
+:::
+
+## 25.16 — Influence diagrams, Dec-POMDPs, and Markov games
+
+We close the decision-theoretic thread with the frame that sits *above* all the single-agent machinery and the multi-agent extensions that generalize it. Three ideas: a graphical language for one-shot decisions (influence diagrams), the value of gathering information before deciding, and what changes when *multiple* agents decide at once — cooperatively (Dec-POMDPs) or competitively (Markov games).
 
 ### Influence diagrams: decisions as graphs
 
@@ -1007,7 +1130,7 @@ flowchart TB
 The unifying view of this whole chapter: an MDP is the base case, and every richer framework relaxes one assumption. POMDPs drop full observability (track beliefs); LQR specializes to continuous linear-quadratic dynamics (solve Riccati); Dec-POMDPs and Markov games add agents (solve for joint policies or equilibria). The algorithms differ, but the Bellman backbone — value, lookahead, fixed-point iteration — runs through all of them.
 :::
 
-## 25.15 — Reward shaping and the sparse-reward problem
+## 25.17 — Reward shaping and the sparse-reward problem
 
 Imagine teaching someone chess if the *only* feedback allowed is "you won" or "you lost" at the very end. They could play a hundred games before stumbling onto a win, with no clue which of the forty moves in each game helped. That is the **sparse-reward problem**, and it is the single most common reason RL fails in practice: when reward arrives rarely (a goal scored, a maze solved) the agent explores almost blindly, because nearly every action returns zero and there is nothing to climb toward.
 
@@ -1036,7 +1159,7 @@ When even shaping is not enough, three other ideas attack sparsity:
 
 - **Curiosity / intrinsic motivation** — manufacture an internal reward for visiting *surprising* states (where a learned dynamics model predicts poorly). The agent explores out of "boredom-avoidance" until it stumbles onto real reward. This is what cracked notoriously sparse games like *Montezuma's Revenge*.
 - **Hindsight Experience Replay (HER)** — after failing to reach goal $g$, *pretend* the state you actually ended in was the goal all along. Every failed episode becomes a successful demonstration of reaching *some* goal, so even a never-successful agent learns from every rollout. Indispensable for goal-conditioned robotics.
-- **Curriculum learning** — start with easy, nearby goals where reward is reachable, then gradually widen the task as competence grows (closely related to the self-play curriculum of Section 25.8).
+- **Curriculum learning** — start with easy, nearby goals where reward is reachable, then gradually widen the task as competence grows (closely related to the self-play curriculum of Section 25.9).
 
 ```python
 # Hindsight Experience Replay: relabel a failed trajectory with an achieved goal.
@@ -1053,7 +1176,7 @@ for t, (s, a, s_next) in enumerate(trajectory):
 Before hand-crafting a dense reward, ask whether it admits a shortcut the agent will find and you won't. The safest dense signals are *potential-based* (provably exploit-proof) or *learned from human preference* (the RLHF route). Arbitrary engineered bonuses are where reward hacking lives.
 :::
 
-## 25.16 — Offline RL: learning from a fixed dataset
+## 25.18 — Offline RL: learning from a fixed dataset
 
 Every method so far assumes the agent can *act* in the environment to gather fresh data. Often it cannot. You have a hospital's logged treatment histories, a fleet's recorded driving, a recommender's click logs — and letting a half-trained policy experiment on real patients or real cars is unthinkable. **Offline RL** (also "batch RL") asks: can we learn the best possible policy from a *fixed* dataset of past interactions, with no further environment access at all?
 
@@ -1119,26 +1242,26 @@ cql.fit(dataset, n_steps=100_000)                            # no environment in
 Offline RL is what makes RL usable in high-stakes domains — healthcare, finance, recommendation — where exploration is expensive, dangerous, or illegal. The mental model: online RL *asks* the world questions; offline RL must answer using only the questions someone already asked, and its whole craft is resisting the urge to trust answers it can't check.
 :::
 
-## 25.17 — Key takeaways
+## 25.19 — Key takeaways
 
 - RL maximises **expected cumulative discounted reward** through interaction, not labelled answers; the **MDP** $(\mathcal{S},\mathcal{A},P,R,\gamma)$ is its universal model.
 - **Bellman equations** tie a state's value to its successors'; **dynamic programming** solves them exactly when the model is known but does not scale.
-- Model-free learning splits into **Monte Carlo** (wait for the real return, unbiased) and **TD** (bootstrap each step, lower variance) — TD underpins most modern RL.
-- **SARSA** (on-policy) learns the policy it follows; **Q-learning** (off-policy) learns the optimal one via a max. **DQN** scales Q-learning with experience replay + a target network.
-- **Policy-gradient / actor-critic** methods (REINFORCE, A2C, **PPO**) optimise a policy directly; PPO's clipped update is the backbone of **RLHF**.
-- The **exploration–exploitation** tradeoff, studied cleanly in **bandits** (ε-greedy, UCB, Thompson), recurs everywhere in RL.
+- Model-free learning splits into **Monte Carlo** (wait for the real return, unbiased) and **TD** (bootstrap each step, lower variance) — the $n$-step return is the dial between them, and TD underpins most modern RL.
+- **SARSA** (on-policy) learns the policy it follows; **Q-learning** (off-policy) learns the optimal one via a max. **DQN** scales Q-learning with experience replay + a target network, and Double/Dueling/Prioritised/Rainbow refine it.
+- **Policy-gradient / actor-critic** methods (REINFORCE, A2C, **PPO**) optimise a policy directly; **GAE** dials the advantage's bias–variance trade-off, and PPO's clipped update is the backbone of **RLHF**.
+- The **exploration–exploitation** tradeoff, studied cleanly in **bandits** (ε-greedy, UCB, Thompson) and scored by **regret**, recurs everywhere in RL.
 - **Multi-agent RL** adds non-stationarity; **self-play** turns it into an automatic curriculum, powering **AlphaGo → AlphaZero → MuZero**.
 - **Imitation learning** (behavioral cloning, DAgger, inverse RL) skips reward design by learning from expert demonstrations; **POMDPs** track a **belief state** when the world is only partly observable; **LQR** solves the continuous linear-quadratic case in closed form via the Riccati equation.
+- **Model-based RL** (Dyna, PETS, MuZero, Dreamer) learns a dynamics model and plans inside it for sample efficiency, at the cost of model bias.
 - **Sparse rewards** stall learning; **potential-based shaping** speeds it up without changing the optimum, while curiosity, **HER**, and curricula attack sparsity from other angles. **Offline RL** (CQL, IQL, TD3+BC) learns from a fixed logged dataset by staying close to the data and resisting overestimation.
 
-## 25.18 — See also
+## 25.20 — See also
 
 - **Optimization** — gradient ascent, SGD, and the loss-landscape view behind policy gradients.
 - **Probability & Statistics** — expectations, variance, and the Bayesian posteriors underlying Thompson sampling.
 - **Neural Networks (Core)** — the function approximators inside DQN and actor-critic.
 - **Large Language Models** — where PPO-based RLHF aligns model behaviour to human preferences.
 - **Search & Problem Solving** — Monte Carlo Tree Search and the lookahead in the AlphaZero family.
-- **Planning, Constraint Satisfaction & Game Playing** — adversarial search and the game-theoretic backdrop to multi-agent RL.
 
 ------------------------------------------------------------------------
 

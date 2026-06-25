@@ -115,6 +115,8 @@ Machine learning is the part of AI where a system improves at a task by looking 
 
 These four words get used interchangeably and shouldn't be. The clean mental model is **nested circles**: each is a subset of the one before, except data science, which cuts across them.
 
+**Think of it like vehicles.** "Vehicle" is the broad idea (AI). "Car" is a kind of vehicle that runs on an engine instead of muscle (ML — runs on data instead of hand-written rules). "Electric car" is a kind of car with a specific power source (DL — a specific way of learning, deep neural networks). And "the mechanic who diagnoses, tunes, and decides what to fix" is doing something orthogonal — that's data science.
+
 **Artificial Intelligence (AI)** is the broadest goal: any technique that makes a machine do something we'd call "intelligent" — playing chess, planning a route, parsing a sentence. It includes hand-written rule systems with no learning at all.
 
 **Machine Learning (ML)** is the subset of AI where the behavior is *learned from data* rather than programmed. You don't write the rule "emails with the word lottery are spam"; you show the system labeled emails and it infers the rule.
@@ -140,6 +142,13 @@ These four words get used interchangeably and shouldn't be. The clean mental mod
 </svg>
 
 **Worked example — one spam problem, four lenses.** An AI textbook from 1990 might filter spam with a hand-written rule list (pure AI, no learning). A 2005 system learns a logistic-regression filter from labeled emails (ML). A 2020 system feeds raw email text into a transformer that learns its own features (DL). The person who pulls the email logs, checks the false-positive rate against business cost, and decides whether the filter is worth shipping is doing data science.
+
+| Lens | Who writes the rules? | Who finds the features? | Example |
+|------|----------------------|------------------------|---------|
+| AI (non-ML) | Human | Human | If-then spam rule list |
+| ML | Data (fit) | Human (hand-engineered) | Logistic-regression spam filter |
+| Deep Learning | Data (fit) | Data (learned) | Transformer over raw email text |
+| Data Science | n/a — frames & evaluates | n/a | Cost analysis of false positives |
 
 ::: {.callout-tip}
 Rule of thumb: if a human wrote the decision rule, it's AI but not ML. If the rule was fit to data, it's ML. If the model learned its own features from raw input, it's deep learning.
@@ -169,7 +178,7 @@ The lesson of the history: each "winter" came from over-promising. The thaw came
 
 ## 5.3 — Types of Learning
 
-Learning paradigms differ in **what supervision signal** the model gets. The signal is the answer key: how much of it you have, and what form it takes, determines the whole approach.
+Learning paradigms differ in **what supervision signal** the model gets. The signal is the answer key: how much of it you have, and what form it takes, determines the whole approach. A simple way to picture it: supervised learning is studying with the answer key in hand, unsupervised is sorting a pile of unlabeled photos by gut feel, and reinforcement learning is learning to ride a bike — nobody tells you the right move, you just feel the reward (staying upright) or the punishment (falling).
 
 **Supervised learning** uses labeled examples — each input $x$ comes with the correct output $y$. The model learns a mapping $f: x \to y$. Two flavors: **classification** (discrete $y$, e.g. spam/not-spam) and **regression** (continuous $y$, e.g. house price). This is the workhorse of applied ML because labels make training direct.
 
@@ -196,6 +205,21 @@ flowchart TD
 
 **Worked example — the same photos, five ways.** Given a folder of animal photos: *supervised* trains "cat vs dog" if each photo is labeled; *unsupervised* groups them into look-alike clusters with no names; *semi-supervised* uses 50 labeled photos to propagate labels across 5,000 unlabeled ones; *self-supervised* masks half of each photo and learns to reconstruct it, building a general visual representation; *RL* would apply if a robot moved a camera to *seek out* animals, rewarded for each one found.
 
+The line between supervised and unsupervised shows up directly in code — supervised `.fit` takes both `X` and `y`, unsupervised takes only `X`:
+
+```python
+from sklearn.linear_model import LogisticRegression
+from sklearn.cluster import KMeans
+
+# Supervised: needs labels y
+clf = LogisticRegression().fit(X_train, y_train)   # X AND y
+preds = clf.predict(X_test)
+
+# Unsupervised: no labels at all
+km = KMeans(n_clusters=3).fit(X_train)             # X only
+groups = km.predict(X_test)
+```
+
 ## 5.4 — The End-to-End ML Workflow
 
 A model is maybe 10% of a real ML project. The rest is the pipeline around it. The stages run in order, but the arrows loop back constantly — you learn things downstream that send you back upstream.
@@ -218,7 +242,48 @@ flowchart LR
 The most expensive mistake is skipping problem framing and optimizing a metric that doesn't match the real goal. A churn model with 99% accuracy is useless if 99% of users don't churn — it can hit that score by predicting "nobody churns." Pick the metric before you touch the data.
 :::
 
-## 5.5 — Generalization, Overfitting vs Underfitting
+## 5.5 — Train / Validation / Test Splits and Data Leakage
+
+Before any model is fit, the data has to be cut into pieces with different jobs — and the single most common reason a model that looked brilliant in development falls flat in production is that these pieces were not kept honest. The intuition is the same as schooling: the **training set** is your homework (you study it), the **validation set** is the practice exams (you tune your study strategy against them), and the **test set** is the final exam you only sit once. If you peek at the final exam while studying, your grade no longer means anything.
+
+**Training set** — the data the model fits its parameters on. **Validation set** — held-out data used *during* development to pick hyperparameters and compare models (the $\lambda$ in regularization, the tree depth, which architecture). **Test set** — locked away, touched exactly once at the very end to get an honest estimate of generalization. A common split is 60/20/20, though with cross-validation (Chapter 12) the train/validation boundary is reshuffled many times.
+
+<svg viewBox="0 0 480 110" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif">
+  <rect x="20" y="35" width="270" height="40" fill="rgba(99,102,241,0.45)" stroke="currentColor"/>
+  <rect x="290" y="35" width="90" height="40" fill="rgba(245,158,11,0.5)" stroke="currentColor"/>
+  <rect x="380" y="35" width="80" height="40" fill="rgba(236,72,153,0.5)" stroke="currentColor"/>
+  <text x="155" y="60" text-anchor="middle" font-size="12" font-weight="bold" fill="currentColor">Train (60%)</text>
+  <text x="335" y="60" text-anchor="middle" font-size="11" font-weight="bold" fill="currentColor">Val (20%)</text>
+  <text x="420" y="60" text-anchor="middle" font-size="11" font-weight="bold" fill="currentColor">Test (20%)</text>
+  <text x="155" y="95" text-anchor="middle" font-size="9" fill="currentColor">fit parameters</text>
+  <text x="335" y="95" text-anchor="middle" font-size="9" fill="currentColor">tune & choose</text>
+  <text x="420" y="95" text-anchor="middle" font-size="9" fill="currentColor">judge once</text>
+  <text x="20" y="22" font-size="11" font-weight="bold" fill="currentColor">All available data</text>
+</svg>
+
+**Data leakage** is the silent killer: any time information from outside the training set sneaks into training, the model "cheats." Classic forms: scaling or imputing using statistics computed over the *whole* dataset (the test rows leak their mean into training), including a feature that is really a proxy for the answer (a "discharge date" that only exists for patients who survived), or splitting time-series data randomly so the model trains on the future and predicts the past. Leakage produces gorgeous validation scores and a model that collapses in the real world.
+
+```python
+from sklearn.model_selection import train_test_split
+from sklearn.pipeline import make_pipeline
+from sklearn.preprocessing import StandardScaler
+from sklearn.linear_model import LogisticRegression
+
+# Split FIRST, then fit any preprocessing only on the training fold.
+X_tr, X_test, y_tr, y_test = train_test_split(
+    X, y, test_size=0.2, random_state=0, stratify=y)
+
+# Pipeline fits the scaler on train only -> no leakage of test statistics
+model = make_pipeline(StandardScaler(), LogisticRegression())
+model.fit(X_tr, y_tr)          # scaler.mean_ comes from X_tr only
+print(model.score(X_test, y_test))
+```
+
+::: {.callout-warning}
+Fit every transformer — scalers, imputers, encoders, feature selectors — **inside a pipeline on the training fold only**. Computing them over the full dataset before splitting is the most common leakage bug, and it is invisible until production.
+:::
+
+## 5.6 — Generalization, Overfitting vs Underfitting
 
 The entire point of ML is **generalization**: performing well on *new, unseen* data, not on the examples you trained on. Memorizing the training set is trivial and worthless — it's the exam-vs-homework distinction. We estimate generalization by holding out a **test set** the model never sees during training.
 
@@ -251,17 +316,59 @@ Two failure modes sit on either side of the sweet spot:
 
 **Worked example — fitting a polynomial.** Six points lie roughly on a gentle curve. A degree-1 line (underfit) misses the curvature and has big errors everywhere. A degree-2 curve (good fit) tracks the trend with small errors. A degree-9 polynomial (overfit) threads *every* point exactly — zero training error — but wiggles violently between them, so a new point lands far from the curve. The tell is the gap: when training error is tiny but test error is large, you're overfitting.
 
+You can watch the gap open up directly. The diagnostic is two numbers — training score and validation score — and their difference:
+
+```python
+from sklearn.pipeline import make_pipeline
+from sklearn.preprocessing import PolynomialFeatures
+from sklearn.linear_model import LinearRegression
+from sklearn.model_selection import cross_val_score
+
+for deg in (1, 2, 9):
+    model = make_pipeline(PolynomialFeatures(deg), LinearRegression())
+    train = model.fit(X, y).score(X, y)
+    val = cross_val_score(model, X, y, cv=5).mean()
+    print(f"deg={deg}: train R²={train:.2f}  val R²={val:.2f}")
+# deg 1 -> both low (underfit); deg 2 -> both high (good);
+# deg 9 -> train≈1.0 but val crashes (overfit: the gap is the tell)
+```
+
 ::: {.callout-tip}
 Diagnose by comparing the two errors. High train error → underfitting (add capacity / features). Low train error but high test error → overfitting (add data / simplify / regularize).
 :::
 
-## 5.6 — The Bias–Variance Tradeoff
+## 5.7 — The Bias–Variance Tradeoff
 
 Underfitting and overfitting are the two ends of one continuous dial: **model complexity**. The **bias–variance tradeoff** is the math behind that dial. For squared-error problems, a model's expected test error decomposes into three pieces:
 
 $$\text{Expected error} = \underbrace{\text{Bias}^2}_{\text{wrong assumptions}} + \underbrace{\text{Variance}}_{\text{sensitivity to data}} + \underbrace{\sigma^2}_{\text{irreducible noise}}$$
 
+**In words:** how wrong you'll be on average splits into three independent buckets — how far off your model's *typical* prediction is (bias squared), how much your prediction *jumps around* as the training data changes (variance), and the random noise nobody can ever remove (sigma squared).
+
+**Also written:** $\mathbb{E}\big[(y - \hat f(x))^2\big] = \big(\mathbb{E}[\hat f(x)] - f(x)\big)^2 + \mathbb{E}\big[(\hat f(x) - \mathbb{E}[\hat f(x)])^2\big] + \sigma^2$.
+
 **Bias** is error from the model being too rigid to represent the truth — it's wrong the same way every time. **Variance** is error from the model being so flexible it changes a lot if you reshuffle the training data. **Irreducible noise** ($\sigma^2$) is the floor you can never beat — randomness in the world itself.
+
+A dartboard makes the two concrete: high bias is a tight cluster landing in the wrong corner (consistent, but consistently off); high variance is darts scattered all around the bullseye (centered on average, but wildly inconsistent).
+
+<svg viewBox="0 0 360 180" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif">
+  <!-- high bias board -->
+  <circle cx="90" cy="90" r="55" fill="none" stroke="currentColor"/>
+  <circle cx="90" cy="90" r="35" fill="none" stroke="currentColor"/>
+  <circle cx="90" cy="90" r="15" fill="rgba(34,197,94,0.4)" stroke="currentColor"/>
+  <circle cx="120" cy="60" r="3.5" fill="#ec4899"/><circle cx="126" cy="66" r="3.5" fill="#ec4899"/>
+  <circle cx="123" cy="55" r="3.5" fill="#ec4899"/><circle cx="130" cy="60" r="3.5" fill="#ec4899"/>
+  <text x="90" y="165" text-anchor="middle" font-size="11" font-weight="bold" fill="currentColor">High bias</text>
+  <text x="90" y="178" text-anchor="middle" font-size="9" fill="currentColor">tight, but off-target</text>
+  <!-- high variance board -->
+  <circle cx="270" cy="90" r="55" fill="none" stroke="currentColor"/>
+  <circle cx="270" cy="90" r="35" fill="none" stroke="currentColor"/>
+  <circle cx="270" cy="90" r="15" fill="rgba(34,197,94,0.4)" stroke="currentColor"/>
+  <circle cx="255" cy="70" r="3.5" fill="#38bdf8"/><circle cx="290" cy="105" r="3.5" fill="#38bdf8"/>
+  <circle cx="245" cy="110" r="3.5" fill="#38bdf8"/><circle cx="295" cy="65" r="3.5" fill="#38bdf8"/>
+  <text x="270" y="165" text-anchor="middle" font-size="11" font-weight="bold" fill="currentColor">High variance</text>
+  <text x="270" y="178" text-anchor="middle" font-size="9" fill="currentColor">scattered, centered-ish</text>
+</svg>
 
 The catch: pushing complexity up lowers bias but raises variance, and vice versa. Total error is U-shaped — it falls, bottoms out at the sweet spot, then rises. Your job is to find the bottom.
 
@@ -292,13 +399,17 @@ The catch: pushing complexity up lowers bias but raises variance, and vice versa
 The classic U-curve is the *classical* picture. Very large neural networks show **double descent** — past the interpolation point, test error can fall *again*. The tradeoff still governs everyday models; just don't treat the single U as a universal law for over-parameterized deep nets.
 :::
 
-## 5.7 — Regularization Overview
+## 5.8 — Regularization Overview
 
-If overfitting is the model using too much freedom, **regularization** is any technique that deliberately constrains that freedom to improve generalization. It nudges the model toward simpler solutions, trading a little training accuracy for a lot of test stability — sliding you left on the complexity dial toward the sweet spot.
+If overfitting is the model using too much freedom, **regularization** is any technique that deliberately constrains that freedom to improve generalization. It nudges the model toward simpler solutions, trading a little training accuracy for a lot of test stability — sliding you left on the complexity dial toward the sweet spot. The everyday intuition: you make the model "pay rent" for every bit of complexity it wants, so it only keeps the parts the data really insists on.
 
 The most common form adds a **penalty on the size of the weights** to the loss:
 
 $$\text{Loss}_{\text{reg}} = \text{Loss}_{\text{data}} + \lambda \sum_i w_i^2$$
+
+**In words:** the new objective is "fit the data well, *plus* a fine that grows with how big your weights get" — and $\lambda$ sets how steep that fine is.
+
+**Also written:** $\mathcal{L}_{\text{reg}}(\mathbf{w}) = \mathcal{L}_{\text{data}}(\mathbf{w}) + \lambda\,\lVert \mathbf{w} \rVert_2^2$ (the penalty is the squared $L_2$ norm of the weight vector).
 
 The penalty term ($L_2$, "ridge") punishes large weights, so the optimizer keeps them small unless the data strongly justifies otherwise. $L_1$ ("lasso") uses $\sum |w_i|$ instead and drives some weights exactly to zero — automatic feature selection. The knob $\lambda$ sets the strength: $\lambda = 0$ is no regularization; large $\lambda$ forces a very simple model (and can underfit).
 
@@ -314,17 +425,36 @@ print(ridge(X,y,0.0))   # no penalty -> fits data closely
 print(ridge(X,y,10.0))  # strong penalty -> weights shrink toward 0
 ```
 
+The same idea in scikit-learn, where `alpha` is the $\lambda$ knob and `Lasso` swaps the $L_2$ penalty for $L_1$ to zero out features:
+
+```python
+from sklearn.linear_model import Ridge, Lasso
+
+ridge = Ridge(alpha=1.0).fit(X_tr, y_tr)   # L2: shrinks all weights
+lasso = Lasso(alpha=0.1).fit(X_tr, y_tr)   # L1: sets some weights to exactly 0
+print("ridge weights:", ridge.coef_)
+print("lasso weights:", lasso.coef_, " <- zeros = features dropped")
+```
+
 Regularization is a family, not one trick: **weight penalties** ($L_1/L_2$), **dropout** (randomly zero neurons during training, Chapter 14), **early stopping** (halt before the model memorizes), and **data augmentation** (add transformed copies of data) all serve the same goal — fight variance.
 
 ::: {.callout-tip}
 Tune $\lambda$ with cross-validation, never on the test set. Sweep it across orders of magnitude ($10^{-4}$ to $10^{1}$) and pick the value that minimizes validation error.
 :::
 
-## 5.8 — The Curse of Dimensionality
+## 5.9 — The Curse of Dimensionality
 
 The **curse of dimensionality** is the bundle of bizarre things that happen when data has many features (high dimensions). The headline: as dimensions grow, the volume of the space explodes exponentially, so your data becomes hopelessly **sparse** — every point sits alone in a vast empty space, and notions like "nearby" stop meaning much.
 
 A concrete way to feel it: to cover 10% of the range of each axis you need a hypercube whose side is $0.1$. In 1-D that captures 10% of the data. In 10-D the same cube captures $0.1^{10}$ = one ten-billionth of the volume. To capture 10% of points in 10-D, the cube's side must be $0.1^{1/10} \approx 0.8$ — it spans 80% of *every* axis. "Local" neighborhoods aren't local anymore.
+
+The fraction-of-axis rule that drives this is worth stating as a formula. To capture a fraction $r$ of the points in $d$ dimensions, each side of the cube must span:
+
+$$e_d(r) = r^{1/d}$$
+
+**In words:** the side length you need to grab a given slice of the data is the $d$-th root of that slice — and as the number of dimensions $d$ grows, that root races toward 1, meaning the "neighborhood" swallows almost the whole range of every feature.
+
+**Also written:** $e_d(r) = \exp\!\big(\tfrac{1}{d}\ln r\big)$, so $e_d(r) \to 1$ as $d \to \infty$ for any fixed $r < 1$.
 
 <svg viewBox="0 0 480 180" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif">
   <text x="60" y="20" text-anchor="middle" font-size="11" font-weight="bold">1-D</text>
@@ -343,11 +473,24 @@ A concrete way to feel it: to cover 10% of the range of each axis you need a hyp
 
 The practical fallout: distance-based methods (k-NN, clustering) degrade because all pairwise distances converge to nearly the same value; you need exponentially more data to fill the space; and overfitting gets easier because there's so much room to draw a perfect-but-meaningless boundary. The cures are **dimensionality reduction** (Chapter 7), **feature selection**, and models with strong built-in assumptions that don't rely on dense neighborhoods.
 
+You can watch distances collapse with a few lines of NumPy — as $d$ grows, the nearest and farthest neighbors become nearly indistinguishable:
+
+```python
+import numpy as np
+rng = np.random.default_rng(0)
+for d in (2, 10, 100, 1000):
+    X = rng.random((500, d))
+    dists = np.linalg.norm(X - X[0], axis=1)[1:]      # distances to point 0
+    contrast = (dists.max() - dists.min()) / dists.min()
+    print(f"d={d:5d}  (far-near)/near = {contrast:.2f}")
+# contrast shrinks toward 0: in high-d, "nearest" barely beats "farthest"
+```
+
 ::: {.callout-warning}
 More features is not more signal. Each useless feature adds dimensions — and emptiness — without information, often *hurting* accuracy. Add features that carry signal, not features because you have them.
 :::
 
-## 5.9 — The No-Free-Lunch Theorem
+## 5.10 — The No-Free-Lunch Theorem
 
 The **no-free-lunch (NFL) theorem** is the field's humility check. Formally: averaged over *all possible problems*, every learning algorithm has the same performance. There is no single best algorithm — one that wins on every task. An algorithm only beats others by making **assumptions** (an **inductive bias**) that happen to match the structure of the problem at hand.
 
@@ -364,7 +507,23 @@ flowchart LR
 
 **Worked example — three datasets, three winners.** On clean tabular data with a linear trend, ridge regression beats a neural net (and trains in milliseconds). On a million labeled images, a convolutional net crushes ridge regression. On messy tabular data full of feature interactions, gradient-boosted trees usually beat both. No model swept all three — exactly what NFL predicts.
 
-The practical takeaway isn't despair, it's method: since theory can't crown a winner, you **try several models and let validation data decide** (Chapter 12). NFL is *why* model selection and cross-validation exist as disciplines.
+The practical takeaway isn't despair, it's method: since theory can't crown a winner, you **try several models and let validation data decide** (Chapter 12). NFL is *why* model selection and cross-validation exist as disciplines. In practice that means a short bake-off:
+
+```python
+from sklearn.model_selection import cross_val_score
+from sklearn.linear_model import RidgeClassifier
+from sklearn.ensemble import RandomForestClassifier, GradientBoostingClassifier
+
+candidates = {
+    "ridge": RidgeClassifier(),
+    "random_forest": RandomForestClassifier(n_estimators=200),
+    "grad_boost": GradientBoostingClassifier(),
+}
+for name, model in candidates.items():
+    score = cross_val_score(model, X, y, cv=5).mean()
+    print(f"{name:15s} CV accuracy = {score:.3f}")
+# Let the winning row decide — NFL says no model is best a priori.
+```
 
 ::: {.callout-tip}
 NFL is permission to be empirical. Stop arguing about which algorithm is "best" in the abstract — benchmark two or three on *your* data and let the validation score settle it.
@@ -376,6 +535,7 @@ NFL is permission to be empirical. Stop arguing about which algorithm is "best" 
 - AI's history swings between **symbolic** (rules) and **connectionist** (learning) approaches; today's foundation models came from scale — GPUs, big data, attention — not hype.
 - Learning paradigms differ by **supervision signal**: supervised (full labels), unsupervised (none), semi-supervised (few), self-supervised (labels from the data itself), reinforcement (reward).
 - The **workflow** is framing → data → features → train → evaluate → deploy → monitor, with constant loop-backs; framing and data dominate the real work.
+- Split data into **train / validation / test** and fit all preprocessing on the training fold only — **data leakage** is the silent killer of real-world models.
 - **Generalization** is the only goal that matters; **underfitting** = too simple (high bias), **overfitting** = memorizes noise (high variance). Diagnose by the train-vs-test gap.
 - The **bias–variance tradeoff** makes total error U-shaped in complexity; **regularization** ($L_1/L_2$, dropout, early stopping) slides you toward the sweet spot.
 - The **curse of dimensionality** makes high-dimensional data sparse and distances meaningless; more features is not more signal.

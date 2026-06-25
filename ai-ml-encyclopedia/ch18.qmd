@@ -904,7 +904,144 @@ The score-SDE picture also hands you a bonus: every reverse SDE has a determinis
 
 The conceptual takeaway closes the loop on the whole family. Energy-based models posed the problem — model any density, but pay at the partition function. Score matching removed $Z$ by learning gradients instead of densities. Langevin dynamics turned those gradients into samples. Diffusion discovered, seemingly independently, that adding and removing noise at many scales makes the whole scheme work on real high-dimensional data. The score-SDE framework shows these were always the same idea: *learn the score of data smoothed across all noise levels, then integrate backward from noise to data.* What looked like four separate techniques is one continuous theory seen through different windows.
 
-## 18.13 — Key takeaways
+## 18.13 — Vector-Quantized Models: Discrete Latent Codes
+
+Every latent space so far has been *continuous* — a VAE's $z$ is a vector of real numbers, an autoencoder's bottleneck is a smooth cloud. But much of the data we care about is more naturally described as a sequence of *discrete symbols*: a sentence is a string of words, and it turns out images and audio compress beautifully into a small alphabet of reusable visual or acoustic "words" too. The **VQ-VAE** (Vector-Quantized VAE) builds exactly that — an autoencoder whose latent code is forced to come from a fixed, finite **codebook** of vectors rather than the whole continuous space.
+
+The intuition: imagine the decoder can only paint using a palette of, say, 512 named colors. The encoder looks at each patch of the image, finds the *nearest* palette entry, and writes down its index. The reconstruction is built entirely from palette colors. Because the codebook is small and shared, the model is pushed to discover a compact vocabulary of recurring parts — eyes, edges, textures — and the image becomes a grid of integer indices, exactly the form a language model knows how to predict.
+
+Concretely, the encoder produces a continuous vector $z_e(x)$, and **quantization** snaps it to its nearest neighbor among the $K$ codebook vectors $\{e_1, \dots, e_K\}$:
+
+$$ z_q(x) = e_k, \qquad k = \arg\min_j \lVert z_e(x) - e_j \rVert_2 $$
+
+**In words:** replace the encoder's raw vector with whichever codebook entry sits closest to it, and remember that entry's index.
+**Also written:** $z_q(x) = e_{k}$ with $k = \operatorname{argmin}_j \lVert z_e(x) - e_j \rVert_2^2$ — squaring the distance changes nothing about which entry wins, since $\arg\min$ ignores monotone transforms.
+
+That $\arg\min$ has zero gradient almost everywhere, which would block training. The fix is the **straight-through estimator**: in the backward pass, pretend the quantizer was the identity and copy the decoder's gradient straight back to the encoder, as if $z_q = z_e$. The full loss has three parts — reconstruction, plus two terms that pull the codebook and the encoder toward each other:
+
+$$ \mathcal{L} = \underbrace{\lVert x - g(z_q) \rVert^2}_{\text{reconstruction}} + \underbrace{\lVert \operatorname{sg}[z_e] - e \rVert^2}_{\text{codebook}} + \beta \underbrace{\lVert z_e - \operatorname{sg}[e] \rVert^2}_{\text{commitment}} $$
+
+**In words:** rebuild the input well, drag the chosen codebook vector toward the encoder's output, and (more gently) drag the encoder's output toward its chosen codebook vector so it commits to a code instead of drifting.
+**Also written:** with $\operatorname{sg}[\cdot]$ the stop-gradient operator, the codebook term moves only $e$ and the commitment term moves only $z_e$ — the same squared distance, but each copy lets gradient flow to just one side.
+
+Here $\operatorname{sg}[\cdot]$ is the **stop-gradient** operator — it passes its value forward but blocks gradient in the backward pass, which is how the two near-identical squared-distance terms end up updating *different* parameters. The commitment weight $\beta$ (often $\approx 0.25$) keeps the encoder from hopping between codes.
+
+```{mermaid}
+flowchart LR
+  X["x"] --> E["encoder"] --> ZE["z_e (continuous)"]
+  ZE --> Q["nearest-neighbor<br/>lookup in codebook"]
+  CB["codebook<br/>e₁ … e_K"] --> Q
+  Q --> ZQ["z_q = e_k (discrete)"]
+  ZQ --> D["decoder"] --> XH["x̂"]
+```
+
+```python
+import torch, torch.nn as nn, torch.nn.functional as F
+
+class VectorQuantizer(nn.Module):
+    def __init__(self, K=512, dim=64, beta=0.25):
+        super().__init__()
+        self.codebook = nn.Embedding(K, dim)
+        self.codebook.weight.data.uniform_(-1/K, 1/K)
+        self.beta = beta
+    def forward(self, z_e):                       # z_e: (B, dim)
+        d = torch.cdist(z_e, self.codebook.weight) # distance to every code
+        k = d.argmin(dim=1)                        # nearest code index
+        z_q = self.codebook(k)                     # quantized vector
+        codebook_loss   = F.mse_loss(z_q, z_e.detach())
+        commitment_loss = F.mse_loss(z_q.detach(), z_e)
+        loss = codebook_loss + self.beta * commitment_loss
+        z_q = z_e + (z_q - z_e).detach()           # straight-through estimator
+        return z_q, k, loss
+```
+
+The line `z_q = z_e + (z_q - z_e).detach()` is the straight-through trick in one expression: the forward value equals `z_q`, but the gradient flows as if it were `z_e`.
+
+The real power shows up in **two-stage generation**. Stage one trains the VQ-VAE to turn images into grids of codebook indices and back. Stage two throws away the pixels and trains a powerful *autoregressive* model (a PixelCNN or a Transformer, §18.6) over those index grids — learning $p(\text{indices})$ exactly the way a language model learns $p(\text{tokens})$. To generate, you sample a fresh grid of indices from the prior, look them up in the codebook, and decode to a full image. This factorization — a learned discrete tokenizer plus a sequence model over the tokens — is the blueprint behind **VQ-VAE-2**, **VQGAN** (which adds an adversarial loss for crisper textures), **DALL·E** (a Transformer over image tokens conditioned on text), and the neural audio codecs (SoundStream, EnCodec) that tokenize sound for speech and music models.
+
+| Model | Latent | What it adds over VQ-VAE |
+|-------|--------|--------------------------|
+| VQ-VAE | Discrete codes + PixelCNN prior | The base recipe |
+| VQ-VAE-2 | Hierarchical (coarse + fine) codes | Multi-scale codebooks for sharper, larger images |
+| VQGAN | Discrete codes + adversarial + perceptual loss | Crisper textures; pairs with a Transformer prior |
+| DALL·E (v1) | Image tokens, text-conditioned Transformer | Text-to-image via next-token prediction |
+| EnCodec / SoundStream | Discrete *audio* codes (residual VQ) | Tokenizes waveforms for audio language models |
+
+::: {.callout-warning}
+The classic VQ-VAE failure is **codebook collapse**: a handful of codes get used for everything while the rest go dead, shrinking the effective vocabulary. Common cures are re-initializing unused codes to recent encoder outputs, updating the codebook with an exponential moving average instead of gradients, or replacing hard nearest-neighbor with a soft/Gumbel assignment during early training.
+:::
+
+## 18.14 — Fast Sampling: Distillation and Consistency Models
+
+Diffusion's one glaring weakness is speed. A GAN paints an image in a single forward pass; a diffusion model traditionally needs tens to hundreds of denoising steps, each a full U-Net evaluation. For interactive tools and on-device generation that is far too slow. The last few years produced a clean line of attack: keep diffusion's stable training and excellent quality, but collapse the long sampling chain into a handful of steps — or even one.
+
+The first lever is a **better ODE solver**. Recall the probability-flow ODE from §18.12: sampling is really just integrating a deterministic differential equation from noise to data, and integrating an ODE is a well-studied numerical problem. Generic samplers like **DDIM**, **DPM-Solver**, and higher-order exponential integrators take much larger, smarter steps than naive Euler, cutting a 1000-step process down to 20–50 steps *with no retraining at all* — you just swap the sampler. This is the easy, free win and the first thing to reach for.
+
+The second lever is **distillation**: train a fast student network to reproduce, in few steps, what the slow teacher produces in many. **Progressive distillation** halves the step count repeatedly — a student learns to take one step that matches two teacher steps, then becomes the teacher for the next halving — walking 1024 steps down to 8, then 4, then 2.
+
+The most elegant idea in this family is the **consistency model**. Its insight: along the entire probability-flow trajectory from noise to a given clean image, *every* point should map back to the *same* clean image. So train a single network $f_\theta(x_t, t)$ to predict that common endpoint directly, from any noise level, and enforce that its predictions are *self-consistent* across adjacent points on the trajectory:
+
+$$ f_\theta(x_t, t) \approx f_\theta(x_{t'}, t') \quad \text{for points on the same trajectory}, \qquad f_\theta(x, 0) = x $$
+
+**In words:** wherever you are along the path from static to a particular image, the network should jump straight to that same final image — and at zero noise it must return the image untouched.
+**Also written:** the **boundary condition** $f_\theta(x,0)=x$ plus trajectory-invariance is what makes a *single* evaluation a valid one-step generator; more steps just refine it.
+
+Because the network is trained to leap straight to the answer, generation can be **single-step** — draw noise, evaluate $f_\theta$ once, done — yet you can optionally take a few more steps to trade compute for quality, the same graceful dial diffusion offers. Consistency models can be *distilled* from a pretrained diffusion teacher or trained standalone from scratch.
+
+```{mermaid}
+flowchart LR
+  N["x_T noise"] -.->|"diffusion: T small steps"| I1["image"]
+  N2["x_T noise"] -->|"consistency: 1 big jump f_θ"| I2["image"]
+  XT["any xₜ on the path"] --> F["f_θ(xₜ,t)"] --> SAME["same clean x₀"]
+```
+
+In practice you pull a distilled few-step or one-step model straight off the shelf rather than training one:
+
+```python
+# A distilled few-step diffusion model: high quality in ~4 steps
+from diffusers import AutoPipelineForText2Image
+import torch
+
+pipe = AutoPipelineForText2Image.from_pretrained(
+    "stabilityai/sdxl-turbo", torch_dtype=torch.float16
+).to("cuda")
+# guidance off, a handful of steps instead of 50
+img = pipe("a red fox in snow, photorealistic",
+           num_inference_steps=4, guidance_scale=0.0).images[0]
+```
+
+<svg viewBox="0 0 560 150" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif" font-size="10">
+  <text x="280" y="16" text-anchor="middle" font-weight="bold" fill="currentColor">many small denoising steps  vs.  one consistency leap</text>
+  <!-- multi-step path -->
+  <circle cx="40" cy="55" r="10" fill="#94a3b8" opacity="0.6"/>
+  <circle cx="120" cy="55" r="10" fill="#6366f1" opacity="0.4"/>
+  <circle cx="200" cy="55" r="10" fill="#6366f1" opacity="0.55"/>
+  <circle cx="280" cy="55" r="10" fill="#6366f1" opacity="0.7"/>
+  <circle cx="360" cy="55" r="10" fill="#6366f1" opacity="0.85"/>
+  <line x1="52" y1="55" x2="108" y2="55" stroke="#f59e0b" stroke-width="2" marker-end="url(#m18)"/>
+  <line x1="132" y1="55" x2="188" y2="55" stroke="#f59e0b" stroke-width="2" marker-end="url(#m18)"/>
+  <line x1="212" y1="55" x2="268" y2="55" stroke="#f59e0b" stroke-width="2" marker-end="url(#m18)"/>
+  <line x1="292" y1="55" x2="348" y2="55" stroke="#f59e0b" stroke-width="2" marker-end="url(#m18)"/>
+  <text x="200" y="90" text-anchor="middle" fill="currentColor">diffusion: noise → … → image (T steps)</text>
+  <!-- one-step leap -->
+  <circle cx="40" cy="120" r="10" fill="#94a3b8" opacity="0.6"/>
+  <circle cx="360" cy="120" r="10" fill="#22c55e" opacity="0.8"/>
+  <path d="M52,120 Q200,135 348,120" fill="none" stroke="#22c55e" stroke-width="2.5" marker-end="url(#m18)"/>
+  <text x="200" y="145" text-anchor="middle" fill="currentColor">consistency: noise → image (1 step)</text>
+  <defs><marker id="m18" markerWidth="8" markerHeight="8" refX="6" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 Z" fill="currentColor"/></marker></defs>
+</svg>
+
+| Approach | Steps | Retraining? | Idea |
+|----------|-------|-------------|------|
+| Better ODE solver (DDIM, DPM-Solver) | 20–50 | None | Larger, smarter integration steps |
+| Progressive distillation | 4–8 | Distill from teacher | Halve step count repeatedly |
+| Consistency model | 1–4 | Distill or from scratch | Map any noise level to the same endpoint |
+
+::: {.callout-tip}
+The speed ladder, cheapest first: swap in a better ODE sampler (free, no training) → distill to a few-step student → distill or train a one-step consistency model. Each rung buys speed; the lower rungs cost a little quality, so stop at the first one fast enough for your use case.
+:::
+
+## 18.15 — Key takeaways
 
 - **Generative models learn the data distribution** so they can synthesize new samples, rather than mapping inputs to labels.
 - **Autoencoders** compress through a bottleneck and reconstruct; denoising and sparse variants force more useful codes, but the plain latent space has holes you can't sample from.
@@ -916,14 +1053,16 @@ The conceptual takeaway closes the loop on the whole family. Energy-based models
 - **Autoregressive and flow-based models** give *exact* likelihoods: autoregressive factorizes $p(x)$ via the chain rule (slow sequential sampling), flows use invertible transforms and change-of-variables (fast, but limited expressiveness).
 - **Boltzmann machines / RBMs** are energy-based models trained with contrastive divergence; historically pivotal for deep-learning pretraining and conceptually echoed in today's score-based diffusion.
 - **Energy-based models, score matching, Langevin dynamics, and diffusion are one theory** — learn the score of data smoothed across noise levels, then integrate backward from noise to data; the partition function is dodged by modeling gradients, not densities.
+- **Vector-quantized models (VQ-VAE/VQGAN)** turn data into grids of discrete codebook tokens, so a Transformer can generate by next-token prediction — the recipe behind DALL·E and neural audio codecs.
+- **Fast sampling** closes diffusion's speed gap: better ODE solvers need no retraining, distillation collapses the chain to a few steps, and consistency models map any noise level straight to the final sample for one-step generation.
 
-## 18.14 — See also
+## 18.16 — See also
 
 - **Neural Networks (Core)** — the encoder, decoder, generator, and discriminator are all standard nets; backprop and activations underpin everything here.
 - **Convolutional Neural Networks** — the backbone of DCGAN, StyleGAN, and the U-Net inside diffusion models.
 - **Dimensionality Reduction** — autoencoders are nonlinear cousins of PCA; the latent space is a learned low-dimensional manifold.
 - **Probability & Statistics** — KL divergence, Gaussian priors, the ELBO, the change-of-variables formula, and the Boltzmann distribution all live here.
-- **Large Language Models** — autoregressive text generation, the other great branch of generative modeling.
+- **Large Language Models** — autoregressive text generation, the other great branch of generative modeling; the same next-token machinery powers VQ-VAE's discrete-token priors.
 - **Computer Vision** — the primary proving ground for GANs and diffusion (image synthesis, translation, super-resolution).
 - **Probabilistic Graphical Models** — Boltzmann machines are undirected graphical models; the energy/partition-function machinery originates there.
 

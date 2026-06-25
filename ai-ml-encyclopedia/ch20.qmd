@@ -160,6 +160,25 @@ $$
 **In words:** scan all adjacent token pairs in the corpus and merge the single pair that occurs most frequently into one new token; repeat.
 **Also written:** $\text{merge} = \operatorname*{argmax}_{(x,y)\in \text{pairs}} \ \text{freq}(xy)$ — choose the bigram $xy$ with maximum frequency.
 
+This figure shows the same vocabulary trade-off the three schemes make — words are reliable but explode and break on new words, characters never break but lose all word identity, and subwords sit in the sweet spot:
+
+<svg viewBox="0 0 440 180" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif" font-size="12">
+  <text x="10" y="18" fill="currentColor" font-size="13">Granularity vs. vocabulary size</text>
+  <line x1="40" y1="150" x2="420" y2="150" stroke="currentColor" stroke-opacity="0.4"/>
+  <text x="40" y="168" fill="currentColor" opacity="0.7">fine ←  token size  → coarse</text>
+  <rect x="60" y="60" width="70" height="90" fill="#38bdf8" fill-opacity="0.55"/>
+  <text x="68" y="52" fill="currentColor">characters</text>
+  <text x="62" y="120" fill="currentColor" font-size="10">tiny vocab,</text>
+  <text x="62" y="134" fill="currentColor" font-size="10">long seqs</text>
+  <rect x="190" y="95" width="70" height="55" fill="#22c55e" fill-opacity="0.55"/>
+  <text x="200" y="87" fill="currentColor">subwords</text>
+  <text x="192" y="128" fill="currentColor" font-size="10">balanced ✓</text>
+  <rect x="320" y="40" width="70" height="110" fill="#f59e0b" fill-opacity="0.55"/>
+  <text x="338" y="32" fill="currentColor">words</text>
+  <text x="322" y="120" fill="currentColor" font-size="10">huge vocab,</text>
+  <text x="322" y="134" fill="currentColor" font-size="10">OOV breaks</text>
+</svg>
+
 ```{mermaid}
 flowchart LR
   A["Raw text<br/>'The cats ran.'"] --> B[Normalize<br/>lowercase, strip]
@@ -535,7 +554,7 @@ print(sentiment("This movie was not great at all."))
 # [{'label': 'NEGATIVE', 'score': 0.99}]  <- handles the negation BoW misses
 ```
 
-The trap in sentiment is **negation and sarcasm**: "not great" flips polarity but a bag-of-words model sees the positive word "great". Word-order-aware models (LSTM, transformer) handle this far better, which is why fine-tuned transformers now dominate sentiment benchmarks. For evaluating these classifiers — accuracy, precision, recall, F1 — see Section 20.10 and Model Evaluation & Tuning.
+The trap in sentiment is **negation and sarcasm**: "not great" flips polarity but a bag-of-words model sees the positive word "great". Word-order-aware models (LSTM, transformer) handle this far better, which is why fine-tuned transformers now dominate sentiment benchmarks. For evaluating these classifiers — accuracy, precision, recall, F1 — see Section 20.11 and Model Evaluation & Tuning.
 
 ::: {.callout-warning}
 Multiplying many small probabilities underflows to zero on real documents. Always work in **log space**: sum $\log P(w\mid c)$ instead of multiplying. The toy example above is short enough to skip it, but production code must not.
@@ -642,13 +661,71 @@ sys  = ["the cat the mat"]                          # system output
 print(sacrebleu.corpus_bleu(sys, refs).score)       # corpus-level BLEU (0-100)
 ```
 
-BLEU is cheap and correlates with human judgment in aggregate, but it is surface-level: it rewards exact n-gram overlap and misses valid paraphrases ("big" vs. "large"). Newer metrics like **METEOR** (allows synonyms/stems) and embedding-based **BERTScore** (semantic similarity) address this; see Section 20.10.
+BLEU is cheap and correlates with human judgment in aggregate, but it is surface-level: it rewards exact n-gram overlap and misses valid paraphrases ("big" vs. "large"). Newer metrics like **METEOR** (allows synonyms/stems) and embedding-based **BERTScore** (semantic similarity) address this; see Section 20.11.
 
 ::: {.callout-warning}
 BLEU is meaningful only as a *corpus-level* average against the *same* reference set. A single-sentence BLEU is noisy, and scores aren't comparable across datasets or different numbers of references.
 :::
 
-## 20.9 — Chatbots & dialogue (retrieval vs generative, intent/slot)
+## 20.9 — Text generation & decoding (summarization, sampling)
+
+Translation is one instance of a much broader family: **conditional text generation**, where a model produces an output sequence from some input. **Summarization** is the other everyday member — condensing a long document into a short one — and it splits into two styles. **Extractive** summarization *copies* the most important sentences verbatim (safe, never hallucinates, but choppy); **abstractive** summarization *rewrites* the gist in new words with a seq2seq or LLM (fluent, but can invent facts). The same encoder–decoder machinery from translation powers abstractive summarization; only the training data changes (document → summary instead of source → target).
+
+Whatever the task, once the model gives you a probability distribution over the next token, you still have to *choose* a token — and that choice, the **decoding strategy**, matters as much as the model. The intuition: the model hands you a ranked menu of next words each step; decoding is your policy for ordering off that menu. Greedy always orders the top item; sampling rolls dice weighted by the menu; beam search keeps several half-finished plates and serves the best.
+
+- **Greedy decoding**: always take the single highest-probability token. Fast, but myopic — locking in the best word *now* can paint you into a corner later, and it produces bland, repetitive text.
+- **Beam search**: keep the $k$ best partial sequences ("beams") at every step and expand all of them, so a locally worse word that leads somewhere better can survive. Standard for translation and summarization where there is one "right" answer.
+- **Sampling** (temperature, top-$k$, top-$p$/nucleus): draw the next token at random from the distribution. **Temperature** $T$ flattens ($T>1$, more surprising) or sharpens ($T<1$, more conservative) it; **top-$k$** samples only from the $k$ likeliest tokens; **top-$p$** samples from the smallest set whose probabilities sum to $p$. This is what gives chatbots and story generators their creativity.
+
+Temperature reshapes the distribution before sampling by dividing the logits $z$ by $T$:
+
+$$
+P(w) = \frac{\exp(z_w / T)}{\sum_{v}\exp(z_v / T)}.
+$$
+
+**In words:** before turning scores into probabilities, divide every score by the temperature — a big $T$ squashes the gaps so even unlikely words get a real shot (creative, wild), a small $T$ exaggerates the gaps so the top word almost always wins (focused, safe).
+**Also written:** $P(w) = \operatorname{softmax}(z / T)_w$; the limit $T \to 0$ recovers greedy decoding (argmax), while $T \to \infty$ approaches a uniform random pick.
+
+<svg viewBox="0 0 440 180" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif" font-size="12">
+  <text x="10" y="18" fill="currentColor" font-size="13">Same logits, different temperature</text>
+  <text x="40" y="42" fill="currentColor" font-size="11">low T (0.5): sharp, picks the top word</text>
+  <rect x="40" y="48" width="120" height="14" fill="#6366f1" fill-opacity="0.8"/>
+  <rect x="160" y="48" width="34" height="14" fill="#6366f1" fill-opacity="0.45"/>
+  <rect x="194" y="48" width="14" height="14" fill="#6366f1" fill-opacity="0.25"/>
+  <text x="40" y="98" fill="currentColor" font-size="11">high T (1.5): flat, spreads the bets</text>
+  <rect x="40" y="104" width="64" height="14" fill="#f59e0b" fill-opacity="0.8"/>
+  <rect x="104" y="104" width="52" height="14" fill="#f59e0b" fill-opacity="0.6"/>
+  <rect x="156" y="104" width="44" height="14" fill="#f59e0b" fill-opacity="0.45"/>
+  <text x="40" y="150" fill="currentColor" font-size="11" opacity="0.7">bar width ≈ probability of each candidate next token</text>
+</svg>
+
+A concrete summarization example shows the extractive/abstractive split. Source: *"The committee met on Friday. After a long debate, it approved the new budget."*
+
+| Style | Output |
+|-------|--------|
+| **Extractive** | "It approved the new budget." (a sentence lifted as-is) |
+| **Abstractive** | "Budget passed after debate." (reworded, shorter) |
+
+In code, modern generation is one Hugging Face call, and the decoding knobs are just arguments:
+
+```python
+from transformers import pipeline
+
+summarizer = pipeline("summarization")           # abstractive, seq2seq under the hood
+text = ("The committee met on Friday. After a long debate, "
+        "it approved the new budget for the coming year.")
+print(summarizer(text, max_length=20, min_length=5)[0]["summary_text"])
+
+# decoding knobs on a generator (greedy vs. sampled):
+gen = pipeline("text-generation", model="gpt2")
+gen("Once upon a time", do_sample=True, temperature=0.8, top_p=0.9, max_new_tokens=20)
+```
+
+::: {.callout-tip}
+Match the decoder to the task: **beam search** when there is essentially one correct output (translation, summarization, code), **sampling with temperature/top-p** when you want diversity and voice (dialogue, story writing, brainstorming).
+:::
+
+## 20.10 — Chatbots & dialogue (retrieval vs generative, intent/slot)
 
 A **dialogue system** (chatbot) carries on a conversation with a user. Two architectural families, and a spectrum between them — think of it as a help-desk worker reading from a binder of pre-approved answers (retrieval) versus one improvising replies on the spot (generative):
 
@@ -662,7 +739,7 @@ flowchart TD
   K -->|Generative| G[LLM generates<br/>new tokens] --> GB[Novel reply]
 ```
 
-Modern assistants blend both: **Retrieval-Augmented Generation (RAG)** retrieves relevant documents, then *generates* an answer grounded in them — combining retrieval's factual control with generation's fluency. The mental model: an open-book exam — the model looks up the relevant pages first, then writes the answer in its own words instead of reciting from memory.
+Modern assistants blend both: **Retrieval-Augmented Generation (RAG)** retrieves relevant documents, then *generates* an answer grounded in them — combining retrieval's factual control with generation's fluency. The mental model: an open-book exam — the model looks up the relevant pages first, then writes the answer in its own words instead of reciting from memory. (The retrieval half of RAG is exactly the semantic search of Section 20.12.)
 
 **Task-oriented** bots (booking a flight, ordering food) traditionally run a **Natural Language Understanding (NLU)** front end built on two jobs:
 
@@ -705,7 +782,7 @@ For the LLM techniques behind modern chatbots — instruction tuning, RAG, funct
 Choose by risk tolerance: retrieval (or RAG) when wrong answers are costly and must stay on-brand; pure generation when open-ended fluency matters more than guaranteed correctness.
 :::
 
-## 20.10 — Evaluation metrics
+## 20.11 — Evaluation metrics
 
 NLP spans classification, sequence labeling, generation, and ranking, and each needs its own yardstick. Choosing the wrong metric is one of the most common ways an NLP project quietly fails. Here is the map.
 
@@ -738,7 +815,56 @@ The deepest caution: **all automatic generation metrics are proxies.** A fluent,
 Never report a single metric on an imbalanced task. A spam classifier that labels everything "ham" can hit 95% accuracy while catching zero spam — its recall is 0. Always pair accuracy with precision/recall or F1, and report on a held-out test set (Model Evaluation & Tuning).
 :::
 
-## 20.11 — Bias, fairness & safety in NLP
+## 20.12 — Semantic search & vector databases
+
+TF-IDF (Section 20.2) finds documents that share the *exact words* of your query — search "automobile" and a page that only says "car" is invisible to it. **Semantic search** fixes this by matching on *meaning* instead of surface words: embed the query and every document into the same vector space (Section 20.3), then return the documents whose vectors point most nearly in the query's direction. The intuition: instead of matching keywords, you place every document as a pin on a map of meaning and grab the pins nearest to where the query lands — synonyms and paraphrases sit close together, so "how do I reset my password" finds a doc titled "account recovery steps."
+
+The score is the same **cosine similarity** from Section 20.3, now between a query vector $q$ and a document vector $d$:
+
+$$
+\text{score}(q, d) = \frac{q \cdot d}{\lVert q\rVert\,\lVert d\rVert}.
+$$
+
+**In words:** rank documents by how closely their meaning-vector points the same way as the query's meaning-vector; the smaller the angle, the more relevant.
+**Also written:** if the vectors are pre-normalized to unit length, this collapses to a plain dot product, $\text{score}(q,d) = \hat{q}\cdot\hat{d}$ — which is why production systems normalize once and store $\hat{d}$.
+
+The modern document embedder is not word2vec but a **sentence/passage encoder** (e.g., a Sentence-BERT model) that maps a whole chunk of text to one vector. The flow is: embed your corpus once offline, store the vectors, then at query time embed the query and find its nearest neighbors.
+
+```{mermaid}
+flowchart LR
+  subgraph Offline indexing
+    C[Documents] --> E1[Embed each<br/>passage] --> V[(Vector index)]
+  end
+  Q[User query] --> E2[Embed query] --> NN[Nearest-neighbor<br/>search in V]
+  V --> NN
+  NN --> R[Top-k relevant<br/>passages]
+```
+
+Scanning every vector is fine for thousands of documents but hopeless for millions. **Vector databases** (FAISS, Pinecone, Milvus, pgvector) solve this with **approximate nearest neighbor (ANN)** indexes — structures like HNSW graphs that find *almost* the closest vectors in near-constant time, trading a sliver of recall for an enormous speedup. This indexed semantic search is the *retrieval* half of RAG (Section 20.10): the documents it returns become the grounding an LLM writes its answer from.
+
+A minimal end-to-end semantic search, embedding with `sentence-transformers` and searching with FAISS:
+
+```python
+from sentence_transformers import SentenceTransformer
+import faiss, numpy as np
+
+model = SentenceTransformer("all-MiniLM-L6-v2")
+docs = ["how to reset your password", "store hours and locations", "refund policy details"]
+emb = model.encode(docs, normalize_embeddings=True)        # unit vectors
+
+index = faiss.IndexFlatIP(emb.shape[1])                    # inner product = cosine (normalized)
+index.add(np.asarray(emb))
+
+q = model.encode(["I forgot my login"], normalize_embeddings=True)
+scores, ids = index.search(np.asarray(q), k=1)
+print(docs[ids[0][0]])     # -> 'how to reset your password'  (no shared keywords!)
+```
+
+::: {.callout-tip}
+Hybrid search — combining keyword (BM25/TF-IDF) and semantic (vector) retrieval, then merging the rankings — usually beats either alone: keywords nail exact terms and rare names, embeddings catch paraphrases and synonyms.
+:::
+
+## 20.13 — Bias, fairness & safety in NLP
 
 It is tempting to treat a model's output as neutral arithmetic, but a language model is a mirror of its training text — and that text carries every prejudice, stereotype, and gap of the people who wrote it. Garbage in, garbage out has a social edge here: bias in, bias out. Before deploying any NLP system that touches people, you have to ask not just "is it accurate?" but "is it fair, and is it safe?"
 
@@ -773,16 +899,16 @@ The headline 92% hid a real harm: Group B's harmless comments are flagged nearly
 
 Beyond fairness sit two more safety concerns that any generative deployment must plan for:
 
-- **Hallucination** — generative models state false things fluently and confidently. Grounding with retrieval (RAG, Section 20.9) and citing sources is the main defense.
+- **Hallucination** — generative models state false things fluently and confidently. Grounding with retrieval (RAG, Section 20.10) and citing sources is the main defense.
 - **Toxicity & misuse** — models can produce harmful, hateful, or unsafe text, and can be prompted to. Safety filters, content moderation, and alignment training (covered in Large Language Models) are the guardrails.
 
 ::: {.callout-warning}
 A model that is *accurate on average* can still be *unfair to a subgroup*. Fairness is not a single number — slice every evaluation by the protected groups your system will affect, and look at error *types* (false positives vs. false negatives), not just overall accuracy.
 :::
 
-## 20.12 — Evaluation metrics in code
+## 20.14 — Evaluation metrics in code
 
-Having mapped the metrics conceptually (Section 20.10), it helps to see them computed with real tooling rather than by hand — in practice you never re-derive precision or BLEU from scratch.
+Having mapped the metrics conceptually (Section 20.11), it helps to see them computed with real tooling rather than by hand — in practice you never re-derive precision or BLEU from scratch.
 
 ```python
 # Classification / sequence-labeling metrics with scikit-learn
@@ -795,7 +921,7 @@ print(f"P={p:.2f} R={r:.2f} F1={f1:.2f}")
 print(classification_report(y_true, y_pred))   # per-class P/R/F1 in one table
 ```
 
-For NER, the `seqeval` library scores at the **entity-span** level (the strict version from Section 20.10), and for generation, libraries wrap BLEU/ROUGE/BERTScore so you pass strings and get scores:
+For NER, the `seqeval` library scores at the **entity-span** level (the strict version from Section 20.11), and for generation, libraries wrap BLEU/ROUGE/BERTScore so you pass strings and get scores:
 
 ```python
 # ROUGE for summarization (recall-oriented n-gram overlap)
@@ -805,20 +931,21 @@ s = scorer.score("the cat sat on the mat", "a cat was on the mat")
 print(s["rougeL"].fmeasure)   # longest-common-subsequence F-measure
 ```
 
-The point is reflexive metric hygiene: pick the metric that matches the task (Section 20.10), compute it with a trusted library, slice it by subgroup (Section 20.11), and only then trust the number.
+The point is reflexive metric hygiene: pick the metric that matches the task (Section 20.11), compute it with a trusted library, slice it by subgroup (Section 20.13), and only then trust the number.
 
-## 20.13 — Key takeaways
+## 20.15 — Key takeaways
 
 - **Text must become numbers first.** Tokenization (increasingly **subword** BPE/WordPiece) plus optional stemming/lemmatization/stop-word handling is the unavoidable front door of every NLP pipeline.
 - **Representations climbed a ladder of meaning:** raw counts (BoW) → frequency-weighted counts (TF-IDF) → dense semantic vectors (**word2vec/GloVe**) → contextual vectors (transformers); **n-grams** add a little local word-order back to the order-blind models.
-- **Embeddings encode meaning geometrically** — similar words sit close, and analogies become vector arithmetic ($\vec{king}-\vec{man}+\vec{woman}\approx\vec{queen}$) — which also means they inherit and reflect the **biases** in their training text.
+- **Embeddings encode meaning geometrically** — similar words sit close, and analogies become vector arithmetic ($\vec{king}-\vec{man}+\vec{woman}\approx\vec{queen}$) — which also means they inherit and reflect the **biases** in their training text, and power **semantic search** (embed query + corpus, rank by cosine, scale with vector databases).
 - **A language model predicts the next token**; n-grams count, neural LMs generalize, and **perplexity** scores prediction (lower = better, but tokenizer-dependent).
+- **Generation needs a decoding strategy:** greedy and beam search for one-right-answer tasks (translation, summarization), temperature/top-p **sampling** for creative, diverse output.
 - **Sequence labeling** (POS, NER with BIO tags) needs label-transition structure (CRF) on top of per-token scores; **classification** (sentiment, intent) maps a whole document to a category.
-- **Translation** went statistical → neural **seq2seq** → attention, evaluated by **BLEU** (n-gram precision + brevity penalty).
+- **Translation** went statistical → neural **seq2seq** → attention, evaluated by **BLEU** (n-gram precision + brevity penalty); **summarization** splits into extractive (copy) vs. abstractive (rewrite).
 - **Dialogue** spans retrieval (safe, fixed) to generative (fluent, risky), with **RAG** blending them; task bots decompose into **intent + slots**.
 - **Match the metric to the task**: F1 for labeling, BLEU for translation, ROUGE for summarization, and human/LLM judgment as the real ground truth — and always slice metrics by **subgroup** to catch fairness failures aggregate numbers hide.
 
-## 20.14 — See also
+## 20.16 — See also
 
 - **Recurrent & Sequence Models** — the RNN/LSTM backbone behind seq2seq, BiLSTM tagging, and neural LMs.
 - **Attention & Transformers** — contextual embeddings and the architecture that now dominates NLP.
