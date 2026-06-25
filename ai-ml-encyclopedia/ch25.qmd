@@ -84,6 +84,14 @@ toc-expand: true
 <li><a href="ch38.html">38 &middot; ⚖️ AI Ethics, Fairness & Safety</a></li>
 <li><a href="ch39.html">39 &middot; 🌠 Frontier & Emerging Directions</a></li>
 </ul>
+<p class="ig-era">🎓 Advanced & Specialized Topics</p>
+<ul>
+<li><a href="ch40.html">40 &middot; 🔗 Graph Machine Learning</a></li>
+<li><a href="ch41.html">41 &middot; 🤖 Robotics & Autonomy</a></li>
+<li><a href="ch42.html">42 &middot; 📐 Learning Theory</a></li>
+<li><a href="ch43.html">43 &middot; 🔎 Information Retrieval & Data Mining</a></li>
+<li><a href="ch44.html">44 &middot; 🏗️ LLM Systems: Building LLMs from Scratch</a></li>
+</ul>
 </details>
 
 ------------------------------------------------------------------------
@@ -477,7 +485,427 @@ The unifying engine is **MCTS guided by learned networks**: the value network su
 The throughline is removal: AlphaGo removed the handcrafted evaluation, AlphaZero removed human data, MuZero removed the known model. Each step generalises the system to more problems — the practical payoff of methods that learn from interaction rather than instruction.
 :::
 
-## 25.10 — Key takeaways
+
+## 25.10 — Imitation learning: learning to act by watching
+
+The cleanest way to teach a skill is often to demonstrate it. A driving instructor does not hand you a reward function and tell you to maximize discounted future safety; they drive, you watch, you copy. Imitation learning formalizes that idea: instead of learning from a scalar reward signal, the agent learns from a dataset of expert trajectories — sequences of states paired with the actions the expert took there.
+
+This sidesteps the single hardest part of reinforcement learning: designing a reward. For tasks like "drive like a careful human" or "fold a towel," writing down a reward that captures what you actually want is brutally hard, but producing demonstrations is easy. The cost reappears elsewhere, as we will see, but for many problems the trade is worth it.
+
+### Behavioral cloning: imitation as supervised learning
+
+The most direct approach treats imitation as plain supervised learning. Collect a dataset $\mathcal{D} = \{(s_i, a_i)\}$ from the expert, then fit a policy $\pi_\theta(a \mid s)$ to predict the expert's action at each state — exactly as you would train a classifier (discrete actions) or a regressor (continuous actions). This is **behavioral cloning** (BC).
+
+::: {.callout-tip}
+Behavioral cloning is the "just memorize what the expert did" baseline. No environment interaction, no reward, no rollouts during training — one pass of supervised learning over logged demonstrations. When it works, it is by far the cheapest option.
+:::
+
+The objective is a standard maximum-likelihood (or regression) loss:
+
+$$
+\theta^\star = \arg\max_\theta \sum_{(s,a)\in\mathcal{D}} \log \pi_\theta(a \mid s).
+$$
+
+### The compounding-error problem
+
+Behavioral cloning has a subtle, fatal flaw, and it comes from a broken assumption. Supervised learning assumes the training and test inputs are drawn from the *same* distribution. But a policy *generates its own future states*. The states the cloned policy visits depend on the actions it takes, and those actions are imperfect — so the moment the agent makes a small error, it nudges itself into a state slightly off the expert's path. That new state was rare or absent in the demonstrations, so the policy is even less sure what to do, makes a larger error, drifts further off-distribution, and so on. Errors compound.
+
+The classic analysis makes the damage precise. If the cloned policy disagrees with the expert with probability at most $\epsilon$ on states from the expert's distribution, the expected extra cost over a horizon $T$ grows like
+
+$$
+\text{regret} = O(\epsilon\, T^2),
+$$
+
+not the $O(\epsilon T)$ you would naively hope for. The extra factor of $T$ is the cost of *leaving the distribution*: one mistake puts you in a region where mistakes are more likely, and there is no correction signal pulling you back.
+
+<svg viewBox="0 0 480 240" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif" font-size="12">
+  <!-- expert trajectory -->
+  <path d="M40 180 C 140 120, 260 110, 440 100" fill="none" stroke="#2563eb" stroke-width="3"/>
+  <text x="300" y="92" fill="#2563eb">expert trajectory</text>
+  <!-- cloned policy drifting away -->
+  <path d="M40 180 C 130 160, 200 170, 260 150 S 360 70, 440 30" fill="none" stroke="#dc2626" stroke-width="3" stroke-dasharray="6 4"/>
+  <text x="300" y="40" fill="#dc2626">cloned policy drifts off</text>
+  <!-- divergence arrows -->
+  <line x1="260" y1="118" x2="260" y2="150" stroke="#888" stroke-width="1"/>
+  <line x1="360" y1="103" x2="360" y2="60" stroke="#888" stroke-width="1"/>
+  <text x="365" y="78" fill="#888">error grows</text>
+  <circle cx="40" cy="180" r="4" fill="#111"/>
+  <text x="20" y="200" fill="#111">start</text>
+</svg>
+
+You can feel this in a car: clone a human driver who always stays centered in the lane, and the demonstrations contain *no examples of recovering from the shoulder* — because the expert never went there. The first time the cloned policy drifts toward the shoulder, it has no idea how to steer back, because that situation never appeared in training.
+
+### DAgger: let the expert label the states you actually visit
+
+The fix follows directly from the diagnosis. The problem is a mismatch between the states the expert visited and the states the *learner* visits. So gather labels on the learner's own state distribution. **DAgger** (Dataset Aggregation) does exactly this, iteratively:
+
+```{mermaid}
+flowchart LR
+    A[Train policy π on dataset D] --> B[Roll out π in the environment]
+    B --> C[Collect states π actually visits]
+    C --> D[Ask expert for correct action at each]
+    D --> E[Aggregate into D]
+    E --> A
+```
+
+1. Train $\pi$ on the current dataset $\mathcal{D}$ by behavioral cloning.
+2. Run $\pi$ in the environment to collect the states it actually visits — including the off-distribution ones.
+3. Query the expert for the correct action at each of those states.
+4. Add these new (state, expert-action) pairs to $\mathcal{D}$ and repeat.
+
+After a few iterations the dataset covers the recovery situations the learner stumbles into, and the policy learns to climb back onto the expert's path. DAgger provably reduces regret from $O(\epsilon T^2)$ back to $O(\epsilon T)$. The catch is the requirement of an **interactive expert** — a human (or oracle) who can be queried for the right action at arbitrary, possibly weird states. That is exactly the towel-half-folded-and-twisted state nobody wants to label, and it is the practical bottleneck of DAgger.
+
+### Inverse reinforcement learning: recover the reward, not the actions
+
+Behavioral cloning copies *what* the expert did. **Inverse reinforcement learning** (IRL) asks the deeper question: *why* did the expert do it — what reward were they optimizing? If you can recover that reward $R$, you can then run ordinary RL against it and obtain a policy that generalizes to new states, new dynamics, even new goals, rather than parroting a fixed mapping.
+
+The intuition: among all reward functions, find one under which the expert's behavior looks optimal (or near-optimal). The trouble is this is badly under-determined — the all-zero reward makes *every* policy optimal, so the expert is trivially "optimal" under it. IRL needs a principle to break the tie.
+
+**Maximum-entropy IRL** is the dominant answer. It models the expert as noisily-rational: the probability of a trajectory $\tau$ is proportional to the exponential of its total reward,
+
+$$
+p(\tau) \propto \exp\!\Big(\sum_{t} R_\theta(s_t, a_t)\Big),
+$$
+
+so higher-reward trajectories are exponentially more likely, but suboptimal ones are not forbidden. Fitting $R_\theta$ by maximum likelihood picks the reward that explains the demonstrations while being maximally noncommittal (highest entropy) about everything else — the principled tie-breaker. Modern variants (e.g. adversarial IRL) learn $R_\theta$ with a neural network using a GAN-like setup, where a discriminator separating expert from policy trajectories implicitly defines the reward.
+
+::: {.callout-warning}
+IRL is far more expensive than behavioral cloning: the classic formulation runs a full RL solve in an inner loop for every candidate reward, and the recovered reward is only identifiable up to shaping transformations. Reach for IRL when you need a *reward that transfers* to new situations; if you only need to mimic the expert in the same setting, BC or DAgger is much cheaper.
+:::
+
+| Method | Needs reward? | Needs env interaction? | Needs interactive expert? | Fixes compounding error? | Transfers to new settings? |
+|---|---|---|---|---|---|
+| Behavioral cloning | no | no | no | no | no |
+| DAgger | no | yes | yes | yes | no |
+| Inverse RL | learns it | yes | no | yes (via re-solve) | yes |
+
+## 25.11 — Bandits and exploration, made precise
+
+Strip a reinforcement learning problem down until there is only one state, and what remains is a **multi-armed bandit**. You face $K$ slot machines ("arms"); pulling arm $a$ returns a reward drawn from an unknown distribution with mean $\mu_a$. Each round you pick one arm, see its reward, and want to maximize total reward over $n$ rounds. There is no state transition to reason about — only the pure tension between *exploiting* the arm that looks best so far and *exploring* arms you haven't sampled enough to trust.
+
+This stripped-down setting is where the explore–exploit trade-off can be analyzed exactly, and the algorithms that fall out (UCB, Thompson sampling) reappear, lightly modified, throughout full RL.
+
+### Regret: the right way to keep score
+
+Raw cumulative reward is hard to interpret because it depends on the unknown means. The clean scoreboard is **regret**: how much worse you did than an oracle that knew the best arm $a^\star$ (with mean $\mu^\star = \max_a \mu_a$) and pulled it every round.
+
+$$
+\text{Regret}(n) = n\,\mu^\star - \mathbb{E}\!\left[\sum_{t=1}^{n} \mu_{a_t}\right] = \sum_{a} \Delta_a\, \mathbb{E}[N_a(n)],
+$$
+
+where $\Delta_a = \mu^\star - \mu_a$ is the *gap* of arm $a$ and $N_a(n)$ is how many times you pulled it. The second form is the key insight: **regret is just the sum, over suboptimal arms, of how bad each arm is times how often you pulled it.** Good algorithms keep $N_a(n)$ small for high-gap arms.
+
+The gold standard is **sublinear regret**: $\text{Regret}(n)/n \to 0$, meaning your average reward converges to the optimum. The best achievable rate is logarithmic, $O(\log n)$ — you can never stop exploring entirely, but you can explore ever more rarely. Any algorithm with *linear* regret (a constant fraction of pulls wasted forever) has failed.
+
+### Three strategies
+
+**$\epsilon$-greedy** is the blunt instrument. With probability $1-\epsilon$ pull the arm with the best estimated mean; with probability $\epsilon$ pull a uniformly random arm. Dead simple, and it works — but a *fixed* $\epsilon$ wastes a constant fraction of pulls on exploration forever, giving *linear* regret. You must decay $\epsilon_t \sim 1/t$ to recover the $O(\log n)$ rate, and even then it explores indiscriminately, wasting pulls on arms it should already know are bad.
+
+**UCB** (Upper Confidence Bound) is smarter: be *optimistic in the face of uncertainty*. For each arm keep its empirical mean $\hat\mu_a$ plus a bonus that is large when the arm is under-sampled:
+
+$$
+\text{UCB}_a(t) = \hat\mu_a + \sqrt{\frac{2\ln t}{N_a(t)}},
+$$
+
+and pull the arm with the highest UCB. The bonus shrinks as $N_a$ grows, so a rarely-pulled arm gets the benefit of the doubt — you pull it *because* you are uncertain, not at random. An arm gets dropped only once enough samples confirm its mean really is low. UCB achieves the optimal $O(\log n)$ regret and explores in a *targeted* way.
+
+**Thompson sampling** is the Bayesian approach, and often the best in practice. Keep a posterior distribution over each arm's mean. Each round, *sample* one plausible mean from each arm's posterior and pull the arm with the highest sampled value; then update that arm's posterior with the observed reward. Arms with wide posteriors (little data) sometimes sample high and get explored; as data accumulates, posteriors sharpen and exploration fades automatically — "probability matching" rather than an explicit bonus.
+
+```{mermaid}
+flowchart TB
+    subgraph eps["ε-greedy"]
+        E1[best arm w.p. 1−ε] --- E2[random arm w.p. ε]
+    end
+    subgraph ucb["UCB"]
+        U1[score = mean + uncertainty bonus] --- U2[pull highest score]
+    end
+    subgraph ts["Thompson"]
+        T1[sample mean from each posterior] --- T2[pull highest sample]
+    end
+```
+
+### Worked example: three arms, by hand
+
+Three coin-flip arms with true means $\mu = (0.2,\ 0.5,\ 0.8)$; arm 3 is best. Suppose after some play the counts and empirical means are:
+
+| Arm | $N_a$ | $\hat\mu_a$ | bonus $\sqrt{2\ln t / N_a}$ at $t=50$ | UCB |
+|---|---|---|---|---|
+| 1 | 20 | 0.25 | $\sqrt{2\cdot3.91/20}=0.626$ | 0.876 |
+| 2 | 20 | 0.45 | 0.626 | 1.076 |
+| 3 | 10 | 0.70 | $\sqrt{2\cdot3.91/10}=0.884$ | 1.584 |
+
+UCB pulls arm 3: it has both the best mean *and* the largest bonus (fewest pulls), so optimism and exploitation agree. Now contrast with $\epsilon$-greedy at $\epsilon=0.1$: it pulls arm 3 (highest $\hat\mu$) 90% of the time but burns the other 10% split evenly between arms 1, 2, and 3 — including pulls of arm 1, which it already has strong evidence is terrible. That wasted exploration of a clearly-bad arm is exactly what UCB and Thompson avoid.
+
+```python
+import numpy as np
+rng = np.random.default_rng(0)
+mu = np.array([0.2, 0.5, 0.8])           # true means, arm 3 best
+K, n = 3, 2000
+counts = np.zeros(K); sums = np.zeros(K)
+regret = 0.0; mu_star = mu.max()
+for t in range(1, n+1):
+    if (counts == 0).any():              # pull each arm once first
+        a = int(np.argmin(counts))
+    else:
+        ucb = sums/counts + np.sqrt(2*np.log(t)/counts)
+        a = int(np.argmax(ucb))
+    r = rng.random() < mu[a]             # Bernoulli reward
+    counts[a] += 1; sums[a] += r
+    regret += mu_star - mu[a]            # gap incurred this round
+print(counts)        # ~ most pulls on arm 3
+print(round(regret)) # grows like log(n), not linearly
+```
+
+::: {.callout-warning}
+A fixed exploration rate is the most common bandit mistake: constant $\epsilon$ never stops paying the exploration tax, so its regret grows *linearly* and average reward never reaches the optimum. Either decay $\epsilon$ over time or use an uncertainty-aware method (UCB / Thompson) whose exploration shrinks automatically as evidence accumulates.
+:::
+
+## 25.12 — POMDPs: acting when you can't see the whole state
+
+Every method so far quietly assumed you can see the true state. Reality rarely cooperates. A robot's camera is occluded, a medical test is noisy, a poker opponent's cards are hidden. A **partially observable Markov decision process** (POMDP) is the honest model: the world still has a true state $s$ that evolves as a Markov process, but you never observe it directly. Instead, after each action you receive an **observation** $o$ drawn from $O(o \mid s', a)$ — a noisy, partial clue about where you ended up.
+
+The defining difficulty: the optimal action can depend on the *entire history* of past actions and observations, not just the latest clue. A single sensor reading "beep" might mean "target is left" or "target is right" depending on everything that came before. You cannot act well by reacting to the last observation alone.
+
+### The belief state: a sufficient statistic for history
+
+The key move that rescues tractability: you do not need to remember the raw history. You only need the **belief state** $b$ — a probability distribution over the true states, $b(s) = \Pr[\text{state} = s \mid \text{history}]$. The belief is a *sufficient statistic*: it compresses everything the history tells you about where you are. Two different histories that induce the same belief call for the same action.
+
+Each step, the belief is updated by Bayes' rule. After taking action $a$ and seeing observation $o$:
+
+$$
+b'(s') = \eta\; O(o \mid s', a) \sum_{s} T(s' \mid s, a)\, b(s),
+$$
+
+where $\eta$ normalizes. This is exactly the predict-then-correct loop of a Bayes filter: the sum *predicts* the new state from dynamics, and multiplying by $O$ *corrects* using the fresh observation.
+
+Once you track beliefs, a POMDP becomes a fully-observed MDP — but over the continuous **belief space**, a simplex of distributions. That is the curse: you have traded a discrete state space for a continuous one of probability vectors.
+
+```{mermaid}
+flowchart LR
+    B[belief b] -->|choose action a| ACT[act]
+    ACT --> ENV[hidden world: true state transitions]
+    ENV -->|observation o| UPD[Bayes update]
+    B --> UPD
+    UPD -->|new belief b'| B
+```
+
+### Alpha vectors: why the value function is piecewise-linear
+
+Here is the structural miracle that makes POMDPs solvable. The optimal value function over belief space is **piecewise-linear and convex** (PWLC). It can be written as the upper envelope of a finite set of linear functions, each represented by a vector $\alpha$ (an **alpha vector**) with one entry per state:
+
+$$
+V(b) = \max_{\alpha \in \Gamma}\; \sum_{s} \alpha(s)\, b(s) = \max_{\alpha \in \Gamma}\; \alpha \cdot b.
+$$
+
+Each $\alpha$ vector corresponds to a *conditional plan* — "do this, then react to the next observation thus" — and its value is linear in the belief because expected reward is linear in the state probabilities. At any belief $b$, the best plan is whichever $\alpha$ gives the highest dot product. Convexity has a satisfying meaning: value is *highest at the corners* of the simplex (you are certain of the state) and *lowest in the middle* (maximum confusion), because certainty is worth money.
+
+<svg viewBox="0 0 460 240" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif" font-size="12">
+  <!-- axes -->
+  <line x1="40" y1="200" x2="420" y2="200" stroke="#333"/>
+  <line x1="40" y1="200" x2="40" y2="30" stroke="#333"/>
+  <text x="36" y="220">b=(1,0)</text>
+  <text x="380" y="220">b=(0,1)</text>
+  <text x="10" y="40">V(b)</text>
+  <!-- three alpha vectors (lines) -->
+  <line x1="40" y1="70"  x2="420" y2="170" stroke="#2563eb" stroke-width="2"/>
+  <line x1="40" y1="160" x2="420" y2="60"  stroke="#16a34a" stroke-width="2"/>
+  <line x1="40" y1="120" x2="420" y2="130" stroke="#a855f7" stroke-width="2"/>
+  <text x="50" y="66" fill="#2563eb">α₁</text>
+  <text x="395" y="56" fill="#16a34a">α₂</text>
+  <text x="200" y="118" fill="#a855f7">α₃</text>
+  <!-- upper envelope highlighted -->
+  <polyline points="40,70 210,118 420,60" fill="none" stroke="#dc2626" stroke-width="3" stroke-dasharray="5 3"/>
+  <text x="150" y="50" fill="#dc2626">V(b) = upper envelope</text>
+</svg>
+
+### Point-based value iteration (PBVI): plan only where you'll actually be
+
+Exact POMDP solving tracks every alpha vector, and their number explodes with the horizon — exact methods choke beyond toy problems. The breakthrough approximation is **point-based value iteration**. Instead of maintaining the value function over the *whole* simplex, sample a finite set of representative belief points $B = \{b_1, \dots, b_m\}$ — typically beliefs actually reachable from the start — and maintain just *one* alpha vector per point. Back up values only at those points.
+
+The bet: the beliefs you actually encounter are a thin, low-dimensional sliver of the full simplex, so a value function pinned down at a few hundred reachable beliefs generalizes well to the rest (its PWLC structure interpolates between them). PBVI and its descendants (Perseus, SARSOP) turned POMDPs from textbook curiosities into something you can run on real robot navigation problems.
+
+### Online solvers: POMCP and DESPOT
+
+Offline methods compute a policy for *all* beliefs in advance. **Online** solvers do the opposite — they plan from the *current* belief only, every step, by looking ahead with a search tree, then throw the plan away and re-plan after the next observation. This scales to enormous state spaces because you only reason about what is reachable from where you are right now.
+
+**POMCP** (Partially Observable Monte Carlo Planning) is Monte Carlo Tree Search lifted to POMDPs. It runs simulations from the current belief through a tree whose nodes alternate action and observation branches, using random *particles* (sampled states) to represent the belief — no explicit transition or observation matrices needed, just a simulator. **DESPOT** tames the branching by evaluating the tree against a small fixed set of sampled "scenarios" (pre-drawn random outcomes), which sharply bounds the search width and comes with regret guarantees. Both are the practical workhorses when the state space is too large for PBVI.
+
+### QMDP: the cheap approximation that ignores future sensing
+
+Sometimes you want something far simpler. **QMDP** makes one bold simplifying assumption: *after the next step, the world becomes fully observable.* Concretely, solve the underlying MDP (pretending you can see the state) to get state-action values $Q_{\text{MDP}}(s, a)$, then choose the action that is best *on average* under the current belief:
+
+$$
+a^\star = \arg\max_a \sum_s b(s)\, Q_{\text{MDP}}(s, a).
+$$
+
+This is cheap — one MDP solve plus a belief-weighted average — and surprisingly effective. Its blind spot is structural: because it assumes future full observability, **QMDP never values information-gathering**. It will never take an action whose only purpose is to *reduce uncertainty* (peek around a corner, run a diagnostic test), because it believes uncertainty will vanish on its own next step. If your task requires deliberately sensing before acting, QMDP fails and you need a real POMDP solver.
+
+::: {.callout-warning}
+QMDP's pitfall is concrete: it cannot plan to gather information. A QMDP robot uncertain whether the goal is left or right will dither between the two rather than first moving to a vantage point that resolves the ambiguity — because it wrongly assumes the ambiguity resolves itself. Use it as a fast baseline, not when active sensing is the whole point.
+:::
+
+| Method | Offline / Online | Handles big state space? | Values information-gathering? | Cost |
+|---|---|---|---|---|
+| Exact (alpha vectors) | offline | no (toy only) | yes | extreme |
+| PBVI / SARSOP | offline | moderate | yes | medium |
+| POMCP / DESPOT | online | yes (with simulator) | yes | per-step |
+| QMDP | offline | yes (MDP-sized) | **no** | cheap |
+
+## 25.13 — Optimal control and LQR: the continuous cousin of RL
+
+Reinforcement learning grew up alongside an older, more mathematical sibling: **optimal control**. Both ask the same question — choose actions over time to optimize a long-run objective — but control theory studies the case where the dynamics are *known* and the state and action are *continuous*. Where RL says "state, action, reward, policy, value," control says "state, control input, cost, controller, cost-to-go." Same animal, different dialect; and one special case, the **linear-quadratic regulator** (LQR), is so clean it can be solved in closed form, making it the bedrock example that links the two fields.
+
+### The setup: linear dynamics, quadratic cost
+
+LQR is the case where two things line up perfectly. The dynamics are **linear** — the next state is a matrix times the current state plus a matrix times the control:
+
+$$
+x_{t+1} = A x_t + B u_t,
+$$
+
+and the cost to minimize is **quadratic** in state and control:
+
+$$
+J = \sum_{t=0}^{T} \big(x_t^\top Q\, x_t + u_t^\top R\, u_t\big).
+$$
+
+Here $Q \succeq 0$ penalizes being away from the origin (the target state) and $R \succ 0$ penalizes large control effort. The tension is the whole story: $Q$ says "get to the goal fast," $R$ says "but don't slam the actuators." A cruise controller lives this trade-off — $Q$ wants the exact set speed *now*, $R$ wants to avoid flooring the throttle.
+
+### The solution: a linear controller from the Riccati equation
+
+The beautiful result: the optimal controller is **linear in the state**,
+
+$$
+u_t = -K_t\, x_t,
+$$
+
+a constant-feedback gain matrix $K_t$ that you compute *offline*, before ever running the system. The optimal cost-to-go is *quadratic*, $V_t(x) = x^\top P_t\, x$, mirroring the PWLC structure we saw for POMDPs — here the value function's shape is exactly a paraboloid. The matrix $P_t$ is found by sweeping *backward* in time through the **discrete-time Riccati equation**:
+
+$$
+P_t = Q + A^\top P_{t+1} A - A^\top P_{t+1} B \big(R + B^\top P_{t+1} B\big)^{-1} B^\top P_{t+1} A,
+$$
+
+starting from $P_T = Q$, and then the gain is read off as
+
+$$
+K_t = \big(R + B^\top P_{t+1} B\big)^{-1} B^\top P_{t+1} A.
+$$
+
+Over an infinite horizon, $P_t$ converges to a fixed matrix $P$ (the *algebraic* Riccati equation) and the gain $K$ becomes constant — a single time-invariant feedback law. This is the same Bellman backup as in RL, only the recursion closes in matrix algebra instead of a table or a network.
+
+```{mermaid}
+flowchart LR
+    A["set P_T = Q"] --> B["Riccati backup:<br/>P_t from P_t+1"]
+    B --> C{"t = 0?"}
+    C -->|no| B
+    C -->|yes| D["gains K_t = (R+BᵀP B)⁻¹ BᵀP A"]
+    D --> E["run forward:<br/>u_t = −K_t x_t"]
+```
+
+### Worked example: settling a 1-D system
+
+Take a scalar system: $x_{t+1} = x_t + u_t$ (so $A=B=1$), with $Q=1$, $R=1$, over an infinite horizon. The algebraic Riccati equation becomes $P = 1 + P - P^2/(1+P)$, i.e. $P^2/(1+P) = 1$, giving $P^2 - P - 1 = 0$, so $P = (1+\sqrt5)/2 \approx 1.618$ — the golden ratio. The gain is $K = P/(1+P) \approx 0.618$, and the closed-loop dynamics are $x_{t+1} = (1-K)x_t \approx 0.382\, x_t$: the state decays geometrically to zero, smoothly and stably, without us ever simulating a single rollout.
+
+```python
+import numpy as np
+A=B=np.array([[1.0]]); Q=R=np.array([[1.0]])
+P = Q.copy()
+for _ in range(200):                       # iterate Riccati to fixed point
+    K = np.linalg.solve(R + B.T@P@B, B.T@P@A)
+    P = Q + A.T@P@A - A.T@P@B@K
+print("P =", P.ravel())   # ~1.618, the golden ratio
+print("K =", K.ravel())   # ~0.618
+x = 1.0                                     # roll out the optimal controller
+for t in range(8):
+    u = -(K.item())*x; x = x + u
+    print(f"t={t} x={x:.4f}")               # decays ~0.382^t toward 0
+```
+
+### Why this matters for RL
+
+LQR is the Rosetta Stone between control and RL. It shows, in a case you can solve by hand, that the optimal policy is a feedback law and the value function has fixed structure — the very things deep RL tries to approximate when dynamics are unknown or nonlinear. The connection is load-bearing in practice:
+
+- **iLQR / DDP** linearize a nonlinear system around a trajectory and apply LQR repeatedly, the backbone of model-based control for robotics.
+- **Model-based RL** learns $A, B$ (or a nonlinear dynamics model) from data, then plans with control machinery.
+- The **linear-quadratic-Gaussian** (LQG) regulator bolts a Kalman filter onto LQR to handle noisy observations — LQR's answer to partial observability, and a direct continuous-state echo of the belief-state idea from POMDPs.
+
+::: {.callout-tip}
+The cleanest way to internalize the RL–control link: an MDP with linear dynamics and quadratic reward *is* LQR, and its "learned" optimal policy is exactly the Riccati feedback law. If your real problem is nearly linear near the operating point, do not reach for deep RL — linearize and solve the Riccati equation. It is faster, exact, and comes with stability guarantees that learned policies cannot promise.
+:::
+
+## 25.14 — Influence diagrams, Dec-POMDPs, and Markov games
+
+We close with the decision-theoretic frame that sits *above* all the single-agent machinery and the multi-agent extensions that generalize it. Three ideas: a graphical language for one-shot decisions (influence diagrams), the value of gathering information before deciding, and what changes when *multiple* agents decide at once — cooperatively (Dec-POMDPs) or competitively (Markov games).
+
+### Influence diagrams: decisions as graphs
+
+A Bayesian network models *beliefs* — random variables and their probabilistic dependencies. An **influence diagram** extends it with two new node types to model *decisions*:
+
+- **Chance nodes** (ovals) — random variables, as in a Bayes net.
+- **Decision nodes** (rectangles) — variables *you* control; arcs into a decision node show what you'll *know* when you choose.
+- **Utility nodes** (diamonds) — the payoff, a function of its parents.
+
+Solving an influence diagram means choosing the decision rule (a mapping from observed information to action) that maximizes expected utility — exactly a compact, graphical one-shot MDP. The arcs into decision nodes are the crucial part: they encode *information availability*, which sets up the next idea.
+
+```{mermaid}
+flowchart LR
+    W([Weather]) --> U{{Payoff}}
+    F([Forecast]) -.observed.-> D[Take umbrella?]
+    W -.influences.-> F
+    D --> U
+```
+
+### Value of information: what is it worth to know first?
+
+A decision-theoretic agent can reason about *its own future knowledge*. The **value of information** (VoI) of an observation is how much your expected utility rises if you get to see that observation *before* deciding, versus deciding blind:
+
+$$
+\text{VoI} = \mathbb{E}\big[\,\text{utility with the observation}\,\big] - \mathbb{E}\big[\,\text{utility without it}\,\big].
+$$
+
+VoI is never negative — more information can't hurt when you're free to ignore it — and it is *zero* exactly when the information wouldn't change your decision. This is the principle QMDP was missing back in the POMDP section: an agent that computes VoI will pay to run a diagnostic test or peek around a corner precisely when, and only when, the knowledge would alter its action.
+
+**Worked example.** A drilling company decides whether to drill ($+\$200\text{k}$ if oil, $-\$100\text{k}$ if dry); oil has prior probability $0.5$. Blind, the expected value of drilling is $0.5(200) + 0.5(-100) = +\$50\text{k}$, so you drill and expect $\$50\text{k}$. Now a *perfect* seismic test reveals oil-or-dry for sure. With the test: if it says oil (prob $0.5$) you drill for $+\$200\text{k}$; if it says dry (prob $0.5$) you walk away for $\$0$. Expected utility with the test is $0.5(200) + 0.5(0) = \$100\text{k}$. So
+
+$$
+\text{VoI} = \$100\text{k} - \$50\text{k} = \$50\text{k},
+$$
+
+the most you should ever pay for that test. Notice *why* it has value: in the "dry" branch the test *changes your decision* from drill to don't-drill, avoiding a $\$100\text{k}$ loss half the time.
+
+### Dec-POMDPs: cooperation under shared uncertainty
+
+Now add agents. A **decentralized POMDP** (Dec-POMDP) is a team of agents sharing one reward and one world, but each acting on its *own* local observations with *no* free communication. Think of a fleet of warehouse robots that must coordinate to maximize joint throughput, each seeing only its own corner.
+
+The brutal difficulty: each agent must reason not just about the hidden world but about *what its teammates believe and will do* — and they're reasoning about it too, with different information. There is no shared belief state to collapse the problem onto. Dec-POMDPs are **NEXP-complete**, dramatically harder than single-agent POMDPs; optimal solutions exist only for tiny instances, and practice relies on approximations or *centralized training with decentralized execution* (CTDE), the dominant pattern in cooperative multi-agent RL.
+
+### Markov games: when agents have their own agendas
+
+Drop the shared reward and you get a **Markov game** (stochastic game) — the multi-agent generalization of the MDP, and the natural home of competition. Each agent $i$ has its own reward $R_i$; the state transitions depend on *everyone's* joint action.
+
+The conceptual shift is that "optimal" no longer means a single best policy — it means an **equilibrium**. In a *zero-sum* two-player game (one's gain is the other's loss, like the board games covered earlier in this chapter) the solution is a minimax policy, and value iteration with a minimax backup converges. In *general-sum* games, the target is a **Nash equilibrium**: a joint policy where no single agent can improve by unilaterally deviating. Such equilibria exist but may not be unique, and finding them is hard — there is no single scalar "value" everyone agrees to optimize.
+
+```{mermaid}
+flowchart TB
+    R{"reward structure?"} -->|"single shared reward,<br/>full observability"| M["MDP / Markov game (1 agent)"]
+    R -->|"single shared reward,<br/>partial obs, decentralized"| DP["Dec-POMDP<br/>(cooperative, NEXP-hard)"]
+    R -->|"per-agent rewards,<br/>opposed"| ZS["zero-sum Markov game<br/>(minimax)"]
+    R -->|"per-agent rewards,<br/>mixed"| GS["general-sum Markov game<br/>(Nash equilibrium)"]
+```
+
+| Framework | Agents | Reward | Observability | Solution concept | Hardness |
+|---|---|---|---|---|---|
+| MDP | 1 | single | full | optimal policy | P |
+| POMDP | 1 | single | partial | optimal policy (belief) | PSPACE-hard |
+| Dec-POMDP | many | shared | partial, decentralized | optimal joint policy | NEXP-complete |
+| Zero-sum Markov game | 2 | opposed | full | minimax policy | tractable (LP) |
+| General-sum Markov game | many | per-agent | full | Nash equilibrium | hard (PPAD) |
+
+::: {.callout-tip}
+The unifying view of this whole chapter: an MDP is the base case, and every richer framework relaxes one assumption. POMDPs drop full observability (track beliefs); LQR specializes to continuous linear-quadratic dynamics (solve Riccati); Dec-POMDPs and Markov games add agents (solve for joint policies or equilibria). The algorithms differ, but the Bellman backbone — value, lookahead, fixed-point iteration — runs through all of them.
+:::
+
+## 25.15 — Key takeaways
 
 - RL maximises **expected cumulative discounted reward** through interaction, not labelled answers; the **MDP** $(\mathcal{S},\mathcal{A},P,R,\gamma)$ is its universal model.
 - **Bellman equations** tie a state's value to its successors'; **dynamic programming** solves them exactly when the model is known but does not scale.
@@ -487,7 +915,7 @@ The throughline is removal: AlphaGo removed the handcrafted evaluation, AlphaZer
 - The **exploration–exploitation** tradeoff, studied cleanly in **bandits** (ε-greedy, UCB, Thompson), recurs everywhere in RL.
 - **Multi-agent RL** adds non-stationarity; **self-play** turns it into an automatic curriculum, powering **AlphaGo → AlphaZero → MuZero**.
 
-## 25.11 — See also
+## 25.16 — See also
 
 - **Optimization** — gradient ascent, SGD, and the loss-landscape view behind policy gradients.
 - **Probability & Statistics** — expectations, variance, and the Bayesian posteriors underlying Thompson sampling.

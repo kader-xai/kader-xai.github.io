@@ -84,6 +84,14 @@ toc-expand: true
 <li><a href="ch38.html">38 &middot; ⚖️ AI Ethics, Fairness & Safety</a></li>
 <li><a href="ch39.html">39 &middot; 🌠 Frontier & Emerging Directions</a></li>
 </ul>
+<p class="ig-era">🎓 Advanced & Specialized Topics</p>
+<ul>
+<li><a href="ch40.html">40 &middot; 🔗 Graph Machine Learning</a></li>
+<li><a href="ch41.html">41 &middot; 🤖 Robotics & Autonomy</a></li>
+<li><a href="ch42.html">42 &middot; 📐 Learning Theory</a></li>
+<li><a href="ch43.html">43 &middot; 🔎 Information Retrieval & Data Mining</a></li>
+<li><a href="ch44.html">44 &middot; 🏗️ LLM Systems: Building LLMs from Scratch</a></li>
+</ul>
 </details>
 
 ------------------------------------------------------------------------
@@ -319,7 +327,262 @@ The most expensive mistake in applied ML is optimizing the proxy until it diverg
 Before building anything, write down the single business number the project must move and how you will measure it live. If you cannot name that number, you are not ready to train a model — you are ready to talk to a stakeholder.
 :::
 
-## 28.5 — Key takeaways
+
+## 28.5 — Genomics and Computational Biology: Deep Learning on the Sequence of Life
+
+A genome is text. Four letters — A, C, G, T — strung into a sequence three billion characters long in humans, with a grammar we only partially understand. Some stretches code for proteins; far more do not, yet still control *when* and *where* genes switch on. The central problem of computational genomics is reading that grammar: given a stretch of DNA, what does it *do*? Deep learning earns its place here for the same reason it does in language modeling — the input is a long sequence with local motifs and long-range dependencies, and we have lots of it.
+
+The intuition to hold onto: a convolutional or attention model sliding over DNA is doing exactly what it does over text or images. It learns short patterns (a transcription-factor binding site is like a misspelled keyword), composes them, and maps the composition to an outcome (this region is open chromatin; this variant disrupts a regulatory site). The biology supplies the labels; the architecture is mostly borrowed.
+
+```{mermaid}
+flowchart LR
+  A["DNA sequence<br/>(one-hot: 4 x L)"] --> B["Conv layers<br/>learn motifs"]
+  B --> C["Pooling /<br/>dilated conv or attention<br/>long-range context"]
+  C --> D["Output head"]
+  D --> E1["TF binding (DeepBind)"]
+  D --> E2["Chromatin / epigenetic marks (DeepSEA)"]
+  D --> E3["Gene expression tracks (Enformer)"]
+```
+
+### One-hot encoding: turning letters into tensors
+
+Before any convolution, DNA becomes numbers. The standard move is one-hot encoding: each base is a length-4 vector, so a window of length $L$ becomes a $4 \times L$ matrix.
+
+$$
+\text{ACGT} \rightarrow
+\begin{bmatrix}
+1 & 0 & 0 & 0 \\
+0 & 1 & 0 & 0 \\
+0 & 0 & 1 & 0 \\
+0 & 0 & 0 & 1
+\end{bmatrix}^{\!\top}
+$$
+
+A 1-D convolution with a filter of width $w$ then scans this matrix. A single filter is, in effect, a learned **position weight matrix** — the classic way biologists describe a binding motif — and the convolution score is high exactly where the sequence matches the motif.
+
+<svg viewBox="0 0 520 180" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif" font-size="13">
+  <text x="10" y="20" font-weight="bold">Sequence:</text>
+  <text x="100" y="20" letter-spacing="6" font-family="monospace">T G A C G T G A C A</text>
+  <rect x="92" y="6" width="120" height="20" fill="none" stroke="#e07a5f" stroke-width="2"/>
+  <text x="92" y="48" fill="#e07a5f">filter slides &rarr;</text>
+  <text x="10" y="90" font-weight="bold">Motif filter (4&times;3):</text>
+  <g font-family="monospace" font-size="12">
+    <text x="60" y="115">A  .1  .0  .9</text>
+    <text x="60" y="132">C  .0  .8  .0</text>
+    <text x="60" y="149">G  .8  .1  .1</text>
+    <text x="60" y="166">T  .1  .1  .0</text>
+  </g>
+  <text x="300" y="115">conv score peaks</text>
+  <text x="300" y="132">where GAC-like</text>
+  <text x="300" y="149">pattern appears</text>
+  <path d="M250 90 q40 -30 80 0 t80 0" fill="none" stroke="#3d5a80" stroke-width="2"/>
+  <circle cx="290" cy="74" r="4" fill="#3d5a80"/>
+</svg>
+
+This is the lineage worth knowing:
+
+| Model | Year (approx.) | Input window | Architecture | Predicts |
+|---|---|---|---|---|
+| DeepBind | 2015 | ~tens of bp | shallow CNN | TF / RBP binding affinity |
+| DeepSEA | 2015 | 1,000 bp | deep CNN | 919 chromatin features (DNase, TF, histone) |
+| Basset / Basenji | 2016–18 | up to 100 kb | CNN + dilated conv | chromatin accessibility, expression tracks |
+| Enformer | 2021 | ~200 kb | CNN + transformer | thousands of expression / epigenetic tracks |
+
+The arc is one of *reach*. DeepBind reads a binding site. DeepSEA reads a kilobase and predicts a panel of regulatory states. Enformer attends across 200,000 bases so a model can connect an enhancer to the gene it regulates a hundred kilobases away — a dependency far too long for convolutions alone, which is precisely why attention entered the field.
+
+### A from-scratch motif scanner
+
+The cleanest way to feel what these models learn is to skip the training and just *score* a sequence against a known motif, then see where deep nets improve on it.
+
+```python
+import numpy as np
+
+BASES = "ACGT"
+def onehot(seq):                                   # L -> 4 x L
+    idx = {b: i for i, b in enumerate(BASES)}
+    m = np.zeros((4, len(seq)))
+    for j, b in enumerate(seq): m[idx[b], j] = 1
+    return m
+
+# a learned-ish position weight matrix for motif "GAC"
+pwm = np.array([                                   # rows A,C,G,T  cols pos1,2,3
+    [0.1, 0.0, 0.9],
+    [0.0, 0.8, 0.0],
+    [0.8, 0.1, 0.1],
+    [0.1, 0.1, 0.0],
+])
+seq = "TGACGTGACA"
+x = onehot(seq)
+w = pwm.shape[1]
+scores = [np.sum(x[:, i:i+w] * pwm) for i in range(x.shape[1]-w+1)]
+print([round(s, 2) for s in scores])
+peak = int(np.argmax(scores))
+print("best match at pos", peak, "->", seq[peak:peak+w])
+# assert the scanner finds a GAC at the highest-scoring position
+assert seq[peak:peak+w].startswith("G")
+```
+
+A real CNN learns the PWM from data, stacks many of them, and lets later layers learn that *this motif near that motif* means something a single filter never could. But the unit of meaning is still the motif — that continuity is why interpretability tools (below) can map a trained network back to biology.
+
+::: {.callout-tip}
+## Intuition
+A genomics CNN is a regex engine that learned its own patterns. Early filters are fuzzy keywords (binding motifs); deeper layers are the grammar combining them. When the model says "this region is active," the honest follow-up is *which learned patterns fired here* — and that question has a concrete answer.
+:::
+
+## 28.6 — The AlphaFold Idea: From Sequence to Structure
+
+DNA's cousin problem lives one level up. A gene's protein-coding region specifies a chain of amino acids; that chain folds into a 3-D shape; the shape determines what the protein *does*. Predicting the fold from the sequence — the **protein folding problem** — sat unsolved for fifty years. AlphaFold2 (2021) brought it within striking distance of experimental accuracy, and the conceptual move is worth understanding even if you never train one.
+
+The key insight is not "a bigger network." It is **evolutionary coupling**. Across thousands of species, the same protein appears with mutations. If two amino-acid positions are physically touching in the folded structure, a mutation at one tends to be compensated by a mutation at the other — otherwise the protein breaks and that lineage dies out. So *correlated mutations across a multiple-sequence alignment (MSA) are a noisy signal of physical contact.*
+
+```{mermaid}
+flowchart TB
+  A["Query protein sequence"] --> B["Search databases<br/>build MSA<br/>(thousands of homologs)"]
+  B --> C["Evoformer<br/>attention over<br/>sequences &times; residue-pairs"]
+  C --> D["Structure module<br/>predicts 3-D coordinates"]
+  D --> E["Folded structure<br/>+ per-residue confidence (pLDDT)"]
+  E -.refine.-> C
+```
+
+AlphaFold's Evoformer passes information back and forth between two representations — one indexed by *(sequence, residue)* and one by *(residue, residue)* pairs — so the evolutionary signal in the alignment and the geometric constraints of a structure inform each other. A final structure module turns the refined pair representation into atomic coordinates.
+
+A worked micro-example of the coupling signal, no deep learning required:
+
+```python
+import numpy as np
+# 4 aligned homologs, 5 residue positions (toy)
+msa = np.array([
+    list("MKVLA"),
+    list("MRVLD"),   # pos1 K->R AND pos4 ... track pos 1 & 4 together
+    list("MKVLA"),
+    list("MRVLD"),
+])
+def col(j): return msa[:, j]
+# mutual information between two columns ~ "do they vary together?"
+def mutinfo(a, b):
+    mi = 0.0
+    for x in set(a):
+        for y in set(b):
+            pxy = np.mean((a == x) & (b == y))
+            px, py = np.mean(a == x), np.mean(b == y)
+            if pxy > 0: mi += pxy * np.log(pxy / (px * py))
+    return mi
+print("MI(pos1,pos4) =", round(mutinfo(col(0), col(4)), 3))  # high: they co-vary
+print("MI(pos1,pos2) =", round(mutinfo(col(0), col(1)), 3))  # low
+# high MI => likely in contact in the folded structure
+```
+
+Positions 1 and 4 mutate in lockstep (K/A together, R/D together); the model treats that as evidence they sit close in 3-D. AlphaFold replaces this crude mutual-information statistic with learned attention, but the biology it exploits is the same. The practical payoff: a near-complete catalog of predicted human protein structures, each annotated with a **per-residue confidence (pLDDT)** — which matters enormously, because a structure you cannot trust is worse than no structure. Confidence is a first-class output, not an afterthought.
+
+::: {.callout-warning}
+## Pitfall
+AlphaFold predicts a *static, folded* structure for a single chain well; it is far weaker on disordered regions, on the effect of a single point mutation, and on dynamics or binding. Treating a confident fold as a confident *functional* answer is the most common misuse. pLDDT tells you the model trusts the geometry — not that the geometry answers your biological question.
+:::
+
+## 28.7 — Variant-Effect Prediction: Does This Mutation Matter?
+
+Now the question that touches patients. A person's genome differs from the reference at millions of positions. Most differences are harmless. A few cause disease. Variant-effect prediction asks, for a given change, *how likely is it to be functionally consequential?*
+
+The deep-learning framing is elegant and reuses everything above. Take a trained sequence model — DeepSEA, Enformer, a protein language model. Feed it the **reference** sequence and read its prediction. Feed it the **mutated** sequence and read again. The *difference* in predictions is the model's estimate of the variant's effect. No labeled disease examples required for the base signal — the model was trained to predict regulatory or structural state, and the variant's effect falls out of the gap.
+
+```{mermaid}
+flowchart LR
+  R["Reference sequence<br/>...A C [G] T A..."] --> M1["Trained model"]
+  V["Variant sequence<br/>...A C [T] T A..."] --> M2["Trained model"]
+  M1 --> P1["pred_ref<br/>(e.g. chromatin openness)"]
+  M2 --> P2["pred_var"]
+  P1 --> D["effect = | pred_var - pred_ref |"]
+  P2 --> D
+  D --> S["score &rarr; prioritize / flag"]
+```
+
+For coding variants the analog is a protein language model (ESM-style): score the reference amino-acid sequence and the mutant, and a variant the model finds "surprising" (low probability) is more likely to be deleterious. For non-coding variants — the vast majority, and the ones classical methods handled worst — a regulatory model like Enformer predicts whether the change shifts a gene's expression.
+
+A tiny illustration of the difference-of-predictions recipe, with a stand-in scoring function:
+
+```python
+import numpy as np
+# stand-in for a trained model: scores "regulatory activity" of a window.
+# real model = DeepSEA/Enformer; here a toy that rewards the motif "GATA".
+def model_score(seq):
+    return sum(seq[i:i+4] == "GATA" for i in range(len(seq)-3))
+
+ref = "CCGATACC"
+var = "CCGAGACC"          # single base G->... breaks the GATA motif
+effect = model_score(var) - model_score(ref)
+print("ref:", model_score(ref), "var:", model_score(var), "effect:", effect)
+assert effect < 0          # variant destroys a regulatory motif -> flagged
+```
+
+The variant erases a binding motif, the predicted activity drops, the effect score is non-zero — that is the entire logic, scaled up to real networks and thousands of output tracks.
+
+What makes this hard is not the recipe but the **evaluation**. A model that scores variants must be checked against ground truth — known pathogenic vs. benign variants, or experimental measurements from a *massively parallel reporter assay* (MPRA) where thousands of variants are tested in the lab at once. And the metric must respect that pathogenic variants are *rare*: accuracy is meaningless when 99.9% of variants are benign.
+
+| Metric | Why it matters for variant prediction |
+|---|---|
+| AUROC | overall ranking, but optimistic under heavy class imbalance |
+| AUPRC | far more honest when positives (pathogenic) are rare |
+| Calibration | a "0.9 pathogenic" score must mean ~90% truly are |
+| Enrichment in known genes | do top-scored variants land in disease genes? |
+
+## 28.8 — Regulatory-Motif Discovery and Why Interpretability Is the Product
+
+A genomics model that predicts accurately but explains nothing is, in biomedicine, only half-built. The reason is not aesthetic. A biologist wants to know *which sequence features* drive a prediction, because that is the testable hypothesis — the thing you can knock out in the lab to confirm. Interpretability here is not a sanity check bolted on at the end; it is the deliverable.
+
+The workhorse is **attribution**: for each base in the input, how much did it contribute to the output? Methods like in-silico mutagenesis (mutate each base, measure the prediction change) or gradient-based attributions (DeepLIFT, integrated gradients) produce a per-base importance score. Plotting those scores as a letter-height "sequence logo" reveals the motifs the model actually used.
+
+<svg viewBox="0 0 540 160" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif" font-size="12">
+  <line x1="40" y1="120" x2="500" y2="120" stroke="#333"/>
+  <text x="10" y="80" transform="rotate(-90 10 80)">importance</text>
+  <!-- low bases -->
+  <text x="60"  y="118" font-size="14" fill="#999">c</text>
+  <text x="90"  y="118" font-size="14" fill="#999">t</text>
+  <!-- the motif: tall letters = high attribution -->
+  <text x="150" y="118" font-size="54" fill="#e07a5f" font-family="monospace">G</text>
+  <text x="200" y="118" font-size="48" fill="#3d5a80" font-family="monospace">A</text>
+  <text x="250" y="118" font-size="44" fill="#81b29a" font-family="monospace">T</text>
+  <text x="295" y="118" font-size="50" fill="#3d5a80" font-family="monospace">A</text>
+  <!-- low bases again -->
+  <text x="360" y="118" font-size="14" fill="#999">g</text>
+  <text x="390" y="118" font-size="14" fill="#999">a</text>
+  <text x="420" y="118" font-size="14" fill="#999">c</text>
+  <text x="150" y="145" fill="#666">tall letters = bases the model relied on (a GATA motif)</text>
+</svg>
+
+The problem: a single sequence's attributions are noisy. The same true motif shows up in thousands of windows, each slightly different and each with messy per-base scores. **TF-MoDISco** (Transcription Factor Motif Discovery from Importance Scores) solves this by aggregating. It scans attributions across the whole dataset, extracts the high-importance subsequences ("seqlets"), clusters them, and averages each cluster into a clean, consensus motif. The pipeline turns a haystack of noisy per-base scores into a short list of recurring patterns you can match against databases of known transcription-factor binding sites.
+
+```{mermaid}
+flowchart LR
+  A["Trained model"] --> B["Per-base attributions<br/>over many sequences"]
+  B --> C["Extract seqlets<br/>(high-importance stretches)"]
+  C --> D["Cluster similar seqlets"]
+  D --> E["Average &rarr; consensus motifs"]
+  E --> F["Match to known TF database<br/>(novel motif = hypothesis)"]
+```
+
+When a TF-MoDISco motif matches a known transcription factor, the model has *rediscovered real biology from scratch* — strong evidence it learned signal, not artifact. When it surfaces a motif no database knows, that is a genuine hypothesis worth an experiment. Either way, the attribution-to-motif loop is how a black-box predictor becomes a scientific instrument.
+
+### Validation and calibration are non-negotiable
+
+Two failure modes haunt this field, and both are about *trust*, not accuracy.
+
+First, **data leakage through the genome's structure**. Nearby genomic regions are correlated, and the same biological elements recur. Split your train and test sets by random window and you will leak — a near-identical region sits on both sides, and your reported accuracy is fiction. The discipline is to split by **chromosome**: hold out entire chromosomes for testing so no region near a training example can sneak into evaluation. The same logic forbids letting two homologous proteins straddle the train/test boundary in folding work.
+
+::: {.callout-warning}
+## Pitfall
+Random train/test splits are the single most common way genomics deep-learning papers overstate performance. Because regulatory elements and homologs recur across the genome, a random split places near-duplicates on both sides and the model partly memorizes the test set. Always split by chromosome (or by sequence-identity clusters for proteins), and report performance on held-out chromosomes only.
+:::
+
+Second, **uncalibrated confidence in a clinical setting**. A variant-effect model that outputs 0.9 must be right about 90% of the time at that score, or a clinician acting on it makes systematic errors. This is why AlphaFold ships pLDDT, why variant scores are checked for calibration and not just AUROC, and why the honest output of a biomedical model is a *calibrated probability with an interpretable explanation*, never a bare number. The cost of a confidently wrong prediction is measured in misdiagnoses and wasted experiments — so validation against held-out biology, calibrated uncertainty, and attribution-based interpretability are the three things that turn an impressive model into a usable one.
+
+| Requirement | Why it is non-negotiable in biomedicine |
+|---|---|
+| Chromosome-level splits | random splits leak via genomic correlation; inflate accuracy |
+| Calibration | a clinician acts on the *probability*, not the rank |
+| Interpretability (attributions, TF-MoDISco) | the explanation is the testable hypothesis |
+| External validation (MPRA, held-out cohorts) | in-silico accuracy must survive contact with the wet lab |
+
+## 28.9 — Key takeaways
 
 - The hard part of applied ML is almost never the model — it is data quality, distribution shift, regulation, and aligning evaluation with the real business goal.
 - **Finance** is dominated by **non-stationarity** and **regulation**: use walk-forward (time-ordered) validation, fear lookahead bias, and prefer interpretable models where the law demands explanations.
@@ -328,7 +591,7 @@ Before building anything, write down the single business number the project must
 - Expect **distribution shift** by default; monitor it (e.g. PSI) and retrain. Use **human-in-the-loop** for high-stakes decisions.
 - Always evaluate against the **business metric**, ideally via a live A/B test, and beware **Goodhart's law** when optimizing proxies.
 
-## 28.6 — See also
+## 28.10 — See also
 
 - **Anomaly & Fraud Detection** — the mechanics behind the security/fraud workhorse.
 - **Recommender Systems** — the full treatment of the recommendation workhorse.

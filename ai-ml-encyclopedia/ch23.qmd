@@ -84,6 +84,14 @@ toc-expand: true
 <li><a href="ch38.html">38 &middot; ⚖️ AI Ethics, Fairness & Safety</a></li>
 <li><a href="ch39.html">39 &middot; 🌠 Frontier & Emerging Directions</a></li>
 </ul>
+<p class="ig-era">🎓 Advanced & Specialized Topics</p>
+<ul>
+<li><a href="ch40.html">40 &middot; 🔗 Graph Machine Learning</a></li>
+<li><a href="ch41.html">41 &middot; 🤖 Robotics & Autonomy</a></li>
+<li><a href="ch42.html">42 &middot; 📐 Learning Theory</a></li>
+<li><a href="ch43.html">43 &middot; 🔎 Information Retrieval & Data Mining</a></li>
+<li><a href="ch44.html">44 &middot; 🏗️ LLM Systems: Building LLMs from Scratch</a></li>
+</ul>
 </details>
 
 ------------------------------------------------------------------------
@@ -564,7 +572,212 @@ The diagram below shows how temperature reshapes the same logits before sampling
 **Rule of thumb:** for self-hosted serving, the default stack is *4-bit (or int8) quantization to fit memory + vLLM for continuous batching + the KV cache (on by default)*. That trio typically delivers an order-of-magnitude better throughput-per-dollar than naive single-request fp16 generation, with negligible quality loss.
 :::
 
-## 23.8 — Key takeaways
+
+## 23.8 — Direct Preference Optimization and the post-training stack
+
+The previous sections covered RLHF: train a reward model on human preferences, then use PPO to push the policy toward high-reward outputs. It works, but it is a Rube Goldberg machine. You train a separate reward model, keep four models in memory at once (policy, reference, reward, value), and run an on-policy RL loop that is famously twitchy — a slightly wrong KL coefficient and the model collapses into repeating "Thank you for your question!" forever. The natural question is whether all that machinery is actually necessary just to teach a model that humans prefer answer A over answer B.
+
+**Direct Preference Optimization (DPO)** says no. The key insight is a piece of algebra: the optimal policy under the RLHF objective has a *closed-form* relationship to the reward. RLHF maximizes expected reward minus a KL penalty that keeps the policy near a reference model $\pi_{\text{ref}}$. The solution to that constrained problem is
+
+$$\pi^*(y\mid x) = \frac{1}{Z(x)}\,\pi_{\text{ref}}(y\mid x)\,\exp\!\Big(\tfrac{1}{\beta} r(x,y)\Big).$$
+
+Rearrange and the reward is expressible *through the policy itself*: $r(x,y) = \beta \log \frac{\pi(y\mid x)}{\pi_{\text{ref}}(y\mid x)} + \beta \log Z(x)$. The intractable partition function $Z(x)$ is the same for both responses to a given prompt, so it cancels when you compare a preferred response $y_w$ against a rejected one $y_l$. What remains is a plain classification loss on preference pairs:
+
+$$\mathcal{L}_{\text{DPO}} = -\log \sigma\!\Big(\beta \log \tfrac{\pi_\theta(y_w\mid x)}{\pi_{\text{ref}}(y_w\mid x)} - \beta \log \tfrac{\pi_\theta(y_l\mid x)}{\pi_{\text{ref}}(y_l\mid x)}\Big).$$
+
+The reward model has vanished. It is *implicit* — the policy's own log-probability ratio against the frozen reference *is* the reward. No reward model to train, no rollouts to sample, no value network. Just supervised learning on a static dataset of (prompt, chosen, rejected) triples, with the reference model along for the ride to compute the ratios.
+
+::: {.callout-tip}
+The intuition behind the loss: $\log \frac{\pi_\theta(y_w)}{\pi_{\text{ref}}(y_w)}$ is how much *more* likely the trained model makes the good answer relative to where it started. DPO simply pushes the gap between the good answer's lift and the bad answer's lift to be positive — raise $y_w$, lower $y_l$. The $\beta$ knob controls how far the policy is allowed to drift from the reference; small $\beta$ permits big moves, large $\beta$ keeps it conservative.
+:::
+
+### A worked example
+
+Take one preference pair and walk the loss through. Suppose under the reference model the two responses have token log-probabilities (summed over the response) of $\log\pi_{\text{ref}}(y_w) = -5.0$ and $\log\pi_{\text{ref}}(y_l) = -4.0$ — the reference actually finds the *rejected* answer slightly more likely, which is exactly the mistake we want to fix. After a step of training the policy gives $\log\pi_\theta(y_w) = -4.5$ and $\log\pi_\theta(y_l) = -5.0$. With $\beta = 0.1$:
+
+```python
+import math
+def dpo_loss(lp_w, lp_l, ref_w, ref_l, beta=0.1):
+    # log-ratio = how much policy lifted each response vs reference
+    margin = beta*((lp_w - ref_w) - (lp_l - ref_l))   # implicit reward gap
+    return -math.log(1/(1+math.exp(-margin))), margin  # -log sigmoid
+
+loss, margin = dpo_loss(-4.5, -5.0, -5.0, -4.0)
+print(f"reward margin={margin:.3f}  loss={loss:.3f}")
+# implicit reward(y_w)=0.1*(-4.5 - -5.0)= +0.05 ; reward(y_l)=0.1*(-5.0 - -4.0)= -0.10
+# margin = 0.15 ; loss = 0.621  -> below log2≈0.693, so y_w now correctly preferred
+assert margin > 0   # check: chosen now out-ranks rejected
+```
+
+The reference preferred $y_l$ (its implicit reward gap started negative), but the trained policy has flipped the ranking: the implicit reward of $y_w$ is now $+0.05$ versus $-0.10$ for $y_l$, a positive margin, and the loss has dropped below the $\log 2 \approx 0.693$ break-even point. No reward model was ever instantiated — the numbers $\pi_\theta$ and $\pi_{\text{ref}}$ produce *are* the reward.
+
+### The preference-optimization family
+
+DPO opened a floodgate. Once you see preference tuning as a loss on log-ratios, you can redesign the loss. Each variant fixes a specific weakness:
+
+| Method | What it changes | Why |
+|---|---|---|
+| **DPO** | $-\log\sigma$ on the implicit-reward margin | Removes the reward model; baseline. |
+| **IPO** | Replaces log-sigmoid with a squared loss toward a target margin | DPO can overfit to deterministic preferences and push $y_l$ to zero probability; IPO regularizes against this. |
+| **KTO** | Drops *pairs* entirely; uses single thumbs-up / thumbs-down labels with a prospect-theory value function | Pairwise data is expensive; binary "good/bad" feedback is what you actually collect in production. |
+| **ORPO** | Folds preference into the SFT loss via an odds-ratio penalty; **no reference model** | Collapses SFT + alignment into one stage; saves the memory of the frozen reference. |
+| **SimPO** | Uses length-normalized average log-prob as the reward; **no reference model** | The reference-free reward matches what's used at decoding (avg token logprob), and length normalization fights DPO's tendency to ramble. |
+
+The trend is clear: shed components. DPO killed the reward model and the RL loop; ORPO and SimPO kill the reference model too. Less to hold in memory, fewer moving parts, fewer ways to diverge.
+
+### Where each fits the pipeline
+
+Modern post-training is a sequence of stages, and these methods are *complements*, not rivals — most pipelines chain them.
+
+```{mermaid}
+flowchart LR
+    A[Pretrained base] --> B[SFT<br/>imitate good answers]
+    B --> C{Preference stage}
+    C -->|cheap, stable,<br/>offline data| D[DPO / IPO / KTO<br/>ORPO / SimPO]
+    C -->|max quality,<br/>online signal| E[RLHF: reward model + PPO/GRPO]
+    D --> F[Aligned model]
+    E --> F
+    F -.->|harder tasks:<br/>verifiable reward| G[RL for reasoning<br/>see 23.91]
+```
+
+The practical decision rule: **start with DPO**. It is the default first-line alignment method now precisely because it is supervised, reproducible, and runs on a fixed dataset you can inspect and version. Reach for full RLHF with PPO (or GRPO) when you need the last few points of quality, when you have a live stream of fresh human feedback, or when the reward is something you can *check* rather than merely prefer — math correctness, passing unit tests, tool-call success — which is exactly the regime the next section is about.
+
+::: {.callout-warning}
+DPO is offline and on a *fixed* dataset, so it can only re-rank responses that already appear in your preference pairs; it never explores new outputs the way PPO rollouts do. If your chosen/rejected pairs were generated by a weak model, DPO faithfully learns that weak model's ceiling. It also silently rewards verbosity — longer responses accumulate more (negative) log-prob terms in ways that bias the margin — which is the specific bug SimPO's length normalization was built to kill. Always log average response length during DPO training; a creeping upward trend is the canary.
+:::
+
+## 23.9 — Test-time compute and reasoning models
+
+Every method so far spends its effort at *training* time and then answers in a single forward pass. But humans do not solve a hard integral or a logic puzzle in one glance — we scribble, backtrack, check. The insight behind reasoning models is that **spending more computation at inference time**, not just at training time, buys accuracy, and that this is often a better trade than making the model bigger.
+
+### Chain-of-thought and self-consistency
+
+The simplest lever is **chain-of-thought (CoT)**: prompt the model to "think step by step" so it emits intermediate reasoning tokens before the final answer. Those tokens are not decoration — they are scratch space. Each generated step conditions the next, so the model is effectively using its own output as working memory, turning a problem it cannot solve in one step into a sequence of steps it can.
+
+CoT produces *one* reasoning path, and any single path can wander into an error. **Self-consistency** fixes this by sampling many paths at nonzero temperature and taking a *majority vote* over the final answers. Different reasoning routes that converge on the same answer are more likely to be right; a one-off arithmetic slip in one path gets outvoted.
+
+```python
+from collections import Counter
+# 5 sampled chains-of-thought, each ending in a boxed answer
+answers = ["42", "42", "37", "42", "37"]   # extracted final answers
+vote = Counter(answers).most_common(1)[0]
+print(f"self-consistency answer: {vote[0]}  ({vote[1]}/5 paths agreed)")
+# -> 42 (3/5). Two paths slipped to 37; the majority corrects them.
+```
+
+### Best-of-n and verifier reranking
+
+Majority vote treats every path equally. If you have a way to *score* candidate answers, you can do better: sample $n$ responses and pick the best one. This is **best-of-$n$**, and the scorer is a **verifier** — a separate model (or rule) trained to judge whether a solution is correct. For domains with a ground-truth check (does the code pass the tests? does the proof type-check?) the verifier is exact and best-of-$n$ is extremely effective. For fuzzier domains it is a learned reward model doing the reranking.
+
+```{mermaid}
+flowchart LR
+    P[Prompt] --> G[Sample n candidate solutions]
+    G --> C1[candidate 1]
+    G --> C2[candidate 2]
+    G --> C3[...]
+    G --> Cn[candidate n]
+    C1 --> V[Verifier scores each]
+    C2 --> V
+    C3 --> V
+    Cn --> V
+    V --> R[Return highest-scoring]
+```
+
+### Process vs outcome reward
+
+How should the verifier be trained? Two philosophies, and the distinction matters.
+
+An **Outcome Reward Model (ORM)** scores only the *final answer* — right or wrong. It is cheap to label (you just need the gold answer) but it gives no signal about *where* a long derivation went off the rails, and it can reward a correct answer reached by faulty luck.
+
+A **Process Reward Model (PRM)** scores *each intermediate step*. It catches the first wrong move in a chain, gives much denser feedback, and lets you prune bad branches early in a tree search. The cost is labeling: someone (or another model) must annotate step-by-step correctness, which is far more expensive.
+
+| | Outcome RM | Process RM |
+|---|---|---|
+| Scores | Final answer only | Every reasoning step |
+| Label cost | Low (gold answer) | High (per-step annotation) |
+| Signal density | Sparse | Dense |
+| Catches *where* it failed | No | Yes |
+| Best for | Quick reranking | Tree search, hard multi-step proofs |
+
+### RL-trained reasoning models (o1 / R1-style)
+
+CoT, self-consistency, and best-of-$n$ all bolt extra compute *on top of* a fixed model at inference. The newest generation goes further: it uses **reinforcement learning to train the model to reason** in the first place. Models in the o1 / DeepSeek-R1 family are optimized — typically with a verifiable, outcome-based reward on math and code, using RL algorithms like GRPO — to generate long internal chains of thought before committing to an answer. The training signal is simply "did you get the verifiable answer right," and the model *discovers on its own* that producing longer, self-checking reasoning traces raises its reward.
+
+What emerges is striking: these models spontaneously learn to backtrack ("wait, let me reconsider"), verify intermediate results, and try alternative approaches — behaviors nobody hand-coded. The reasoning happens in a long "thinking" segment that may be hidden from the user, and crucially the model *chooses how long to think* based on difficulty.
+
+```{mermaid}
+flowchart LR
+    Q[Question] --> T["Long internal reasoning<br/>(self-check, backtrack, retry)"]
+    T --> T
+    T --> A[Final answer]
+    style T fill:#1a3a5a,stroke:#4a90d9,color:#fff
+```
+
+The headline result is the **test-time scaling law**: accuracy rises smoothly as you let the model emit more thinking tokens. The same weights get steadily smarter the longer they are allowed to deliberate. This reframes the whole economics of LLMs — you can buy capability with inference compute, not just by paying for a bigger pretraining run.
+
+::: {.callout-warning}
+Test-time compute is not free, and the curve bends. Doubling the thinking budget rarely doubles accuracy; returns diminish, and on easy questions long reasoning *wastes* tokens (and money, and latency) for no gain — sometimes it even talks itself out of a correct first instinct ("overthinking"). Reasoning traces can also be plausible-sounding but unfaithful: the stated chain is not always the true cause of the answer, so do not treat a confident-looking derivation as an audit trail. Match the thinking budget to problem difficulty rather than cranking it to the maximum by default.
+:::
+
+## 23.10 — Evaluating LLMs and agents
+
+Training a model is only half the job; knowing whether it is actually good — and not merely good at *looking* good on your test — is the other half, and it is harder than it sounds. Evaluation is where most LLM projects quietly go wrong, because the failure modes are subtle and the metrics are easy to game.
+
+### Benchmarks and the contamination problem
+
+The field runs on **benchmarks**: fixed datasets with known answers — MMLU for broad knowledge, GSM8K for grade-school math, HumanEval for code, and harder successors like GPQA and competition math. You score the model, you compare to others, you get a number. The trouble is that these benchmarks are *public*, and modern models are pretrained on scrapes of the entire internet. If the test questions and answers leaked into the training data — **data contamination** — the model can score well by *memorization* rather than ability, and your benchmark number is fiction.
+
+::: {.callout-warning}
+Contamination is the single most common way an LLM evaluation lies to you. A model that "solves" a benchmark may have simply read the answer key during pretraining. Defenses: prefer *held-out* or freshly-created test sets the model could not have seen, use benchmarks with private test splits, paraphrase or perturb questions and check whether scores collapse (a memorizing model is brittle to rewording), and watch for suspiciously high performance on old benchmarks paired with poor performance on new ones probing the same skill.
+:::
+
+### LLM-as-judge and its biases
+
+For open-ended outputs — "write a helpful email," "summarize this" — there is no gold answer to match against. The now-standard shortcut is **LLM-as-judge**: prompt a strong model (often GPT-4-class) to score or compare responses. It is fast, cheap relative to human raters, and correlates reasonably with human preference. But the judge is itself a fallible model with measurable, systematic biases:
+
+| Bias | What it is | Mitigation |
+|---|---|---|
+| **Position** | Prefers whichever answer is shown *first* (or sometimes last) | Run both orderings, average; randomize |
+| **Verbosity** | Rates longer answers higher regardless of quality | Control for length; penalize padding explicitly |
+| **Self-preference** | Favors text in its own model's style | Use a different judge family than the one being judged |
+| **Sycophancy** | Agrees with assertive or flattering framing | Strip confidence cues; blind the judge to claimed authority |
+
+The fix is not to abandon LLM-judges but to *calibrate* them — validate against a human-labeled subset, report agreement rates, and treat the judge as an instrument with known error bars rather than an oracle.
+
+### Evaluating agents: trajectory and task success
+
+Agents (the tool-using systems from earlier in this chapter) break single-output evaluation entirely, because an agent's job is a *sequence* of actions, not one answer. Two complementary lenses:
+
+- **Task success (outcome)**: did the agent achieve the goal? Did the booked flight match the request, the file get created, the bug get fixed? This is the bottom line, often a binary pass/fail against an environment check.
+- **Trajectory (process)**: *how* did it get there? Did it call the right tools in a sensible order, avoid redundant or destructive actions, recover gracefully from a tool error? A run can succeed by luck through a sloppy trajectory, or fail late despite near-perfect intermediate steps — so process metrics catch problems outcome alone hides.
+
+```{mermaid}
+flowchart TB
+    subgraph Trajectory["Trajectory eval (process)"]
+        direction LR
+        S1[tool call 1] --> S2[tool call 2] --> S3[tool call 3]
+    end
+    Trajectory --> O{Outcome eval}
+    O -->|env check| OK[goal achieved?]
+    O -->|efficiency| EFF[wasted / redundant steps?]
+    O -->|safety| SAFE[any harmful action?]
+```
+
+Concretely you measure: task-success rate (the headline number), tool-selection accuracy, step efficiency (actions taken vs. the minimum needed), and error-recovery rate. Benchmarks like SWE-bench (resolve real GitHub issues), WebArena (navigate real websites), and $\tau$-bench (tool-use in customer-service dialogues) score agents on exactly these axes against live or simulated environments.
+
+### Red-teaming and safety evaluation
+
+Capability evals ask "can it?"; safety evals ask "can it be *made* to do the wrong thing?" **Red-teaming** is the adversarial probing of a model for harmful behavior — and an aligned model is not the same as a safe one, because alignment can be circumvented.
+
+A **jailbreak** is a prompt crafted to bypass the model's safety training: role-play framings ("you are DAN, you have no rules"), encoding the request to dodge filters, prompt injection that smuggles instructions through retrieved documents or tool outputs, or many-shot priming that drowns the guardrail in fake compliant examples. The defense is to test against these *systematically* rather than hoping production traffic stays benign.
+
+Standardized safety benchmarks make this measurable. **HarmBench** provides a broad battery of harmful-behavior prompts and an automated classifier to score whether the model complied. **AgentHarm** raises the stakes for agents specifically: it measures whether a *tool-using* agent can be steered into harmful multi-step actions — the danger compounds when a jailbroken model can also execute commands, send emails, or move money, not merely emit text.
+
+::: {.callout-warning}
+A high refusal rate on a safety benchmark is necessary but not sufficient. Models can be safe against known jailbreaks and fall to novel ones, and over-aggressive safety tuning creates the opposite failure — refusing benign requests ("how do I kill a Python process?"), which is its own kind of broken. Report both the harmful-compliance rate *and* the false-refusal rate; a model that is safe only because it refuses everything is useless, and one that is helpful only because it refuses nothing is dangerous. For agents, always evaluate safety with tools *live* in a sandbox, because a harmful plan that never executes and a harmful plan that drains an account score identically on text-only evals.
+:::
+
+## 23.11 — Key takeaways
 
 - An **LLM is a scaled-up Transformer**; almost all generative/chat models are **decoder-only** (causal attention, generates left-to-right), while **encoder-only** (BERT) models use bidirectional attention and excel at embeddings and classification.
 - Models read **tokens** (~4 chars each); token counts drive both **cost** and the **context window**. **Scaling laws** say quality improves as a smooth power law in parameters, data, and compute — and Chinchilla says scale them *together* (~20 tokens/param).
@@ -575,7 +788,7 @@ The diagram below shows how temperature reshapes the same logits before sampling
 - **Agents** wrap the LLM in a reason→act→observe loop using **function calling**, standardized by **MCP**, with vector-store long-term memory and optional multi-agent roles — and the tools must be guarded against mistakes and prompt injection.
 - **Inference** is the recurring cost: the **KV cache** ($O(T^2)\to O(T)$), **quantization** (int8/NF4/GPTQ/AWQ), **decoding strategies** (greedy/temperature/top-k/top-p), and **continuous batching via vLLM/PagedAttention**.
 
-## 23.9 — See also
+## 23.12 — See also
 
 - **Attention & Transformers** — the architecture every LLM is built on (attention, masks, positional encoding).
 - **Natural Language Processing** — tokenization lineage, embeddings, and the language tasks LLMs subsume.

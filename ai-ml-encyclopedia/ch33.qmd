@@ -84,6 +84,14 @@ toc-expand: true
 <li><a href="ch38.html">38 &middot; ⚖️ AI Ethics, Fairness & Safety</a></li>
 <li><a href="ch39.html">39 &middot; 🌠 Frontier & Emerging Directions</a></li>
 </ul>
+<p class="ig-era">🎓 Advanced & Specialized Topics</p>
+<ul>
+<li><a href="ch40.html">40 &middot; 🔗 Graph Machine Learning</a></li>
+<li><a href="ch41.html">41 &middot; 🤖 Robotics & Autonomy</a></li>
+<li><a href="ch42.html">42 &middot; 📐 Learning Theory</a></li>
+<li><a href="ch43.html">43 &middot; 🔎 Information Retrieval & Data Mining</a></li>
+<li><a href="ch44.html">44 &middot; 🏗️ LLM Systems: Building LLMs from Scratch</a></li>
+</ul>
 </details>
 
 ------------------------------------------------------------------------
@@ -447,7 +455,280 @@ Note what the code does and does *not* show: it computes the *penalty*, not a gr
 **Intuition:** let each tradition do what it is good at. Neurons handle the fuzzy, high-bandwidth job of turning the world into symbols; logic handles the crisp, auditable job of reasoning over them. Neurosymbolic AI is the wiring that connects the two.
 :::
 
-## 33.8 — Key Takeaways
+
+## 33.8 — Resolution and Proof by Refutation
+
+The honest way to prove a statement is to assume it is false and watch the world catch fire. If assuming "the opposite" forces a contradiction, the original statement had to be true. This is **proof by refutation**, and it is the engine inside almost every automated theorem prover.
+
+Resolution is the single inference rule that makes refutation mechanical. The intuition: if you know "it is raining OR the ground is wet" and you also know "it is NOT raining OR I brought an umbrella," then in every world the two clauses agree on, you can cancel the rain and conclude "the ground is wet OR I brought an umbrella." Two clauses that disagree on exactly one literal can be merged, with that literal struck out.
+
+Formally, working in **conjunctive normal form** (CNF) — an AND of clauses, where each clause is an OR of literals — the resolution rule is:
+
+$$\frac{(A \lor \ell) \qquad (B \lor \lnot \ell)}{(A \lor B)}$$
+
+The new clause $(A \lor B)$ is the **resolvent**. If $A$ and $B$ are both empty, the resolvent is the **empty clause** $\square$, which is unsatisfiable by definition — there is no literal left to make true. Deriving $\square$ is the contradiction we were hunting for.
+
+The refutation recipe is always the same:
+
+```{mermaid}
+flowchart LR
+  KB["Knowledge base (true facts)"] --> C["Add ¬(goal)"]
+  C --> N["Convert all to CNF"]
+  N --> R["Resolve clause pairs<br/>repeatedly"]
+  R --> Q{"Derived □ ?"}
+  Q -- yes --> P["goal is PROVEN"]
+  Q -- no, no new clauses --> F["goal does NOT follow"]
+```
+
+::: {.callout-tip}
+You never try to prove the goal directly. You add its negation to the facts you already trust, then show the enlarged set is impossible. If the facts plus "not the goal" cannot all be true at once, the goal must follow from the facts.
+:::
+
+### Worked example
+
+Suppose we know three things and want to prove the patient is healthy ($H$).
+
+| # | English | Clause (CNF) |
+|---|---------|--------------|
+| 1 | If feverish, then infected | $\lnot F \lor I$ |
+| 2 | If infected, then not healthy is false — i.e. treatment makes healthy | $\lnot I \lor H$ |
+| 3 | The patient is feverish | $F$ |
+
+Goal: prove $H$. Negate it and add $\lnot H$ as clause 4. Now resolve:
+
+```python
+# clauses as frozensets of literals; +x = x, -x = not x
+clauses = [frozenset({-1, 2}),   # ¬F ∨ I     (F=1, I=2, H=3)
+           frozenset({-2, 3}),   # ¬I ∨ H
+           frozenset({1}),       # F
+           frozenset({-3})]      # ¬H  (negated goal)
+
+def resolve(ci, cj):                       # all resolvents of two clauses
+    out = []
+    for lit in ci:
+        if -lit in cj:                     # complementary literal found
+            r = (ci - {lit}) | (cj - {-lit})
+            if not any(l in r and -l in r for l in r):  # skip tautologies
+                out.append(frozenset(r))
+    return out
+
+known = set(clauses)
+frontier = list(clauses)
+while frontier:
+    a = frontier.pop()
+    for b in list(known):
+        for r in resolve(a, b):
+            if len(r) == 0:                # empty clause = ⊥
+                print("Contradiction -> H proven"); raise SystemExit
+            if r not in known:
+                known.add(r); frontier.append(r)
+print("H not provable")
+```
+
+Tracing by hand: clause 3 ($F$) resolves with clause 1 ($\lnot F \lor I$) to give $I$. That $I$ resolves with clause 2 ($\lnot I \lor H$) to give $H$. And $H$ resolves with the negated goal $\lnot H$ to give the empty clause $\square$. Contradiction reached, so $H$ is proven.
+
+Resolution is **refutation-complete**: if a set of clauses is genuinely unsatisfiable, resolution will eventually derive $\square$. The catch is *eventually* — the search space of clause pairs explodes, which is exactly the pressure that motivates the smarter solvers below.
+
+::: {.callout-warning}
+Resolution proves *unsatisfiability*, not satisfiability. If it never derives $\square$ and runs out of new clauses, the goal simply does not follow — but on large problems "runs out" can take astronomically long, and naive resolution generates oceans of useless tautological clauses if you do not prune them.
+:::
+
+## 33.9 — Unification: Pattern-Matching for First-Order Logic
+
+Propositional resolution cancels $\ell$ against $\lnot \ell$ — an exact match. First-order logic has variables, so $Loves(x, \text{Mary})$ and $Loves(\text{John}, y)$ *ought* to cancel too: there is clearly a way to make them the same statement. **Unification** is the algorithm that finds that way, computing the substitution that makes two expressions identical.
+
+The intuition is jigsaw matching. A variable is a blank that can take any shape; a constant is a fixed shape; a function term is a shape with its own blanks. Unification slides the pieces together and records what each blank had to become. The result is the **most general unifier (MGU)** — the least committal substitution that works, leaving everything not forced to be equal still free.
+
+$$\text{unify}(Loves(x,\text{Mary}),\; Loves(\text{John},y)) = \{\,x/\text{John},\; y/\text{Mary}\,\}$$
+
+The rules are short:
+
+- variable vs. anything → bind the variable to that term (record it)
+- constant vs. same constant → succeed, no binding
+- constant vs. different constant → **fail**
+- $f(\dots)$ vs. $g(\dots)$ with different functor/arity → **fail**
+- $f(s_1..s_n)$ vs. $f(t_1..t_n)$ → unify arguments pairwise, threading the substitution forward
+
+One rule has teeth: the **occurs check**. You may not bind $x$ to a term that contains $x$, such as $x = f(x)$ — that describes an infinite term $f(f(f(\dots)))$ and no finite substitution satisfies it. Skipping the occurs check is what lets a logic engine quietly produce garbage; many Prolog systems omit it for speed and accept the risk.
+
+```python
+def unify(s, t, sub):
+    s, t = walk(s, sub), walk(t, sub)          # follow existing bindings
+    if s == t:                  return sub                       # same const/var
+    if isvar(s):                return bind(s, t, sub)           # x = t
+    if isvar(t):                return bind(t, s, sub)           # t = x
+    if isfun(s) and isfun(t):                                    # f(...) vs g(...)
+        if s.op != t.op or len(s.args) != len(t.args): return None
+        for a, b in zip(s.args, t.args):                         # args pairwise
+            sub = unify(a, b, sub)
+            if sub is None: return None
+        return sub
+    return None                                                  # const clash
+
+def bind(v, t, sub):
+    if occurs(v, t, sub): return None          # occurs check: no x = f(x)
+    return {**sub, v: t}
+```
+
+### Worked example
+
+Unify $P(a,\; y,\; f(y))$ with $P(x,\; b,\; z)$ (lowercase letters $x,y,z$ are variables; $a,b$ are constants).
+
+| Step | Compare | Action | Substitution so far |
+|------|---------|--------|---------------------|
+| 1 | $P$ vs $P$, arity 3 | match functor, recurse on args | $\{\}$ |
+| 2 | $a$ vs $x$ | bind $x$ to $a$ | $\{x/a\}$ |
+| 3 | $y$ vs $b$ | bind $y$ to $b$ | $\{x/a,\, y/b\}$ |
+| 4 | $f(y)$ vs $z$ | apply $y/b$ then bind $z$ | $\{x/a,\, y/b,\, z/f(b)\}$ |
+
+The MGU is $\{x/a,\ y/b,\ z/f(b)\}$. Apply it to either term and both become $P(a, b, f(b))$.
+
+With unification in hand, first-order resolution generalizes the propositional rule: to resolve two clauses, find a literal in one and a negated literal in the other whose atoms **unify**, apply the MGU to both clauses, and drop the matched pair. This is how a prover reasons over "all men are mortal, Socrates is a man" without ever enumerating every individual — the variable does the quantifying.
+
+::: {.callout-warning}
+Variables in two different clauses are unrelated even if spelled the same. Always **standardize apart** (rename variables uniquely per clause) before unifying, or you will accidentally force $x$ in one fact to equal $x$ in an unrelated fact and derive nonsense.
+:::
+
+## 33.10 — DPLL and CDCL: Inside Modern SAT Solvers
+
+The **Boolean satisfiability problem** (SAT) asks: given a CNF formula, is there any assignment of true/false to the variables that makes every clause true? It was the first problem proven NP-complete, and in the worst case nothing beats trying assignments. Yet today's solvers routinely crack formulas with *millions* of variables. The gap between "exponential in theory" and "fast in practice" is the story of two algorithms.
+
+### DPLL: backtracking search with two shortcuts
+
+The naive approach is a binary tree over variables: try $x_1 = \text{true}$, recurse, backtrack, try false. **DPLL** (Davis–Putnam–Logemann–Loveland) keeps that backtracking skeleton but adds two cheap deductions that prune enormous subtrees:
+
+- **Unit propagation:** a clause with all-but-one literal already false *forces* the last literal true. $(\lnot x_1 \lor x_2)$ with $x_1 = \text{true}$ forces $x_2 = \text{true}$. Then propagate again — one decision can cascade into dozens of forced assignments, a chain reaction called Boolean Constraint Propagation (BCP), where solvers spend most of their time.
+- **Pure literal elimination:** if a variable appears only positively (or only negatively) across all remaining clauses, assign it the satisfying polarity for free.
+
+```{mermaid}
+flowchart TD
+  S["Pick unassigned var<br/>(decision)"] --> U["Unit-propagate<br/>all forced literals"]
+  U --> C{"Conflict?<br/>(a clause all false)"}
+  C -- no --> D{"All clauses<br/>satisfied?"}
+  D -- yes --> SAT(["SAT"])
+  D -- no --> S
+  C -- yes --> B{"Any decision<br/>to undo?"}
+  B -- yes --> J["Backtrack, flip<br/>last decision"] --> U
+  B -- no --> UN(["UNSAT"])
+```
+
+### Worked example: unit propagation does the work
+
+Formula: $(x_1 \lor x_2) \land (\lnot x_1 \lor x_3) \land (\lnot x_3)$.
+
+1. Clause 3 is a unit clause: it forces $x_3 = \text{false}$.
+2. Now clause 2 $(\lnot x_1 \lor x_3)$ has $x_3$ false, so it becomes a unit forcing $x_1 = \text{false}$.
+3. Now clause 1 $(x_1 \lor x_2)$ has $x_1$ false, forcing $x_2 = \text{true}$.
+4. Every clause is satisfied with no branching at all: $x_1{=}F,\ x_2{=}T,\ x_3{=}F$. **SAT.**
+
+Propagation alone solved it — that is why it dominates solver runtime.
+
+### CDCL: learning from every mistake
+
+Plain DPLL, on hitting a conflict, just flips the most recent decision — it forgets *why* the conflict happened and will often rediscover the same dead end elsewhere. **CDCL** (Conflict-Driven Clause Learning) is the upgrade that powers every serious modern solver. When propagation hits a conflict, CDCL analyzes the **implication graph** — which decisions and forced assignments led here — and distills the root cause into a brand-new **learned clause** that it adds permanently to the formula. That clause forbids the entire class of assignments that caused the conflict, so the solver never repeats it.
+
+CDCL then performs **non-chronological backtracking** (backjumping): instead of undoing one level, it leaps straight back to the decision level that actually caused the conflict, potentially skipping many irrelevant levels. Combined with activity-based variable heuristics (VSIDS, which favors variables involved in recent conflicts) and periodic restarts, this is what turns SAT from a toy into industrial infrastructure.
+
+| Feature | DPLL | CDCL |
+|---------|------|------|
+| Backtracking | chronological (one level) | non-chronological (backjump) |
+| Conflict response | flip last decision | learn a clause, never repeat |
+| Memory of failures | none | accumulates learned clauses |
+| Typical scale | thousands of vars | millions of vars |
+
+::: {.callout-warning}
+SAT solvers expect CNF. Converting an arbitrary formula to CNF by distributing $\lor$ over $\land$ can blow up exponentially. Real tools use the **Tseitin transformation**, which introduces fresh auxiliary variables to keep the encoding linear in size — never hand-distribute a large formula into CNF.
+:::
+
+## 33.11 — Model Checking: Verifying Systems Exhaustively
+
+Testing shows the presence of bugs, never their absence — you only ever check the inputs you thought to try. **Model checking** flips this: it explores *every* reachable state of a system and proves a property holds in all of them, or hands you a concrete **counterexample** trace showing exactly how it breaks. Where a theorem prover reasons about formulas, a model checker reasons about a finite (or finitely-abstracted) state machine.
+
+The intuition: model the system as states and transitions, write the desired property in a temporal logic, then ask "is there any path that violates it?" If the search comes back empty, the property is verified for all behaviors; if not, the violating path *is* the bug report.
+
+Properties are written in **temporal logic**, which adds operators for "over time" to ordinary logic:
+
+- $\mathbf{G}\,\varphi$ — *globally*: $\varphi$ holds in every state along every path (a safety/invariant property, e.g. "two trains are never on the same track").
+- $\mathbf{F}\,\varphi$ — *finally*: $\varphi$ eventually holds (a liveness property, e.g. "every request is eventually served").
+- $\mathbf{X}\,\varphi$ — $\varphi$ holds in the *next* state.
+- $\varphi\,\mathbf{U}\,\psi$ — $\varphi$ holds *until* $\psi$ becomes true.
+
+### Worked example: a two-process mutual-exclusion check
+
+Two processes each cycle through *idle → trying → critical*. The safety property we want: $\mathbf{G}\,\lnot(\text{crit}_1 \land \text{crit}_2)$ — never both in the critical section at once. The model checker enumerates the reachable combined states:
+
+```{mermaid}
+stateDiagram-v2
+  [*] --> I_I
+  I_I: idle , idle
+  T_I: trying , idle
+  I_T: idle , trying
+  C_I: crit , idle
+  I_C: idle , crit
+  BAD: crit , crit
+  I_I --> T_I
+  I_I --> I_T
+  T_I --> C_I
+  I_T --> I_C
+  C_I --> I_I
+  I_C --> I_I
+  BAD:::err
+  classDef err fill:#922,color:#fff
+```
+
+If the lock logic is correct, the BAD state $(\text{crit},\text{crit})$ simply has no incoming transition — it is unreachable, and $\mathbf{G}\,\lnot(\text{crit}_1\land\text{crit}_2)$ holds. If a buggy protocol let both processes move from *trying* to *crit* independently, the checker would find a path $I\_I \to T\_I \to \dots \to BAD$ and print it as the counterexample.
+
+The fundamental enemy is **state-space explosion**: $n$ Boolean variables give $2^n$ states, and concurrency multiplies process states together. Two families of techniques fight it, and both lean directly on the SAT machinery of the previous section:
+
+- **Symbolic model checking** represents huge state *sets* compactly — classically with Binary Decision Diagrams (BDDs) — instead of enumerating states one by one.
+- **Bounded model checking (BMC)** asks "is there a counterexample of length $\le k$?" by unrolling the transition relation $k$ steps and encoding the whole question as one giant CNF formula, then handing it to a CDCL SAT solver. A satisfying assignment *is* a counterexample trace; UNSAT means no bug up to depth $k$.
+
+```python
+# Bounded model checking, in spirit: unroll k steps, ask SAT for a bad path.
+# state vars s0..sk; Init, Trans, Bad are CNF predicates over them.
+formula = Init(s[0])                                  # start in an initial state
+for i in range(k):
+    formula &= Trans(s[i], s[i+1])                    # each step is legal
+formula &= Or(*[Bad(s[i]) for i in range(k+1)])       # some state violates safety
+# if SAT  -> assignment is a concrete counterexample trace
+# if UNSAT -> property holds for all paths up to length k
+```
+
+::: {.callout-warning}
+BMC with bound $k$ only proves "no bug within $k$ steps." Declaring a system correct outright requires a **completeness threshold** (a $k$ large enough to cover the whole state space) or an unbounded method like BDD-based checking or k-induction. A clean BMC run at small $k$ is reassuring, not a proof.
+:::
+
+## 33.12 — Where This Powers Planning and Verification
+
+These four ideas are not museum pieces — they are the substrate under tools that ship real software and fly real spacecraft. The unifying trick is **reduction**: take a problem that does not look like logic, encode it as satisfiability or a reachability query, and let a decades-optimized solver do the work.
+
+**Planning as satisfiability.** Classical AI planning — find a sequence of actions from an initial state to a goal — maps cleanly onto SAT. You unroll time into $T$ steps, create a Boolean variable for every fact-at-time and every action-at-time, and add clauses encoding the rules: preconditions must hold before an action, effects hold after, and only one action fires per step. A satisfying assignment *is* a valid plan; the true literals spell out which action happens when. This is exactly the BMC unrolling pattern, reused for action sequences instead of bug traces.
+
+```{mermaid}
+flowchart LR
+  P["Planning / verification<br/>problem"] --> E["Encode as CNF<br/>(unroll over time)"]
+  E --> S["CDCL SAT solver"]
+  S --> R{"SAT?"}
+  R -- yes --> A["Read off plan /<br/>counterexample"]
+  R -- no --> U["No plan / no bug<br/>within bound"]
+```
+
+**Hardware and software verification.** Every modern CPU is model-checked before tape-out — a single arithmetic bug recalled in silicon costs hundreds of millions, so chipmakers prove properties like "this cache protocol never deadlocks" exhaustively rather than testing samples. The same SAT/SMT engines drive software verifiers that prove a function never dereferences null or overflows a buffer on *any* input.
+
+| Domain | Question posed | Engine | Output |
+|--------|---------------|--------|--------|
+| AI planning | reach goal in $\le T$ steps? | SAT (encode + CDCL) | the action sequence |
+| Chip design | can two writers collide? | model checker | counterexample waveform |
+| Program proof | can this assert ever fail? | BMC / SMT | failing input, or "safe" |
+| Protocol design | does every request get served? | temporal model check | violating execution |
+
+**Beyond plain SAT: SMT.** Most real problems mix Boolean logic with arithmetic, arrays, and bit-vectors. **SMT** (Satisfiability Modulo Theories) solvers — Z3, CVC5 — wrap a CDCL core with dedicated *theory solvers* that understand "$x + y \le 10$" or "array $a$ at index $i$." The Boolean engine handles the logical skeleton; the theory solvers check that the chosen literals are consistent in their domain. This combination is what lets a verifier reason about actual program semantics, and it is the bridge from the pure logic of this chapter to the messy, typed, arithmetic world of the systems we actually build.
+
+::: {.callout-tip}
+The throughline of this whole topic: you rarely build a bespoke reasoner. You translate your question — a plan, an invariant, a proof obligation — into clauses, and ride the enormous engineering investment poured into SAT/SMT solvers and model checkers over the last thirty years. Knowing *how to encode* is now more valuable than knowing how to search.
+:::
+
+## 33.13 — Key Takeaways
 
 - **Logic is the foundation:** propositional logic reasons over whole statements; **first-order logic** adds objects, relations, and quantifiers. **Resolution** mechanises proof by refutation — assume the negation of the goal and derive a contradiction (the empty clause). For FOL, **unification** (e.g. $\{x/socrates\}$) finds the substitution that lets a complementary pair cancel.
 - **Expert systems** separate a rule **knowledge base**, **working memory**, and an **inference engine**. **Forward chaining** is data-driven (facts → conclusions); **backward chaining** is goal-driven (goal → needed facts). They prove the same things, differing only in efficiency.
@@ -457,7 +738,7 @@ Note what the code does and does *not* show: it computes the *penalty*, not a gr
 - Symbolic AI's strengths are **interpretability and provable guarantees**; its weaknesses are **brittleness** and the **knowledge-acquisition bottleneck** — complementary to neural networks' profile.
 - **Neurosymbolic AI** fuses the two: neural perception feeds symbolic reasoning, and logic constrains or grounds neural models — the modern antidote to LLM hallucination.
 
-## 33.9 — See Also
+## 33.14 — See Also
 
 - **Probabilistic Graphical Models** — Bayesian networks and the rigorous treatment of reasoning under uncertainty referenced in §33.4.
 - **Search & Problem Solving** — the state-space search machinery underlying chaining and theorem proving.

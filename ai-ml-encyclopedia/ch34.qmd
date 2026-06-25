@@ -84,6 +84,14 @@ toc-expand: true
 <li><a href="ch38.html">38 &middot; ⚖️ AI Ethics, Fairness & Safety</a></li>
 <li><a href="ch39.html">39 &middot; 🌠 Frontier & Emerging Directions</a></li>
 </ul>
+<p class="ig-era">🎓 Advanced & Specialized Topics</p>
+<ul>
+<li><a href="ch40.html">40 &middot; 🔗 Graph Machine Learning</a></li>
+<li><a href="ch41.html">41 &middot; 🤖 Robotics & Autonomy</a></li>
+<li><a href="ch42.html">42 &middot; 📐 Learning Theory</a></li>
+<li><a href="ch43.html">43 &middot; 🔎 Information Retrieval & Data Mining</a></li>
+<li><a href="ch44.html">44 &middot; 🏗️ LLM Systems: Building LLMs from Scratch</a></li>
+</ul>
 </details>
 
 ------------------------------------------------------------------------
@@ -388,7 +396,177 @@ def select(node):
 **Intuition:** minimax assumes a flawless adversary and reasons exhaustively; MCTS gambles, sampling thousands of quick games and trusting the law of large numbers to surface the best move. Tune the exploration constant $c$ *up* to explore more (helpful early, when win-rate estimates are noisy and you don't want to commit) and *down* to exploit more (helpful late, when you trust your accumulated statistics).
 :::
 
-## 34.5 — Key takeaways
+
+## 34.5 — Backtracking search: depth-first assignment with heuristics
+
+A constraint satisfaction problem (CSP) hands you a set of variables, a domain of allowed values for each, and a set of constraints saying which combinations are legal. The job is to assign every variable a value so that no constraint is violated. The brute-force instinct is to try every full assignment and check it, but that explodes: $n$ variables with $d$ values each give $d^n$ combinations. Backtracking search is the simple fix — build the assignment one variable at a time, and the instant a partial assignment breaks a constraint, abandon that whole branch and back up.
+
+The intuition is filling in a form where some answers must agree. You write one entry, check it against what you've already written, and if it clashes you erase it and try the next option rather than blindly finishing the form. Because a violated constraint on three filled-in variables rules out *every* way of filling the rest, pruning early saves the entire subtree below.
+
+```{mermaid}
+flowchart TD
+    A["assignment so far"] --> B{"complete?"}
+    B -->|yes| C["return solution"]
+    B -->|no| D["pick an unassigned variable"]
+    D --> E["try a value from its domain"]
+    E --> F{"consistent with<br/>constraints?"}
+    F -->|yes| G["recurse deeper"]
+    F -->|no| H["try next value"]
+    G --> I{"succeeded?"}
+    I -->|yes| C
+    I -->|no| H
+    H --> J{"values left?"}
+    J -->|yes| E
+    J -->|no| K["backtrack: undo,<br/>fail upward"]
+```
+
+The skeleton is a depth-first recursion: choose a variable, loop over its values, keep the consistent ones, recurse, and undo on failure.
+
+```python
+def backtrack(assignment, csp):
+    if len(assignment) == len(csp.vars):       # all assigned
+        return assignment
+    var = select_unassigned(assignment, csp)   # heuristic choice
+    for val in order_values(var, assignment, csp):
+        if consistent(var, val, assignment, csp):
+            assignment[var] = val
+            result = backtrack(assignment, csp)
+            if result is not None:
+                return result
+            del assignment[var]                # undo, try next
+    return None                                # trigger backtrack
+```
+
+Plain backtracking already beats brute force, but two free choices govern its speed: *which variable to assign next* and *which value to try first*. Those choices are where the heuristics live, and they cost almost nothing to compute.
+
+::: {.callout-tip}
+Backtracking commits to one variable's value and explores fully before reconsidering. Order doesn't change *whether* a solution is found — only how much of the tree you walk before finding it. Good ordering can turn an intractable search into an instant one.
+:::
+
+## 34.6 — Variable and value ordering: MRV, degree, and least-constraining-value
+
+If you must guess, guess where you have the least freedom — that is the whole idea behind variable ordering. The **minimum-remaining-values** heuristic (MRV, also called "most-constrained variable" or "fail-first") picks the unassigned variable with the fewest legal values left. The reasoning is blunt: a variable down to one or two options is a near-forced move, so commit to it now. If it has no legal values, you discover the dead end immediately instead of after pointlessly assigning other variables first.
+
+When several variables tie on MRV — common at the very start, when every domain is still full — the **degree heuristic** breaks the tie by choosing the variable involved in the most constraints with other *unassigned* variables. Pinning down the most entangled variable first prunes the most branches downstream.
+
+Value ordering pulls in the opposite direction. Once you've picked a variable, the **least-constraining-value** heuristic tries the value that rules out the fewest options for the neighboring variables. Here you are *not* failing fast — you want to succeed, and you are betting this branch contains a solution, so you keep your future options as open as possible.
+
+The asymmetry is worth pausing on: pick the variable most likely to fail (so failures surface early), but pick the value least likely to fail (so you don't needlessly destroy a workable branch).
+
+| Choice | Heuristic | Goal | Rule |
+|---|---|---|---|
+| Which variable? | MRV | fail fast | fewest legal values left |
+| Tie-break variable | Degree | prune most | most constraints on unassigned neighbors |
+| Which value? | LCV | succeed | leaves most options open for neighbors |
+
+Consider coloring a map of Australia with three colors — red, green, blue — where adjacent regions must differ. The regions are WA, NT, SA, Q, NSW, V, and the island T (with no land neighbors).
+
+<svg viewBox="0 0 320 260" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif" font-size="13">
+  <rect x="20" y="60" width="70" height="120" fill="#fde2e2" stroke="#555"/>
+  <text x="45" y="125">WA</text>
+  <rect x="90" y="40" width="70" height="80" fill="#e2f0fd" stroke="#555"/>
+  <text x="115" y="85">NT</text>
+  <rect x="90" y="120" width="80" height="90" fill="#e6fde2" stroke="#555"/>
+  <text x="120" y="170">SA</text>
+  <rect x="160" y="40" width="80" height="80" fill="#fdf3e2" stroke="#555"/>
+  <text x="190" y="85">Q</text>
+  <rect x="170" y="120" width="80" height="60" fill="#f0e2fd" stroke="#555"/>
+  <text x="200" y="155">NSW</text>
+  <rect x="180" y="180" width="60" height="40" fill="#e2fdfa" stroke="#555"/>
+  <text x="200" y="205">V</text>
+  <rect x="265" y="200" width="40" height="35" fill="#eee" stroke="#555"/>
+  <text x="275" y="222">T</text>
+</svg>
+
+SA touches WA, NT, Q, NSW, and V — five neighbors — so the degree heuristic flags it first. Assign SA = red. Now every neighbor of SA has lost red from its domain, so all five drop to two values $\{$green, blue$\}$ and T still has three. MRV now prefers any of those five over T. Say we take WA = green; its neighbor NT can no longer be green, leaving NT = blue, which forces Q = green, then NSW = blue, then V = green. T, constrained by nothing, takes any color. The map is solved with zero backtracking — the heuristics steered us straight to a solution.
+
+::: {.callout-warning}
+These heuristics are cheap but not free. MRV and LCV both scan neighbor domains on every step. For small CSPs the bookkeeping can outweigh the savings; their payoff grows with problem size and constraint density. Profile before assuming they help on a tiny instance.
+:::
+
+## 34.7 — Constraint propagation and arc consistency (AC-3)
+
+Heuristics choose *better*; propagation lets you *deduce*. Constraint propagation uses the constraints to shrink domains before and during search — turning "this might be illegal" into "this is provably impossible, delete it." The most useful form is **arc consistency**.
+
+An arc is a directed pair of variables $(X, Y)$ sharing a constraint. The arc is *consistent* when, for every value remaining in $X$'s domain, there exists *some* value in $Y$'s domain that satisfies the constraint. If some value $x$ in $X$ has no compatible partner in $Y$, then $x$ can never be part of a solution, so we delete it. Deleting from $X$ may in turn break the arcs pointing *into* $X$ from its other neighbors, so those must be rechecked — propagation cascades.
+
+**AC-3** is the standard algorithm that runs this to a fixpoint. It keeps a queue of arcs; for each arc it revises $X$'s domain against $Y$, and whenever a revision removes anything, it re-enqueues every arc $(Z, X)$ for $Z$ a neighbor of $X$.
+
+```python
+def ac3(csp):
+    queue = [(x, y) for x in csp.vars for y in csp.neighbors[x]]
+    while queue:
+        x, y = queue.pop(0)
+        if revise(csp, x, y):                  # domain of x shrank
+            if not csp.domain[x]:              # wiped out -> no solution
+                return False
+            for z in csp.neighbors[x] - {y}:   # recheck arcs into x
+                queue.append((z, x))
+    return True
+
+def revise(csp, x, y):
+    removed = False
+    for vx in list(csp.domain[x]):
+        # keep vx only if SOME vy satisfies the constraint
+        if not any(csp.allowed(x, vx, y, vy) for vy in csp.domain[y]):
+            csp.domain[x].remove(vx)
+            removed = True
+    return removed
+```
+
+A worked Sudoku slice shows the cascade. Take three cells in a row, $A, B, C$, all needing different digits. Suppose propagation from elsewhere has already reduced their domains to $A=\{1,2\}$, $B=\{2\}$, $C=\{1,2,3\}$. Because $B$ is fixed at 2, the arc $(A, B)$ deletes 2 from $A$ — no partner left — giving $A=\{1\}$. That revision re-enqueues arcs into $A$; the arc $(C, A)$ now deletes 1 from $C$ (and $(C,B)$ deletes 2), leaving $C=\{3\}$. The slice is fully solved by pure deduction, no guessing.
+
+```{mermaid}
+flowchart LR
+    A0["A = {1,2}"] -->|"(A,B): drop 2"| A1["A = {1}"]
+    B0["B = {2}"] --> A1
+    A1 -->|"(C,A): drop 1"| C1
+    B0 -->|"(C,B): drop 2"| C1["C = {3}"]
+    C0["C = {1,2,3}"] --> C1
+```
+
+Run AC-3 once as preprocessing and it often prunes domains dramatically before search even begins. The catch: arc consistency is sound but *incomplete*. It can certify that individual arcs are satisfiable yet miss higher-order contradictions — a graph can be fully arc-consistent and still have no solution (3-coloring a triangle leaves every domain at all three colors, yet no assignment works). Propagation prunes; it does not generally solve.
+
+## 34.8 — Forward checking and local search (min-conflicts)
+
+**Forward checking** is the lightweight cousin of full propagation, run *inside* backtracking search. Each time you assign a variable a value, you immediately delete that value from the domains of its still-unassigned neighbors. The moment any neighbor's domain becomes empty, you know this branch is doomed and backtrack at once — without descending further. It is cheaper than AC-3 (it only checks arcs pointing at the just-assigned variable, not the full cascade) and pairs naturally with MRV: forward checking is what *updates* the remaining-values counts that MRV reads.
+
+```{mermaid}
+flowchart LR
+    A["assign X = v"] --> B["delete v from<br/>each unassigned<br/>neighbor's domain"]
+    B --> C{"any domain<br/>empty?"}
+    C -->|yes| D["backtrack now"]
+    C -->|no| E["continue search<br/>with smaller domains"]
+```
+
+In the Australia map, assigning SA = red and forward-checking immediately strikes red from WA, NT, Q, NSW, and V. If a later assignment ever empties one of those domains, search reverses on the spot rather than blundering deeper. Forward checking catches failures one step earlier than plain consistency-checking but later than full arc consistency — a deliberate middle ground on the cost/pruning curve.
+
+For very large CSPs — think scheduling thousands of exams, or an $n$-queens board with $n$ in the millions — building a search tree at all is wasteful. **Local search with the min-conflicts heuristic** throws out backtracking entirely. Start from a *complete* assignment (every variable has a value, constraints be damned), then repeatedly pick a variable that is currently in conflict and reassign it to the value that minimizes the total number of violated constraints. Repeat until zero conflicts remain.
+
+```python
+def min_conflicts(csp, max_steps=10000):
+    current = {v: random_value(v) for v in csp.vars}   # full random start
+    for _ in range(max_steps):
+        conflicted = [v for v in csp.vars if conflicts(v, current, csp) > 0]
+        if not conflicted:                             # no violations: solved
+            return current
+        var = random.choice(conflicted)                # a variable in conflict
+        # value that violates the fewest constraints (ties broken randomly)
+        current[var] = min(csp.domain[var],
+                           key=lambda val: conflicts_if(var, val, current, csp))
+    return None                                        # gave up
+
+```
+
+The classic demonstration is $n$-queens. Place eight queens, one per column, and count attacking pairs. Pick a column whose queen is attacked, slide it to the row with the fewest attacks, repeat. Min-conflicts solves the million-queens problem in roughly fifty steps on average — a result that feels impossible until you see that most random starting positions are only a few moves from a solution, and the heuristic walks straight downhill toward it.
+
+::: {.callout-warning}
+Min-conflicts is hill-climbing, so it can stall on a *plateau* or in a local minimum where every single-variable move increases or ties the conflict count. The standard escapes are random restarts (begin again from a fresh assignment) and random sideways moves or noise (occasionally accept an equal-conflict move to drift off a plateau). It is also incomplete: it cannot prove a CSP unsatisfiable — it just runs until the step budget expires.
+:::
+
+The practical takeaway is a layered toolkit: backtracking with MRV, degree, and LCV for systematic search; forward checking and AC-3 to prune domains as you go; and min-conflicts local search when the problem is too large to enumerate but solutions are dense. Real solvers mix them — propagate to shrink, branch with heuristics, and fall back to local search at scale.
+
+## 34.9 — Key takeaways
 
 - **Planning** models the world as states + actions (STRIPS/PDDL: preconditions, add list, delete list) and searches for an action sequence from the initial state to the goal. Forward search keeps states concrete; backward search stays goal-focused; partial-order and HTN methods shrink the space by committing late and planning hierarchically.
 - The **frame problem** is the classic planning trap: everything not in an action's delete list is assumed unchanged, so a missing effect silently produces impossible plans.
@@ -397,7 +575,7 @@ def select(node):
 - **Minimax** solves perfect-information zero-sum games by assuming an optimal opponent; **alpha-beta pruning** returns the identical value while skipping provably irrelevant branches, roughly doubling reachable depth with good move ordering. **Evaluation functions** (plus quiescence search to beat the horizon effect) make deep games tractable.
 - **MCTS/UCT** replaces hand-crafted evaluation with random rollouts and a principled explore/exploit rule, is anytime and domain-light, and — fused with neural networks — became the engine of AlphaGo.
 
-## 34.6 — See also
+## 34.10 — See also
 
 - **Chapter 32 — Search & Problem Solving** — the uninformed and heuristic search (BFS, DFS, A\*) that planning and CSP backtracking build directly upon.
 - **Chapter 33 — Knowledge Representation & Reasoning** — the logic and symbolic facts that STRIPS states and SAT clauses encode.

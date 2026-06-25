@@ -8,7 +8,7 @@ toc-depth: 2
 toc-expand: true
 ---
 
-[📖 All chapters](../ai-ml-encyclopedia.html)  &nbsp;|&nbsp;  [← 38 · ⚖️ AI Ethics, Fairness & Safety](ch38.html)
+[📖 All chapters](../ai-ml-encyclopedia.html)  &nbsp;|&nbsp;  [← 38 · ⚖️ AI Ethics, Fairness & Safety](ch38.html)  &nbsp;|&nbsp;  [40 · 🔗 Graph Machine Learning →](ch40.html)
 
 <details class="ig-jump">
 <summary>📚 Jump to any chapter</summary>
@@ -83,6 +83,14 @@ toc-expand: true
 <li><a href="ch37.html">37 &middot; 🧷 Causal Inference</a></li>
 <li><a href="ch38.html">38 &middot; ⚖️ AI Ethics, Fairness & Safety</a></li>
 <li><a href="ch39.html">39 &middot; 🌠 Frontier & Emerging Directions</a></li>
+</ul>
+<p class="ig-era">🎓 Advanced & Specialized Topics</p>
+<ul>
+<li><a href="ch40.html">40 &middot; 🔗 Graph Machine Learning</a></li>
+<li><a href="ch41.html">41 &middot; 🤖 Robotics & Autonomy</a></li>
+<li><a href="ch42.html">42 &middot; 📐 Learning Theory</a></li>
+<li><a href="ch43.html">43 &middot; 🔎 Information Retrieval & Data Mining</a></li>
+<li><a href="ch44.html">44 &middot; 🏗️ LLM Systems: Building LLMs from Scratch</a></li>
 </ul>
 </details>
 
@@ -546,7 +554,270 @@ Several stand out. **Generalization beyond the training distribution** — model
 A useful frame: progress in AI has come less from one master algorithm than from removing bottlenecks — first compute, then data, then labels (via self-supervision), now reasoning depth (via test-time compute). The next leap likely comes from removing whichever bottleneck binds hardest next: probably data efficiency, continual learning, or grounding in the world.
 :::
 
-## 39.12 — Key takeaways
+
+## 39.12 — Meta-Learning and Multi-Task Learning in Depth
+
+Imagine a tutor who has taught hundreds of students. When a new student walks in, the tutor doesn't start from a blank slate — they already know roughly which explanations land, which mistakes are common, and how to adapt within the first few minutes. **Meta-learning** ("learning to learn") aims for exactly this: instead of training one model for one task, we train across *many* tasks so that adapting to a *new* task takes only a handful of examples and a few gradient steps. **Multi-task learning** is the sibling idea — train one model on several tasks *at once* so they share structure and regularize each other.
+
+The two differ in goal. Multi-task learning wants a single model that is good at all the tasks it was trained on. Meta-learning wants a *starting point* (or a *comparison rule*) that makes a brand-new, unseen task easy to pick up. We treat learning episodes, not just examples, as the unit of training.
+
+### The episodic setup
+
+Meta-learning is trained on a distribution of tasks $p(\mathcal{T})$. Each task $\mathcal{T}_i$ comes as a tiny dataset split into a **support set** (the few labeled examples you adapt on) and a **query set** (held-out examples you're scored on). A "5-way 1-shot" classification episode means 5 classes, 1 support example each — adapt, then classify the queries.
+
+```{mermaid}
+flowchart LR
+  D[Task distribution p(T)] --> S1[Episode 1: support + query]
+  D --> S2[Episode 2: support + query]
+  D --> S3[Episode N: support + query]
+  S1 --> M[Meta-learner]
+  S2 --> M
+  S3 --> M
+  M --> A[Fast adaptation to NEW task]
+```
+
+The whole game is the **outer loop** (across tasks, slow, updates the meta-parameters) wrapped around an **inner loop** (within a task, fast, adapts to the support set).
+
+### Optimization-based: MAML and Reptile
+
+**MAML** (Model-Agnostic Meta-Learning) asks a sharp question: what single set of weights $\theta$ is positioned so that *one or a few gradient steps* on any task's support set lands in a good spot for that task's queries? It learns an initialization, not a final answer.
+
+The inner loop adapts $\theta$ to task $i$ with one SGD step on the support loss:
+
+$$\theta_i' = \theta - \alpha \nabla_\theta \mathcal{L}_{\mathcal{T}_i}^{\text{support}}(\theta)$$
+
+The outer loop then nudges the *original* $\theta$ so that these adapted weights $\theta_i'$ do well on the *query* set:
+
+$$\theta \leftarrow \theta - \beta \nabla_\theta \sum_i \mathcal{L}_{\mathcal{T}_i}^{\text{query}}(\theta_i')$$
+
+Notice the subtlety: the outer gradient differentiates *through* the inner update, so it contains a second derivative (a gradient of a gradient). That is the source of MAML's power and its cost.
+
+::: {.callout-tip}
+The intuition: MAML doesn't seek weights that are good *now*; it seeks weights that are *one step away* from being good on anything. It optimizes for adaptability, not performance.
+:::
+
+**Reptile** is the lazy, beautiful shortcut. Skip the second derivatives entirely. For each task, just run a few SGD steps to get $\tilde\theta_i$, then move the meta-parameters *toward* that adapted point:
+
+$$\theta \leftarrow \theta + \beta\,(\tilde\theta_i - \theta)$$
+
+That's it — no differentiating through the inner loop. Surprisingly, this still works, because averaging "where each task pulled the weights" finds a point near all of them in a way that correlates with MAML's objective.
+
+Here is Reptile's entire core, from scratch:
+
+```python
+import numpy as np
+
+def reptile_step(theta, task_grad_fn, inner_steps=5, alpha=0.05, beta=0.1):
+    w = theta.copy()                      # clone meta-weights
+    for _ in range(inner_steps):          # inner loop: adapt on this task
+        w -= alpha * task_grad_fn(w)      # plain SGD, no graph kept
+    return theta + beta * (w - theta)     # outer: step toward adapted point
+
+# tiny sanity check: tasks are "fit a scalar to a target", target ~ task
+def make_task():
+    target = np.random.randn()
+    return lambda w: 2 * (w - target)     # grad of (w - target)^2
+
+theta = np.array([0.0])
+for _ in range(2000):
+    theta = reptile_step(theta, make_task())
+print(theta)   # converges near the MEAN target (~0), a good init for any task
+```
+
+The toy result is telling: with targets drawn around 0, Reptile parks $\theta$ near the mean — the spot from which *any* task is reachable in a few steps. That is the meta-learning prize in miniature.
+
+::: {.callout-warning}
+MAML's second-order gradients are memory-hungry and unstable on deep nets; the common first-order approximation (FOMAML) drops them and often matches full MAML, which is itself a hint that Reptile's gradient-free trick is not a coincidence.
+:::
+
+### Metric-based: Prototypical and Matching Networks
+
+Optimization-based methods adapt *weights*. Metric-based methods don't adapt at all — they learn an **embedding space** where classification is just "find the nearest thing." The adaptation is cheap because comparison, not training, does the work.
+
+**Prototypical Networks** are the cleanest version. Embed every support example with a learned encoder $f_\phi$. For each class $c$, average its support embeddings into a single **prototype**:
+
+$$\mathbf{p}_c = \frac{1}{|S_c|}\sum_{x_j \in S_c} f_\phi(x_j)$$
+
+Classify a query $x$ by softmax over *negative distances* to the prototypes:
+
+$$P(y = c \mid x) = \frac{\exp(-\|f_\phi(x) - \mathbf{p}_c\|^2)}{\sum_{c'} \exp(-\|f_\phi(x) - \mathbf{p}_{c'}\|^2)}$$
+
+<svg viewBox="0 0 420 230" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif" font-size="11">
+  <rect x="0" y="0" width="420" height="230" fill="none"/>
+  <!-- class A cluster -->
+  <circle cx="90" cy="70" r="5" fill="#4e79a7"/>
+  <circle cx="110" cy="95" r="5" fill="#4e79a7"/>
+  <circle cx="75" cy="100" r="5" fill="#4e79a7"/>
+  <circle cx="92" cy="88" r="9" fill="none" stroke="#4e79a7" stroke-width="2"/>
+  <text x="92" y="50" text-anchor="middle" fill="#4e79a7">prototype A</text>
+  <!-- class B cluster -->
+  <circle cx="300" cy="150" r="5" fill="#e15759"/>
+  <circle cx="320" cy="170" r="5" fill="#e15759"/>
+  <circle cx="285" cy="175" r="5" fill="#e15759"/>
+  <circle cx="302" cy="165" r="9" fill="none" stroke="#e15759" stroke-width="2"/>
+  <text x="302" y="200" text-anchor="middle" fill="#e15759">prototype B</text>
+  <!-- query -->
+  <rect x="180" y="105" width="10" height="10" fill="#222"/>
+  <text x="185" y="100" text-anchor="middle">query?</text>
+  <line x1="185" y1="110" x2="92" y2="88" stroke="#4e79a7" stroke-dasharray="3 3"/>
+  <line x1="185" y1="110" x2="302" y2="165" stroke="#e15759" stroke-dasharray="3 3"/>
+  <text x="135" y="118" fill="#4e79a7">nearer → class A</text>
+</svg>
+
+A worked micro-example in 2-D. Class A support embeddings are $(1,1)$ and $(1,2)$, so $\mathbf{p}_A=(1,1.5)$. Class B support is $(5,5)$ and $(5,6)$, so $\mathbf{p}_B=(5,5.5)$. A query at $(2,2)$ has squared distance $1+0.25=1.25$ to A and $9+12.25=21.25$ to B — clearly class A. No weight updates, just arithmetic in embedding space.
+
+**Matching Networks** are the soft-attention cousin: instead of collapsing each class to one prototype, they compare the query to *every* support example and take an attention-weighted vote over their labels — useful when classes are multimodal and a single mean would blur them.
+
+The trade: metric methods are fast and stable but assume a *fixed comparison rule* (Euclidean or cosine) is enough; optimization methods are more flexible but pay in compute and tuning.
+
+### Multi-task architectures and the gradient-conflict problem
+
+Multi-task learning shares a backbone across tasks. The first design choice is *how much* to share.
+
+**Hard parameter sharing** uses one shared trunk and small per-task heads — the classic, strong-regularizer default. **Soft parameter sharing** gives each task its own network but penalizes the weights for drifting apart, trading parameters for flexibility.
+
+```{mermaid}
+flowchart TB
+  X[Input] --> B[Shared backbone]
+  B --> H1[Head: task A]
+  B --> H2[Head: task B]
+  B --> H3[Head: task C]
+```
+
+**FiLM** (Feature-wise Linear Modulation) is a lightweight middle path: keep one shared backbone but let a task identifier produce per-task scale $\gamma$ and shift $\beta$ vectors that modulate the features, $\text{FiLM}(h) = \gamma \odot h + \beta$. One body, conditioned on which task it's doing — cheap and surprisingly expressive.
+
+The deep problem in multi-task training is **gradient conflict**: two tasks can want the shared weights to move in *opposing* directions. When their gradients point more than 90° apart, the sum can cancel useful signal, and a loud task can drown a quiet one.
+
+**PCGrad** ("gradient surgery") detects conflict by the dot product of two task gradients. If $g_i \cdot g_j < 0$, it *projects* $g_i$ onto the plane orthogonal to $g_j$, removing only the conflicting component:
+
+$$g_i \leftarrow g_i - \frac{g_i \cdot g_j}{\|g_j\|^2}\, g_j$$
+
+```python
+import numpy as np
+
+def pcgrad(grads):                         # grads: list of per-task gradient vectors
+    out = [g.copy() for g in grads]
+    for i in range(len(out)):
+        for j in range(len(grads)):
+            if i == j: continue
+            dot = out[i] @ grads[j]
+            if dot < 0:                    # conflict: remove the bad component
+                out[i] -= dot / (grads[j] @ grads[j]) * grads[j]
+    return sum(out)                        # combined, de-conflicted update
+
+# task A pulls +x, task B pulls -x but +y; the +x/-x clash is surgically removed
+gA = np.array([1.0,  0.0])
+gB = np.array([-1.0, 1.0])
+print(pcgrad([gA, gB]))                    # net update no longer fully cancels
+```
+
+**GradNorm** attacks the *magnitude* side instead: it dynamically rescales each task's loss weight so that all tasks train at a similar *rate*, preventing the fast learner from hogging the shared backbone. PCGrad fixes direction; GradNorm balances speed. In practice they target the two ways multi-task training goes wrong — conflicting gradients and imbalanced ones — and are often worth more than yet another architecture tweak.
+
+## 39.13 — Self-Supervised and Contrastive Learning in Depth
+
+Labels are expensive; raw data is nearly free. **Self-supervised learning (SSL)** turns that asymmetry into a strategy: hide part of the data and train the model to predict it from the rest. The "labels" are manufactured from the input itself, so a billion unlabeled images or a trillion words of text become supervision for free. The payoff is a **representation** — a feature space — that you can later fine-tune on a small labeled task.
+
+The intuition is that to fill in a blank well, a model must understand structure. Predict the missing word and you learn syntax and semantics; predict the missing image patch and you learn objects and textures. Good predictions require good understanding, so the pretext task smuggles real learning in through the back door.
+
+### Pretext tasks: the first generation
+
+Early SSL invented clever puzzles: predict the rotation applied to an image (0°, 90°, 180°, 270°), solve a jigsaw of shuffled patches, or colorize a grayscale photo. These **pretext tasks** worked but felt arbitrary — the puzzle was a means to an end, and the features were a side effect. The field then split into three cleaner families: *contrastive*, *non-contrastive*, and *masked* modeling.
+
+### Contrastive learning: SimCLR, MoCo, and InfoNCE
+
+The contrastive idea is almost embarrassingly simple: **pull together two views of the same thing; push apart views of different things.** Take an image, make two random augmentations (crop, color jitter, blur) — these form a **positive pair**. Every other image in the batch is a **negative**. Train the embedding so positives are close and negatives are far.
+
+The workhorse loss is **InfoNCE** (Noise-Contrastive Estimation). For a positive pair $(i, j)$ with embeddings $z_i, z_j$ and similarity $\text{sim}$ (cosine), over a batch of $2N$ views:
+
+$$\mathcal{L}_{i,j} = -\log \frac{\exp(\text{sim}(z_i, z_j)/\tau)}{\sum_{k \ne i} \exp(\text{sim}(z_i, z_k)/\tau)}$$
+
+It is just a softmax classification: "which of all these candidates is my true partner?" The **temperature** $\tau$ sharpens or softens the contrast.
+
+```{mermaid}
+flowchart LR
+  IMG[Image] --> A1[Augment view 1]
+  IMG --> A2[Augment view 2]
+  A1 --> E1[Encoder f]
+  A2 --> E2[Encoder f]
+  E1 --> Z1[z_i]
+  E2 --> Z2[z_j]
+  Z1 -->|pull together| Z2
+  Z1 -.->|push apart| N[Negatives in batch]
+```
+
+A worked number. Suppose temperature $\tau = 0.1$, the positive pair has cosine similarity $0.9$, and two negatives sit at $0.1$ and $0.2$. The logits are $9$, $1$, and $2$. Softmax over $\{9,1,2\}$ puts about $\frac{e^{9}}{e^{9}+e^{1}+e^{2}} \approx 0.9994$ on the positive — loss $\approx -\log 0.9994 \approx 0.0006$, near zero, because the positive already dominates. Shrink the gap (positive at $0.3$) and the loss balloons, pushing the encoder to separate them.
+
+```python
+import numpy as np
+
+def info_nce(z_i, z_j, negatives, tau=0.1):
+    sim = lambda a, b: a @ b / (np.linalg.norm(a)*np.linalg.norm(b))
+    pos = np.exp(sim(z_i, z_j) / tau)
+    denom = pos + sum(np.exp(sim(z_i, n) / tau) for n in negatives)
+    return -np.log(pos / denom)
+
+z_i = np.array([1.0, 0.0]); z_j = np.array([0.95, 0.31])   # similar view
+negs = [np.array([0.0, 1.0]), np.array([-1.0, 0.1])]       # dissimilar
+print(round(info_nce(z_i, z_j, negs), 4))                  # small loss
+```
+
+**SimCLR** showed this works spectacularly with three ingredients: heavy augmentation, a projection head (a small MLP applied before computing the loss, then discarded), and — crucially — *large batches*, because negatives come from the batch and more negatives mean a harder, more informative contrast.
+
+That batch dependence is a real burden. **MoCo** (Momentum Contrast) removes it by keeping a **queue** of negatives from recent batches and encoding them with a slowly-updated **momentum encoder** ($\theta_k \leftarrow m\,\theta_k + (1-m)\,\theta_q$, with $m$ near $0.999$). The queue decouples the number of negatives from the batch size, so you get thousands of negatives on modest hardware.
+
+::: {.callout-warning}
+Contrastive methods can collapse to a constant if negatives are too easy, and they are sensitive to the augmentation recipe — too weak and positives are trivially close, too strong and they no longer share content. The augmentation policy is a real hyperparameter, not a detail.
+:::
+
+### Non-contrastive learning: BYOL and DINO
+
+Here is the puzzle that made the field nervous: do we even *need* negatives? If you only pull positives together with nothing pushing apart, the obvious solution is collapse — map everything to the same vector, loss zero, useless features. **BYOL** (Bootstrap Your Own Latent) showed you can avoid collapse without a single negative.
+
+BYOL runs two networks: an **online** network that has an extra **predictor** head, and a **target** network that is an exponential moving average of the online one. The online network tries to predict the target's embedding of a *different* augmented view. The asymmetry — the predictor on one side, the stop-gradient and EMA on the other — is what prevents collapse. The target is a slow-moving, more stable teacher the student chases but never quite catches, and that lag keeps the representation from degenerating.
+
+```{mermaid}
+flowchart LR
+  V1[View 1] --> ON[Online encoder] --> PR[Predictor] --> P[prediction]
+  V2[View 2] --> TG[Target encoder EMA] --> T[target / stop-grad]
+  P -->|match| T
+  ON -.EMA update.-> TG
+```
+
+**DINO** (self-**di**stillation with **no** labels) brings the same teacher–student idea to Vision Transformers. The student matches the teacher's output *distribution* over views, with **centering** (subtract a running mean to stop one dimension dominating) and **sharpening** (low teacher temperature) as the twin tricks that prevent collapse. DINO's surprise bonus: the attention maps of the trained ViT segment objects with no segmentation labels ever shown — emergent structure, free.
+
+### Masked modeling and JEPA
+
+The other great branch borrows directly from language modeling's masked-prediction recipe. **MAE** (Masked Autoencoder) masks a *large* fraction of image patches — typically 75% — feeds only the visible ones to an encoder, then asks a lightweight decoder to reconstruct the missing pixels.
+
+```{mermaid}
+flowchart LR
+  IMG[Patches] --> MASK[Mask 75 percent]
+  MASK --> ENC[Encoder: visible only] --> DEC[Decoder] --> REC[Reconstruct masked pixels]
+```
+
+Two design choices make MAE efficient and effective. The high mask ratio makes the task hard enough to force real understanding (you can't cheat by copying neighbors). And feeding only visible patches to the encoder cuts compute dramatically, since the encoder processes a quarter of the patches. After pretraining you throw the decoder away and keep the encoder.
+
+But reconstructing *pixels* spends capacity on irrelevant detail — exact textures, lighting — that a good representation shouldn't care about. **JEPA** (Joint-Embedding Predictive Architecture) is the answer: predict in *representation space*, not pixel space. Mask part of the input, encode the visible part, and predict the *embeddings* of the masked part rather than its raw values. You're predicting "what would the features there look like," which lets the model ignore unpredictable low-level noise and focus on structure.
+
+```{mermaid}
+flowchart LR
+  CTX[Context patches] --> CE[Context encoder] --> PRED[Predictor]
+  TGT[Target patches] --> TE[Target encoder EMA] --> TZ[target embeddings]
+  PRED -->|predict in embedding space| TZ
+```
+
+JEPA sits at an interesting crossroads of everything above: it predicts like masked modeling, but in latent space like the non-contrastive methods, using a stop-gradient/EMA target to avoid collapse like BYOL. The unifying view across this whole section is that SSL is the search for a *prediction task hard enough to demand understanding but not so literal that it wastes effort on noise* — and the frontier has been steadily moving that prediction from raw pixels toward abstract representations.
+
+| Method | Family | Needs negatives? | Predicts in | Anti-collapse trick |
+|---|---|---|---|---|
+| SimCLR | Contrastive | Yes (large batch) | Embedding | Negatives |
+| MoCo | Contrastive | Yes (queue) | Embedding | Negatives + momentum |
+| BYOL | Non-contrastive | No | Embedding | Predictor + EMA target |
+| DINO | Non-contrastive | No | Distribution | Centering + sharpening |
+| MAE | Masked | No | Pixels | Reconstruction target |
+| JEPA | Masked / joint | No | Embedding | EMA target + stop-grad |
+
+## 39.14 — Key takeaways
 
 - **Self-supervised learning** removes the label bottleneck by predicting hidden parts of the data; it is the engine behind every foundation model. **Contrastive learning** (InfoNCE) pulls positive pairs together and pushes negatives apart, with the denominator running over the positive plus all negatives — watch for collapse.
 - **Transfer, multi-task, and meta-learning** form a ladder: reuse one model, train on many tasks at once, or learn an initialization that adapts fast (MAML lands at the point equidistant from all task optima).
@@ -559,7 +830,7 @@ A useful frame: progress in AI has come less from one master algorithm than from
 - **Reasoning models** scale **test-time compute** (chain-of-thought, self-consistency voting, tree-of-thoughts), trading inference compute for accuracy — but CoT is not a faithful explanation.
 - The road to **general intelligence** is gated by open problems: out-of-distribution robustness, genuine reasoning and causality, data/energy efficiency, continual learning, and alignment.
 
-## 39.13 — See also
+## 39.15 — See also
 
 - **Attention & Transformers** — the architecture underlying self-supervised foundation models.
 - **Large Language Models** — in-context learning, chain-of-thought, and the scaling story in depth.
@@ -572,4 +843,4 @@ A useful frame: progress in AI has come less from one master algorithm than from
 
 ------------------------------------------------------------------------
 
-[📖 All chapters](../ai-ml-encyclopedia.html)  &nbsp;|&nbsp;  [← 38 · ⚖️ AI Ethics, Fairness & Safety](ch38.html)
+[📖 All chapters](../ai-ml-encyclopedia.html)  &nbsp;|&nbsp;  [← 38 · ⚖️ AI Ethics, Fairness & Safety](ch38.html)  &nbsp;|&nbsp;  [40 · 🔗 Graph Machine Learning →](ch40.html)
