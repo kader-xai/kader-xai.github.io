@@ -254,7 +254,118 @@ The chart below sketches the two ideas side by side: the smooth power-law fall o
 **Rule of thumb:** if the task is *generate or converse*, reach for a decoder-only model. If it is *classify, score, or embed at scale*, a small encoder (BERT-family) is faster, cheaper, and often more accurate than asking a giant generative model to do a labeling job.
 :::
 
-## 23.2 — Pretraining & Fine-tuning
+
+## 23.2 — Sparse Mixture-of-Experts (MoE)
+
+A dense transformer pays for every parameter on every token: each token flows through the *whole* feed-forward block. That couples capacity to compute — making the model "know more" means making every token cost more. Sparse Mixture-of-Experts breaks that coupling. The idea is simple: replace the single feed-forward block with *many* feed-forward blocks (the **experts**), plus a tiny **router** that, for each token, picks only a handful of experts to actually run. A token might pass through 2 of 8 experts. The other six sit idle for that token.
+
+The payoff is the whole point of MoE: **total parameters scale with the number of experts, but the FLOPs spent per token stay fixed at the top-k you run.** You can hold a model with hundreds of billions of parameters while each token only "feels" a few billion. That is what *sparse* means here — sparse in which experts activate, not sparse in the weights themselves.
+
+**The router.** The router is just a small learned linear layer $W_g$ followed by a softmax over the $N$ experts. For a token's hidden vector $x$ it produces a score per expert, keeps the top-$k$, and uses those (renormalized) scores as mixing weights:
+
+$$g = \text{softmax}(W_g\, x), \qquad \mathcal{T} = \text{top-}k(g), \qquad y = \sum_{i \in \mathcal{T}} g_i \, E_i(x)$$
+
+Only the experts in $\mathcal{T}$ are evaluated; the output is their **weighted sum**, weighted by how strongly the router chose each one.
+
+<svg viewBox="0 0 640 220" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif" font-size="13">
+  <rect x="20" y="92" width="70" height="36" rx="6" fill="rgba(99,102,241,0.25)" stroke="currentColor"/>
+  <text x="55" y="115" text-anchor="middle" fill="currentColor">token x</text>
+  <rect x="130" y="86" width="80" height="48" rx="6" fill="rgba(245,158,11,0.3)" stroke="currentColor"/>
+  <text x="170" y="106" text-anchor="middle" fill="currentColor">router</text>
+  <text x="170" y="122" text-anchor="middle" fill="currentColor" font-size="11">softmax</text>
+  <line x1="90" y1="110" x2="130" y2="110" stroke="currentColor"/>
+  <!-- experts -->
+  <g stroke="currentColor">
+    <rect x="270" y="10"  width="90" height="30" rx="5" fill="rgba(34,197,94,0.35)"/>
+    <rect x="270" y="50"  width="90" height="30" rx="5" fill="rgba(120,120,120,0.15)"/>
+    <rect x="270" y="90"  width="90" height="30" rx="5" fill="rgba(34,197,94,0.35)"/>
+    <rect x="270" y="130" width="90" height="30" rx="5" fill="rgba(120,120,120,0.15)"/>
+    <rect x="270" y="170" width="90" height="30" rx="5" fill="rgba(120,120,120,0.15)"/>
+  </g>
+  <text x="315" y="30"  text-anchor="middle" fill="currentColor">E1  ✓</text>
+  <text x="315" y="70"  text-anchor="middle" fill="currentColor">E2</text>
+  <text x="315" y="110" text-anchor="middle" fill="currentColor">E3  ✓</text>
+  <text x="315" y="150" text-anchor="middle" fill="currentColor">E4</text>
+  <text x="315" y="190" text-anchor="middle" fill="currentColor">E5 … EN</text>
+  <g stroke="currentColor" fill="none">
+    <path d="M210 104 C 240 60, 250 30, 270 25" stroke-width="2"/>
+    <path d="M210 112 C 240 110, 250 105, 270 105" stroke-width="2"/>
+    <path d="M210 116 C 240 70, 250 65, 270 65" stroke-dasharray="3 3" opacity="0.4"/>
+    <path d="M210 120 C 240 140, 250 145, 270 145" stroke-dasharray="3 3" opacity="0.4"/>
+  </g>
+  <!-- weighted sum -->
+  <circle cx="450" cy="80" r="22" fill="rgba(99,102,241,0.25)" stroke="currentColor"/>
+  <text x="450" y="85" text-anchor="middle" fill="currentColor" font-size="18">Σ</text>
+  <line x1="360" y1="25"  x2="430" y2="72" stroke="currentColor"/>
+  <line x1="360" y1="105" x2="430" y2="90" stroke="currentColor"/>
+  <text x="395" y="40" fill="currentColor" font-size="11">g₁</text>
+  <text x="395" y="112" fill="currentColor" font-size="11">g₃</text>
+  <rect x="520" y="62" width="90" height="36" rx="6" fill="rgba(34,197,94,0.3)" stroke="currentColor"/>
+  <text x="565" y="85" text-anchor="middle" fill="currentColor">output y</text>
+  <line x1="472" y1="80" x2="520" y2="80" stroke="currentColor"/>
+</svg>
+
+The router in code is only a few lines — a gating projection, softmax, and a top-k gather:
+
+```python
+import torch, torch.nn.functional as F
+
+def route(x, W_g, k):                  # x: [tokens, d_model]
+    logits = x @ W_g                   # [tokens, n_experts]
+    probs  = F.softmax(logits, dim=-1)
+    topw, topi = probs.topk(k, dim=-1) # weights + indices of chosen experts
+    topw = topw / topw.sum(-1, keepdim=True)   # renormalize over the k kept
+    return topi, topw                  # then: y = Σ topw_j * E[topi_j](x)
+```
+
+**Load balancing — the failure mode.** Left alone, the router cheats. A few experts that happen to start slightly better get chosen more, train more, get better, get chosen even more — a rich-get-richer collapse where most experts are dead weight and the live ones become a bottleneck. The standard fix is an **auxiliary load-balancing loss** added during training: it penalizes the model when the fraction of tokens routed to each expert drifts away from uniform, gently pushing traffic to spread out. Implementations also impose an **expert capacity** — a per-expert token budget per batch; tokens overflowing a full expert are dropped (skipped) or sent to the next choice, which keeps the computation rectangular and hardware-friendly.
+
+**Modern refinements.** Two ideas now dominate. *Fine-grained experts* slice the FFN into many smaller experts so the router composes from a richer palette and each token's top-k mixture is more expressive for the same active FLOPs. *Shared experts* (the DeepSeek-MoE design) keep one or more experts that **every** token always uses, capturing common knowledge, while the routed experts specialize — this also relieves the balancing pressure. Sparse MoE is now mainstream in open models: **Mixtral** (8 experts, top-2), **DeepSeek-V3** (fine-grained + shared experts), **Qwen3-MoE**, and **GPT-OSS** all use it. For *where* the experts physically live across GPUs (expert parallelism, all-to-all routing), see Ch 30.
+
+## 23.3 — Anatomy of a modern LLM
+
+Today's frontier open models are all the same animal: a **decoder-only transformer**, a stack of identical blocks, each with an attention sublayer and a feed-forward sublayer wrapped in residual connections. What changed between the 2017 original and a 2024–2025 model is not the skeleton but the *parts bolted into it* — each one swapped because the old part was either unstable, slow, or memory-hungry at scale. Here are the parts that define a modern block, and why each won.
+
+**Pre-norm + RMSNorm.** The original transformer normalized *after* each sublayer (post-norm), which makes deep stacks fragile to train. Modern models use **pre-norm**: normalize the input *before* the sublayer and add the clean residual back, so gradients have an unobstructed path down the stack and training stays stable without warmup gymnastics. The normalizer itself shrank too — **RMSNorm** replaces LayerNorm, dropping the mean-centering and bias and just rescaling by the root-mean-square. Fewer operations, essentially the same quality.
+
+**RoPE for position.** Position is injected by **Rotary Position Embeddings** — rotating the query/key vectors by an angle proportional to their position, so attention scores depend on *relative* distance. This is the de-facto standard and is what makes context-length extension tricks possible. Covered in depth in §17.
+
+**GQA / MQA — shrinking the KV cache.** At inference, every past token's keys and values are cached so they aren't recomputed. With full multi-head attention that KV cache is enormous and becomes the real memory bottleneck for long contexts. **Multi-Query Attention (MQA)** shares a single K/V head across all query heads; **Grouped-Query Attention (GQA)** is the practical middle ground — several query heads share each K/V head — cutting cache size manyfold with negligible quality loss. DeepSeek pushes further with **Multi-head Latent Attention (MLA)**, which stores a compressed low-rank latent for K/V and reconstructs on the fly, shrinking the cache even more. The memory math and serving impact live in Ch 30.
+
+**SwiGLU feed-forward.** The old FFN was two linear layers with a ReLU or GELU between them. Modern blocks use **SwiGLU**: a *gated* unit where one projection is passed through a SiLU/Swish activation and multiplied elementwise by a second, parallel projection before the output projection. The gate lets the network modulate information flow per-channel, and at matched parameter budgets it consistently beats the plain MLP — so it's now the default.
+
+**MoE feed-forward and local attention.** Two scaling levers stack on top. The FFN can be replaced by a **sparse MoE block** (§23.90) to grow capacity without growing per-token compute. And for long context, some models alternate **sliding-window / local attention** layers — each token attends only to the last $W$ tokens (Mistral, Gemma) — which bounds the attention cost and KV cache per layer while global information still propagates across stacked layers.
+
+Putting it together, one modern decoder block looks like this:
+
+```mermaid
+flowchart TD
+    x[hidden state] --> n1[RMSNorm]
+    n1 --> attn["Attention<br/>GQA / MLA + RoPE<br/>(optionally sliding-window)"]
+    x --> r1((+))
+    attn --> r1
+    r1 --> n2[RMSNorm]
+    n2 --> ff["FFN<br/>SwiGLU  — or —  sparse MoE"]
+    r1 --> r2((+))
+    ff --> r2
+    r2 --> y[to next block]
+```
+
+The lesson is that these are interchangeable Lego bricks. Recent open models pick different combinations of the same parts:
+
+| Model | Attention | FFN | Norm | Position |
+|---|---|---|---|---|
+| Llama 3 | GQA | Dense SwiGLU | RMSNorm (pre-norm) | RoPE |
+| Mistral 7B | GQA + sliding-window | Dense SwiGLU | RMSNorm (pre-norm) | RoPE |
+| Mixtral | GQA + sliding-window | Sparse MoE (top-2) | RMSNorm (pre-norm) | RoPE |
+| DeepSeek-V3 | MLA | Sparse MoE (shared + fine-grained) | RMSNorm (pre-norm) | RoPE |
+| Qwen3-MoE | GQA | Sparse MoE | RMSNorm (pre-norm) | RoPE |
+| Gemma 3 | GQA + interleaved local/global | Dense gated (GeGLU) | RMSNorm | RoPE |
+| GPT-OSS | GQA | Sparse MoE | RMSNorm (pre-norm) | RoPE |
+
+Read the table left to right and the pattern is unmistakable: the frame (pre-norm RMSNorm, RoPE, residuals) is shared by everyone, and the design choices reduce to two questions — *how do I cheapen attention's KV cache* (GQA, sliding-window, MLA) and *how do I add FFN capacity without adding per-token compute* (dense SwiGLU vs. sparse MoE).
+
+## 23.4 — Pretraining & Fine-tuning
 
 An LLM is built in stages, and the bulk of its knowledge comes from the first, unsupervised one. Think of it as raising a generalist and then giving it a job: pretraining grows a mind that has read the internet, and fine-tuning teaches that mind to be useful and well-behaved.
 
@@ -311,7 +422,7 @@ flowchart LR
 **Common mistake:** reaching for full fine-tuning by default. It is rarely necessary. For most adaptation tasks, LoRA/QLoRA matches full fine-tuning quality at a fraction of the cost and memory, and lets you keep many swappable adapters over one shared base model. And before fine-tuning at all, try prompting and RAG — they are far cheaper, need no training run, and are often enough on their own.
 :::
 
-## 23.3 — Prompt Engineering & In-Context Learning
+## 23.5 — Prompt Engineering & In-Context Learning
 
 **Prompt engineering** is the craft of writing the input text so the model produces what you want — without touching its weights. It works because of **in-context learning**: the model conditions its next-token distribution on *everything* in the prompt, so examples and instructions placed there effectively *reprogram* its behavior for that one call. The prompt is not a search box; it is a short, disposable program written in plain language.
 
@@ -350,7 +461,7 @@ flowchart TB
 **Rule of thumb:** before fine-tuning or building anything custom, climb the cheap ladder — zero-shot → few-shot → chain-of-thought → RAG. Each rung adds capability with zero training and zero new infrastructure. Most "we need a custom model" problems dissolve at the few-shot or RAG rung.
 :::
 
-## 23.4 — Retrieval-Augmented Generation (RAG)
+## 23.6 — Retrieval-Augmented Generation (RAG)
 
 An LLM only knows what was in its training data, frozen at its cutoff date, and it cannot tell you where a fact came from. **Retrieval-Augmented Generation (RAG)** fixes both at once by fetching relevant documents at query time and pasting them into the prompt, so the model answers *from supplied context* rather than from parametric memory. This is how you give an LLM your private docs, today's data, and citations — without retraining it.
 
@@ -414,7 +525,7 @@ RAG's failure modes are worth naming because they are where real systems break. 
 **Common mistake:** assuming RAG "removes hallucinations." It only grounds the model in *what you retrieved*. Garbage or irrelevant retrieval still yields confident wrong answers — and a model can ignore the context entirely and answer from memory. Always instruct it to answer only from the provided context and to say "I don't know" otherwise, and surface the citations so users can verify for themselves.
 :::
 
-## 23.5 — RLHF & Alignment
+## 23.7 — RLHF & Alignment
 
 An SFT model is helpful but not yet *aligned* — left alone it may be verbose, evasive, sycophantic, or unsafe. **Alignment** tunes the model to human preferences about *how* it should respond, not just *what* a valid response looks like. The classic recipe is **RLHF**, Reinforcement Learning from Human Feedback. The key shift from SFT is the kind of signal: SFT learns from *demonstrations* (here is a good answer), while alignment learns from *comparisons* (this answer is better than that one), which is far easier for humans to provide reliably.
 
@@ -455,7 +566,7 @@ The table lines up the three training stages so the progression is clear:
 **Intuition:** SFT teaches the model *what a good answer looks like* from positive examples; preference tuning (RLHF/DPO) teaches it *which of two answers is better* — capturing subtle qualities like honesty, harmlessness, and tone that are hard to demonstrate from scratch but easy to compare side by side.
 :::
 
-## 23.6 — Agents & Tool Use
+## 23.8 — Agents & Tool Use
 
 A bare LLM can only emit text. An **agent** wraps the LLM in a loop that lets it *act* — call tools, read the results, and decide what to do next — turning a passive text predictor into something that can search the web, run code, query databases, and complete multi-step tasks. The model is still just predicting tokens; the loop is what turns those tokens into actions in the world and feeds the consequences back.
 
@@ -508,7 +619,7 @@ flowchart TB
 **Common mistake:** giving an agent powerful tools (shell access, file writes, money movement) without guardrails. Models make mistakes, and they can be **prompt-injected** through the very tool outputs they read — a malicious web page can carry instructions the agent then follows. Keep tools least-privilege, require human confirmation for irreversible actions, validate every tool argument before executing it, and cap the loop length so a confused agent cannot spin forever burning tokens.
 :::
 
-## 23.7 — Inference
+## 23.9 — Inference
 
 Training is a one-time cost; **inference** — actually running the model to generate text — is the recurring one, and at scale it dominates the production budget. Every technique in this section exists to cut one of three things: latency (time to the answer), memory (how big a model and context you can fit), or cost per token.
 
@@ -582,7 +693,7 @@ The diagram below shows how temperature reshapes the same logits before sampling
 :::
 
 
-## 23.8 — Direct Preference Optimization and the post-training stack
+## 23.10 — Direct Preference Optimization and the post-training stack
 
 The previous sections covered RLHF: train a reward model on human preferences, then use PPO to push the policy toward high-reward outputs. It works, but it is a Rube Goldberg machine. You train a separate reward model, keep four models in memory at once (policy, reference, reward, value), and run an on-policy RL loop that is famously twitchy — a slightly wrong KL coefficient and the model collapses into repeating "Thank you for your question!" forever. The natural question is whether all that machinery is actually necessary just to teach a model that humans prefer answer A over answer B.
 
@@ -655,7 +766,7 @@ The practical decision rule: **start with DPO**. It is the default first-line al
 DPO is offline and on a *fixed* dataset, so it can only re-rank responses that already appear in your preference pairs; it never explores new outputs the way PPO rollouts do. If your chosen/rejected pairs were generated by a weak model, DPO faithfully learns that weak model's ceiling. It also silently rewards verbosity — longer responses accumulate more (negative) log-prob terms in ways that bias the margin — which is the specific bug SimPO's length normalization was built to kill. Always log average response length during DPO training; a creeping upward trend is the canary.
 :::
 
-## 23.9 — Test-time compute and reasoning models
+## 23.11 — Test-time compute and reasoning models
 
 Every method so far spends its effort at *training* time and then answers in a single forward pass. But humans do not solve a hard integral or a logic puzzle in one glance — we scribble, backtrack, check. The insight behind reasoning models is that **spending more computation at inference time**, not just at training time, buys accuracy, and that this is often a better trade than making the model bigger.
 
@@ -728,7 +839,7 @@ The headline result is the **test-time scaling law**: accuracy rises smoothly as
 Test-time compute is not free, and the curve bends. Doubling the thinking budget rarely doubles accuracy; returns diminish, and on easy questions long reasoning *wastes* tokens (and money, and latency) for no gain — sometimes it even talks itself out of a correct first instinct ("overthinking"). Reasoning traces can also be plausible-sounding but unfaithful: the stated chain is not always the true cause of the answer, so do not treat a confident-looking derivation as an audit trail. Match the thinking budget to problem difficulty rather than cranking it to the maximum by default.
 :::
 
-## 23.10 — Evaluating LLMs and agents
+## 23.12 — Evaluating LLMs and agents
 
 Training a model is only half the job; knowing whether it is actually good — and not merely good at *looking* good on your test — is the other half, and it is harder than it sounds. Evaluation is where most LLM projects quietly go wrong, because the failure modes are subtle and the metrics are easy to game.
 
@@ -786,7 +897,7 @@ Standardized safety benchmarks make this measurable. **HarmBench** provides a br
 A high refusal rate on a safety benchmark is necessary but not sufficient. Models can be safe against known jailbreaks and fall to novel ones, and over-aggressive safety tuning creates the opposite failure — refusing benign requests ("how do I kill a Python process?"), which is its own kind of broken. Report both the harmful-compliance rate *and* the false-refusal rate; a model that is safe only because it refuses everything is useless, and one that is helpful only because it refuses nothing is dangerous. For agents, always evaluate safety with tools *live* in a sandbox, because a harmful plan that never executes and a harmful plan that drains an account score identically on text-only evals.
 :::
 
-## 23.11 — Key takeaways
+## 23.13 — Key takeaways
 
 - An **LLM is a scaled-up Transformer**; almost all generative/chat models are **decoder-only** (causal attention, generates left-to-right), while **encoder-only** (BERT) models use bidirectional attention and excel at embeddings and classification.
 - Models read **tokens** (~4 chars each); token counts drive both **cost** and the **context window**. **Scaling laws** say quality improves as a smooth power law in parameters, data, and compute — and Chinchilla says scale them *together* (~20 tokens/param).
@@ -797,7 +908,7 @@ A high refusal rate on a safety benchmark is necessary but not sufficient. Model
 - **Agents** wrap the LLM in a reason→act→observe loop using **function calling**, standardized by **MCP**, with vector-store long-term memory and optional multi-agent roles — and the tools must be guarded against mistakes and prompt injection.
 - **Inference** is the recurring cost: the **KV cache** ($O(T^2)\to O(T)$), **quantization** (int8/NF4/GPTQ/AWQ), **decoding strategies** (greedy/temperature/top-k/top-p), and **continuous batching via vLLM/PagedAttention**.
 
-## 23.12 — See also
+## 23.14 — See also
 
 - **Attention & Transformers** — the architecture every LLM is built on (attention, masks, positional encoding).
 - **Natural Language Processing** — tokenization lineage, embeddings, and the language tasks LLMs subsume.

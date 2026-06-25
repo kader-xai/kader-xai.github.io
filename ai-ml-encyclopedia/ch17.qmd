@@ -402,7 +402,126 @@ Forgetting positional information is a silent bug, not a crash: the model trains
 :::
 
 
-## 17.5 — Beyond Quadratic Attention: Efficient Attention and State-Space Models
+
+## 17.5 — Relative position and Rotary Position Embeddings (RoPE)
+
+Sinusoidal and learned positional encodings (§17.4) both share one assumption: they tell the model **where each token sits in an absolute sense** — token 0, token 1, token 2 — by adding a position-specific vector to each embedding. That works, but it is often the wrong question. When you read "the cat that the dog chased," what matters for resolving "chased" is how *far apart* it is from "dog," not whether the sentence started at index 5 or index 500. The model overwhelmingly cares about the **distance between two tokens**, not their absolute slots.
+
+This is the idea behind **relative position encoding**: make attention depend on $(n - m)$, the gap between a query at position $m$ and a key at position $n$, rather than on $m$ and $n$ separately. A model built this way generalizes better — a pattern learned at the start of a sequence still holds halfway through, because only the relative offset enters the computation.
+
+### The RoPE idea: rotate, don't add
+
+**Rotary Position Embeddings (RoPE)** achieve relative position through a beautifully simple trick. Instead of *adding* a position vector to the embedding, RoPE **rotates** the query and key vectors by an angle proportional to their position.
+
+Group the $d$-dimensional query and key into $d/2$ pairs of coordinates, so each pair $(x_1, x_2)$ is a little 2D vector. For a token at position $m$, rotate each pair by angle $m\theta_i$, where $\theta_i$ is a fixed frequency that differs from pair to pair:
+
+$$R(m\theta_i)\begin{bmatrix} x_1 \\ x_2 \end{bmatrix} = \begin{bmatrix} \cos m\theta_i & -\sin m\theta_i \\ \sin m\theta_i & \cos m\theta_i \end{bmatrix}\begin{bmatrix} x_1 \\ x_2 \end{bmatrix}$$
+
+Low-index pairs use a high frequency (they spin fast as position grows); high-index pairs use a low frequency (they barely turn). The standard choice is $\theta_i = 10000^{-2i/d}$ — the same geometric spread of wavelengths used by sinusoidal encoding, but applied as *rotation* rather than *addition*.
+
+<svg viewBox="0 0 420 220" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif" font-size="12">
+  <line x1="40" y1="180" x2="380" y2="180" stroke="currentColor" stroke-width="1" opacity="0.4"/>
+  <line x1="60" y1="200" x2="60" y2="30" stroke="currentColor" stroke-width="1" opacity="0.4"/>
+  <!-- the same vector, rotated to position 0 (baseline) -->
+  <line x1="60" y1="180" x2="200" y2="80" stroke="#6366f1" stroke-width="3"/>
+  <polygon points="200,80 188,80 196,90" fill="#6366f1"/>
+  <text x="205" y="80" fill="#6366f1">same vector, position 0</text>
+  <!-- the same vector, rotated to position m -->
+  <line x1="60" y1="180" x2="168" y2="56" stroke="#f59e0b" stroke-width="3"/>
+  <polygon points="168,56 160,64 172,66" fill="#f59e0b"/>
+  <text x="120" y="46" fill="#f59e0b">rotated by m·θ</text>
+  <!-- arc showing rotation -->
+  <path d="M 178 96 A 100 100 0 0 0 156 86" fill="none" stroke="#22c55e" stroke-width="2"/>
+  <text x="118" y="118" fill="#22c55e">angle ∝ position</text>
+</svg>
+
+A single token's vector is rotated by its **own absolute angle** $m\theta_i$. The relative term only shows up later, in the dot product between a query and a key — not in how any one vector is turned.
+
+### The magic: the dot product becomes relative
+
+Here is why rotation is the right tool. Attention scores come from the dot product $q \cdot k$. A rotation is a rigid turn — it preserves lengths and angles between vectors. So when you rotate the query by $m\theta_i$ and the key by $n\theta_i$, their dot product within each 2D pair depends only on the *difference* of the two rotation angles:
+
+$$\big(R(m\theta_i)\,q\big) \cdot \big(R(n\theta_i)\,k\big) = q^\top R\big((n-m)\theta_i\big)\,k$$
+
+The absolute positions $m$ and $n$ cancel; only $(n - m)$ survives. So even though RoPE *applies* an absolute rotation to each token independently (cheap, no cross-token bookkeeping), the *attention it produces* is automatically **relative**. You get relative-position behavior for free, without ever computing a relative offset.
+
+### Why RoPE is the modern default
+
+RoPE is the position method in **Llama, Mistral, Qwen, DeepSeek, Gemma**, and most current open models. The reasons are practical:
+
+- **Zero extra parameters** — the rotation angles are fixed by the formula, nothing to learn.
+- **Applied where it belongs** — rotation happens on $q$ and $k$ inside each attention head, leaving the value vectors and the residual stream untouched.
+- **Relative by construction** — the distance-only property above is exactly what language modeling wants.
+- **Long-context friendly** — because behavior keys off relative distance, the same model handles much longer sequences gracefully, and the rotation can be re-scaled to stretch even further.
+
+### Stretching RoPE past its training length
+
+A model trained at, say, 4K tokens has only ever seen rotation angles up to $4096\,\theta_i$. Feed it 32K tokens and the angles run off into territory it never saw, and quality collapses. A family of lightweight rescaling tricks — **Position Interpolation**, **NTK-aware scaling**, and **YaRN** — fixes this by squashing or stretching the rotation angles back into the trained range, letting a RoPE model reach far beyond its original length with little or no retraining.
+
+### Rotation in a few lines
+
+```python
+import numpy as np
+
+def rope_rotate(vec, pos, base=10000.0):
+    # vec: 1D array of even length d; rotate each (x1, x2) pair by pos * theta_i
+    d = len(vec)
+    out = np.empty_like(vec)
+    for i in range(d // 2):
+        theta = base ** (-2.0 * i / d)
+        a = pos * theta
+        x1, x2 = vec[2*i], vec[2*i + 1]
+        out[2*i]     = x1 * np.cos(a) - x2 * np.sin(a)
+        out[2*i + 1] = x1 * np.sin(a) + x2 * np.cos(a)
+    return out
+
+# The payoff: score depends only on the gap (n - m), not absolute m, n.
+q = np.random.randn(8); k = np.random.randn(8)
+s1 = rope_rotate(q, 2) @ rope_rotate(k, 5)   # gap = 3
+s2 = rope_rotate(q, 100) @ rope_rotate(k, 103) # gap = 3
+assert np.allclose(s1, s2)  # same gap -> same attention score
+```
+
+The two scores match because both pairs sit three positions apart — the absolute indices (2,5) versus (100,103) make no difference. That is relative position, delivered purely through geometry.
+
+## 17.6 — ALiBi and other position methods (brief)
+
+RoPE injects position by rotating $q$ and $k$. **ALiBi** (Attention with Linear Biases) takes an even more direct route: don't touch the embeddings at all — just **subtract a penalty from each attention score that grows with the distance between the two tokens**. Before the softmax, the score for a query attending $j$ positions back gets a bias of $-s \cdot j$, where $s$ is a fixed per-head slope (different heads use different slopes, so some look near, others far). Tokens far in the past are gently discouraged; nearby tokens dominate.
+
+<svg viewBox="0 0 420 130" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif" font-size="12">
+  <text x="10" y="20" fill="currentColor">score += bias, where bias = −slope × distance</text>
+  <g transform="translate(20,40)">
+    <rect x="0"   y="0" width="50" height="40" fill="#22c55e" opacity="0.7"/>
+    <rect x="60"  y="8" width="50" height="32" fill="#22c55e" opacity="0.55"/>
+    <rect x="120" y="16" width="50" height="24" fill="#f59e0b" opacity="0.55"/>
+    <rect x="180" y="24" width="50" height="16" fill="#f59e0b" opacity="0.45"/>
+    <rect x="240" y="30" width="50" height="10" fill="#6366f1" opacity="0.4"/>
+    <text x="0"   y="58" fill="currentColor">0</text>
+    <text x="62"  y="58" fill="currentColor">−1s</text>
+    <text x="122" y="58" fill="currentColor">−2s</text>
+    <text x="182" y="58" fill="currentColor">−3s</text>
+    <text x="242" y="58" fill="currentColor">−4s</text>
+    <text x="60" y="80" fill="currentColor" opacity="0.7">distance back (bias grows linearly) →</text>
+  </g>
+</svg>
+
+Because the bias is a simple linear function of distance, it keeps working at any length: a model trained at 1K tokens **extrapolates** to far longer sequences with little degradation, which was ALiBi's headline result. Two other methods round out the landscape. **T5 relative bias** also adds a bias to the scores, but a *learned* scalar per relative-distance bucket rather than a fixed slope — flexible, but the buckets cap how far it extrapolates. And **NoPE** (No Positional Encoding) is the surprising observation that a decoder-only model can, in some settings, *infer* order on its own: the causal mask already breaks the symmetry (token $i$ sees only tokens $\le i$), which can give the model enough signal to reconstruct position without any explicit encoding — though it is mainly a small-scale, decoder-only result, not a reliable default.
+
+| Method | How it injects position | Relative? | Extrapolation to longer context |
+|---|---|---|---|
+| Sinusoidal / learned (§17.4) | Add a position vector to the input embedding | No (absolute) | Poor |
+| RoPE | Rotate $q$, $k$ by a position-dependent angle | Yes (emergent from rotation) | Good, strong with PI / NTK / YaRN |
+| ALiBi | Subtract a linear distance penalty from scores | Yes | Strong, built for it |
+| T5 relative bias | Add a learned bias per distance bucket | Yes | Limited by bucket range |
+| NoPE | Nothing explicit — relies on the causal mask | Implicit | Surprisingly decent at small scale |
+
+---
+
+Editor flags resolved: removed the preamble; unified the gap convention to $(n-m)$ throughout §17.90; relabeled the RoPE SVG as one vector rotated by its own absolute angle $m\theta$ (not two queries, not the relative term) and seated both arrowheads on their line ends; renamed the ALiBi slope to $s$ to avoid colliding with query position $m$; trimmed the RoPE-extension paragraph to one sentence naming PI / NTK / YaRN; and hedged the NoPE claim to "can, in some settings."
+
+Not delivered here (and not in scope of these two sections): the MoE routing diagram, the modern-decoder-block `{mermaid}`, and the model-comparison table the ch17-rope checklist also lists. These two sections (§17.90, §17.91) contain no MoE / modern-component content, so if the checklist requires those visuals they must live in sibling sections — confirm they are delivered elsewhere, or they are missing.
+
+## 17.7 — Beyond Quadratic Attention: Efficient Attention and State-Space Models
 
 Self-attention is wonderful because every token can look at every other token directly. That is also its curse. The moment you write down the attention scores, you have committed to a table with one row and one column for every token in the sequence. For a 1,000-token document that is a million entries; for a 100,000-token book it is ten billion. The dream of feeding a model an entire codebase, a legal contract, or an hour of audio keeps running into the same wall: attention costs grow with the *square* of the sequence length. This section is about how we climb over that wall — first by approximating attention so it scales linearly, and then by abandoning the attention formula entirely in favor of **state-space models** that process sequences the way a running tally processes numbers.
 
@@ -439,7 +558,7 @@ flowchart LR
     style W fill:#fee,stroke:#c33
 ```
 
-## 17.6 — Linear and Efficient Attention: Getting Rid of the Square
+## 17.8 — Linear and Efficient Attention: Getting Rid of the Square
 
 The first family of fixes keeps the attention recipe but reorganizes the arithmetic so the $n \times n$ matrix never appears. The cleanest version is **linear attention**, and the trick is a piece of associativity you already know from multiplying matrices in a smart order.
 
@@ -524,7 +643,7 @@ Linear attention is one branch of a larger family. The main ideas, briefly:
 FlashAttention is often lumped in with "efficient attention," but it is a different kind of win: it computes *exact* softmax attention and is still $O(n^2)$ in arithmetic. What it removes is the $O(n^2)$ *memory* traffic by never writing the full score matrix to slow GPU memory. Do not expect it to make a million-token context cheap — it makes the contexts you already use faster and lighter, but the quadratic compute wall is still there.
 :::
 
-## 17.7 — State-Space Models: S4 and Mamba
+## 17.9 — State-Space Models: S4 and Mamba
 
 Sparse and linear attention chip away at the constant; state-space models change the algorithm. The starting point is an idea borrowed from control theory and signal processing: model a sequence as a **continuous system with a hidden state that evolves over time**. You feed in a signal $u(t)$, an internal state $x(t)$ integrates it, and you read out $y(t)$.
 
@@ -628,7 +747,7 @@ State-space models are not a free lunch that dominates transformers. Their fixed
 
 The throughline across this whole section is one idea seen from three angles. Attention keeps all of history and pays $O(n^2)$. A recurrence compresses history into a fixed state and pays $O(n)$ but cannot parallelize. Linear attention and state-space models thread the needle: a linear update that can be *unrolled into a parallel form for training* and *rolled up into a recurrent form for inference*. Whether you arrive there by factorizing the softmax or by discretizing a differential equation, the destination is the same — subquadratic sequence modeling that finally lets the context window grow.
 
-## 17.8 — Key takeaways
+## 17.10 — Key takeaways
 
 - **Attention is a soft, learned dictionary lookup**: a query is compared against all keys, softmax turns the match scores into weights, and the output is a weighted average of the values — $\text{softmax}(QK^\top/\sqrt{d_k})V$.
 - **The $\sqrt{d_k}$ scaling** keeps dot-product magnitudes from growing with dimension and pushing softmax into saturated, no-gradient regions.
@@ -638,7 +757,7 @@ The throughline across this whole section is one idea seen from three angles. At
 - **Transformers beat RNNs** through full sequence parallelism and $O(1)$ path length between any two tokens — at the price of $O(n^2)$ attention cost.
 - **Order must be injected**: self-attention is permutation-equivariant, so positional encoding (sinusoidal, learned, or RoPE) is mandatory.
 
-## 17.9 — See also
+## 17.11 — See also
 
 - **Chapter 16 — Recurrent & Sequence Models**: the RNN/LSTM approach Transformers replaced, and the vanishing-gradient problem attention sidesteps.
 - **Chapter 14 — Neural Networks (Core)**: residual connections, layer normalization, and the feed-forward MLP inside each block.
