@@ -84,6 +84,14 @@ toc-expand: true
 <li><a href="ch38.html">38 &middot; ⚖️ AI Ethics, Fairness & Safety</a></li>
 <li><a href="ch39.html">39 &middot; 🌠 Frontier & Emerging Directions</a></li>
 </ul>
+<p class="ig-era">🎓 Advanced & Specialized Topics</p>
+<ul>
+<li><a href="ch40.html">40 &middot; 🔗 Graph Machine Learning</a></li>
+<li><a href="ch41.html">41 &middot; 🤖 Robotics & Autonomy</a></li>
+<li><a href="ch42.html">42 &middot; 📐 Learning Theory</a></li>
+<li><a href="ch43.html">43 &middot; 🔎 Information Retrieval & Data Mining</a></li>
+<li><a href="ch44.html">44 &middot; 🏗️ LLM Systems: Building LLMs from Scratch</a></li>
+</ul>
 </details>
 
 ------------------------------------------------------------------------
@@ -412,7 +420,260 @@ RBMs matter mostly for their **historical role**. Around 2006, stacking RBMs and
 Energy-based thinking is making a comeback: modern **score-based diffusion models** are, under the hood, learning the *gradient* of an energy landscape — the same valleys-are-data idea, just made tractable by predicting scores instead of normalizing $Z$.
 :::
 
-## 18.8 — Key takeaways
+
+## 18.8 — Energy-Based Models and the Partition-Function Problem
+
+Most generative models we have seen so far buy their tractability with a structural promise. A VAE promises a clean latent prior and a decoder; an autoregressive model promises a fixed factorization order; a normalizing flow promises invertibility. Energy-based models (EBMs) refuse all of these promises. They make the loosest possible commitment: assign every possible configuration $x$ a single scalar called its *energy*, $E_\theta(x)$, where low energy means "plausible" and high energy means "implausible." That is the entire modeling assumption. Any neural network that maps $x$ to a real number is a valid energy function.
+
+The intuition is a landscape. Picture the space of all images as a vast terrain, and $E_\theta(x)$ as its elevation. Real images sit in deep valleys; noise sits on high ridges. To turn this landscape into a probability distribution we say that depth should mean likelihood, via the Boltzmann (Gibbs) form:
+
+$$ p_\theta(x) = \frac{e^{-E_\theta(x)}}{Z(\theta)}, \qquad Z(\theta) = \int e^{-E_\theta(x)}\, dx. $$
+
+The numerator is easy: one forward pass through a network. The trouble is entirely in the denominator. $Z(\theta)$, the *partition function*, is the integral of $e^{-E_\theta(x)}$ over the entire input space — every possible image, molecule, or sentence. For anything beyond a few dimensions this integral is hopeless to compute exactly. And $Z$ is not a harmless constant we can ignore, because it depends on $\theta$: every time we nudge the weights, the whole normalizer shifts.
+
+::: {.callout-tip}
+The freedom of EBMs and their difficulty are the same fact. Because $E_\theta$ has no structural constraints, it can represent distributions a flow or autoregressive model cannot — but precisely because it has no structure, there is no shortcut for $Z$.
+:::
+
+Here is why $Z$ blocks naive training. The log-likelihood of a data point is
+
+$$ \log p_\theta(x) = -E_\theta(x) - \log Z(\theta). $$
+
+To maximize it we take the gradient with respect to $\theta$. The first term is trivial. The second expands into something remarkable:
+
+$$ \nabla_\theta \log Z(\theta) = -\,\mathbb{E}_{x \sim p_\theta}\!\big[\nabla_\theta E_\theta(x)\big]. $$
+
+So the full gradient of the log-likelihood is
+
+$$ \nabla_\theta \log p_\theta(x) = -\nabla_\theta E_\theta(x_{\text{data}}) + \mathbb{E}_{x \sim p_\theta}\!\big[\nabla_\theta E_\theta(x)\big]. $$
+
+Read this as two opposing forces. The first term pushes energy *down* at observed data points — dig the valleys deeper. The second term pushes energy *up* at samples drawn from the model itself — flatten the hallucinated valleys the model currently believes in. At convergence the two cancel: the model's own samples look statistically like the data, so it stops digging. This is the celebrated "positive phase minus negative phase" structure, and it is exactly what makes EBMs hard, because the negative phase requires sampling from $p_\theta$, which itself requires the intractable $Z$.
+
+**A worked one-dimensional example.** Let the energy be a simple quadratic $E_\theta(x) = \tfrac{1}{2}\theta x^2$ with $\theta > 0$. Then $p_\theta(x) \propto e^{-\theta x^2/2}$, which is a Gaussian with variance $1/\theta$. Here $Z$ is one of the rare cases we can do by hand:
+
+$$ Z(\theta) = \int_{-\infty}^{\infty} e^{-\theta x^2/2}\, dx = \sqrt{\frac{2\pi}{\theta}}. $$
+
+So $\log p_\theta(x) = -\tfrac{1}{2}\theta x^2 - \tfrac{1}{2}\log(2\pi/\theta)$. Differentiating, $\nabla_\theta \log p_\theta(x) = -\tfrac{1}{2}x^2 + \tfrac{1}{2\theta}$. Setting the expected gradient over data to zero gives $\tfrac{1}{2}\mathbb{E}[x^2] = \tfrac{1}{2\theta}$, i.e. $\theta = 1/\mathbb{E}[x^2]$ — the maximum-likelihood variance estimate, exactly right. The two phases are visible: $-\tfrac12 x^2$ is the data term pulling energy down where data lives, and $+\tfrac{1}{2\theta} = \tfrac12\mathbb{E}_{p_\theta}[x^2]$ is the model term, the negative phase, computed here in closed form only because $Z$ was tractable. In real models that second expectation is the wall we keep hitting.
+
+<svg viewBox="0 0 560 220" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif">
+  <text x="280" y="18" text-anchor="middle" font-size="13" font-weight="bold">Energy landscape: data carves valleys, model fills phantom ones</text>
+  <line x1="40" y1="180" x2="520" y2="180" stroke="#888" stroke-width="1"/>
+  <text x="280" y="205" text-anchor="middle" font-size="11">configuration x</text>
+  <text x="20" y="100" text-anchor="middle" font-size="11" transform="rotate(-90 20 100)">energy E(x)</text>
+  <!-- current model energy curve: two valleys, one phantom -->
+  <path d="M40,60 Q120,170 200,70 Q280,150 360,60 Q440,150 520,80" fill="none" stroke="#c0392b" stroke-width="2"/>
+  <!-- data points cluster -->
+  <circle cx="170" cy="180" r="3" fill="#2c3e50"/><circle cx="185" cy="180" r="3" fill="#2c3e50"/>
+  <circle cx="200" cy="180" r="3" fill="#2c3e50"/><circle cx="215" cy="180" r="3" fill="#2c3e50"/>
+  <text x="195" y="172" text-anchor="middle" font-size="10" fill="#2c3e50">data</text>
+  <!-- arrows: dig down at data -->
+  <path d="M200,95 L200,140" stroke="#27ae60" stroke-width="2" marker-end="url(#a)"/>
+  <text x="248" y="120" font-size="10" fill="#27ae60">positive phase: push down</text>
+  <!-- phantom valley at ~360 -->
+  <path d="M360,80 L360,40" stroke="#e67e22" stroke-width="2" marker-end="url(#a)"/>
+  <text x="368" y="40" font-size="10" fill="#e67e22">negative phase: push up (no data here)</text>
+  <defs><marker id="a" markerWidth="8" markerHeight="8" refX="4" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 Z" fill="#444"/></marker></defs>
+</svg>
+
+The deeper lesson is that EBMs convert *modeling* difficulty into *sampling* difficulty. They are maximally expressive but you pay for that expressiveness every time you need a gradient, because the negative phase is an expectation over a distribution you can only reach through approximate sampling. The next sections are essentially three different strategies for paying that bill: approximate the negative-phase samples cheaply (contrastive divergence), sidestep $Z$ entirely by matching gradients instead of densities (score matching), and use a physics-inspired sampler to walk the landscape (Langevin dynamics).
+
+## 18.9 — Contrastive Divergence: Cheap Negative Samples
+
+If the only obstacle is that the negative phase needs samples from $p_\theta$, the obvious question is: how bad would it be to get those samples *approximately*? Contrastive divergence (CD), introduced by Hinton for training restricted Boltzmann machines, is the answer that made EBMs practical for years. Its bet is brazenly pragmatic: you do not need samples from the true equilibrium distribution, you just need samples that are *worse* than the data in a direction that tells the gradient which way to move.
+
+The principled way to sample $p_\theta$ is to run a Markov chain — say Langevin or Gibbs steps — from some starting point and let it mix for a very long time until it forgets where it started and settles into $p_\theta$. That mixing can take thousands of steps. CD's shortcut is to start the chain *at a real data point* and run it for only $k$ steps, often just one. The data is already close to where the model's high-probability region should be, so even a single step nudges it toward wherever the model currently disagrees with the data.
+
+```{mermaid}
+flowchart LR
+  D["data point x⁺"] -->|"k Gibbs/Langevin steps"| N["negative sample x⁻"]
+  D --> P["positive phase:<br/>lower E(x⁺)"]
+  N --> M["negative phase:<br/>raise E(x⁻)"]
+  P --> U["θ ← θ − η(∇E(x⁺) − ∇E(x⁻))"]
+  M --> U
+```
+
+The CD-$k$ update for a single example is
+
+$$ \Delta\theta \;\propto\; -\nabla_\theta E_\theta(x^{+}) \;+\; \nabla_\theta E_\theta(x^{-}), $$
+
+where $x^{+}$ is the data point and $x^{-}$ is the result of $k$ chain steps started from $x^{+}$. Compare this to the exact gradient from the previous section: it is the *same expression*, except the negative-phase sample comes from a short, biased chain rather than the true $p_\theta$. CD is therefore a biased gradient estimator. It does not exactly follow the likelihood gradient, but it follows something close enough to learn good models in practice, and it is cheap.
+
+**Worked example on a tiny RBM.** Consider a restricted Boltzmann machine with visible units $v$ and hidden units $h$ and energy $E(v,h) = -v^\top W h - b^\top v - c^\top h$. The conditionals factorize, which is what makes Gibbs sampling easy: $p(h_j=1\mid v) = \sigma(c_j + \sum_i v_i W_{ij})$ and symmetrically $p(v_i=1\mid h) = \sigma(b_i + \sum_j W_{ij} h_j)$. CD-1 is then four lines.
+
+```python
+import numpy as np
+sig = lambda z: 1/(1+np.exp(-z))
+
+def cd1_update(v_data, W, b, c, lr=0.1):
+    # positive phase: hidden probs given real data
+    ph_pos = sig(c + v_data @ W)              # p(h=1 | v_data)
+    h_pos  = (np.random.rand(*ph_pos.shape) < ph_pos).astype(float)
+    # one Gibbs step down-and-up to get the negative sample
+    pv_neg = sig(b + h_pos @ W.T)             # reconstruct visibles
+    v_neg  = (np.random.rand(*pv_neg.shape) < pv_neg).astype(float)
+    ph_neg = sig(c + v_neg @ W)               # hidden probs given recon
+    # gradients = positive correlations minus negative correlations
+    W += lr * (v_data.T @ ph_pos - v_neg.T @ ph_neg) / len(v_data)
+    b += lr * (v_data - v_neg).mean(0)
+    c += lr * (ph_pos - ph_neg).mean(0)
+    return W, b, c
+```
+
+The two outer-product terms `v_data.T @ ph_pos` and `v_neg.T @ ph_neg` are the positive and negative phases made concrete: correlations measured on real data versus on a one-step reconstruction. Learning stops when the model reconstructs its data so well that the one-step sample is statistically indistinguishable from the input, so the two correlation terms cancel.
+
+::: {.callout-warning}
+CD optimizes a surrogate, not the true likelihood, and the bias does not vanish as you collect more data — it comes from truncating the chain, not from sampling noise. Symptoms include energy landscapes with spurious low-energy regions far from any data (the short chain never travels far enough to discover and penalize them). Persistent CD (PCD) helps: instead of restarting the chain at each data point, you keep a *persistent* set of "fantasy particles" that continue evolving across parameter updates, so over many updates they explore more of the landscape and catch those distant phantom valleys.
+:::
+
+The honest summary is that CD trades a correctness guarantee for tractability. For decades it was the workhorse that let Boltzmann machines and deep belief networks train at all. Modern EBM training has largely moved to the score-based and Langevin-based methods in the next sections, which avoid the partition function by a different and often cleaner route — but CD remains the cleanest illustration of the core idea: *learn by contrasting real data against the model's own approximate fantasies.*
+
+## 18.10 — Score Matching: Learning the Gradient of Log-Density
+
+Contrastive divergence accepts a biased gradient to dodge $Z$. Score matching asks a sharper question: is there a quantity we could learn that *does not contain $Z$ at all*? Remarkably, yes. The trick is to stop modeling the density and start modeling its gradient.
+
+Define the *score* of a distribution as the gradient of its log-density with respect to the input — not the parameters, the input:
+
+$$ s_\theta(x) \;=\; \nabla_x \log p_\theta(x). $$
+
+Now substitute the Boltzmann form. Since $\log p_\theta(x) = -E_\theta(x) - \log Z(\theta)$, and $\log Z(\theta)$ does not depend on $x$, its gradient with respect to $x$ is exactly zero:
+
+$$ \nabla_x \log p_\theta(x) \;=\; -\nabla_x E_\theta(x). $$
+
+The partition function vanishes. This is the whole idea in one line. The score is a vector field over input space — at every point it tells you which direction increases log-probability fastest, i.e. which way is "downhill" in energy. It carries no information about the *absolute* normalization, only about *relative* shape, and that is precisely the part we can learn cheaply.
+
+<svg viewBox="0 0 560 230" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif">
+  <text x="280" y="18" text-anchor="middle" font-size="13" font-weight="bold">The score is a vector field pointing toward high density</text>
+  <!-- density blob -->
+  <ellipse cx="300" cy="125" rx="70" ry="50" fill="#3498db" opacity="0.18"/>
+  <ellipse cx="300" cy="125" rx="40" ry="28" fill="#3498db" opacity="0.30"/>
+  <circle cx="300" cy="125" r="4" fill="#2980b9"/>
+  <text x="300" y="190" text-anchor="middle" font-size="10" fill="#2980b9">data density p(x)</text>
+  <!-- arrows pointing inward toward the mode -->
+  <defs><marker id="s" markerWidth="8" markerHeight="8" refX="6" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 Z" fill="#c0392b"/></marker></defs>
+  <line x1="430" y1="60"  x2="345" y2="105" stroke="#c0392b" stroke-width="1.6" marker-end="url(#s)"/>
+  <line x1="170" y1="60"  x2="255" y2="105" stroke="#c0392b" stroke-width="1.6" marker-end="url(#s)"/>
+  <line x1="170" y1="190" x2="255" y2="145" stroke="#c0392b" stroke-width="1.6" marker-end="url(#s)"/>
+  <line x1="430" y1="190" x2="345" y2="145" stroke="#c0392b" stroke-width="1.6" marker-end="url(#s)"/>
+  <line x1="100" y1="125" x2="225" y2="125" stroke="#c0392b" stroke-width="1.6" marker-end="url(#s)"/>
+  <line x1="500" y1="125" x2="375" y2="125" stroke="#c0392b" stroke-width="1.6" marker-end="url(#s)"/>
+  <text x="120" y="50" font-size="10" fill="#c0392b">score s(x) = ∇ₓ log p(x)</text>
+</svg>
+
+So the new goal is: learn a network $s_\theta(x)$ whose output vector field matches the *true* data score $\nabla_x \log p_{\text{data}}(x)$. The natural objective is the expected squared difference, called the *(explicit) Fisher divergence*:
+
+$$ J(\theta) \;=\; \tfrac{1}{2}\,\mathbb{E}_{x\sim p_{\text{data}}}\big\|\, s_\theta(x) - \nabla_x \log p_{\text{data}}(x)\,\big\|^2. $$
+
+But this looks circular — we do not know the true data score; that is the whole thing we are trying to learn. Hyvärinen's key result (2005) is that under mild boundary conditions you can integrate by parts to eliminate the unknown true score entirely, leaving an objective that depends only on the model:
+
+$$ J(\theta) \;=\; \mathbb{E}_{x\sim p_{\text{data}}}\!\left[\, \tfrac{1}{2}\,\|s_\theta(x)\|^2 \;+\; \operatorname{tr}\!\big(\nabla_x s_\theta(x)\big) \,\right] + \text{const}. $$
+
+The second term is the trace of the Jacobian of the score — equivalently $\sum_i \partial^2 \log p_\theta / \partial x_i^2$, the sum of second derivatives. Intuitively the first term wants the score small everywhere (don't claim steep gradients without reason) while the trace term rewards the score for *converging* toward data (negative divergence at the modes). Together they pin the vector field to the data without ever touching $Z$.
+
+**Worked example, one dimension.** Take a Gaussian model $p_\theta(x) \propto e^{-\theta x^2/2}$ again, so $\log p_\theta(x) = -\tfrac\theta2 x^2 + \text{const}$ and the model score is $s_\theta(x) = \partial_x \log p_\theta = -\theta x$. Plug into the integrated objective: $\tfrac12 s_\theta^2 = \tfrac12\theta^2 x^2$ and $\partial_x s_\theta = -\theta$, so
+
+$$ J(\theta) = \mathbb{E}_{x}\!\left[\tfrac12\theta^2 x^2 - \theta\right] = \tfrac12\theta^2\,\mathbb{E}[x^2] - \theta. $$
+
+Set $dJ/d\theta = \theta\,\mathbb{E}[x^2] - 1 = 0$, giving $\theta = 1/\mathbb{E}[x^2]$ — the same maximum-likelihood answer as in §18.90, but obtained with no partition function anywhere in sight. That is the payoff: an estimator that is consistent (it recovers the right parameters) yet never normalizes.
+
+::: {.callout-warning}
+The Jacobian-trace term is the catch. For a $d$-dimensional input, computing $\operatorname{tr}(\nabla_x s_\theta)$ exactly costs $d$ backward passes — fatal for images where $d$ is in the millions. This is why plain score matching does not scale, and why two workarounds dominate practice: *sliced* score matching, which estimates the trace with random projections (Hutchinson's trick) at the cost of one extra pass, and *denoising* score matching, which we meet next as the bridge to diffusion.
+:::
+
+A second, subtler pitfall: score matching on clean data learns the score accurately only *where data lives*. In the vast empty regions between data clusters the data density is near zero, there are no training samples, and the learned score points in essentially random directions. A sampler that starts in those empty regions gets no useful guidance. This single failure mode is what motivates adding noise — and noise is exactly what links score matching to diffusion.
+
+## 18.11 — Langevin Dynamics: Sampling by Following the Score
+
+We now have a way to learn the score $s_\theta(x) \approx \nabla_x \log p(x)$ without ever computing $Z$. But a generative model has to *produce samples*, and a vector field is not a sample. Langevin dynamics is the bridge: it is a procedure that turns a score function into a sampler by treating the score as a force and letting a particle drift down the energy landscape while being kicked by noise.
+
+The physical picture is a speck of pollen in water. It feels a deterministic drift — gravity, or here the score pulling it toward high-density regions — plus relentless random molecular buffeting. Left alone, it does not fall to the single lowest point and freeze; instead it wanders, spending more time in deep regions and less in shallow ones, and the long-run fraction of time it spends at each location is *exactly proportional to the probability density*. That is the magic: pure gradient descent on energy collapses to the single mode, but gradient descent *plus calibrated noise* visits the whole distribution.
+
+The update rule, *Langevin Monte Carlo*, makes this concrete. Starting from any point $x_0$ (even pure noise), iterate
+
+$$ x_{t+1} \;=\; x_t \;+\; \tfrac{\epsilon}{2}\,\nabla_x \log p(x_t) \;+\; \sqrt{\epsilon}\;z_t, \qquad z_t \sim \mathcal{N}(0, I). $$
+
+The middle term is the score: a step *uphill in log-density*, i.e. downhill in energy. The last term is the random kick, scaled so that as the step size $\epsilon \to 0$ and the number of steps $\to \infty$, the distribution of $x_t$ converges to $p(x)$ exactly. Drop the noise term and you get ordinary gradient ascent that converges to the nearest mode and stops — a single image, not a sample from the distribution. The noise is what makes it a *sampler* rather than an *optimizer*.
+
+```{mermaid}
+flowchart LR
+  X0["x₀ ~ noise"] --> S["score step:<br/>+ (ε/2)∇ₓ log p(x)"]
+  S --> N["noise kick:<br/>+ √ε · z"]
+  N --> X1["xₜ₊₁"]
+  X1 -->|"repeat T steps"| S
+  X1 --> OUT["sample ≈ p(x)"]
+```
+
+**Worked example.** Sample a standard Gaussian, whose score is $\nabla_x \log p(x) = -x$. The update becomes $x_{t+1} = x_t - \tfrac\epsilon2 x_t + \sqrt\epsilon\, z_t$. Watch how it self-corrects: when $x_t$ is large and positive the drift $-\tfrac\epsilon2 x_t$ pulls it back toward zero; when it is near zero the drift nearly vanishes and the noise dominates, scattering it back out. The balance of pull-back and kick reproduces the bell curve.
+
+```python
+import numpy as np
+def langevin(score, x, eps=0.01, steps=1000):
+    for _ in range(steps):
+        x = x + 0.5*eps*score(x) + np.sqrt(eps)*np.random.randn(*x.shape)
+    return x
+
+score = lambda x: -x                       # score of N(0,1)
+samples = langevin(score, np.zeros(20000)) # start all at 0
+print(samples.mean(), samples.std())       # ≈ 0.0, ≈ 1.0
+```
+
+Starting every particle at zero and running the chain, the empirical mean and standard deviation come out near $0$ and $1$: the sampler has reconstructed the target distribution using nothing but its score.
+
+::: {.callout-warning}
+Plain Langevin mixes painfully slowly when the distribution has well-separated modes. Between two clusters the density is near zero, the score is tiny, and the noise has to do all the work to ferry a particle across the empty gap — which can take astronomically many steps. Combined with the §18.92 observation that the *learned* score is unreliable in exactly those low-density gaps, naive "learn the score, then run Langevin" simply does not work on real data. The fix is the central trick of the next section: *add noise at many scales*, which both fills in the empty regions with usable gradient signal and smooths the landscape so the chain can travel.
+:::
+
+The thing to carry forward is that Langevin dynamics decouples *learning* from *sampling*. You learn a single object, the score field, by whatever means (score matching, denoising). Then sampling is a fixed, model-free recipe: drift along the score, add noise, repeat. This clean separation is exactly the structure that diffusion models exploit, and the next section shows the two are the same theory written in different notation.
+
+## 18.12 — The Score-SDE View: One Theory Behind Diffusion and Score Matching
+
+The previous chapter introduced diffusion models as a discrete chain: add Gaussian noise step by step until an image becomes static, then train a network to undo each step. §18.92–18.93 introduced score matching and Langevin sampling from the entirely separate world of energy-based models. The score-SDE framework of Song and colleagues (2021) revealed that these are not two ideas but one, viewed at two resolutions. The unification is one of the most clarifying results in modern generative modeling, and it falls out of taking the noise schedule to its continuous limit.
+
+Start with the diffusion forward process but let the steps shrink to infinitesimals. The accumulation of tiny independent Gaussian perturbations is, in the continuum, a *stochastic differential equation* (SDE):
+
+$$ dx \;=\; f(x,t)\,dt \;+\; g(t)\,dw, $$
+
+where $f$ is a deterministic drift, $g$ scales the noise, and $dw$ is the increment of a Wiener process (Brownian motion). This forward SDE just describes data dissolving into noise as time $t$ runs from $0$ to $1$ — nothing is learned here. The remarkable part is a classical result by Anderson (1982): *every* such forward SDE has a corresponding **reverse-time SDE** that runs the clock backward, turning noise back into data, and it has an explicit form:
+
+$$ dx \;=\; \big[\,f(x,t) - g(t)^2\,\nabla_x \log p_t(x)\,\big]\,dt \;+\; g(t)\,d\bar w. $$
+
+Look at what appears in the reverse drift: $\nabla_x \log p_t(x)$ — the **score** of the noised data distribution at time $t$. The only unknown needed to reverse diffusion is the score function. Diffusion is not a different mechanism from score-based generation; *training a diffusion model is estimating the time-dependent score, and sampling from it is integrating the reverse SDE — which, discretized, is Langevin dynamics with a schedule.*
+
+```{mermaid}
+flowchart LR
+  subgraph Forward["forward SDE — fixed, no learning"]
+    A["x₀ data"] -->|"dx = f dt + g dw"| B["x₁ pure noise"]
+  end
+  subgraph Reverse["reverse SDE — needs the score"]
+    C["x₁ noise"] -->|"dx = [f − g²∇ₓlog pₜ] dt + g dw̄"| D["x₀ sample"]
+  end
+  S["score network sθ(x,t)<br/>trained by denoising score matching"] -.->|"supplies ∇ₓ log pₜ(x)"| Reverse
+```
+
+This is where the §18.92 and §18.93 pitfalls dissolve. Recall the twin problems: the learned score is garbage in low-density regions, and Langevin cannot cross between modes. The forward SDE fixes *both at once* by indexing the score on a continuum of noise levels $t$. At high noise (large $t$) the distribution $p_t$ is broad and nearly Gaussian — its score is well-defined *everywhere*, including the empty gaps, and the landscape has one big basin so mixing is trivial. At low noise (small $t$) the distribution is sharp and detailed but the sampler is already near the right region. Sampling runs $t$ from high to low: start in the easy smooth regime, follow the score, and gradually anneal toward the sharp data distribution. This is **annealed Langevin dynamics**, and it is exactly what the reverse SDE prescribes.
+
+Training uses *denoising score matching*, the scalable cousin promised in §18.92. The insight (Vincent, 2011) is that for data corrupted by Gaussian noise of variance $\sigma^2$, the score of the noised distribution has a closed form: it points from the noisy sample back toward the clean one. Concretely, if $\tilde x = x + \sigma\,\epsilon$ with $\epsilon \sim \mathcal N(0,I)$, then
+
+$$ \nabla_{\tilde x} \log p_\sigma(\tilde x \mid x) \;=\; -\,\frac{\tilde x - x}{\sigma^2} \;=\; -\,\frac{\epsilon}{\sigma}. $$
+
+So matching the score reduces to *predicting the noise that was added* — no Jacobian trace, no partition function, just a regression. The training objective becomes the familiar denoising loss
+
+$$ \mathcal L(\theta) \;=\; \mathbb{E}_{t,\,x,\,\epsilon}\Big[\,\lambda(t)\,\big\| s_\theta(\tilde x, t) + \tfrac{\epsilon}{\sigma_t} \big\|^2\,\Big], $$
+
+which is, up to the weighting $\lambda(t)$ and a reparametrization, identical to the noise-prediction loss the diffusion chapter derived from a completely different starting point. Two derivations, one objective.
+
+| view | object learned | training signal | sampling procedure |
+|---|---|---|---|
+| EBM / score matching | score $\nabla_x \log p(x)$ | Fisher divergence (or denoising) | Langevin dynamics |
+| Diffusion (discrete) | noise $\epsilon$ to remove per step | denoising MSE per timestep | iterative denoising chain |
+| Score-SDE (continuous) | time-indexed score $s_\theta(x,t)$ | denoising score matching | integrate reverse SDE |
+
+::: {.callout-tip}
+The score-SDE picture also hands you a bonus: every reverse SDE has a deterministic twin called the *probability-flow ODE* that shares the same time-marginals $p_t$ but removes the noise term. Integrating that ODE instead of the SDE gives a deterministic sampler — faster, fewer steps, and crucially it provides an exact invertible map between data and noise, which means you can compute exact likelihoods and do clean latent interpolation. This is the bridge from diffusion back to normalizing flows: the probability-flow ODE is a continuous-time flow whose velocity field is the learned score.
+:::
+
+The conceptual takeaway closes the loop on the whole family. Energy-based models posed the problem — model any density, but pay at the partition function. Score matching removed $Z$ by learning gradients instead of densities. Langevin dynamics turned those gradients into samples. Diffusion discovered, seemingly independently, that adding and removing noise at many scales makes the whole scheme work on real high-dimensional data. The score-SDE framework shows these were always the same idea: *learn the score of data smoothed across all noise levels, then integrate backward from noise to data.* What looked like four separate techniques is one continuous theory seen through different windows.
+
+## 18.13 — Key takeaways
 
 - **Generative models learn the data distribution** so they can synthesize new samples, rather than mapping inputs to labels.
 - **Autoencoders** compress through a bottleneck and reconstruct; denoising and sparse variants force more useful codes, but the plain latent space has holes you can't sample from.
@@ -423,7 +684,7 @@ Energy-based thinking is making a comeback: modern **score-based diffusion model
 - **Autoregressive and flow-based models** give *exact* likelihoods: autoregressive factorizes $p(x)$ via the chain rule (slow sequential sampling), flows use invertible transforms and change-of-variables (fast, but limited expressiveness).
 - **Boltzmann machines / RBMs** are energy-based models trained with contrastive divergence; historically pivotal for deep-learning pretraining and conceptually echoed in today's score-based diffusion.
 
-## 18.9 — See also
+## 18.14 — See also
 
 - **Neural Networks (Core)** — the encoder, decoder, generator, and discriminator are all standard nets; backprop and activations underpin everything here.
 - **Convolutional Neural Networks** — the backbone of DCGAN, StyleGAN, and the U-Net inside diffusion models.

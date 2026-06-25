@@ -84,6 +84,14 @@ toc-expand: true
 <li><a href="ch38.html">38 &middot; ⚖️ AI Ethics, Fairness & Safety</a></li>
 <li><a href="ch39.html">39 &middot; 🌠 Frontier & Emerging Directions</a></li>
 </ul>
+<p class="ig-era">🎓 Advanced & Specialized Topics</p>
+<ul>
+<li><a href="ch40.html">40 &middot; 🔗 Graph Machine Learning</a></li>
+<li><a href="ch41.html">41 &middot; 🤖 Robotics & Autonomy</a></li>
+<li><a href="ch42.html">42 &middot; 📐 Learning Theory</a></li>
+<li><a href="ch43.html">43 &middot; 🔎 Information Retrieval & Data Mining</a></li>
+<li><a href="ch44.html">44 &middot; 🏗️ LLM Systems: Building LLMs from Scratch</a></li>
+</ul>
 </details>
 
 ------------------------------------------------------------------------
@@ -567,7 +575,216 @@ That responsibility vector — the posterior over the hidden cause — is the th
 Latent variable models suffer from **identifiability** and **label-switching** issues: the components of a mixture can be permuted without changing the likelihood, so "component 1" has no fixed meaning across runs. Don't over-interpret a single fit, and don't trust latent indices to be stable — interpret the *partition* of the data, not the label number attached to it.
 :::
 
-## 13.10 — Key takeaways
+
+## 13.10 — Variable Elimination: Inference as Sums and Products
+
+Imagine you have a joint distribution over many variables, factored into small pieces, and you want one marginal — say $P(D)$. The brute-force route is to write the full joint as a giant table and sum out everything else. That table has $2^n$ rows for $n$ binary variables, so it dies fast. Variable elimination is the simple observation that you don't have to build the table at all: you can push the summations *inside* the product, summing out one variable at a time, because most factors don't mention most variables.
+
+The intuition is the distributive law. To compute $\sum_b \sum_c f(a,b)\,g(b,c)$ you do not enumerate all $(b,c)$ pairs against $a$; you note that $a$ only appears in $f$, so
+
+$$\sum_b \sum_c f(a,b)\,g(b,c) = \sum_b f(a,b)\Big(\sum_c g(b,c)\Big).$$
+
+The inner sum over $c$ produces a smaller factor over $b$ alone, which you then fold into the next sum. Each elimination replaces "multiply everything mentioning this variable, then sum it out" with one new factor over the *neighbors* of the eliminated variable.
+
+The algorithm, stated as factors. A graphical model gives a set of factors $\{\phi_1,\dots,\phi_m\}$ (conditional probability tables in a Bayes net, clique potentials in an MRF), and the joint is their product (times a normalizer). To eliminate variable $X$:
+
+1. Collect every factor that mentions $X$ into a bucket.
+2. Multiply them together into one product factor $\psi$.
+3. Sum $\psi$ over $X$ to get a new factor $\tau$ over $X$'s remaining neighbors.
+4. Remove the bucketed factors, add $\tau$.
+
+Repeat for every variable you want gone; multiply the survivors and normalize.
+
+```{mermaid}
+flowchart LR
+  A["factors mentioning X"] --> B["multiply → ψ(X, neighbors)"]
+  B --> C["sum out X → τ(neighbors)"]
+  C --> D["replace bucket with τ"]
+  D --> E{"more vars<br/>to eliminate?"}
+  E -- yes --> A
+  E -- no --> F["multiply survivors,<br/>normalize"]
+```
+
+::: {.callout-tip}
+The whole method is just the distributive law applied repeatedly: $\sum (ab) = a \sum b$ whenever $a$ doesn't depend on the summation index. "Push sums in as far as they go."
+:::
+
+## 13.11 — A Worked Elimination on a Tiny Chain
+
+Take a four-node chain $A \to B \to C \to D$, all binary. The joint factors as
+
+$$P(A,B,C,D) = P(A)\,P(B\mid A)\,P(C\mid B)\,P(D\mid C).$$
+
+We want $P(D)$, which means eliminating $A$, then $B$, then $C$. Use these tiny numbers:
+
+| factor | values |
+|---|---|
+| $P(A)$ | $P(a_0)=0.6,\ P(a_1)=0.4$ |
+| $P(B\mid A)$ | $P(b_0\mid a_0)=0.7,\ P(b_0\mid a_1)=0.2$ |
+| $P(C\mid B)$ | $P(c_0\mid b_0)=0.8,\ P(c_0\mid b_1)=0.3$ |
+| $P(D\mid C)$ | $P(d_0\mid c_0)=0.9,\ P(d_0\mid c_1)=0.5$ |
+
+**Eliminate $A$.** Only $P(A)$ and $P(B\mid A)$ mention $A$. Multiply and sum:
+
+$$\tau_1(B) = \sum_A P(A)\,P(B\mid A).$$
+
+$$\tau_1(b_0) = 0.6(0.7) + 0.4(0.2) = 0.42 + 0.08 = 0.50,\qquad \tau_1(b_1) = 0.50.$$
+
+This $\tau_1(B)$ is just the prior marginal $P(B)$ — here uniform.
+
+**Eliminate $B$.** Factors mentioning $B$ are now $\tau_1(B)$ and $P(C\mid B)$:
+
+$$\tau_2(C) = \sum_B \tau_1(B)\,P(C\mid B).$$
+
+$$\tau_2(c_0) = 0.50(0.8) + 0.50(0.3) = 0.55,\qquad \tau_2(c_1) = 0.50(0.2)+0.50(0.7) = 0.45.$$
+
+**Eliminate $C$.** Factors mentioning $C$ are $\tau_2(C)$ and $P(D\mid C)$:
+
+$$P(D) = \sum_C \tau_2(C)\,P(D\mid C).$$
+
+$$P(d_0) = 0.55(0.9) + 0.45(0.5) = 0.495 + 0.225 = 0.72,\qquad P(d_1) = 0.28.$$
+
+```python
+import numpy as np
+# CPTs as arrays: row = parent value, col = child value (index 0/1)
+PA  = np.array([0.6, 0.4])
+PBA = np.array([[0.7, 0.3], [0.2, 0.8]])   # P(B|A)
+PCB = np.array([[0.8, 0.2], [0.3, 0.7]])   # P(C|B)
+PDC = np.array([[0.9, 0.1], [0.5, 0.5]])   # P(D|C)
+
+t1 = PA @ PBA      # sum out A  -> P(B)
+t2 = t1 @ PCB      # sum out B  -> factor over C
+PD = t2 @ PDC      # sum out C  -> P(D)
+print(PD)          # [0.72 0.28]
+```
+
+Each elimination is one matrix–vector product because the chain is so thin. The cost is set by the *largest factor ever built*, not by the number of variables — on a chain that factor never exceeds two variables, so inference is linear in chain length.
+
+## 13.12 — Elimination Order and Treewidth: Why Some Graphs Are Hard
+
+The chain was cheap because every intermediate factor touched at most two variables. On a denser graph the order in which you eliminate matters enormously, because summing out a variable *connects all its neighbors together* — they now share a new factor $\tau$ even if they were never directly linked before. These added edges are called **fill-in edges**, and they make later factors bigger.
+
+Picture eliminating the center of a star versus eliminating a leaf. Knock out a leaf and nothing happens to the rest. Knock out the hub first and every former neighbor becomes mutually entangled in one giant factor over all of them — exponential in the number of spokes.
+
+<svg viewBox="0 0 460 200" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif" font-size="12">
+  <text x="70" y="18" text-anchor="middle">eliminate leaf first</text>
+  <line x1="70" y1="100" x2="30"  y2="60"  stroke="#888"/>
+  <line x1="70" y1="100" x2="110" y2="60"  stroke="#888"/>
+  <line x1="70" y1="100" x2="30"  y2="140" stroke="#888"/>
+  <line x1="70" y1="100" x2="110" y2="140" stroke="#888"/>
+  <circle cx="70" cy="100" r="11" fill="#cde3ff" stroke="#333"/>
+  <circle cx="30"  cy="60"  r="9" fill="#fff" stroke="#333"/>
+  <circle cx="110" cy="60"  r="9" fill="#fff" stroke="#333"/>
+  <circle cx="30"  cy="140" r="9" fill="#fff" stroke="#333"/>
+  <circle cx="110" cy="140" r="9" fill="#fff" stroke="#333"/>
+  <text x="70" y="180" text-anchor="middle" fill="#2a7">small factors</text>
+
+  <text x="330" y="18" text-anchor="middle">eliminate hub first</text>
+  <line x1="330" y1="100" x2="290" y2="60"  stroke="#888"/>
+  <line x1="330" y1="100" x2="370" y2="60"  stroke="#888"/>
+  <line x1="330" y1="100" x2="290" y2="140" stroke="#888"/>
+  <line x1="330" y1="100" x2="370" y2="140" stroke="#888"/>
+  <line x1="290" y1="60" x2="370" y2="60"  stroke="#e06" stroke-dasharray="4 3"/>
+  <line x1="290" y1="60" x2="290" y2="140" stroke="#e06" stroke-dasharray="4 3"/>
+  <line x1="370" y1="60" x2="370" y2="140" stroke="#e06" stroke-dasharray="4 3"/>
+  <line x1="290" y1="140" x2="370" y2="140" stroke="#e06" stroke-dasharray="4 3"/>
+  <line x1="290" y1="60" x2="370" y2="140" stroke="#e06" stroke-dasharray="4 3"/>
+  <circle cx="330" cy="100" r="11" fill="#ffd0d0" stroke="#333"/>
+  <circle cx="290" cy="60"  r="9" fill="#fff" stroke="#333"/>
+  <circle cx="370" cy="60"  r="9" fill="#fff" stroke="#333"/>
+  <circle cx="290" cy="140" r="9" fill="#fff" stroke="#333"/>
+  <circle cx="370" cy="140" r="9" fill="#fff" stroke="#333"/>
+  <text x="330" y="180" text-anchor="middle" fill="#e06">one big factor (fill-in)</text>
+</svg>
+
+The cost of an elimination order is governed by the **width**: one less than the size of the largest factor (largest clique) ever created. The **treewidth** of a graph is the width of its *best possible* order — the minimum over all orderings of that largest-clique size, minus one. Inference by elimination runs in time and space exponential in the treewidth:
+
+$$\text{cost} \;\approx\; O\!\big(m \cdot k^{\,w+1}\big),$$
+
+where $m$ is the number of variables, $k$ the number of states each, and $w$ the treewidth. A chain or tree has treewidth $1$, so inference is linear. An $n\times n$ grid has treewidth $n$, so exact inference becomes exponential — which is exactly why image-grid MRFs fall back on the approximate methods covered earlier.
+
+Finding the optimal order is itself NP-hard, so in practice people use cheap greedy heuristics: **min-degree** (next eliminate the variable with the fewest current neighbors) and **min-fill** (next eliminate the variable that adds the fewest fill-in edges). Neither is optimal, but both usually find orders close to the treewidth on real graphs.
+
+::: {.callout-warning}
+Treewidth is a property of the *undirected* graph structure, not of the numbers in the tables. No clever choice of potentials rescues a high-treewidth graph; if the structure is a dense grid, exact elimination is hopeless regardless of how the probabilities are set. Moralize a Bayes net (marry co-parents, drop directions) before reading off its treewidth.
+:::
+
+## 13.13 — The Junction Tree: Reusing Work Across Many Queries
+
+Plain variable elimination answers *one* query. Ask for $P(D)$ and then $P(B)$ and you redo most of the sums. The junction tree (also called the **clique tree** or **join tree**) is the data structure that caches the shared work, so that after one inward-and-outward sweep you can read off the marginal of *every* variable. It is variable elimination organized so the intermediate factors become permanent nodes you can pass messages along in both directions.
+
+A junction tree is built in four steps from the model graph:
+
+```{mermaid}
+flowchart TB
+  A["Bayes net / MRF"] --> B["Moralize:<br/>marry co-parents,<br/>drop arrow directions"]
+  B --> C["Triangulate:<br/>add fill-in edges so every<br/>cycle >3 has a chord"]
+  C --> D["Find maximal cliques<br/>of the triangulated graph"]
+  D --> E["Connect cliques into a tree<br/>(max-weight spanning tree<br/>on shared-variable counts)"]
+```
+
+The cliques become the tree's nodes; each edge carries a **separator**, the set of variables shared by the two cliques it joins. The construction guarantees the **running intersection property**: if a variable appears in two cliques, it appears in every clique on the path between them. This property is what makes local message passing globally correct — a variable's evidence can never "skip" a clique and contradict itself elsewhere.
+
+For our chain $A\to B\to C\to D$, moralizing changes nothing (no co-parents), and it is already triangulated. The maximal cliques are the edges $\{A,B\}$, $\{B,C\}$, $\{C,D\}$, joined through separators $\{B\}$ and $\{C\}$:
+
+<svg viewBox="0 0 460 90" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif" font-size="13">
+  <rect x="20"  y="30" width="80" height="34" rx="6" fill="#cde3ff" stroke="#333"/>
+  <text x="60" y="52" text-anchor="middle">A B</text>
+  <rect x="190" y="30" width="80" height="34" rx="6" fill="#cde3ff" stroke="#333"/>
+  <text x="230" y="52" text-anchor="middle">B C</text>
+  <rect x="360" y="30" width="80" height="34" rx="6" fill="#cde3ff" stroke="#333"/>
+  <text x="400" y="52" text-anchor="middle">C D</text>
+  <line x1="100" y1="47" x2="190" y2="47" stroke="#333"/>
+  <line x1="270" y1="47" x2="360" y2="47" stroke="#333"/>
+  <rect x="128" y="34" width="34" height="26" rx="4" fill="#ffe9b0" stroke="#333"/>
+  <text x="145" y="52" text-anchor="middle">B</text>
+  <rect x="298" y="34" width="34" height="26" rx="4" fill="#ffe9b0" stroke="#333"/>
+  <text x="315" y="52" text-anchor="middle">C</text>
+</svg>
+
+The largest clique has two variables, matching the chain's treewidth of $1$ (width = clique size $-1$). A junction tree's cliques are exactly the factors elimination would have built under a good order — the tree just stores them so they can be reused.
+
+## 13.14 — Belief Propagation on the Junction Tree
+
+Once the tree exists, inference is a two-phase message-passing schedule, sometimes called the **Hugin** or **Shafer–Shenoy** algorithm and structurally identical to **belief propagation**. Each clique starts holding the product of the factors assigned to it (its initial *potential*). Pick any clique as root. Then:
+
+- **Collect (inward):** every leaf sends a message toward the root; each clique waits until it has heard from all its children, then sends upward. A message from clique $C_i$ to neighbor $C_j$ across separator $S$ is the clique's potential, multiplied by all incoming messages except $C_j$'s, then *marginalized down to the separator variables*:
+
+$$m_{i\to j}(S) = \sum_{C_i \setminus S} \psi_i \prod_{k \neq j} m_{k\to i}.$$
+
+- **Distribute (outward):** once the root has everything, messages flow back down the same edges by the same rule.
+
+After both sweeps, each clique's potential times all its incoming messages equals the (unnormalized) joint marginal over that clique's variables. Normalize, and you have every clique marginal at once — and any single-variable marginal by summing within any clique that contains it.
+
+```{mermaid}
+flowchart LR
+  subgraph Collect["Collect — inward to root [CD]"]
+    AB1["AB"] -- "m(B)" --> BC1["BC"]
+    BC1 -- "m(C)" --> CD1["CD = root"]
+  end
+  subgraph Distribute["Distribute — outward from root"]
+    CD2["CD"] -- "m'(C)" --> BC2["BC"]
+    BC2 -- "m'(B)" --> AB2["AB"]
+  end
+```
+
+**Worked sweep on the chain.** Assign $P(A)P(B\mid A)$ to clique $\{A,B\}$, $P(C\mid B)$ to $\{B,C\}$, $P(D\mid C)$ to $\{C,D\}$. Root at $\{C,D\}$.
+
+Collect, from $\{A,B\}$ upward — marginalize $A$ out of its potential:
+
+$$m_{AB\to BC}(B) = \sum_A P(A)P(B\mid A) = \tau_1(B) = (0.5,\ 0.5).$$
+
+Then $\{B,C\}$ multiplies in that message and marginalizes $B$:
+
+$$m_{BC\to CD}(C) = \sum_B \tau_1(B)\,P(C\mid B) = \tau_2(C) = (0.55,\ 0.45).$$
+
+The root $\{C,D\}$ multiplies its own potential by this and sums out $C$ to get $P(D) = (0.72, 0.28)$ — *identical to the elimination answer*, because the collect phase **is** variable elimination toward the root. The difference is the distribute phase: pushing messages back out gives $P(C)$, $P(B)$, and $P(A)$ from the same tree without restarting. One tree, two sweeps, every marginal.
+
+::: {.callout-tip}
+On a tree-structured model the junction tree's two sweeps are exact and cost $O(m\,k^{w+1})$ — the same bound as one elimination, but amortized across *all* marginals. Run the identical message rule on a graph *with* loops and you get **loopy belief propagation**, which is no longer exact (messages double-count evidence around cycles) but is often a good, cheap approximation — the bridge to the approximate-inference methods covered earlier in this chapter.
+:::
+
+## 13.15 — Key takeaways
 
 - A graph **factorizes** a giant joint distribution into small local pieces: **directed** (Bayesian networks, parent→child CPTs) or **undirected** (Markov random fields, clique potentials).
 - **Conditional independence** is read off the graph: by **d-separation** in directed models (the collider / "explaining away" pattern is the trap — observing a common effect couples its causes) and by simple **graph separation given neighbors** in undirected ones.
@@ -579,7 +796,7 @@ Latent variable models suffer from **identifiability** and **label-switching** i
 - **Gaussian Processes** are distributions over functions defined by a kernel; their gift is **calibrated uncertainty** that widens away from data, at $O(n^3)$ cost.
 - **Latent variable models** (GMM, LDA, factor analysis, HMM, VAE) all share one template — posit a hidden cause that makes the data simple, then infer it.
 
-## 13.11 — See also
+## 13.16 — See also
 
 - **Probability & Statistics** — the Bayes' rule, distributions, and KL divergence this chapter builds on.
 - **Dimensionality Reduction** — PCA and factor analysis as latent-factor models.

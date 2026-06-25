@@ -84,6 +84,14 @@ toc-expand: true
 <li><a href="ch38.html">38 &middot; ⚖️ AI Ethics, Fairness & Safety</a></li>
 <li><a href="ch39.html">39 &middot; 🌠 Frontier & Emerging Directions</a></li>
 </ul>
+<p class="ig-era">🎓 Advanced & Specialized Topics</p>
+<ul>
+<li><a href="ch40.html">40 &middot; 🔗 Graph Machine Learning</a></li>
+<li><a href="ch41.html">41 &middot; 🤖 Robotics & Autonomy</a></li>
+<li><a href="ch42.html">42 &middot; 📐 Learning Theory</a></li>
+<li><a href="ch43.html">43 &middot; 🔎 Information Retrieval & Data Mining</a></li>
+<li><a href="ch44.html">44 &middot; 🏗️ LLM Systems: Building LLMs from Scratch</a></li>
+</ul>
 </details>
 
 ------------------------------------------------------------------------
@@ -572,13 +580,363 @@ When confused by a deep-learning error, print `.shape`. Ninety percent of tensor
 :::
 
 
+
 ::: {.viz-wrap}
 **🎮 Try it — Tensor Algebra**
 
 <div class="ml-viz" data-viz="matnote" data-params="{&quot;text&quot;: &quot;A batch of 32 RGB 224\u00d7224 images is a 4-D tensor: shape (32, 224, 224, 3). Each axis is a dimension you index into.&quot;}"></div>
 :::
 
-## 1.11 — Key takeaways
+## 1.11 — Iterative Solvers and Why We Avoid Inverting Matrices
+
+Suppose you want to solve $Ax = b$ for $x$, where $A$ is a known matrix and $b$ a known vector. The textbook move is $x = A^{-1}b$. The intuition feels clean: undo $A$, recover $x$. But in real numerical work, forming $A^{-1}$ is almost always the wrong thing to do. It is the equivalent of computing a full division table to divide one number.
+
+The first problem is cost. Inverting a dense $n \times n$ matrix costs about $\frac{2}{3}n^3$ floating-point operations and stores $n^2$ numbers. For $n = 100{,}000$ — a small mesh in physics, a mid-sized recommendation graph — that is $10^{10}$ stored entries and on the order of $10^{15}$ operations. You will run out of memory long before you run out of patience.
+
+The second problem is that you rarely need the inverse itself. You need its *action* on a vector: the product $A^{-1}b$. And the matrices that show up at scale are usually **sparse** — mostly zeros, like a graph Laplacian where each node touches a handful of neighbors. The inverse of a sparse matrix is generally **dense**: inverting destroys the very structure that made the problem tractable. A matrix you could store in megabytes becomes one you cannot store at all.
+
+This is the dividing line between two families of methods:
+
+| | Direct methods | Iterative methods |
+|---|---|---|
+| Examples | LU, QR, Cholesky, explicit inverse | CG, GMRES, MINRES |
+| Cost | $O(n^3)$ dense, fixed | $O(\text{nnz})$ per step, $\times$ #steps |
+| Output | Exact (up to roundoff) | Approximate, refined each step |
+| Needs | The full matrix $A$ | Only the product $v \mapsto Av$ |
+| Sparsity | Often destroyed (fill-in) | Preserved |
+| Best when | $n$ small-to-medium, dense | $n$ huge, sparse, or $A$ implicit |
+
+The last row of "Needs" is the deep one. An iterative solver never asks to *see* $A$. It only asks: "given a vector $v$, what is $Av$?" That product is a **matrix-free** operation — you can supply it as a function. In a neural network, $A$ might be a Hessian you never materialize; you only know how to multiply by it via a backprop trick. Iterative methods are the only game in town there.
+
+::: {.callout-tip}
+If your code ever computes `inv(A) @ b`, replace it with a solve: `numpy.linalg.solve(A, b)` for dense, `scipy.sparse.linalg.spsolve` or `cg`/`gmres` for sparse. The solve is faster, uses less memory, and is more accurate, because it never forms the inverse.
+:::
+
+## 1.12 — Conjugate Gradient: Solving by Rolling Downhill
+
+The **conjugate gradient** method (CG) solves $Ax = b$ when $A$ is **symmetric positive definite** (SPD) — symmetric, and with all eigenvalues positive. SPD systems are everywhere: least-squares normal equations, covariance matrices, graph Laplacians (plus a shift), the Newton step of a convex problem.
+
+The key reframe: solving $Ax = b$ with $A$ SPD is *exactly* the same as minimizing the bowl-shaped quadratic
+
+$$ f(x) = \tfrac{1}{2}\,x^\top A x - b^\top x. $$
+
+Its gradient is $\nabla f(x) = Ax - b$, which is zero precisely at the solution. So solving the linear system *is* finding the bottom of a bowl. The negative gradient $r = b - Ax$ is the **residual** — it points downhill and measures how wrong we are.
+
+The naive idea, **steepest descent**, walks straight downhill each step. On a stretched bowl (an ill-conditioned $A$) this zigzags badly, taking tiny crisscrossing steps. CG's insight: instead of independent downhill steps, choose search directions that are **$A$-conjugate**, meaning $p_i^\top A p_j = 0$ for $i \neq j$. Conjugate directions don't interfere: progress made along one is never undone by the next. In exact arithmetic, $n$ conjugate steps land *exactly* at the solution — but in practice you stop far earlier, once the residual is small enough.
+
+```{mermaid}
+flowchart TD
+    A["Start: x0, r0 = b - A x0, p0 = r0"] --> B["alpha = (r·r) / (p·A p)"]
+    B --> C["x = x + alpha · p  (step along direction)"]
+    C --> D["r_new = r - alpha · A p  (update residual)"]
+    D --> E{"||r_new|| small?"}
+    E -->|yes| F["done: x solves A x = b"]
+    E -->|no| G["beta = (r_new·r_new)/(r·r)"]
+    G --> H["p = r_new + beta · p  (new conjugate direction)"]
+    H --> B
+```
+
+Notice the loop touches $A$ exactly once per iteration, in the single product $Ap$. Everything else is cheap vector arithmetic. That is why CG scales: each step costs $O(\text{nnz})$, the number of nonzeros.
+
+Here is CG from scratch, solving a tiny SPD system.
+
+```python
+import numpy as np
+
+A = np.array([[4., 1.], [1., 3.]])   # symmetric, both eigenvalues > 0
+b = np.array([1., 2.])
+
+x = np.zeros(2)
+r = b - A @ x          # initial residual
+p = r.copy()           # first search direction
+rs = r @ r             # squared residual norm
+
+for i in range(10):
+    Ap = A @ p                 # the ONE matrix-vector product
+    alpha = rs / (p @ Ap)      # optimal step length along p
+    x = x + alpha * p          # take the step
+    r = r - alpha * Ap         # cheap residual update (no new A x)
+    rs_new = r @ r
+    if np.sqrt(rs_new) < 1e-10:
+        print(f"converged in {i+1} steps")
+        break
+    p = r + (rs_new / rs) * p  # next A-conjugate direction
+    rs = rs_new
+
+print("x =", x)                # -> [0.0909..., 0.6363...]
+print("check A x - b =", A @ x - b)
+```
+
+For this $2 \times 2$ problem CG converges in two steps, matching the theory. How fast CG converges on big problems is governed by the condition number $\kappa$ (Section 1.95): the error shrinks roughly like $\left(\frac{\sqrt{\kappa}-1}{\sqrt{\kappa}+1}\right)^k$ after $k$ steps. A well-conditioned system ($\kappa$ near 1) converges almost instantly; a badly conditioned one crawls. This is why **preconditioning** — solving $M^{-1}Ax = M^{-1}b$ with $M \approx A$ but easy to invert — is the single most important practical trick in iterative solving.
+
+::: {.callout-warning}
+CG assumes $A$ is symmetric positive definite. Feed it a nonsymmetric or indefinite matrix and it can divide by a near-zero $p^\top A p$, stall, or silently return garbage. Check symmetry and positive-definiteness first, or reach for GMRES/MINRES instead.
+:::
+
+## 1.13 — GMRES and MINRES: When the Matrix Isn't So Nice
+
+CG's elegance depends on $A$ being SPD. But plenty of systems aren't. The discretized equations for fluid flow give **nonsymmetric** matrices (the flow has a direction). A saddle-point system from constrained optimization is **symmetric but indefinite** — eigenvalues of both signs. For these, we need solvers that ask less of $A$.
+
+The shared idea behind both methods is the **Krylov subspace**. Starting from the residual $r_0 = b - Ax_0$, repeatedly multiplying by $A$ generates a sequence of vectors
+
+$$ \mathcal{K}_k = \text{span}\{r_0,\; A r_0,\; A^2 r_0,\; \dots,\; A^{k-1} r_0\}. $$
+
+This is the space of everything you can reach using only matrix-vector products — exactly the operations an iterative method is allowed. Each Krylov method picks the "best" approximate solution from within this growing subspace, for its own definition of best.
+
+```{mermaid}
+flowchart LR
+    subgraph choose["Which Krylov solver?"]
+        direction TB
+        Q1{"A symmetric?"}
+        Q1 -->|no| GM["GMRES<br/>(general A)"]
+        Q1 -->|yes| Q2{"positive<br/>definite?"}
+        Q2 -->|yes| CG["CG<br/>(cheapest)"]
+        Q2 -->|no, indefinite| MR["MINRES<br/>(symmetric)"]
+    end
+```
+
+**GMRES** (Generalized Minimal RESidual) works for *any* invertible $A$. At step $k$ it returns the vector in the Krylov subspace that minimizes the residual norm $\|b - Ax\|_2$. To do this it builds an orthonormal basis of $\mathcal{K}_k$ via the **Arnoldi process** (essentially Gram-Schmidt applied to the Krylov vectors). The catch: GMRES must *store every basis vector* and orthogonalize each new one against all previous ones. So work and memory grow with the iteration count. In practice you use **restarted GMRES**, written GMRES($m$): run $m$ steps, throw away the basis, restart from the current solution. Smaller $m$ saves memory but can stall; it is a tuning knob.
+
+**MINRES** (Minimal RESidual) is the specialization for $A$ **symmetric but possibly indefinite**. Symmetry lets the Arnoldi process collapse into a short three-term recurrence (the **Lanczos** process): each new basis vector only needs the previous two, not all of them. So MINRES, like CG, runs in fixed memory per step — no growing storage, no restarts. The rule of thumb is a small decision tree, captured above: symmetric and positive definite leads to CG; symmetric but indefinite leads to MINRES; anything else leads to GMRES.
+
+| Method | Requires | Memory per step | Minimizes |
+|---|---|---|---|
+| CG | SPD | Constant (few vectors) | $A$-norm of error |
+| MINRES | Symmetric (any signs) | Constant (3-term recurrence) | Residual $\|b-Ax\|_2$ |
+| GMRES | Any invertible $A$ | **Grows** with #steps | Residual $\|b-Ax\|_2$ |
+
+```python
+import numpy as np
+from scipy.sparse.linalg import gmres, minres
+
+# nonsymmetric system -> GMRES
+A = np.array([[2., 1., 0.],
+              [0., 3., 1.],
+              [1., 0., 4.]])      # A != A.T
+b = np.array([1., 2., 3.])
+x, info = gmres(A, b, rtol=1e-10)
+print("GMRES:", x, "residual", np.linalg.norm(A @ x - b))
+
+# symmetric indefinite system -> MINRES
+S = np.array([[0., 1.],
+              [1., 0.]])          # symmetric, eigenvalues +1 and -1
+c = np.array([1., 1.])
+y, _ = minres(S, c, rtol=1e-10)
+print("MINRES:", y, "residual", np.linalg.norm(S @ y - c))
+```
+
+::: {.callout-warning}
+GMRES memory grows every iteration. On a large problem that converges slowly, un-restarted GMRES can quietly exhaust RAM. Always set a restart parameter (`restart=m` in SciPy) on big systems, and pair it with a preconditioner — restarting a poorly-conditioned system without one can stagnate completely.
+:::
+
+## 1.14 — Householder Reflections and Gram-Schmidt: Two Ways to Build QR
+
+QR factorization — writing $A = QR$ with $Q$ orthonormal and $R$ upper-triangular — is the workhorse behind least squares, eigenvalue algorithms, and the Arnoldi/GMRES machinery above. But *how* you compute $Q$ matters enormously for numerical accuracy. There are two classic routes, and one of the most instructive cautionary tales in numerical linear algebra lives here.
+
+**Gram-Schmidt** is the route everyone learns first. Take the columns of $A$ one at a time, and subtract off their projections onto the directions already fixed, leaving a piece orthogonal to all of them; normalize, repeat. Geometrically: each new column is "straightened" to be perpendicular to the subspace built so far.
+
+The trouble is the **classical** version (CGS) subtracts all projections using the *original* vector. In floating point, tiny rounding errors mean the computed vectors drift away from true orthogonality, and the errors compound. The **modified** version (MGS) fixes this with a one-line change: subtract each projection *as you go*, updating the working vector before computing the next projection. Mathematically identical, numerically far better.
+
+```python
+import numpy as np
+
+def mgs_qr(A):
+    A = A.astype(float).copy()
+    m, n = A.shape
+    Q = np.zeros((m, n))
+    R = np.zeros((n, n))
+    for j in range(n):
+        v = A[:, j].copy()
+        for i in range(j):                 # MGS: project against
+            R[i, j] = Q[:, i] @ v          # the UPDATED v,
+            v = v - R[i, j] * Q[:, i]      # not the original column
+        R[j, j] = np.linalg.norm(v)
+        Q[:, j] = v / R[j, j]
+    return Q, R
+
+A = np.array([[1., 1., 0.], [1., 0., 1.], [0., 1., 1.]])
+Q, R = mgs_qr(A)
+print("orthogonality error:", np.abs(Q.T @ Q - np.eye(3)).max())
+print("reconstruction err :", np.abs(Q @ R - A).max())
+```
+
+**Householder reflections** take a completely different, more robust route. A Householder reflection is a matrix $H = I - 2\,vv^\top / (v^\top v)$ that reflects vectors across a hyperplane. The trick: for any column, you can choose $v$ so that $H$ reflects that column onto a single axis — zeroing out every entry below the diagonal in one shot. Apply such reflections column by column and you grind $A$ down to upper-triangular $R$; the product of the reflections is $Q$.
+
+The picture for one reflection: the vector $x$ is mirrored across a plane so it lands on the first coordinate axis, with its length preserved.
+
+<svg viewBox="0 0 320 200" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif" font-size="12">
+  <line x1="20" y1="160" x2="300" y2="160" stroke="#888" stroke-width="1"/>
+  <line x1="40" y1="20" x2="40" y2="180" stroke="#888" stroke-width="1"/>
+  <line x1="40" y1="160" x2="160" y2="60" stroke="#1f77b4" stroke-width="2" marker-end="url(#a)"/>
+  <text x="120" y="70" fill="#1f77b4">x</text>
+  <line x1="40" y1="160" x2="196" y2="160" stroke="#d62728" stroke-width="2" marker-end="url(#a)"/>
+  <text x="150" y="178" fill="#d62728">Hx (on axis)</text>
+  <line x1="40" y1="160" x2="180" y2="35" stroke="#999" stroke-dasharray="4 3" stroke-width="1"/>
+  <text x="182" y="32" fill="#999">mirror plane</text>
+  <path d="M 78 128 A 50 50 0 0 1 95 160" fill="none" stroke="#555" stroke-width="1"/>
+  <defs>
+    <marker id="a" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto">
+      <path d="M0,0 L6,3 L0,6 Z" fill="#333"/>
+    </marker>
+  </defs>
+</svg>
+
+Why prefer Householder? Because reflections are exactly orthogonal by construction — applying them never amplifies error. The resulting $Q$ is orthonormal to machine precision regardless of how nasty $A$ is. This is why LAPACK and `numpy.linalg.qr` use Householder (or the related Givens rotations) under the hood, not Gram-Schmidt.
+
+| | Classical GS | Modified GS | Householder |
+|---|---|---|---|
+| Idea | Subtract all projections at once | Subtract projections incrementally | Reflect columns onto axes |
+| Orthogonality of $Q$ | Poor (errors compound) | Good | Excellent (machine precision) |
+| Cost | $\sim 2mn^2$ | $\sim 2mn^2$ | $\sim 2mn^2 - \tfrac{2}{3}n^3$ |
+| Builds $Q$ column-by-column | Yes | Yes | No (implicit as product) |
+| Used in practice | Rarely | Arnoldi/GMRES (cheap, incremental) | LAPACK default |
+
+::: {.callout-warning}
+Classical Gram-Schmidt looks correct and passes on small well-conditioned examples, then silently produces a $Q$ whose columns are visibly non-orthogonal on nearly-dependent data. If you must build $Q$ explicitly column-by-column, use modified Gram-Schmidt — or just call a library QR, which uses Householder. Never ship classical GS for production least-squares.
+:::
+
+## 1.15 — Levenberg-Marquardt: Interpolating Between Two Bad Options
+
+Everything so far solves *linear* systems. But fitting a model to data is usually **nonlinear least squares**: choose parameters $\theta$ to minimize the sum of squared residuals
+
+$$ S(\theta) = \sum_i r_i(\theta)^2, \qquad r_i(\theta) = y_i - \text{model}(x_i; \theta), $$
+
+where the model — an exponential decay, a sigmoid, a sum of Gaussians — depends nonlinearly on $\theta$. There is no closed-form solution; you iterate.
+
+Two classic iterations sit at opposite extremes. **Gradient descent** steps downhill along $-\nabla S$. It is robust — it always heads in a sensible direction even when you start far from the answer — but it is slow near the bottom, inching along. **Gauss-Newton** linearizes the residuals using the **Jacobian** $J$ (the matrix of $\partial r_i / \partial \theta_j$) and solves the linear least-squares step $J^\top J\,\delta = -J^\top r$. Near a good solution it converges in a handful of steps, but far away — or when $J^\top J$ is nearly singular — it can take a wild, divergent leap.
+
+**Levenberg-Marquardt** (LM) blends the two with a single dial. It solves the *damped* normal equations
+
+$$ \left(J^\top J + \lambda\, \text{diag}(J^\top J)\right)\delta = -J^\top r. $$
+
+Look at the role of $\lambda$, the damping parameter:
+
+- **$\lambda \to 0$**: the equation becomes Gauss-Newton — fast, trusting the local quadratic model.
+- **$\lambda \to \infty$**: the $\lambda$ term dominates, the step shrinks and turns to point straight downhill — it becomes (scaled) gradient descent, small but safe.
+
+LM adapts $\lambda$ automatically. After each proposed step it checks whether the error actually went down. If yes, it accepts the step and *decreases* $\lambda$ (trust the fast Gauss-Newton mode more). If no, it rejects the step and *increases* $\lambda$ (back off toward cautious downhill steps), then tries again. It is a self-tuning interpolation between caution and speed.
+
+```{mermaid}
+flowchart TD
+    A["Start with params theta, damping lambda"] --> B["Compute residuals r and Jacobian J"]
+    B --> C["Solve (JᵀJ + lambda·diag(JᵀJ)) delta = -Jᵀr"]
+    C --> D{"Error S(theta+delta)<br/>< S(theta)?"}
+    D -->|yes: step helped| E["Accept: theta = theta + delta<br/>decrease lambda (trust Gauss-Newton)"]
+    D -->|no: step hurt| F["Reject step<br/>increase lambda (toward gradient descent)"]
+    E --> G{"converged?"}
+    F --> C
+    G -->|no| B
+    G -->|yes| H["return theta"]
+```
+
+A concrete fit: recover the rate $\theta$ in $y = e^{-\theta x}$ from noisy data, watching $\lambda$ do its work.
+
+```python
+import numpy as np
+
+rng = np.random.default_rng(0)
+x = np.linspace(0, 3, 25)
+theta_true = 1.4
+y = np.exp(-theta_true * x) + 0.02 * rng.standard_normal(x.size)
+
+def resid(t):  return y - np.exp(-t * x)        # r_i(theta)
+def jac(t):    return (x * np.exp(-t * x))[:, None]  # dr_i/dtheta (n x 1)
+
+theta = np.array([0.2])    # deliberately poor start
+lam = 1e-2
+for it in range(50):
+    r = resid(theta)
+    J = jac(theta)
+    JtJ = J.T @ J
+    g = J.T @ r
+    step = np.linalg.solve(JtJ + lam * np.diag(np.diag(JtJ)), -g)
+    if np.sum(resid(theta + step)**2) < np.sum(r**2):
+        theta = theta + step       # step helped: accept, trust more
+        lam *= 0.5
+    else:
+        lam *= 2.0                 # step hurt: reject, be cautious
+    if np.linalg.norm(step) < 1e-10:
+        break
+
+print("recovered theta:", theta[0], "  true:", theta_true)
+```
+
+In practice you reach for `scipy.optimize.least_squares(..., method='lm')` or `curve_fit`, which wrap a battle-tested LM with analytic or finite-difference Jacobians. LM is the default engine behind most curve-fitting you will ever do.
+
+::: {.callout-warning}
+LM finds a *local* minimum, and nonlinear least squares is full of them. A bad starting guess can land you in the wrong valley. Give the optimizer a sensible initial $\theta$, scale your parameters so they have comparable magnitudes (the $\text{diag}(J^\top J)$ damping helps but does not cure bad scaling), and refit from several starts if the fit looks wrong.
+:::
+
+## 1.16 — Condition Number, Stability, and the Tricks That Save a Computation
+
+Every computation above runs in finite-precision arithmetic, where numbers carry roughly 16 significant digits (double precision). Usually that is plenty. Sometimes it is catastrophically not — and the **condition number** tells you which case you are in *before* you get burned.
+
+Intuitively, the condition number of a problem measures how much the output can amplify a small wiggle in the input. A problem is **well-conditioned** if small input changes cause small output changes, and **ill-conditioned** if a tiny input perturbation can swing the answer wildly. This is a property of the *problem*, separate from the *algorithm* used to solve it.
+
+For solving $Ax = b$, the condition number of $A$ is
+
+$$ \kappa(A) = \|A\|\,\|A^{-1}\| = \frac{\sigma_{\max}}{\sigma_{\min}}, $$
+
+the ratio of the largest to smallest singular value. The practical reading: if $\kappa(A) \approx 10^k$, you can lose about $k$ digits of accuracy in the solution. With 16 digits to start and $\kappa = 10^{12}$, you keep only about 4 — the rest is noise. A matrix with $\sigma_{\min} = 0$ is **singular** ($\kappa = \infty$); a matrix with $\sigma_{\min}$ tiny is *nearly* singular and almost as dangerous.
+
+```python
+import numpy as np
+
+# A nearly-singular matrix: two almost-parallel rows
+A = np.array([[1.0, 1.0],
+              [1.0, 1.0 + 1e-10]])
+b = np.array([2.0, 2.0])
+print("condition number:", np.linalg.cond(A))   # ~ 4e10
+
+x  = np.linalg.solve(A, b)
+b2 = b + np.array([0.0, 1e-8])                   # wiggle b by 1e-8
+x2 = np.linalg.solve(A, b2)
+print("tiny input change:", np.linalg.norm(b2 - b))   # 1e-8
+print("huge output swing:", np.linalg.norm(x2 - x))   # ~ 100, amplified ~1e10x
+```
+
+A near-zero input nudge produces a giant change in $x$: the condition number $\approx 4\times10^{10}$ shows up directly as the amplification factor. No algorithm can rescue an ill-conditioned problem — the information is genuinely lost in the input. The cure is reformulation (regularize, rescale, use better-posed equations), not a cleverer solver.
+
+Two everyday tricks fight conditioning damage at the algorithm level.
+
+**Pivoting** keeps Gaussian elimination stable. When eliminating a column, dividing by a tiny pivot element multiplies every downstream error by a huge factor. **Partial pivoting** simply swaps rows so the largest-magnitude entry sits on the diagonal before each elimination step — keeping the multipliers $\le 1$ and the errors bounded. It costs almost nothing, and it is why `scipy.linalg.lu` and every production solver pivot by default. The lesson: *never divide by a small number when a larger one is available by reordering.*
+
+**Log-sum-exp** is the same principle in a different disguise, and it is everywhere in machine learning. The softmax and cross-entropy loss need $\log \sum_i e^{z_i}$. But $e^{1000}$ overflows to infinity and $e^{-1000}$ underflows to zero, even though the *answer* is a perfectly ordinary number. The fix uses a clean identity: subtract the max $m = \max_i z_i$ before exponentiating, then add it back.
+
+$$ \log \sum_i e^{z_i} = m + \log \sum_i e^{z_i - m}, \qquad m = \max_i z_i. $$
+
+Now the largest exponent is $e^0 = 1$ — no overflow — and at least one term is exactly $1$, so the sum is never zero — no underflow from $\log(0)$. The result is mathematically identical, numerically bulletproof.
+
+```python
+import numpy as np
+
+def logsumexp_naive(z):
+    return np.log(np.sum(np.exp(z)))
+
+def logsumexp_stable(z):
+    m = np.max(z)
+    return m + np.log(np.sum(np.exp(z - m)))   # shift down, then back up
+
+z = np.array([1000., 1001., 1002.])
+print("naive :", logsumexp_naive(z))    # inf  (exp(1000) overflows)
+print("stable:", logsumexp_stable(z))   # 1002.407...  correct
+```
+
+```{mermaid}
+flowchart LR
+    A["raw scores z<br/>(may be huge/tiny)"] --> B["subtract max:<br/>z - m"]
+    B --> C["exp: all values in (0, 1]<br/>no overflow"]
+    C --> D["sum, then log<br/>at least one term = 1, no log(0)"]
+    D --> E["add m back<br/>exact answer, safe"]
+```
+
+The through-line of this whole section: at scale, *how* you compute is as important as *what* you compute. Avoid forming inverses, prefer orthogonal transforms, respect the condition number, and reach for the stabilizing identity (pivot, shift, damp) before the hardware reaches its limits.
+
+::: {.callout-warning}
+A low *training loss* or a clean *residual* can hide an ill-conditioned problem — the numbers look fine until the inputs shift slightly and the answer explodes. Check `np.linalg.cond` on matrices you invert or solve against, watch for singular values spanning many orders of magnitude, and never write your own softmax/cross-entropy without the max-subtraction trick. The library versions (`scipy.special.logsumexp`, framework `log_softmax`) already do it.
+:::
+
+## 1.17 — Key takeaways
 
 - **Data is vectors, models are matrices.** Examples are vectors of features; a model layer is a matrix that transforms them. The dot product — alignment of two vectors — is the atomic operation underneath neurons, similarity, and kernels.
 - **A matrix is a transformation.** Multiplication chains transformations; the determinant measures volume scaling and flags non-invertibility (zero ⇒ singular); shapes must conform.
@@ -588,7 +946,7 @@ When confused by a deep-learning error, print `.shape`. Ninety percent of tensor
 - **Least squares is a projection.** Regression projects $\mathbf{b}$ onto the column space; the residual is orthogonal. Prefer QR/SVD solvers over the normal equations for stability.
 - **Tensors generalize matrices** to the n-dimensional arrays deep learning runs on — and `.shape` is your best debugging friend.
 
-## 1.12 — See also
+## 1.18 — See also
 
 - **Calculus & Differentiation** — gradients and the chain rule that train the transformations defined here.
 - **Optimization** — how eigenvalues of the Hessian and conditioning govern convergence.

@@ -84,6 +84,14 @@ toc-expand: true
 <li><a href="ch38.html">38 &middot; ⚖️ AI Ethics, Fairness & Safety</a></li>
 <li><a href="ch39.html">39 &middot; 🌠 Frontier & Emerging Directions</a></li>
 </ul>
+<p class="ig-era">🎓 Advanced & Specialized Topics</p>
+<ul>
+<li><a href="ch40.html">40 &middot; 🔗 Graph Machine Learning</a></li>
+<li><a href="ch41.html">41 &middot; 🤖 Robotics & Autonomy</a></li>
+<li><a href="ch42.html">42 &middot; 📐 Learning Theory</a></li>
+<li><a href="ch43.html">43 &middot; 🔎 Information Retrieval & Data Mining</a></li>
+<li><a href="ch44.html">44 &middot; 🏗️ LLM Systems: Building LLMs from Scratch</a></li>
+</ul>
 </details>
 
 ------------------------------------------------------------------------
@@ -382,7 +390,168 @@ Report at least two metrics: an error in real units (RMSE or MAE) for "how wrong
 $R^2$ on the *training* set always flatters the model and rises with every added feature — never select models by training $R^2$. Compare on held-out data, and use adjusted $R^2$ or cross-validated error when models differ in number of features.
 :::
 
-## 8.7 — Key takeaways
+
+## 8.7 — Generalized Linear Models from the Exponential Family
+
+Up to now the regression models in this chapter have looked like separate inventions. Ordinary least squares assumes the response is a continuous number with constant-variance Gaussian noise. Logistic regression assumes the response is a 0/1 label. Poisson regression — the natural tool for counts — has its own likelihood again. It is tempting to memorize each as its own recipe.
+
+The deep insight of *generalized linear models* (GLMs) is that all three are the **same model** seen from three angles. They differ only in which member of a single family of probability distributions — the **exponential family** — you plug in for the response. Once you see the family, you get one fitting algorithm, one notion of "the right link," and one diagnostic story that covers Gaussian, Bernoulli, Poisson, Gamma, and more.
+
+The intuition: a GLM keeps the familiar linear predictor $\eta = \mathbf{x}^\top\boldsymbol\beta$ — a weighted sum of features — but inserts two flexible slots. First, the response can be drawn from any exponential-family distribution, not just a Gaussian. Second, a **link function** decides how the linear predictor connects to the distribution's mean. Choose Gaussian + identity link and you recover OLS. Choose Bernoulli + logit link and you recover logistic regression. Choose Poisson + log link and you recover Poisson regression. Nothing else changes.
+
+### The exponential-family form
+
+A distribution belongs to the exponential family if its density (or mass) for a single observation $y$ can be written as
+
+$$
+p(y \mid \theta, \phi) = \exp\!\left( \frac{y\,\theta - b(\theta)}{a(\phi)} + c(y, \phi) \right).
+$$
+
+Each piece has a name and a job:
+
+| Symbol | Name | Role |
+|--------|------|------|
+| $\theta$ | natural (canonical) parameter | the "knob" the linear predictor will ultimately turn |
+| $y$ | sufficient statistic | the only thing about the data the parameter interacts with |
+| $b(\theta)$ | log-partition (cumulant) function | normalizes the density; its derivatives give the mean and variance |
+| $a(\phi)$ | dispersion / scale | spreads or shrinks the distribution (e.g. Gaussian variance) |
+| $c(y,\phi)$ | base measure | a term independent of $\theta$; it does not affect the fit |
+
+The magic is in $b(\theta)$. Two clean identities fall straight out of the requirement that the density integrates to one:
+
+$$
+\mathbb{E}[y] = \mu = b'(\theta), \qquad \operatorname{Var}[y] = a(\phi)\,b''(\theta).
+$$
+
+So the *mean* is the first derivative of the log-partition, and the *variance* is the second derivative times the dispersion. The factor $b''(\theta)$, written as a function of $\mu$, is called the **variance function** $V(\mu)$ — it tells you how the noise scales with the mean. For a Gaussian it is constant; for a Poisson it equals the mean itself. That single difference is why count data fans out as it grows.
+
+::: {.callout-tip}
+The whole family is "designed" so that knowing the natural parameter $\theta$ tells you everything: the mean is $b'(\theta)$, the variance is $b''(\theta)$ up to scale. You never integrate anything by hand — you differentiate $b$.
+:::
+
+### Three familiar models, one template
+
+Let us actually unpack the algebra for the three workhorses. The trick each time is to take the textbook density and bend it into the $\exp\!\big(\frac{y\theta - b(\theta)}{a(\phi)} + c\big)$ shape, then read off the pieces.
+
+**Gaussian.** The density $\frac{1}{\sqrt{2\pi\sigma^2}}\exp\!\big(-\frac{(y-\mu)^2}{2\sigma^2}\big)$ expands. The cross term $y\mu/\sigma^2$ is linear in $y$, so $\theta = \mu$ and $b(\theta) = \theta^2/2$. Then $b'(\theta) = \theta = \mu$ — the mean — and $b''(\theta) = 1$, a constant variance function. Dispersion $a(\phi) = \sigma^2$.
+
+**Bernoulli.** The mass $\mu^y(1-\mu)^{1-y}$ becomes $\exp\!\big(y\log\frac{\mu}{1-\mu} + \log(1-\mu)\big)$. The thing multiplying $y$ is the **log-odds**, so $\theta = \log\frac{\mu}{1-\mu}$. Inverting gives $\mu = \frac{1}{1+e^{-\theta}}$ — the logistic sigmoid appears on its own. Here $b(\theta) = \log(1+e^{\theta})$ and $a(\phi)=1$.
+
+**Poisson.** The mass $\frac{\mu^y e^{-\mu}}{y!}$ becomes $\exp\!\big(y\log\mu - \mu - \log y!\big)$. The coefficient of $y$ is $\log\mu$, so $\theta = \log\mu$, giving $\mu = e^{\theta}$, $b(\theta) = e^{\theta}$, and $a(\phi)=1$.
+
+| Model | Distribution | $\theta$ (natural param) | $b(\theta)$ | $\mu = b'(\theta)$ | $V(\mu) = b''$ |
+|-------|--------------|--------------------------|-------------|--------------------|----------------|
+| Linear | Gaussian | $\mu$ | $\theta^2/2$ | $\theta$ | $1$ |
+| Logistic | Bernoulli | $\log\frac{\mu}{1-\mu}$ | $\log(1+e^\theta)$ | $\frac{1}{1+e^{-\theta}}$ | $\mu(1-\mu)$ |
+| Poisson | Poisson | $\log\mu$ | $e^\theta$ | $e^\theta$ | $\mu$ |
+
+Read the third column. In every case, the natural parameter $\theta$ is some specific function of the mean $\mu$. That function — the one that turns the mean into the natural parameter — is exactly the **canonical link**.
+
+### The canonical link
+
+The link function $g$ is the bridge between the linear world and the mean of the response:
+
+$$
+g(\mu) = \eta = \mathbf{x}^\top\boldsymbol\beta.
+$$
+
+You are always free to pick any monotonic, differentiable $g$. But there is one *canonical* choice that makes the math line up beautifully: set the link equal to the map from mean to natural parameter, so that
+
+$$
+g(\mu) = \theta \quad\Longrightarrow\quad \theta = \mathbf{x}^\top\boldsymbol\beta.
+$$
+
+When you use the canonical link, the linear predictor *is* the natural parameter. Reading off the table:
+
+- Gaussian: $\theta = \mu$, so the canonical link is the **identity**, $g(\mu)=\mu$. Linear regression.
+- Bernoulli: $\theta = \log\frac{\mu}{1-\mu}$, so the canonical link is the **logit**. Logistic regression.
+- Poisson: $\theta = \log\mu$, so the canonical link is the **log**. Poisson regression.
+
+```{mermaid}
+flowchart LR
+    X["features x"] -->|"β"| ETA["linear predictor<br/>η = xᵀβ"]
+    ETA -->|"inverse link g⁻¹"| MU["mean μ"]
+    MU -->|"exp-family<br/>distribution"| Y["response y"]
+    subgraph canonical["canonical link: g(μ) = θ"]
+        direction TB
+        G1["Gaussian → identity"]
+        G2["Bernoulli → logit"]
+        G3["Poisson → log"]
+    end
+```
+
+The canonical link is not mandatory — you can do Poisson regression with an identity link, or fit a probit model (Gaussian-CDF link) on binary data instead of logit. But the canonical link buys real conveniences: the score equations simplify, the observed and expected information matrices coincide, and the sufficient statistic for $\boldsymbol\beta$ becomes simply $\mathbf{X}^\top\mathbf{y}$. That last fact is why logistic and Poisson fits are so well-behaved.
+
+::: {.callout-warning}
+"Canonical" means *mathematically convenient*, not *always correct*. The link should match how your mean actually behaves — a log link is right for counts because it keeps $\mu>0$, but if your binary outcome is better described by a latent Gaussian threshold, probit may fit better than logit even though logit is canonical.
+:::
+
+### Fitting by maximum likelihood: the IRLS view
+
+A GLM is fit by **maximum likelihood** — find the $\boldsymbol\beta$ that makes the observed data most probable. Stack the per-observation log-densities into the log-likelihood $\ell(\boldsymbol\beta)$ and set its gradient (the *score*) to zero. Using the chain rule through $\eta \to \mu \to \theta$, the score for the whole dataset collapses into a strikingly uniform expression:
+
+$$
+\frac{\partial \ell}{\partial \boldsymbol\beta} = \sum_{i=1}^n \frac{(y_i - \mu_i)}{V(\mu_i)\,g'(\mu_i)}\,\mathbf{x}_i = \mathbf{0}.
+$$
+
+Notice the shape: every term is a **residual** $y_i - \mu_i$, reweighted by how noisy that point is ($V(\mu_i)$) and how steep the link is there ($g'(\mu_i)$). Unlike OLS, there is no closed-form solution in general — the $\mu_i$ depend nonlinearly on $\boldsymbol\beta$. So we solve it iteratively.
+
+The standard solver is **Iteratively Reweighted Least Squares (IRLS)**, which is just Newton's method (with Fisher scoring) wearing a disguise. At each step you linearize, build a *working response* $z$ and *working weights* $w$, and solve an ordinary weighted least-squares problem:
+
+$$
+z_i = \eta_i + (y_i - \mu_i)\,g'(\mu_i), \qquad w_i = \frac{1}{V(\mu_i)\,g'(\mu_i)^2},
+$$
+$$
+\boldsymbol\beta^{\text{new}} = (\mathbf{X}^\top \mathbf{W}\mathbf{X})^{-1}\mathbf{X}^\top \mathbf{W}\mathbf{z}.
+$$
+
+The working response $z$ is the current linear prediction nudged toward the data; the weights $w$ downweight observations the model thinks are noisy. You recompute $\mu$, $z$, and $w$ and repeat until $\boldsymbol\beta$ stops moving. Each iteration is one weighted OLS fit — code you already have.
+
+```{mermaid}
+flowchart TD
+    A["initialize β (e.g. β = 0)"] --> B["η = Xβ,  μ = g⁻¹(η)"]
+    B --> C["working response<br/>z = η + (y−μ)·g'(μ)"]
+    C --> D["weights<br/>w = 1 / (V(μ)·g'(μ)²)"]
+    D --> E["weighted least squares<br/>β = (XᵀWX)⁻¹XᵀWz"]
+    E --> F{"β converged?"}
+    F -->|no| B
+    F -->|yes| G["return β̂"]
+```
+
+### Worked example: Poisson regression by hand-rolled IRLS
+
+Take a tiny count dataset — say, number of defects $y$ on a unit versus a single exposure feature $x$. We fit a Poisson GLM with the canonical log link, where $\mu = e^{\eta}$, the variance function is $V(\mu)=\mu$, and the link derivative is $g'(\mu)=1/\mu$. Plugging into the IRLS formulas, the working weights become simply $w_i = \mu_i$ and the working response is $z_i = \eta_i + (y_i-\mu_i)/\mu_i$.
+
+```python
+import numpy as np
+
+# tiny dataset: feature x, count response y
+x = np.array([1.0, 2.0, 3.0, 4.0, 5.0])
+y = np.array([1,    1,    2,    4,    8])
+X = np.column_stack([np.ones_like(x), x])   # add intercept column
+
+beta = np.zeros(2)                           # start at 0
+for _ in range(25):
+    eta = X @ beta
+    mu  = np.exp(eta)                        # inverse log link
+    z   = eta + (y - mu) / mu                # working response
+    w   = mu                                 # working weights (Poisson)
+    WX  = X * w[:, None]
+    beta = np.linalg.solve(X.T @ WX, X.T @ (w * z))   # weighted LS
+
+print("beta =", beta)                        # intercept, slope
+print("fitted mu =", np.exp(X @ beta))
+# beta = [-0.401  0.494]
+# fitted mu = [0.91 1.49 2.44 3.99 6.54]
+```
+
+In a handful of iterations the slope settles near $0.49$, meaning each unit of $x$ multiplies the expected count by $e^{0.49}\approx 1.64$ — the multiplicative interpretation that the log link guarantees. The fitted means stay positive automatically, something an identity-link linear fit could never promise on counts. Swap two lines — `mu = 1/(1+np.exp(-eta))`, `w = mu*(1-mu)` — and the *same loop* fits logistic regression. That reuse is the entire point of the GLM framework: one algorithm, parameterized by the distribution's variance function and link.
+
+::: {.callout-warning}
+IRLS can diverge or stall when the model is near-separable (logistic data perfectly split by a feature) or when extreme fitted means make weights overflow. Watch for coefficients sprinting toward $\pm\infty$, add a tiny ridge penalty to $\mathbf{X}^\top\mathbf{W}\mathbf{X}$, or fall back to a damped Newton step. These are not flaws in the data so much as the likelihood honestly reporting that the maximum lies at infinity.
+:::
+
+## 8.8 — Key takeaways
 
 - **OLS** fits a hyperplane by minimizing squared residuals; solve it exactly via the **normal equation** $(X^\top X)^{-1}X^\top y$ for small $p$, or by **gradient descent** at scale.
 - A **coefficient** is the change in the target per one-unit change in its feature, others held fixed — interpretable only when features are comparably scaled.
@@ -392,7 +561,7 @@ $R^2$ on the *training* set always flatters the model and rises with every added
 - **GLMs** unify all of the above as a linear predictor plus a **link function** and a target distribution (Gaussian/identity, Bernoulli/logit, Poisson/log).
 - Evaluate with **RMSE/MAE** (real units), **$R^2$** (variance explained), and **adjusted $R^2$** when comparing models of different size.
 
-## 8.8 — See also
+## 8.9 — See also
 
 - **Optimization** — gradient descent, convexity, and the machinery behind fitting these losses.
 - **Linear Algebra** — matrices, projections, and the normal equation's geometry.

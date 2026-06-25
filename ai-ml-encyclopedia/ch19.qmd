@@ -84,6 +84,14 @@ toc-expand: true
 <li><a href="ch38.html">38 &middot; ⚖️ AI Ethics, Fairness & Safety</a></li>
 <li><a href="ch39.html">39 &middot; 🌠 Frontier & Emerging Directions</a></li>
 </ul>
+<p class="ig-era">🎓 Advanced & Specialized Topics</p>
+<ul>
+<li><a href="ch40.html">40 &middot; 🔗 Graph Machine Learning</a></li>
+<li><a href="ch41.html">41 &middot; 🤖 Robotics & Autonomy</a></li>
+<li><a href="ch42.html">42 &middot; 📐 Learning Theory</a></li>
+<li><a href="ch43.html">43 &middot; 🔎 Information Retrieval & Data Mining</a></li>
+<li><a href="ch44.html">44 &middot; 🏗️ LLM Systems: Building LLMs from Scratch</a></li>
+</ul>
 </details>
 
 ------------------------------------------------------------------------
@@ -422,7 +430,310 @@ assert (fb == np.array([[3, 1, 5, 3]])).all()    # x flips: 1->5, 3->3; y unchan
 The classic augmentation bug is flipping the image but forgetting the label geometry. A horizontally flipped photo with un-flipped bounding boxes trains the detector to point at empty space. Always run augmentation through a library (Albumentations, torchvision transforms v2) that transforms image *and* targets together — or carefully pair them yourself, as above.
 :::
 
-## 19.7 — Key takeaways
+
+## 19.7 — Camera Models and Multi-View Geometry
+
+Every image is a flattening. A camera takes a three-dimensional world and squashes it onto a flat sensor, and in doing so it throws away depth. Multi-view geometry is the study of how that flattening works mathematically — and how, by combining several flattened views, we can claw the lost third dimension back.
+
+### The pinhole camera
+
+The simplest useful model is the **pinhole camera**: imagine a sealed box with a tiny hole on one face. Light from a point in the world travels in a straight line through the hole and lands on the opposite wall, the image plane. Because rays travel straight, the geometry is just similar triangles.
+
+Place the pinhole (the *camera center*) at the origin, looking down the $z$-axis. A world point $(X, Y, Z)$ projects to the image plane at distance $f$ (the focal length) as
+
+$$x = f\frac{X}{Z}, \qquad y = f\frac{Y}{Z}.$$
+
+That division by $Z$ is the entire reason depth is lost: double the distance and halve the size, and the projected point is identical. A toy car at $1\text{ m}$ and a real car at $20\text{ m}$ can paint the exact same pixels.
+
+<svg viewBox="0 0 460 240" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif" font-size="12">
+  <line x1="40" y1="200" x2="440" y2="200" stroke="currentColor" stroke-width="1"/>
+  <line x1="40" y1="20" x2="40" y2="200" stroke="currentColor" stroke-width="1"/>
+  <text x="20" y="115" fill="currentColor">Y</text>
+  <text x="430" y="218" fill="currentColor">Z</text>
+  <circle cx="120" cy="200" r="3" fill="currentColor"/>
+  <text x="108" y="218" fill="currentColor">center</text>
+  <line x1="180" y1="40" x2="180" y2="200" stroke="currentColor" stroke-width="1" stroke-dasharray="3 3"/>
+  <text x="150" y="35" fill="currentColor">image plane (f)</text>
+  <circle cx="400" cy="60" r="4" fill="#e07a5f"/>
+  <text x="360" y="52" fill="#e07a5f">(X,Y,Z)</text>
+  <line x1="120" y1="200" x2="400" y2="60" stroke="#e07a5f" stroke-width="1.5"/>
+  <circle cx="180" cy="170" r="3" fill="#3d5a80"/>
+  <text x="186" y="166" fill="#3d5a80">(x,y)</text>
+</svg>
+
+### Intrinsics: from metric to pixels
+
+The projection above lands in metric units on a plane centered on the optical axis. Real sensors index pixels from a corner, with possibly non-square pixels. The **intrinsic matrix** $K$ bundles these conversions:
+
+$$K = \begin{bmatrix} f_x & s & c_x \\ 0 & f_y & c_y \\ 0 & 0 & 1 \end{bmatrix}.$$
+
+Here $f_x, f_y$ are focal lengths in pixels (different if pixels aren't square), $(c_x, c_y)$ is the **principal point** where the optical axis pierces the sensor (near the image center), and $s$ is a skew term that is essentially always zero on modern cameras. These parameters are *internal* to the camera — they don't change when the camera moves.
+
+### Extrinsics: placing the camera in the world
+
+A camera also sits *somewhere*, pointed *somehow*. The **extrinsics** are a rotation $R$ (a $3\times3$ orientation) and translation $t$ (a $3$-vector position) that map world coordinates into the camera's own frame. Stacking intrinsics and extrinsics gives the full $3 \times 4$ **projection matrix**, acting on homogeneous coordinates:
+
+$$\lambda \begin{bmatrix} u \\ v \\ 1 \end{bmatrix} = K\,[\,R \mid t\,] \begin{bmatrix} X \\ Y \\ Z \\ 1 \end{bmatrix}.$$
+
+The scalar $\lambda$ is the depth that gets divided out. Homogeneous coordinates are the trick that turns the nonlinear "divide by $Z$" into a clean matrix multiply followed by a final normalization (divide the vector by its third entry).
+
+```python
+import numpy as np
+# tiny projection: a 1m cube corner at (0.5, 0.5, 5) meters
+K = np.array([[800, 0, 320],   # fx, 0, cx
+              [0, 800, 240],    # 0, fy, cy
+              [0,   0,   1]])
+R = np.eye(3)                   # camera aligned with world
+t = np.zeros(3)                 # camera at origin
+Xw = np.array([0.5, 0.5, 5.0])  # world point
+x_cam = R @ Xw + t              # into camera frame
+uvw = K @ x_cam                 # apply intrinsics
+uv = uvw[:2] / uvw[2]           # normalize by depth
+print(uv)                       # -> [400. 320.] pixels
+```
+
+The point at $5\text{ m}$ lands at pixel $(400, 320)$: $800 \times 0.5/5 = 80$ pixels right of the principal point $c_x = 320$, exactly as similar triangles predict.
+
+### Calibration and lens distortion
+
+Real lenses bend straight lines, especially wide-angle ones — the **radial distortion** that makes door frames bow outward (barrel) or pinch inward (pincushion). The standard model adds polynomial correction terms in the squared radius $r^2 = x^2 + y^2$ from the principal point:
+
+$$x_{\text{dist}} = x\,(1 + k_1 r^2 + k_2 r^4 + \cdots).$$
+
+**Calibration** is the process of recovering $K$ and the distortion coefficients $k_1, k_2, \dots$. The classic recipe (Zhang's method) photographs a checkerboard of known square size from many angles; because we know the true geometry of the board, we can solve for the camera parameters that best explain where its corners landed. OpenCV's `calibrateCamera` does exactly this in a few lines.
+
+::: {.callout-warning}
+Skipping calibration silently poisons every downstream 3D task. Uncorrected radial distortion can shift a corner by tens of pixels at the image edge, which translates into large depth and pose errors in stereo and SfM. Calibrate once per lens/zoom setting and reuse it.
+:::
+
+### Two views: epipolar geometry
+
+Point one camera at a scene, then a second camera from a different spot. A single point in the left image could have come from anywhere along its viewing ray — but that whole ray, seen by the right camera, projects to a *line*. This is the **epipolar constraint**: the match for a left-image point must lie on a specific line in the right image, never the whole 2D plane. It collapses matching from a 2D search to a 1D one.
+
+Algebraically, for calibrated cameras the constraint is captured by the **essential matrix** $E$, and for uncalibrated ones by the **fundamental matrix** $F$:
+
+$$x'^\top F\, x = 0,$$
+
+where $x$ and $x'$ are corresponding points in homogeneous pixel coordinates. Given eight or more matches you can solve for $F$ linearly (the eight-point algorithm), then decompose $E = K'^\top F K$ to recover the relative rotation and translation between the two cameras.
+
+```{mermaid}
+flowchart LR
+  A[World point] --> B[Left image: point x]
+  A --> C[Right image: point x']
+  B -. "epipolar line in right view" .-> C
+  B --> D["x'ᵀ F x = 0<br/>(must hold)"]
+  C --> D
+```
+
+### Stereo and depth
+
+If the two cameras are mounted side by side with parallel optical axes — a **rectified stereo rig** — the epipolar lines become horizontal scanlines, and a matching point simply shifts left or right by an amount called the **disparity** $d$. Disparity is inversely proportional to depth:
+
+$$Z = \frac{f \cdot B}{d},$$
+
+where $B$ is the **baseline** (distance between the cameras) and $f$ the focal length in pixels. Near objects shift a lot between the two views; far objects barely move — exactly why your two eyes sense depth, and why the moon seems to follow the car.
+
+Worked example: cameras with $f = 800\text{ px}$ and baseline $B = 0.1\text{ m}$. A point with disparity $d = 16\text{ px}$ sits at $Z = 800 \times 0.1 / 16 = 5\text{ m}$. Halve the disparity to $8\text{ px}$ and the depth doubles to $10\text{ m}$ — note that the same one-pixel matching error costs far more depth accuracy far away, the fundamental weakness of stereo at range.
+
+| Disparity $d$ (px) | Depth $Z$ (m) | Depth error per ±1 px |
+|---|---|---|
+| 80 | 1.0 | ±0.01 |
+| 16 | 5.0 | ±0.31 |
+| 8 | 10.0 | ±1.25 |
+| 4 | 20.0 | ±5.0 |
+
+### Structure from Motion
+
+**Structure from Motion** (SfM) generalizes stereo to many uncalibrated images — a tourist's photos of a cathedral, a drone's overflight — and recovers *both* the 3D scene and every camera pose at once. The pipeline:
+
+```{mermaid}
+flowchart LR
+  A[Many images] --> B[Detect + match<br/>features SIFT]
+  B --> C[Estimate pairwise<br/>geometry F/E]
+  C --> D[Triangulate points,<br/>chain camera poses]
+  D --> E[Bundle adjustment:<br/>jointly refine all]
+  E --> F[Sparse 3D point cloud<br/>+ camera poses]
+```
+
+The crucial final stage is **bundle adjustment**: a big nonlinear least-squares optimization that jiggles every 3D point and every camera pose simultaneously to minimize **reprojection error** — the pixel gap between where each 3D point lands when projected and where its feature was actually observed. Formally it minimizes
+
+$$\sum_{i,j} \left\lVert\, \text{proj}(C_i, P_j) - x_{ij} \,\right\rVert^2$$
+
+over all cameras $C_i$ and points $P_j$. It is the workhorse behind tools like COLMAP and photogrammetry apps, and the front end that feeds the neural reconstruction methods in the next section.
+
+::: {.callout-tip}
+Reprojection error is the universal sanity check in geometric vision. If your calibration, pose, or triangulation is good, projected points land within a pixel or two of their observations. A reprojection error of tens of pixels means something upstream is wrong — bad matches, bad calibration, or a mirror-image pose from an $E$-decomposition sign flip.
+:::
+
+## 19.8 — 3D and Video Understanding
+
+The previous section recovered geometry as *points* — sparse clouds and camera poses. But we often want something richer: a model you can render from a brand-new viewpoint, or an understanding of how a scene changes through *time*. This section covers two frontiers: neural 3D scene representations, and models that reason about video.
+
+### From point clouds to neural fields
+
+Classical reconstruction gives you discrete primitives — points, meshes, voxels. The neural approach instead represents a scene as a *continuous function*: feed in a 3D location (and maybe a viewing direction), get back what's there. The scene lives in the weights of a small neural network. This is a **neural implicit representation** or **neural field**.
+
+### NeRF: scenes as radiance fields
+
+A **Neural Radiance Field** (NeRF) is the breakout example. It trains a small MLP to map a 5D input — position $(x, y, z)$ plus viewing direction $(\theta, \phi)$ — to a color $(r, g, b)$ and a volume density $\sigma$ (how much light that point blocks or emits):
+
+$$F_\Theta : (x, y, z, \theta, \phi) \;\longmapsto\; (r, g, b, \sigma).$$
+
+To render a pixel, you don't query one point — you shoot a ray from the camera through that pixel and **march** along it, sampling colors and densities, then composite them front-to-back with **volume rendering**. A sample's contribution is its color weighted by its density *and* by the probability that light got through everything in front of it (transmittance $T_i$):
+
+$$C(\mathbf{r}) = \sum_i T_i\,\big(1 - e^{-\sigma_i \delta_i}\big)\,c_i, \qquad T_i = e^{-\sum_{j<i}\sigma_j \delta_j},$$
+
+where $\delta_i$ is the spacing between samples. The whole pipeline is differentiable, so the only training signal needed is a set of photos with known poses: render each pixel, compare to the real photo, backpropagate into the MLP weights.
+
+```{mermaid}
+flowchart LR
+  A[Camera ray<br/>per pixel] --> B[Sample N points<br/>along ray]
+  B --> C["MLP F_Θ:<br/>(x,y,z,dir) → (rgb, σ)"]
+  C --> D[Volume render:<br/>composite samples]
+  D --> E[Predicted pixel color]
+  E --> F[Loss vs. real photo]
+  F -. backprop .-> C
+```
+
+Two details make NeRF actually work. **Positional encoding** maps the raw coordinates through high-frequency sinusoids before the MLP, because a plain network is biased toward smooth functions and would blur fine detail. And conditioning color on viewing direction lets NeRF capture **view-dependent effects** like specular highlights and reflections — the glint that moves as you walk around a teapot.
+
+::: {.callout-warning}
+Vanilla NeRF is slow and rigid: training can take hours per scene, rendering is far from real-time, and the model captures one *static* scene under fixed lighting. It does not generalize across scenes out of the box. Follow-ups (Instant-NGP's hash grids, Mip-NeRF, dynamic and generalizable variants) chip away at each limitation, but "a NeRF" usually means "retrained per scene."
+:::
+
+### 3D Gaussian Splatting
+
+**3D Gaussian Splatting** (3DGS, 2023) attacks NeRF's speed problem by ditching the implicit MLP for an *explicit* set of primitives. The scene is represented as millions of tiny 3D Gaussian blobs, each with a position, a covariance (its shape and orientation as a fuzzy ellipsoid), an opacity, and a view-dependent color. Rendering doesn't march rays — it **splats**: each Gaussian is projected onto the image and the overlapping blobs are alpha-blended, an operation GPUs do extremely fast.
+
+The payoff is dramatic: comparable or better visual quality than NeRF, but rendering at *real-time* frame rates and much faster training. Because the primitives are explicit, they're also easier to edit and animate than weights buried in an MLP.
+
+| | NeRF | 3D Gaussian Splatting |
+|---|---|---|
+| Representation | Implicit MLP weights | Explicit 3D Gaussians |
+| Rendering | Ray marching (slow) | Rasterize/splat (real-time) |
+| Training speed | Hours | Minutes |
+| Editing | Hard (opaque weights) | Easier (explicit blobs) |
+| Memory | Tiny network | Large blob set |
+
+Both NeRF and 3DGS typically take the camera poses from an SfM run (Section 19.90) as their starting point — geometry feeds the neural reconstruction, exactly as foreshadowed.
+
+### Understanding video: adding the time axis
+
+A video is a stack of frames — a $(T \times H \times W \times 3)$ tensor — and the central new challenge is **motion**. A single frame can tell a "sitting" from a "standing" pose, but distinguishing "sitting down" from "standing up" needs the *temporal order*. Three families of architectures handle this.
+
+**3D CNNs** extend convolution into time. Where a 2D kernel slides over $(H, W)$, a **3D convolution** kernel slides over $(T, H, W)$, learning spatiotemporal patterns — an edge that moves, a hand that opens — in one operation. C3D and I3D ("inflated" 2D ImageNet filters into 3D) are the classics. The cost is real: a $3\times3\times3$ kernel has $27$ weights versus $9$, and the input is a whole clip, so compute and memory balloon.
+
+**Two-stream networks** split appearance from motion explicitly. One CNN stream sees the raw RGB frames (*what* things look like); a second stream sees pre-computed **optical flow** (the per-pixel motion field — *how* things move). Their predictions are fused at the end. This cleanly separates the two cues and was a strong early approach, at the cost of computing optical flow as a preprocessing step.
+
+```{mermaid}
+flowchart TB
+  subgraph TwoStream[Two-stream network]
+    A[RGB frame] --> B[Spatial CNN<br/>appearance]
+    C[Optical flow stack] --> D[Temporal CNN<br/>motion]
+    B --> E[Fuse]
+    D --> E
+    E --> F[Action label]
+  end
+```
+
+**Video transformers** (ViViT, TimeSformer, VideoMAE) tokenize the clip into spatiotemporal patches — little cubes of pixels across a few frames — and apply self-attention. The key trick is **factorized attention**: attending over all space-time patches at once is quadratic and ruinously expensive, so these models alternate spatial attention (within a frame) and temporal attention (across frames at the same location), slashing the cost while still mixing information across the whole clip. They now dominate action-recognition benchmarks, mirroring the image-classification story from earlier in the chapter.
+
+::: {.callout-tip}
+The recurring tension in video is the **accuracy–compute tradeoff**. Processing every frame at full resolution is wasteful because adjacent frames are nearly identical. Practical systems sample sparse frames or clips, use lower spatial resolution, or factorize attention. When a video model feels too slow, the first lever is almost always *how many frames you actually feed it*.
+:::
+
+## 19.9 — Transformer-Based Detection and Panoptic Segmentation
+
+The detection methods earlier in this chapter — R-CNN, YOLO, SSD — all lean on hand-designed machinery: a dense grid of **anchor boxes**, plus **non-maximum suppression** (NMS) afterward to delete the flood of duplicate detections each object attracts. It works, but it's a pile of heuristics with knobs to tune. Transformer-based detection asks: what if the network just *outputs the final set of objects directly*, no anchors, no NMS?
+
+### DETR: detection as set prediction
+
+**DETR** (DEtection TRansformer, 2020) reframes detection as **set prediction**. A CNN backbone extracts image features; a transformer encoder-decoder processes them; and a fixed number of learned **object queries** (say 100) each emerge from the decoder as one prediction — a box and a class, where "no object" ($\varnothing$) is a valid class. The output is the final answer. No grid of anchors, no NMS.
+
+```{mermaid}
+flowchart LR
+  A[Image] --> B[CNN backbone]
+  B --> C[Transformer<br/>encoder]
+  C --> D[Transformer decoder<br/>+ N object queries]
+  D --> E[N predictions:<br/>box + class each]
+  E --> F[Bipartite matching<br/>to ground truth]
+  F --> G[Loss]
+```
+
+### The key idea: bipartite matching
+
+How do you train a model that emits an unordered *set* of 100 predictions against, say, 3 ground-truth objects? You can't compare prediction #7 to "the dog" by position, because there's no fixed ordering. DETR's answer is **bipartite matching**: find the one-to-one assignment between predictions and ground-truth objects that minimizes total cost, using the **Hungarian algorithm**. Each ground-truth object gets matched to exactly one prediction; every unmatched prediction is trained to say "no object."
+
+This matching is *why* DETR needs no NMS. Because the loss permits only one prediction per object, the model is actively trained *not* to produce duplicates — the deduplication that NMS used to do by hand is now baked into the objective.
+
+Tiny worked example. Suppose the model emits 3 predictions $P_1, P_2, P_3$ and there are 2 ground-truth boxes $G_1, G_2$ (plus $\varnothing$). The matcher builds a cost matrix combining class mismatch and box error:
+
+| | $G_1$ (cat) | $G_2$ (dog) |
+|---|---|---|
+| $P_1$ | 0.2 | 0.9 |
+| $P_2$ | 0.8 | 0.3 |
+| $P_3$ | 0.7 | 0.6 |
+
+The Hungarian algorithm picks the minimum-total assignment: $P_1 \to G_1$ (0.2) and $P_2 \to G_2$ (0.3), total cost $0.5$. $P_3$ is left over and supervised toward $\varnothing$. The matching cost typically blends a class term with a box term (an $L_1$ distance plus the **generalized IoU** introduced earlier), so a prediction is rewarded for being both the right class *and* well-localized.
+
+```python
+import numpy as np
+from scipy.optimize import linear_sum_assignment
+# cost[i,j] = cost of matching prediction i to ground-truth j
+cost = np.array([[0.2, 0.9],
+                 [0.8, 0.3],
+                 [0.7, 0.6]])
+rows, cols = linear_sum_assignment(cost)   # Hungarian
+for r, c in zip(rows, cols):
+    print(f"pred {r} -> gt {c}  (cost {cost[r,c]})")
+# pred 0 -> gt 0 (0.2);  pred 1 -> gt 1 (0.3);  pred 2 unmatched -> ∅
+```
+
+DETR's tradeoffs are honest: it is beautifully simple and end-to-end, but the original was slow to converge (hundreds of training epochs) and weak on small objects. Follow-ups — **Deformable DETR** (attend to a few key points instead of all pixels), DINO, and others — fixed convergence and accuracy, and the query-based paradigm has since spread well beyond boxes.
+
+### Panoptic segmentation: one map for everything
+
+Earlier the chapter drew a line between two segmentation tasks. **Semantic segmentation** labels every pixel with a class but doesn't separate instances — all cars share one "car" blob. **Instance segmentation** (Mask R-CNN) separates individual objects but only the countable "things," ignoring amorphous background "stuff" like sky, road, or grass.
+
+**Panoptic segmentation** unifies them: *every* pixel gets both a class and, for countable things, an instance id. "Stuff" classes get a class label with no instance distinction; "thing" classes get separated into individual instances. One coherent, complete labeling of the image — nothing left unexplained, no pixel double-counted.
+
+| Task | Stuff (sky, road) | Things (cars, people) | Per-pixel? |
+|---|---|---|---|
+| Semantic | classed | classed, not separated | yes |
+| Instance | ignored | separated | no (only things) |
+| Panoptic | classed | separated | yes |
+
+<svg viewBox="0 0 460 150" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif" font-size="11">
+  <text x="10" y="14" fill="currentColor">Semantic</text>
+  <rect x="10" y="22" width="120" height="40" fill="#9bb8d3"/>
+  <rect x="10" y="62" width="120" height="20" fill="#b08968"/>
+  <rect x="30" y="48" width="40" height="22" fill="#e07a5f"/>
+  <rect x="78" y="48" width="40" height="22" fill="#e07a5f"/>
+  <text x="20" y="98" fill="currentColor">cars = one blob</text>
+  <text x="170" y="14" fill="currentColor">Instance</text>
+  <rect x="170" y="22" width="120" height="60" fill="none" stroke="currentColor" stroke-dasharray="2 2"/>
+  <rect x="190" y="48" width="40" height="22" fill="#e07a5f"/>
+  <rect x="238" y="48" width="40" height="22" fill="#3d5a80"/>
+  <text x="180" y="98" fill="currentColor">cars separated, bg ignored</text>
+  <text x="330" y="14" fill="currentColor">Panoptic</text>
+  <rect x="330" y="22" width="120" height="40" fill="#9bb8d3"/>
+  <rect x="330" y="62" width="120" height="20" fill="#b08968"/>
+  <rect x="350" y="48" width="40" height="22" fill="#e07a5f"/>
+  <rect x="398" y="48" width="40" height="22" fill="#3d5a80"/>
+  <text x="340" y="98" fill="currentColor">stuff classed + things split</text>
+</svg>
+
+### Mask2Former: one architecture, all three tasks
+
+The transformer set-prediction idea turns out to be the natural way to do this. **MaskFormer** and its successor **Mask2Former** (2022) recast *all* segmentation as **mask classification**: instead of labeling each pixel independently, the model predicts a set of $N$ binary masks, each paired with a class label — exactly the set-prediction framing DETR used for boxes, now producing masks.
+
+Each object query decodes into one mask plus its class. Semantic, instance, and panoptic segmentation then differ only in how you *interpret and merge* those mask-class pairs at inference — the network and training objective stay identical. Mask2Former's key efficiency trick is **masked attention**: each query's cross-attention is restricted to the region of its own predicted mask rather than the whole image, which both speeds training and sharpens localization.
+
+::: {.callout-tip}
+The throughline of this whole section: **set prediction with bipartite matching** is a general recipe, not a detection-only trick. Swap "box" for "mask" and the same machinery does panoptic segmentation; the same idea extends to pose, tracking, and more. One conceptual hammer, many nails — which is exactly why the query-based transformer view reshaped so much of vision after 2020.
+:::
+
+## 19.10 — Key takeaways
 
 - A digital image is just a grid of numbers (color = three stacked grids); every vision model is a function from that grid to a structured answer.
 - Vision tasks form a ladder of spatial precision: **classification** (one label/image) → **detection** (box + label/object) → **segmentation** (label/pixel). Pick the lightest one that solves your problem.
@@ -434,7 +745,7 @@ The classic augmentation bug is flipping the image but forgetting the label geom
 - **OCR** (CTC-trained text recognition), **pose** (keypoint heatmaps), and **tracking** (detection + Kalman/appearance association) are the applied workhorses.
 - **Data augmentation** cheaply buys invariance and fights overfitting — apply it to training only, and transform the boxes/masks alongside the image.
 
-## 19.8 — See also
+## 19.11 — See also
 
 - **Convolutional Neural Networks** — the backbone mechanics (filters, pooling, receptive fields) behind every model here.
 - **Attention & Transformers** — how Vision Transformers tokenize and attend over image patches.

@@ -84,6 +84,14 @@ toc-expand: true
 <li><a href="ch38.html">38 &middot; ⚖️ AI Ethics, Fairness & Safety</a></li>
 <li><a href="ch39.html">39 &middot; 🌠 Frontier & Emerging Directions</a></li>
 </ul>
+<p class="ig-era">🎓 Advanced & Specialized Topics</p>
+<ul>
+<li><a href="ch40.html">40 &middot; 🔗 Graph Machine Learning</a></li>
+<li><a href="ch41.html">41 &middot; 🤖 Robotics & Autonomy</a></li>
+<li><a href="ch42.html">42 &middot; 📐 Learning Theory</a></li>
+<li><a href="ch43.html">43 &middot; 🔎 Information Retrieval & Data Mining</a></li>
+<li><a href="ch44.html">44 &middot; 🏗️ LLM Systems: Building LLMs from Scratch</a></li>
+</ul>
 </details>
 
 ------------------------------------------------------------------------
@@ -384,7 +392,234 @@ def sinusoidal_pe(n, d):
 Forgetting positional information is a silent bug, not a crash: the model trains and runs, it just plateaus at mediocre accuracy because it literally cannot tell word order. If a from-scratch Transformer learns suspiciously poorly on ordered data, check that you actually added positional encoding before the first block.
 :::
 
-## 17.5 — Key takeaways
+
+## 17.5 — Beyond Quadratic Attention: Efficient Attention and State-Space Models
+
+Self-attention is wonderful because every token can look at every other token directly. That is also its curse. The moment you write down the attention scores, you have committed to a table with one row and one column for every token in the sequence. For a 1,000-token document that is a million entries; for a 100,000-token book it is ten billion. The dream of feeding a model an entire codebase, a legal contract, or an hour of audio keeps running into the same wall: attention costs grow with the *square* of the sequence length. This section is about how we climb over that wall — first by approximating attention so it scales linearly, and then by abandoning the attention formula entirely in favor of **state-space models** that process sequences the way a running tally processes numbers.
+
+### The shape of the bottleneck
+
+Recall the attention computation for a sequence of $n$ tokens with model dimension $d$. We form queries, keys, and values $Q, K, V \in \mathbb{R}^{n \times d}$, then compute
+
+$$
+\text{Attention}(Q, K, V) = \underbrace{\text{softmax}\!\left(\frac{QK^\top}{\sqrt{d}}\right)}_{S \,\in\, \mathbb{R}^{n \times n}} V .
+$$
+
+The trouble lives in $S = QK^\top$. That matrix is $n \times n$. Building it costs $O(n^2 d)$ arithmetic, and — usually the real killer — storing it costs $O(n^2)$ memory. Double the sequence length and you quadruple both. Everything else in a transformer (the feed-forward layers, the projections) scales *linearly* in $n$, so for long sequences this one matrix dominates the entire budget.
+
+Here is the asymmetry that motivates everything below. A recurrent network reads a sequence in $O(n)$ time and remembers the past in a fixed-size state — cheap, but it must compress all history into that one state and it cannot be parallelized across time. Attention refuses to compress: it keeps every token available, which is why it is so expressive, but it pays $O(n^2)$ for the privilege. The research program of this section is to get attention's quality at a recurrence's price.
+
+| Approach | Time | Memory | Parallel over sequence? | Keeps full history? |
+|---|---|---|---|---|
+| RNN / LSTM | $O(n)$ | $O(1)$ state | No (sequential) | No (compressed) |
+| Full attention | $O(n^2 d)$ | $O(n^2)$ | Yes | Yes |
+| Linear attention | $O(n d^2)$ | $O(d^2)$ state | Yes (or recurrent) | Compressed |
+| State-space (S4/Mamba) | $O(n d)$–$O(n \log n)$ | $O(d)$ state | Yes (convolution/scan) | Compressed |
+
+::: {.callout-tip}
+The quadratic cost is not in "the attention idea" — it is specifically in materializing the $n \times n$ score matrix and applying softmax to it. Almost every efficient method is a different answer to the question: *can we get the effect of $S V$ without ever building $S$?*
+:::
+
+```{mermaid}
+flowchart LR
+    A["n tokens"] --> B["Q Kᵀ<br/>n×n scores"]
+    B --> C["softmax"]
+    C --> D["× V<br/>output"]
+    B -.->|"this is the<br/>O(n²) wall"| W["memory blows up<br/>as n grows"]
+    style B fill:#fdd,stroke:#c33
+    style W fill:#fee,stroke:#c33
+```
+
+## 17.6 — Linear and Efficient Attention: Getting Rid of the Square
+
+The first family of fixes keeps the attention recipe but reorganizes the arithmetic so the $n \times n$ matrix never appears. The cleanest version is **linear attention**, and the trick is a piece of associativity you already know from multiplying matrices in a smart order.
+
+### Reordering the multiplication
+
+Softmax couples the two matrix products: you must finish $QK^\top$ before you can normalize, and only then multiply by $V$. Suppose instead we replace the exponential similarity with a simpler one that *factorizes*. Write the similarity between query $i$ and key $j$ as $\phi(q_i)^\top \phi(k_j)$ for some feature map $\phi$ applied to each vector independently. Then the output for token $i$ becomes
+
+$$
+o_i = \frac{\sum_j \big(\phi(q_i)^\top \phi(k_j)\big)\, v_j}{\sum_j \phi(q_i)^\top \phi(k_j)}
+    = \frac{\phi(q_i)^\top \Big(\sum_j \phi(k_j) v_j^\top\Big)}{\phi(q_i)^\top \sum_j \phi(k_j)} .
+$$
+
+Look at what happened. The inner sum $\sum_j \phi(k_j) v_j^\top$ does not depend on $i$ at all. We can compute it *once* — it is a $d' \times d$ matrix, where $d'$ is the feature dimension — and then every query just reads from it. We never form an $n \times n$ object. The cost drops to $O(n\, d' d)$: linear in sequence length.
+
+The associativity is the whole game. Full attention computes $(QK^\top)V$ — first an $n \times n$, then times $V$. Linear attention computes $Q(K^\top V)$ — first a small $d \times d$, then times $Q$. Same parentheses-shuffle that lets you multiply a tall-skinny by a small matrix cheaply.
+
+```{mermaid}
+flowchart TB
+    subgraph FULL["Full attention: (Q Kᵀ) V"]
+        direction LR
+        F1["Q<br/>n×d"] --> F2["Q Kᵀ<br/>n×n 😱"] --> F3["× V<br/>n×d"]
+    end
+    subgraph LIN["Linear attention: Q (Kᵀ V)"]
+        direction LR
+        L1["Kᵀ V<br/>d×d 🙂"] --> L2["Q × ·<br/>n×d"]
+    end
+    style F2 fill:#fdd,stroke:#c33
+    style L1 fill:#dfd,stroke:#3a3
+```
+
+### A tiny worked example
+
+Let us make the saving concrete with $n = 4$ tokens and $d = 2$, using the identity feature map $\phi(x) = x$ (the simplest choice — real methods use $\phi(x) = \text{elu}(x)+1$ or random features to keep things positive).
+
+```python
+import numpy as np
+np.random.seed(0)
+n, d = 4, 2
+Q = np.random.randn(n, d); K = np.random.randn(n, d); V = np.random.randn(n, d)
+
+# Full path: build the n×n matrix (unnormalized, no softmax, for illustration)
+S = Q @ K.T                      # n×n  <- the object we want to avoid
+out_full = S @ V                 # n×d
+
+# Linear path: never build n×n
+KV = K.T @ V                     # d×d  <- summary of all keys+values
+out_lin = Q @ KV                 # n×d
+
+print(np.allclose(out_full, out_lin))   # True — same answer, different cost
+print("n×n entries built:", S.size, "| d×d entries built:", KV.size)
+```
+
+```
+True
+n×n entries built: 16 | d×d entries built: 4
+```
+
+The two paths produce identical numbers, but the second never allocated the $n \times n$ matrix. At $n = 16$ the difference is trivial; at $n = 100{,}000$ it is the difference between a model that runs and one that runs out of memory. The catch, of course, is the softmax we dropped — genuine softmax attention does *not* factorize, so linear attention only approximates it, and the approximation costs some expressive power.
+
+### The recurrent twin
+
+There is a beautiful second view. Because $\sum_j \phi(k_j) v_j^\top$ is just an accumulating sum, we can build it token by token. Define a running state $S_t = S_{t-1} + \phi(k_t) v_t^\top$. Then linear attention *is* a recurrent network with a matrix-valued hidden state:
+
+$$
+S_t = S_{t-1} + \phi(k_t)\, v_t^\top, \qquad o_t = \frac{\phi(q_t)^\top S_t}{\phi(q_t)^\top z_t}, \qquad z_t = z_{t-1} + \phi(k_t).
+$$
+
+So linear attention has two faces: a **parallel** form for training (compute all features, do one big matrix product) and a **recurrent** form for inference (carry a fixed-size state, $O(1)$ per new token). This duality — parallel to train, recurrent to generate — is exactly the property that the next family, state-space models, takes to its logical conclusion.
+
+### Other efficient-attention strategies
+
+Linear attention is one branch of a larger family. The main ideas, briefly:
+
+| Family | Core idea | Examples | Tradeoff |
+|---|---|---|---|
+| Kernel / linear | Factorize similarity via $\phi$ | Linear Transformer, Performer | Approximation error vs. softmax |
+| Sparse / local | Each token attends to a few others (window, strided, global tokens) | Longformer, BigBird, Sparse Transformer | Picks patterns by hand; can miss long-range links |
+| Low-rank | Project $K, V$ to length $k \ll n$ | Linformer | Assumes attention is low-rank |
+| IO-aware exact | Keep full attention, tile it to avoid storing $S$ | FlashAttention | Still $O(n^2)$ compute, but $O(n)$ memory |
+
+::: {.callout-warning}
+FlashAttention is often lumped in with "efficient attention," but it is a different kind of win: it computes *exact* softmax attention and is still $O(n^2)$ in arithmetic. What it removes is the $O(n^2)$ *memory* traffic by never writing the full score matrix to slow GPU memory. Do not expect it to make a million-token context cheap — it makes the contexts you already use faster and lighter, but the quadratic compute wall is still there.
+:::
+
+## 17.7 — State-Space Models: S4 and Mamba
+
+Sparse and linear attention chip away at the constant; state-space models change the algorithm. The starting point is an idea borrowed from control theory and signal processing: model a sequence as a **continuous system with a hidden state that evolves over time**. You feed in a signal $u(t)$, an internal state $x(t)$ integrates it, and you read out $y(t)$.
+
+### The state-space recurrence
+
+A linear state-space model is defined by four matrices $A, B, C, D$:
+
+$$
+x'(t) = A\,x(t) + B\,u(t), \qquad y(t) = C\,x(t) + D\,u(t).
+$$
+
+The state $x(t)$ is a fixed-size vector — say 64 numbers — that summarizes everything the model has seen so far. $A$ says how the state decays and mixes on its own; $B$ says how new input enters; $C$ says how to read an output off the state. To use this on a sequence of discrete tokens, we discretize it with step size $\Delta$, turning the differential equation into a plain recurrence:
+
+$$
+x_t = \bar{A}\, x_{t-1} + \bar{B}\, u_t, \qquad y_t = C\, x_t,
+$$
+
+where $\bar{A}, \bar{B}$ come from $A, B, \Delta$ via a fixed formula. This is just an RNN with a *linear* update — no nonlinearity inside the recurrence. That linearity is the secret to everything that follows.
+
+### The recurrence–convolution duality
+
+Because the update is linear, you can unroll it. Starting from $x_0 = 0$:
+
+$$
+y_t = \sum_{j=0}^{t} C\,\bar{A}^{\,t-j}\,\bar{B}\; u_j
+    = \sum_{j=0}^{t} \bar{K}_{t-j}\, u_j, \qquad \bar{K}_k = C\,\bar{A}^k\,\bar{B}.
+$$
+
+That sum is a **convolution**. The whole output sequence is the input convolved with a single long kernel $\bar{K} = (\bar{K}_0, \bar{K}_1, \bar{K}_2, \dots)$. So an SSM has the same dual nature as linear attention, but more dramatically:
+
+- **As a recurrence** ($x_t = \bar{A} x_{t-1} + \bar{B} u_t$): $O(1)$ work and memory per token — perfect for generating one token at a time.
+- **As a convolution** ($y = \bar{K} * u$): compute the kernel once, then apply it to the whole sequence in parallel with an FFT in $O(n \log n)$ — perfect for training on long sequences at once.
+
+```{mermaid}
+flowchart LR
+    subgraph TRAIN["Training view: convolution"]
+        direction LR
+        T1["whole input<br/>u₀…uₙ"] --> T2["FFT convolve<br/>with kernel K̄"] --> T3["all outputs<br/>O(n log n), parallel"]
+    end
+    subgraph GEN["Inference view: recurrence"]
+        direction LR
+        G1["uₜ + state xₜ₋₁"] --> G2["xₜ = Ā xₜ₋₁ + B̄ uₜ"] --> G3["yₜ<br/>O(1) per token"]
+    end
+    style T2 fill:#dff,stroke:#39c
+    style G2 fill:#ffd,stroke:#ca3
+```
+
+You train in the fast parallel mode and deploy in the cheap streaming mode — *the same weights, two algorithms.* This is why an SSM can have a million-token context: nothing ever scales with $n^2$.
+
+### What S4 added, and a tiny example
+
+A naive linear RNN forgets the distant past: powers $\bar{A}^k$ either explode or decay to zero, so $\bar{K}_k$ vanishes and information from far back is lost. **S4** (Structured State Space) made this work by choosing $A$ with a special structure (the HiPPO matrix) designed so the state provably retains a compressed, multi-resolution memory of the entire history, plus a clever way to compute the long convolution kernel stably. The payoff was the first model to handle sequences of tens of thousands of steps and crush long-range benchmarks that defeated transformers.
+
+Here is the recurrence in its barest form, scalar state per channel, to feel the dynamics:
+
+```python
+import numpy as np
+# one channel, scalar SSM: x_t = a x_{t-1} + b u_t ; y_t = c x_t
+a, b, c = 0.9, 0.5, 1.0          # a<1 -> state remembers but slowly forgets
+u = np.array([1, 0, 0, 0, 0, 0], float)   # a single impulse at t=0
+
+# recurrent form
+x, ys = 0.0, []
+for ut in u:
+    x = a*x + b*ut
+    ys.append(c*x)
+print("recurrent:", np.round(ys, 3))
+
+# convolution form: kernel K_k = c * a^k * b
+K = np.array([c * a**k * b for k in range(len(u))])
+ys_conv = np.convolve(u, K)[:len(u)]
+print("convolved:", np.round(ys_conv, 3))
+```
+
+```
+recurrent: [0.5  0.45 0.405 0.365 0.328 0.295]
+convolved: [0.5  0.45 0.405 0.365 0.328 0.295]
+```
+
+The impulse response is the kernel itself — a decaying echo $0.5, 0.45, 0.405, \dots$ The recurrence and the convolution are literally the same function computed two ways. Notice how $a = 0.9$ controls memory: closer to 1 means the echo lingers longer (more long-range memory); smaller means it fades fast.
+
+### Mamba: making the state-space selective
+
+S4 had one weakness that attention does not: its $A, B, C$ matrices are *fixed* — the same filter is applied to every token regardless of content. Attention, by contrast, decides *at runtime* what to attend to based on the actual tokens. A fixed convolution cannot say "this token is important, remember it; that one is filler, skip it."
+
+**Mamba** fixes this by making the SSM **selective**: it lets $B$, $C$, and the step size $\Delta$ be *functions of the current input* $u_t$. Now the model can, on the fly, decide how much of each token to write into the state and how fast the state should forget. A delimiter token can trigger a reset; a key fact can be written in boldly; padding can be ignored. This input-dependence is what closes much of the quality gap with attention.
+
+But it breaks the magic trick. Once $\bar{A}, \bar{B}$ depend on the token, the model is no longer a fixed convolution — there is no single kernel to FFT. Mamba recovers parallel training with a **hardware-aware parallel scan**: a prefix-scan (the same associative-scan idea behind a parallel cumulative sum) computes the time-varying recurrence across the sequence in $O(n)$ work and $O(\log n)$ depth, fused into fast GPU memory so the large states never spill to slow memory. The result is linear-time training *and* linear-time, constant-memory generation, with selectivity that rivals attention on language.
+
+| | S4 | Mamba (selective SSM) |
+|---|---|---|
+| $A, B, C, \Delta$ | Fixed for all tokens | $B, C, \Delta$ depend on the input token |
+| Can ignore/focus per token? | No — same filter everywhere | Yes — content-based gating |
+| Parallel training | Global convolution (FFT) | Associative parallel scan |
+| Generation cost | $O(1)$ per token | $O(1)$ per token |
+| Long-context scaling | Linear | Linear |
+
+::: {.callout-warning}
+State-space models are not a free lunch that dominates transformers. Their fixed-size state is a hard memory budget: tasks that need exact recall of a specific earlier token — "what was the 4,000th word?", precise copying, in-context lookup tables — favor attention, which keeps every token addressable. SSMs win on long, streaming, throughput-bound sequences where a compressed running summary is enough. In practice many strong long-context models are *hybrids*, interleaving a few attention layers (for sharp recall) with many SSM or linear-attention layers (for cheap long-range mixing) — taking the recurrence's price and the attention's memory only where each is worth it.
+:::
+
+The throughline across this whole section is one idea seen from three angles. Attention keeps all of history and pays $O(n^2)$. A recurrence compresses history into a fixed state and pays $O(n)$ but cannot parallelize. Linear attention and state-space models thread the needle: a linear update that can be *unrolled into a parallel form for training* and *rolled up into a recurrent form for inference*. Whether you arrive there by factorizing the softmax or by discretizing a differential equation, the destination is the same — subquadratic sequence modeling that finally lets the context window grow.
+
+## 17.8 — Key takeaways
 
 - **Attention is a soft, learned dictionary lookup**: a query is compared against all keys, softmax turns the match scores into weights, and the output is a weighted average of the values — $\text{softmax}(QK^\top/\sqrt{d_k})V$.
 - **The $\sqrt{d_k}$ scaling** keeps dot-product magnitudes from growing with dimension and pushing softmax into saturated, no-gradient regions.
@@ -394,7 +629,7 @@ Forgetting positional information is a silent bug, not a crash: the model trains
 - **Transformers beat RNNs** through full sequence parallelism and $O(1)$ path length between any two tokens — at the price of $O(n^2)$ attention cost.
 - **Order must be injected**: self-attention is permutation-equivariant, so positional encoding (sinusoidal, learned, or RoPE) is mandatory.
 
-## 17.6 — See also
+## 17.9 — See also
 
 - **Chapter 16 — Recurrent & Sequence Models**: the RNN/LSTM approach Transformers replaced, and the vanishing-gradient problem attention sidesteps.
 - **Chapter 14 — Neural Networks (Core)**: residual connections, layer normalization, and the feed-forward MLP inside each block.
