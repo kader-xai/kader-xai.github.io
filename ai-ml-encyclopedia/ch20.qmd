@@ -138,7 +138,7 @@ for w in ["running", "studies", "jumped", "cats"]:
 
 Notice `running → runn` — that ugliness is exactly why real stemmers have dozens of rules, and why lemmatization is preferred when correctness matters.
 
-The modern answer to the OOV problem is **subword tokenization**: build a vocabulary of frequent character chunks so that *any* word can be reconstructed from pieces. **Byte-Pair Encoding (BPE)** starts from individual characters and greedily merges the most frequent adjacent pair, over and over, until the vocabulary reaches a target size.
+The modern answer to the OOV problem is **subword tokenization**: build a vocabulary of frequent character chunks so that *any* word can be reconstructed from pieces. Think of it like LEGO: instead of stocking one pre-built model for every word you might ever say, you keep a box of small reusable bricks (`un`, `believ`, `able`) and snap together whatever word arrives — including ones you have never seen. **Byte-Pair Encoding (BPE)** starts from individual characters and greedily merges the most frequent adjacent pair, over and over, until the vocabulary reaches a target size.
 
 Worked BPE example on the corpus `low low lower newest newest widest` (treat each word as a sequence of characters with a word-boundary marker `_`):
 
@@ -151,6 +151,15 @@ Worked BPE example on the corpus `low low lower newest newest widest` (treat eac
 
 After a few merges, *newest* tokenizes as `new` + `est`, and a brand-new word *slowest* becomes `s` + `low` + `est` — no OOV, no exploded vocabulary. This is why GPT, BERT, and friends all use subword schemes (BPE, WordPiece, or SentencePiece/Unigram).
 
+The merge rule that BPE applies at each step is just "pick the pair that shows up most often":
+
+$$
+(a, b) = \arg\max_{(x,y)} \ \text{count}(x, y)
+$$
+
+**In words:** scan all adjacent token pairs in the corpus and merge the single pair that occurs most frequently into one new token; repeat.
+**Also written:** $\text{merge} = \operatorname*{argmax}_{(x,y)\in \text{pairs}} \ \text{freq}(xy)$ — choose the bigram $xy$ with maximum frequency.
+
 ```{mermaid}
 flowchart LR
   A["Raw text<br/>'The cats ran.'"] --> B[Normalize<br/>lowercase, strip]
@@ -162,13 +171,25 @@ flowchart LR
   F --> G
 ```
 
+In real projects you almost never hand-roll a tokenizer; you load a pretrained one that ships with the model. Here is the idiomatic Hugging Face version:
+
+```python
+from transformers import AutoTokenizer
+
+tok = AutoTokenizer.from_pretrained("bert-base-uncased")
+enc = tok("The cats ran unbelievably fast.")
+print(tok.convert_ids_to_tokens(enc["input_ids"]))
+# ['[CLS]', 'the', 'cats', 'ran', 'un', '##bel', '##ie', '##va', '##bly', 'fast', '.', '[SEP]']
+# note: 'unbelievably' is split into WordPiece subwords (## = continuation)
+```
+
 ::: {.callout-tip}
 Rule of thumb: for classical bag-of-words pipelines, lemmatize + remove stop-words. For anything feeding a neural net or transformer, use **subword tokenization** and skip stemming/stop-words entirely — the model learns what to ignore.
 :::
 
 ## 20.2 — Bag of Words & TF-IDF
 
-Once you have tokens, the simplest way to turn a document into a fixed-length vector is the **Bag of Words (BoW)**: ignore order entirely, and just count how often each vocabulary word appears. The document becomes a vector as long as the vocabulary, mostly zeros (**sparse**).
+Once you have tokens, the simplest way to turn a document into a fixed-length vector is the **Bag of Words (BoW)**: ignore order entirely, and just count how often each vocabulary word appears. Picture emptying a sentence into a bag, shaking it, and only recording *which* words fell out and *how many* of each — the sequence is gone, only the tallies remain. The document becomes a vector as long as the vocabulary, mostly zeros (**sparse**).
 
 Tiny corpus of two documents:
 
@@ -182,12 +203,15 @@ Vocabulary = {the, cat, sat, dog, mat}. Count vectors:
 | $d_1$ | 1 | 1 | 1 | 0 | 0 |
 | $d_2$ | 2 | 0 | 1 | 1 | 1 |
 
-The problem: "the" dominates by raw count yet carries no topical signal. **TF-IDF** (Term Frequency–Inverse Document Frequency) fixes this by down-weighting words that appear in *many* documents. It multiplies two factors:
+The problem: "the" dominates by raw count yet carries no topical signal. **TF-IDF** (Term Frequency–Inverse Document Frequency) fixes this by down-weighting words that appear in *many* documents. The intuition: a word is informative about a document only if it is common *here* but rare *elsewhere*. "The" is everywhere, so it tells you nothing; "amortization" in one report screams what that report is about. TF-IDF multiplies two factors:
 
 $$
 \text{tf}(t,d) = \frac{\text{count of } t \text{ in } d}{\text{total terms in } d}, \qquad
 \text{idf}(t) = \log\frac{N}{1 + \text{df}(t)}
 $$
+
+**In words:** *tf* is how often a word shows up in this one document (its local prominence); *idf* is how rare the word is across the whole collection (its global distinctiveness). Multiply them so a word scores high only when it is both frequent here and rare everywhere else.
+**Also written:** $\text{idf}(t) = \log N - \log(1 + \text{df}(t))$, and the final score in vector form is $\text{tfidf}(t,d) = \text{tf}(t,d)\cdot\text{idf}(t)$.
 
 where $N$ is the number of documents and $\text{df}(t)$ is how many documents contain $t$. The score is $\text{tfidf}(t,d) = \text{tf}(t,d)\cdot\text{idf}(t)$.
 
@@ -210,15 +234,47 @@ print(vocab)
 print(tfidf(docs[0]).round(3))   # 'the','sat' shrink toward 0
 ```
 
+In practice, scikit-learn does the whole thing in two lines — and is what you would actually ship:
+
+```python
+from sklearn.feature_extraction.text import TfidfVectorizer
+
+corpus = ["the cat sat", "the dog sat the mat"]
+vec = TfidfVectorizer()
+X = vec.fit_transform(corpus)          # sparse TF-IDF matrix, shape (2, n_vocab)
+print(vec.get_feature_names_out())     # ['cat' 'dog' 'mat' 'sat' 'the']
+print(X.toarray().round(3))            # rows = documents, columns = words
+```
+
 TF-IDF vectors plug directly into cosine similarity for search and into linear classifiers for text classification. They are a strong, interpretable baseline — but they know nothing about word *meaning*: "car" and "automobile" are as unrelated as "car" and "banana". That gap is what embeddings close.
 
 ::: {.callout-warning}
 BoW/TF-IDF throw away word order. "Dog bites man" and "man bites dog" get identical vectors. When order or negation matters, you need sequence models (Recurrent & Sequence Models) or transformers (Attention & Transformers).
 :::
 
+### 20.2b — n-grams: putting a little order back
+
+Pure bag-of-words is *amnesiac* about order, but there is a cheap halfway fix: instead of counting single words (unigrams), count short adjacent runs of words — **n-grams**. A **bigram** model counts pairs like "not good"; a **trigram** counts triples like "not very good". By treating "not good" as its own feature, the model can finally tell a negated phrase from a bare positive word.
+
+For our sentence "the dog sat the mat", the bigrams are:
+
+| | the dog | dog sat | sat the | the mat |
+|---|---------|---------|---------|---------|
+| count | 1 | 1 | 1 | 1 |
+
+This is why "New York" survives as a meaningful unit instead of dissolving into two ordinary words. The cost is a much larger, sparser feature space — the number of possible bigrams is roughly the vocabulary size squared — so n-grams trade memory for a small, local memory of order. In scikit-learn it is a one-argument change:
+
+```python
+# include both single words and adjacent pairs as features
+vec = TfidfVectorizer(ngram_range=(1, 2))   # unigrams + bigrams
+X = vec.fit_transform(corpus)
+```
+
+n-grams are the bridge between order-blind BoW and the genuinely sequential models (RNNs, transformers) later in this chapter — and the same n-gram counting idea reappears in language modeling (Section 20.4) and in BLEU (Section 20.8).
+
 ## 20.3 — Word embeddings
 
-A **word embedding** is a dense, low-dimensional vector (say 100–300 numbers) that represents a word's meaning, learned so that words used in similar contexts land near each other in space. The guiding principle, the **distributional hypothesis**, is a line from linguist J.R. Firth: *"You shall know a word by the company it keeps."* If two words show up around the same neighbors, they probably mean similar things.
+A **word embedding** is a dense, low-dimensional vector (say 100–300 numbers) that represents a word's meaning, learned so that words used in similar contexts land near each other in space. The guiding principle, the **distributional hypothesis**, is a line from linguist J.R. Firth: *"You shall know a word by the company it keeps."* If two words show up around the same neighbors, they probably mean similar things. The everyday version: you can guess a stranger's personality from the friends they hang out with — words work the same way.
 
 **word2vec** learns these vectors with a tiny prediction task slid over a corpus. It comes in two flavors:
 
@@ -245,6 +301,9 @@ $$
 P(o \mid c) = \frac{\exp(u_o^\top v_c)}{\sum_{w \in V} \exp(u_w^\top v_c)}.
 $$
 
+**In words:** the chance that word $o$ appears near center word $c$ grows with how aligned their two vectors are (big dot product = pointing the same way), normalized against every other word in the vocabulary so the probabilities sum to one.
+**Also written:** $P(o \mid c) = \operatorname{softmax}_o\!\big(U v_c\big)$, where $U$ stacks every word's context vector into a matrix and the softmax is taken over its rows.
+
 Because that denominator sums over the whole vocabulary, real implementations use **negative sampling**: for each true (center, context) pair, sample a few random "negative" words and just train the model to say *yes* to the real pair and *no* to the fakes — a handful of cheap logistic-regression updates instead of a giant softmax.
 
 **GloVe** (Global Vectors) reaches a similar place from a different angle: it factorizes a global word **co-occurrence matrix**, fitting vectors so that $v_i^\top v_j$ approximates $\log$ of how often words $i$ and $j$ co-occur. word2vec is "predictive/local," GloVe is "count-based/global"; in practice they yield comparably useful vectors.
@@ -254,6 +313,9 @@ The famous payoff is that **analogies become vector arithmetic**. The vector off
 $$
 \vec{king} - \vec{man} + \vec{woman} \approx \vec{queen}.
 $$
+
+**In words:** start at "king", subtract the "maleness" direction (the step from man to woman, taken backward), add the "femaleness" direction, and you land essentially on "queen" — the geometry encodes the gender relationship as a reusable direction.
+**Also written:** $\vec{king} - \vec{queen} \approx \vec{man} - \vec{woman}$ — the two gender offsets are (approximately) the same vector.
 
 <svg viewBox="0 0 420 260" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif" font-size="13">
   <line x1="30" y1="230" x2="400" y2="230" stroke="#888"/>
@@ -272,23 +334,49 @@ $$
 
 The two green arrows are nearly parallel and equal — that geometric regularity is *why* the arithmetic works. These embeddings are **static**: one vector per word, so "bank" (river vs. money) gets a single blurred vector. Contextual embeddings from transformers (Attention & Transformers) fix that by giving each *occurrence* its own vector.
 
+In code, you rarely train word2vec from scratch — you load pretrained vectors and ask for neighbors:
+
+```python
+import gensim.downloader as api
+
+wv = api.load("glove-wiki-gigaword-100")          # 100-dim GloVe vectors
+print(wv.most_similar("king", topn=3))            # [('queen', ...), ('prince', ...), ...]
+print(wv.most_similar(positive=["king", "woman"], negative=["man"], topn=1))
+# [('queen', 0.77)]  -> the king - man + woman analogy, computed for real
+```
+
 ::: {.callout-tip}
 Cosine similarity, not Euclidean distance, is the standard way to compare embeddings — direction encodes meaning, magnitude largely encodes word frequency.
 :::
 
+The cosine similarity that does this comparing is worth stating once:
+
+$$
+\cos(\theta) = \frac{a \cdot b}{\lVert a\rVert\,\lVert b\rVert}.
+$$
+
+**In words:** measure the angle between two word vectors — point the same way (small angle) → score near 1 → similar meaning; point oppositely → near −1; perpendicular → 0 (unrelated). It deliberately ignores how long the vectors are.
+**Also written:** $\cos(\theta) = \hat{a}\cdot\hat{b}$, the dot product of the two vectors after each is normalized to unit length ($\hat{a} = a/\lVert a\rVert$).
+
 ## 20.4 — Language models (n-gram to neural; perplexity)
 
-A **language model (LM)** assigns probabilities to sequences of words — equivalently, it predicts the next word given the previous ones. This single capability powers autocomplete, speech recognition, translation, and ChatGPT. By the chain rule, the probability of a sentence factorizes as
+A **language model (LM)** assigns probabilities to sequences of words — equivalently, it predicts the next word given the previous ones. Intuitively it is a very well-read autocomplete: having seen oceans of text, it knows that after "I poured myself a cup of" the word "coffee" is far likelier than "concrete". This single capability powers autocomplete, speech recognition, translation, and ChatGPT. By the chain rule, the probability of a sentence factorizes as
 
 $$
 P(w_1,\dots,w_n) = \prod_{i=1}^{n} P(w_i \mid w_1,\dots,w_{i-1}).
 $$
+
+**In words:** the probability of a whole sentence is the running product of "how likely is each next word, given everything written so far" — read the sentence left to right, multiplying one next-word probability at a time.
+**Also written:** in log space (how it is actually computed) this is a sum, $\log P(w_1,\dots,w_n) = \sum_{i=1}^{n} \log P(w_i \mid w_{<i})$, where $w_{<i}$ is shorthand for all words before position $i$.
 
 The full history is impossible to count, so the classical **n-gram** model makes a **Markov assumption**: the next word depends only on the previous $n-1$ words. A **bigram** model ($n=2$) estimates probabilities by simple counting:
 
 $$
 P(w_i \mid w_{i-1}) = \frac{\text{count}(w_{i-1}, w_i)}{\text{count}(w_{i-1})}.
 $$
+
+**In words:** to guess the next word, look only at the single word before it; the probability is just "of all the times this previous word appeared, what fraction of the time was it followed by this next word."
+**Also written:** $P(w_i \mid w_{i-1}) = \dfrac{c(w_{i-1} w_i)}{\sum_{w} c(w_{i-1} w)}$ — the denominator is equivalently the total count of the previous word as a left-context.
 
 Worked bigram example. Training text: `"I like cats . I like dogs ."`
 
@@ -297,13 +385,25 @@ Worked bigram example. Training text: `"I like cats . I like dogs ."`
 
 So the model assigns $P(\text{cats}\mid\text{like}) = 0.5$ and $P(\text{dogs}\mid\text{like}) = 0.5$ — it learned that "like" is followed equally by cats or dogs. If we now ask about "like fish", the count is 0 → probability 0, which would zero out the whole sentence. The fix is **smoothing** (e.g., add-one/Laplace), which shaves probability mass off seen events and hands it to unseen ones.
 
+Add-one (Laplace) smoothing makes the zero impossible by pretending every pair was seen one extra time:
+
+$$
+P_{\text{add-1}}(w_i \mid w_{i-1}) = \frac{\text{count}(w_{i-1}, w_i) + 1}{\text{count}(w_{i-1}) + |V|}.
+$$
+
+**In words:** give every possible next word a tiny "starter credit" of one count so nothing is ever flatly impossible; the denominator grows by the vocabulary size $|V|$ to keep the probabilities summing to one.
+**Also written:** the general additive form $P_{\text{add-}k} = \dfrac{c(w_{i-1}w_i) + k}{c(w_{i-1}) + k|V|}$, with $k=1$ recovering Laplace.
+
 n-grams are simple and fast but suffer two fatal limits: they cannot see beyond $n-1$ words (no long-range context), and the table grows explosively. **Neural language models** replace the count table with a network that maps word embeddings of the context to a softmax over the next word — generalizing to unseen contexts because similar words share similar vectors. RNNs (Recurrent & Sequence Models) and then Transformers (Attention & Transformers) extended the context window dramatically.
 
-How do we score an LM? With **perplexity (PPL)** — intuitively, the average number of equally-likely choices the model feels it has at each step. Lower is better. For a test sequence,
+How do we score an LM? With **perplexity (PPL)** — intuitively, the average number of equally-likely choices the model feels it has at each step. A perplexity of 8 means the model is, on average, as unsure as if it were rolling an 8-sided die for each next word. Lower is better. For a test sequence,
 
 $$
 \text{PPL} = \exp\!\left(-\frac{1}{N}\sum_{i=1}^{N} \ln P(w_i \mid w_{<i})\right).
 $$
+
+**In words:** take the model's average surprise per word (the average negative log-probability it assigned to the words that actually came), then undo the log to turn it back into an effective "number of choices"; the more confident and correct the model, the smaller this number.
+**Also written:** $\text{PPL} = \left(\prod_{i=1}^{N} P(w_i \mid w_{<i})\right)^{-1/N}$ — the inverse geometric mean of the per-word probabilities.
 
 A perplexity of 1 means perfect prediction; a perplexity of $|V|$ means the model is no better than guessing uniformly. If our bigram model assigns probabilities $0.5, 0.5, 1.0$ to a 3-word test, $\text{PPL} = \exp(-\frac13(\ln 0.5 + \ln 0.5 + \ln 1.0)) = \exp(0.462) \approx 1.59$ — between 1 and 2 effective choices per word.
 
@@ -320,7 +420,7 @@ Perplexity is only comparable across models that share the *same tokenization an
 
 ## 20.5 — Named Entity Recognition & POS tagging (sequence labeling)
 
-Many NLP tasks are **sequence labeling**: assign a label to *every* token in a sentence, where the labels depend on each other. Two staples:
+Many NLP tasks are **sequence labeling**: assign a label to *every* token in a sentence, where the labels depend on each other. Think of a highlighter pass over a page — you color each word according to its job, but the colors follow rules (a "middle-of-a-name" color can't appear unless a "start-of-a-name" color came just before it). Two staples:
 
 - **Part-of-Speech (POS) tagging**: label each word with its grammatical role — noun, verb, adjective, etc.
 - **Named Entity Recognition (NER)**: find and classify spans naming real-world things — people, organizations, locations, dates.
@@ -340,6 +440,9 @@ $$
 \text{score}(x, y) = \sum_{i} \big(\underbrace{\psi(y_i, x_i)}_{\text{emission}} + \underbrace{T(y_{i-1}, y_i)}_{\text{transition}}\big).
 $$
 
+**In words:** rate a candidate labeling of the whole sentence by adding up two things at every position — how well the label fits the word under it (emission), and how legal it is to jump from the previous label to this one (transition) — then keep the labeling with the highest total.
+**Also written:** $\text{score}(x,y) = \sum_i \psi(y_i, x_i) + \sum_i T(y_{i-1}, y_i)$, splitting the per-word fit and the label-to-label compatibility into two separate sums.
+
 ```{mermaid}
 flowchart LR
   W1[Jane] --> T1((B-PER))
@@ -352,6 +455,19 @@ flowchart LR
 
 The modern recipe is a **BiLSTM** (Recurrent & Sequence Models) or **Transformer** (Attention & Transformers) encoder that reads the whole sentence both directions to produce context-aware token vectors, often with a CRF layer on top to enforce legal transitions. Fine-tuned BERT-style models are today's default for NER and POS.
 
+In practice a pretrained pipeline gives you spans straight out of the box:
+
+```python
+import spacy
+nlp = spacy.load("en_core_web_sm")
+doc = nlp("Jane Smith works at Acme Corp in Tokyo.")
+for ent in doc.ents:
+    print(ent.text, ent.label_)
+# Jane Smith PERSON
+# Acme Corp  ORG
+# Tokyo      GPE
+```
+
 ::: {.callout-tip}
 The transition matrix is doing real work: even a mediocre per-token classifier improves sharply once a CRF forbids impossible label sequences like `O → I-ORG`.
 :::
@@ -362,11 +478,14 @@ The transition matrix is doing real work: even a mediocre per-token classifier i
 
 The pipeline is the general supervised-learning loop (Supervised Learning) wearing a text costume: turn each document into a vector (TF-IDF or embeddings), then train any classifier (logistic regression, Naive Bayes, an LSTM, or a fine-tuned transformer).
 
-**Naive Bayes** is the classic, fast sentiment baseline. It applies Bayes' rule and "naively" assumes words are independent given the class:
+**Naive Bayes** is the classic, fast sentiment baseline. The "naive" intuition: pretend each word votes on the sentiment independently, ignoring how words combine, then tally the votes weighted by how strongly each word leans positive or negative. It applies Bayes' rule and "naively" assumes words are independent given the class:
 
 $$
 P(\text{pos} \mid \text{doc}) \propto P(\text{pos}) \prod_{w \in \text{doc}} P(w \mid \text{pos}).
 $$
+
+**In words:** the document's score for "positive" is the base rate of positive documents multiplied by each word's individual probability under the positive class — every word chips in a multiplicative vote, and whichever class scores higher wins.
+**Also written:** in log space, $\log P(\text{pos}\mid\text{doc}) = \log P(\text{pos}) + \sum_{w\in\text{doc}} \log P(w\mid\text{pos}) + \text{const}$ — products of probabilities become a sum of log-probabilities.
 
 Worked example. Suppose training gives these word likelihoods:
 
@@ -394,6 +513,28 @@ def classify(doc):
 print(classify(["great","movie"]))   # ('pos', 0.04, 0.005)
 ```
 
+The real-world version is a short scikit-learn pipeline that vectorizes and classifies in one object:
+
+```python
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.naive_bayes import MultinomialNB
+from sklearn.pipeline import make_pipeline
+
+X = ["great movie", "terrible film", "loved it", "awful waste"]
+y = ["pos", "neg", "pos", "neg"]
+clf = make_pipeline(TfidfVectorizer(), MultinomialNB()).fit(X, y)
+print(clf.predict(["a great film"]))   # ['pos']
+```
+
+And the modern, highest-accuracy route — a fine-tuned transformer behind a one-line Hugging Face pipeline:
+
+```python
+from transformers import pipeline
+sentiment = pipeline("sentiment-analysis")     # downloads a fine-tuned model
+print(sentiment("This movie was not great at all."))
+# [{'label': 'NEGATIVE', 'score': 0.99}]  <- handles the negation BoW misses
+```
+
 The trap in sentiment is **negation and sarcasm**: "not great" flips polarity but a bag-of-words model sees the positive word "great". Word-order-aware models (LSTM, transformer) handle this far better, which is why fine-tuned transformers now dominate sentiment benchmarks. For evaluating these classifiers — accuracy, precision, recall, F1 — see Section 20.10 and Model Evaluation & Tuning.
 
 ::: {.callout-warning}
@@ -402,7 +543,7 @@ Multiplying many small probabilities underflows to zero on real documents. Alway
 
 ## 20.7 — Topic modeling (LDA)
 
-Sometimes you have a pile of documents and *no labels*, and you want to discover the hidden themes running through them. **Topic modeling** is this unsupervised task, and **Latent Dirichlet Allocation (LDA)** is its classic engine. The core idea is a **generative story**: pretend each document was written by a simple random process, then run it backward to infer the hidden structure.
+Sometimes you have a pile of documents and *no labels*, and you want to discover the hidden themes running through them. Imagine inheriting ten thousand unsorted news clippings and wanting to know, without reading them all, "what topics is this stack actually about?" — that is exactly the job. **Topic modeling** is this unsupervised task, and **Latent Dirichlet Allocation (LDA)** is its classic engine. The core idea is a **generative story**: pretend each document was written by a simple random process, then run it backward to infer the hidden structure.
 
 LDA's story for writing a document:
 
@@ -430,6 +571,21 @@ The output is human-readable. A topic is just its top words; you read them and n
 | 2 | market, stock, price, bank, rate | Finance |
 | 3 | film, movie, director, role, star | Cinema |
 
+Fitting LDA in scikit-learn is a few lines — and the top words per topic come straight out of the learned components:
+
+```python
+from sklearn.feature_extraction.text import CountVectorizer
+from sklearn.decomposition import LatentDirichletAllocation
+
+docs = ["team won the game", "stock market price rose", "the film director won"]
+counts = CountVectorizer().fit(docs)
+lda = LatentDirichletAllocation(n_components=2, random_state=0).fit(counts.transform(docs))
+terms = counts.get_feature_names_out()
+for k, topic in enumerate(lda.components_):
+    top = [terms[i] for i in topic.argsort()[-3:][::-1]]
+    print(f"topic {k}:", top)
+```
+
 LDA needs you to choose the number of topics $K$ up front, ignores word order (it's bag-of-words underneath), and gives "soft" topics you must interpret. Modern alternatives embed documents with transformers and cluster them (e.g., BERTopic), often producing cleaner topics — but LDA remains the interpretable, probabilistic baseline worth understanding.
 
 ::: {.callout-tip}
@@ -442,7 +598,7 @@ LDA topics are *discovered*, not defined — there's no guarantee they match the
 
 **Statistical Machine Translation (SMT)**, dominant into the 2010s, decomposed translation with Bayes' rule into a **translation model** (which target words/phrases correspond to source phrases, learned from aligned bilingual corpora) and a **language model** (does the target output read fluently?). Phrase-based SMT stitched together translated chunks and reordered them with complex heuristics — powerful but brittle, with many separately-tuned components.
 
-**Neural Machine Translation (NMT)** replaced the whole pipeline with one network trained end-to-end: the **sequence-to-sequence (seq2seq)** architecture. An **encoder** RNN reads the source sentence into a context vector; a **decoder** RNN generates the target sentence one word at a time, each step conditioned on what it has produced so far.
+**Neural Machine Translation (NMT)** replaced the whole pipeline with one network trained end-to-end: the **sequence-to-sequence (seq2seq)** architecture. The intuition: one network *reads* the whole source sentence and squeezes its meaning into a vector (like jotting the gist on a sticky note), and a second network *writes* the translation from that note, one word at a time. An **encoder** RNN reads the source sentence into a context vector; a **decoder** RNN generates the target sentence one word at a time, each step conditioned on what it has produced so far.
 
 ```{mermaid}
 flowchart LR
@@ -456,7 +612,7 @@ flowchart LR
   end
 ```
 
-The early bottleneck: cramming an entire sentence into one fixed context vector lost information on long inputs. The fix — **attention** (Attention & Transformers) — lets the decoder look back at *all* encoder states and focus on the relevant source words at each step. Attention was invented for translation before it grew into the Transformer that now defines the field.
+The early bottleneck: cramming an entire sentence into one fixed context vector lost information on long inputs — like summarizing a paragraph on a single sticky note, the longer the input the more falls off the edge. The fix — **attention** (Attention & Transformers) — lets the decoder look back at *all* encoder states and focus on the relevant source words at each step. Attention was invented for translation before it grew into the Transformer that now defines the field.
 
 To measure translation quality automatically, the standard metric is **BLEU (Bilingual Evaluation Understudy)**. It compares the machine output to one or more human reference translations by counting overlapping **n-grams** (shared 1-grams, 2-grams, 3-grams, 4-grams), then combining them. Two ingredients keep it honest:
 
@@ -468,11 +624,23 @@ $$
 \text{BP} = \min\!\big(1,\ e^{1 - r/c}\big)
 $$
 
+**In words:** BLEU is the geometric average of how much the candidate's 1-, 2-, 3-, and 4-word chunks overlap the reference, then shrunk by a penalty if the candidate came out too short.
+**Also written:** the exponential-of-log-sum is exactly a weighted geometric mean, $\text{BLEU} = \text{BP}\cdot\prod_{n=1}^{4} p_n^{w_n}$, with equal weights $w_n = 1/4$.
+
 where $p_n$ is the modified $n$-gram precision, $w_n=1/4$, $c$ is candidate length and $r$ reference length. Worked unigram example — reference: "the cat is on the mat" (length 6); candidate: "the cat the mat" (length 4):
 
 - Unigram matches: "the" appears 2× in candidate but is capped at 2 (its reference count) → credited 2; "cat" → 1; "mat" → 1. Total clipped matches = 4 of 4 candidate words → $p_1 = 4/4 = 1.0$.
 - Brevity penalty: $c=4 < r=6$ → $\text{BP} = e^{1 - 6/4} = e^{-0.5} \approx 0.607$.
 - So even with perfect unigram precision, BLEU is pulled down to ~0.61 by the brevity penalty — the metric punishes the too-short output.
+
+In practice you call a library implementation (here `sacrebleu`, the de-facto standard for comparable scores) rather than re-deriving the clipping yourself:
+
+```python
+import sacrebleu
+refs = [["the cat is on the mat"]]                 # one reference set
+sys  = ["the cat the mat"]                          # system output
+print(sacrebleu.corpus_bleu(sys, refs).score)       # corpus-level BLEU (0-100)
+```
 
 BLEU is cheap and correlates with human judgment in aggregate, but it is surface-level: it rewards exact n-gram overlap and misses valid paraphrases ("big" vs. "large"). Newer metrics like **METEOR** (allows synonyms/stems) and embedding-based **BERTScore** (semantic similarity) address this; see Section 20.10.
 
@@ -482,7 +650,7 @@ BLEU is meaningful only as a *corpus-level* average against the *same* reference
 
 ## 20.9 — Chatbots & dialogue (retrieval vs generative, intent/slot)
 
-A **dialogue system** (chatbot) carries on a conversation with a user. Two architectural families, and a spectrum between them:
+A **dialogue system** (chatbot) carries on a conversation with a user. Two architectural families, and a spectrum between them — think of it as a help-desk worker reading from a binder of pre-approved answers (retrieval) versus one improvising replies on the spot (generative):
 
 - **Retrieval-based**: the bot has a fixed library of candidate responses and *selects* the best-matching one for the user's message (rank by similarity, return top answer). Safe and controllable — it never says anything off-script — but limited to its library and can feel rigid.
 - **Generative**: the bot *writes* a fresh response token-by-token with a language model (seq2seq or, today, an LLM). Fluent and flexible, but can hallucinate facts or go off the rails.
@@ -494,7 +662,7 @@ flowchart TD
   K -->|Generative| G[LLM generates<br/>new tokens] --> GB[Novel reply]
 ```
 
-Modern assistants blend both: **Retrieval-Augmented Generation (RAG)** retrieves relevant documents, then *generates* an answer grounded in them — combining retrieval's factual control with generation's fluency.
+Modern assistants blend both: **Retrieval-Augmented Generation (RAG)** retrieves relevant documents, then *generates* an answer grounded in them — combining retrieval's factual control with generation's fluency. The mental model: an open-book exam — the model looks up the relevant pages first, then writes the answer in its own words instead of reciting from memory.
 
 **Task-oriented** bots (booking a flight, ordering food) traditionally run a **Natural Language Understanding (NLU)** front end built on two jobs:
 
@@ -521,7 +689,17 @@ flowchart LR
   DM -->|all slots filled| A[Call API / respond]
 ```
 
-LLM-based assistants increasingly fold intent and slot extraction into a single prompt (often emitting structured JSON), but the intent/slot decomposition is still the clearest mental model for *what* a task bot must figure out. For the LLM techniques behind modern chatbots — instruction tuning, RAG, function calling — see Large Language Models.
+LLM-based assistants increasingly fold intent and slot extraction into a single prompt (often emitting structured JSON), but the intent/slot decomposition is still the clearest mental model for *what* a task bot must figure out. In practice this looks like asking an LLM to return the parse as JSON:
+
+```python
+# Sketch: modern LLM-as-NLU — one prompt replaces the intent + slot models
+prompt = '''Extract intent and slots as JSON.
+User: "Book a flight to Tokyo on Friday."'''
+# LLM returns:
+# {"intent": "book_flight", "slots": {"destination": "Tokyo", "date": "Friday"}}
+```
+
+For the LLM techniques behind modern chatbots — instruction tuning, RAG, function calling — see Large Language Models.
 
 ::: {.callout-tip}
 Choose by risk tolerance: retrieval (or RAG) when wrong answers are costly and must stay on-brand; pure generation when open-ended fluency matters more than guaranteed correctness.
@@ -536,6 +714,9 @@ For **classification & sequence labeling** (sentiment, NER, intent), the core me
 $$
 P = \frac{TP}{TP+FP}, \quad R = \frac{TP}{TP+FN}, \quad F_1 = \frac{2PR}{P+R}.
 $$
+
+**In words:** precision asks "when I shouted 'positive', how often was I right?"; recall asks "of all the real positives out there, how many did I find?"; F1 blends the two so you can't win by acing one and tanking the other.
+**Also written:** $F_1 = \left(\dfrac{P^{-1} + R^{-1}}{2}\right)^{-1}$ — the harmonic mean of precision and recall, equivalently $\dfrac{2TP}{2TP + FP + FN}$.
 
 For NER, F1 is computed at the **entity (span) level** — a prediction counts as correct only if the *entire* span and its type match, which is stricter than per-token accuracy.
 
@@ -557,22 +738,91 @@ The deepest caution: **all automatic generation metrics are proxies.** A fluent,
 Never report a single metric on an imbalanced task. A spam classifier that labels everything "ham" can hit 95% accuracy while catching zero spam — its recall is 0. Always pair accuracy with precision/recall or F1, and report on a held-out test set (Model Evaluation & Tuning).
 :::
 
-## 20.11 — Key takeaways
+## 20.11 — Bias, fairness & safety in NLP
+
+It is tempting to treat a model's output as neutral arithmetic, but a language model is a mirror of its training text — and that text carries every prejudice, stereotype, and gap of the people who wrote it. Garbage in, garbage out has a social edge here: bias in, bias out. Before deploying any NLP system that touches people, you have to ask not just "is it accurate?" but "is it fair, and is it safe?"
+
+The clearest illustration is hiding inside the very embeddings of Section 20.3. Because analogies are vector arithmetic, you can ask the model to complete *"man is to computer-programmer as woman is to ___"* — and classic word2vec/GloVe vectors famously answered *"homemaker"*. The geometry didn't invent that; it faithfully captured a skew in the corpus. The same mechanism that gives us $\vec{king}-\vec{man}+\vec{woman}\approx\vec{queen}$ also encodes occupational and racial stereotypes.
+
+Where bias creeps in, and what to do:
+
+- **Data bias** — the corpus over-represents some groups, dialects, or viewpoints. Mitigation: audit and rebalance training data; document it (a "datasheet" / "model card").
+- **Representational bias** — embeddings and models associate identities with stereotypes. Mitigation: debiasing techniques, counterfactual data augmentation (swap "he"↔"she" and retrain), bias probes.
+- **Allocational harm** — a biased classifier makes unfair decisions (résumé screening, loan-related text, content moderation that silences a dialect). Mitigation: evaluate metrics *per subgroup*, not just in aggregate.
+
+A small worked check — **subgroup evaluation**. Suppose a toxicity classifier reports 92% accuracy overall. Split the test set by the dialect of the comment:
+
+| Group | Accuracy | False-positive rate (flagged as toxic, but wasn't) |
+|-------|----------|----------------------------------------------------|
+| Group A | 94% | 4% |
+| Group B | 88% | 19% |
+
+The headline 92% hid a real harm: Group B's harmless comments are flagged nearly 5× as often. **Aggregate metrics can pass while a subgroup quietly suffers** — which is exactly the failure mode fairness evaluation exists to catch.
+
+<svg viewBox="0 0 420 170" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif" font-size="12">
+  <text x="10" y="20" fill="currentColor" font-size="13">False-positive rate by group</text>
+  <line x1="60" y1="130" x2="400" y2="130" stroke="currentColor" stroke-opacity="0.4"/>
+  <rect x="90" y="118" width="40" height="12" fill="#22c55e"/>
+  <text x="90" y="148" fill="currentColor">Group A</text>
+  <text x="138" y="128" fill="currentColor">4%</text>
+  <rect x="250" y="73" width="40" height="57" fill="#ec4899"/>
+  <text x="248" y="148" fill="currentColor">Group B</text>
+  <text x="298" y="83" fill="currentColor">19%</text>
+  <text x="60" y="165" fill="currentColor" font-size="11" opacity="0.7">same model, same 92% headline accuracy — very different harm</text>
+</svg>
+
+Beyond fairness sit two more safety concerns that any generative deployment must plan for:
+
+- **Hallucination** — generative models state false things fluently and confidently. Grounding with retrieval (RAG, Section 20.9) and citing sources is the main defense.
+- **Toxicity & misuse** — models can produce harmful, hateful, or unsafe text, and can be prompted to. Safety filters, content moderation, and alignment training (covered in Large Language Models) are the guardrails.
+
+::: {.callout-warning}
+A model that is *accurate on average* can still be *unfair to a subgroup*. Fairness is not a single number — slice every evaluation by the protected groups your system will affect, and look at error *types* (false positives vs. false negatives), not just overall accuracy.
+:::
+
+## 20.12 — Evaluation metrics in code
+
+Having mapped the metrics conceptually (Section 20.10), it helps to see them computed with real tooling rather than by hand — in practice you never re-derive precision or BLEU from scratch.
+
+```python
+# Classification / sequence-labeling metrics with scikit-learn
+from sklearn.metrics import precision_recall_fscore_support, classification_report
+
+y_true = ["pos", "neg", "pos", "pos", "neg"]
+y_pred = ["pos", "neg", "neg", "pos", "neg"]
+p, r, f1, _ = precision_recall_fscore_support(y_true, y_pred, average="macro")
+print(f"P={p:.2f} R={r:.2f} F1={f1:.2f}")
+print(classification_report(y_true, y_pred))   # per-class P/R/F1 in one table
+```
+
+For NER, the `seqeval` library scores at the **entity-span** level (the strict version from Section 20.10), and for generation, libraries wrap BLEU/ROUGE/BERTScore so you pass strings and get scores:
+
+```python
+# ROUGE for summarization (recall-oriented n-gram overlap)
+from rouge_score import rouge_scorer
+scorer = rouge_scorer.RougeScorer(["rouge1", "rougeL"], use_stemmer=True)
+s = scorer.score("the cat sat on the mat", "a cat was on the mat")
+print(s["rougeL"].fmeasure)   # longest-common-subsequence F-measure
+```
+
+The point is reflexive metric hygiene: pick the metric that matches the task (Section 20.10), compute it with a trusted library, slice it by subgroup (Section 20.11), and only then trust the number.
+
+## 20.13 — Key takeaways
 
 - **Text must become numbers first.** Tokenization (increasingly **subword** BPE/WordPiece) plus optional stemming/lemmatization/stop-word handling is the unavoidable front door of every NLP pipeline.
-- **Representations climbed a ladder of meaning:** raw counts (BoW) → frequency-weighted counts (TF-IDF) → dense semantic vectors (**word2vec/GloVe**) → contextual vectors (transformers).
-- **Embeddings encode meaning geometrically** — similar words sit close, and analogies become vector arithmetic ($\vec{king}-\vec{man}+\vec{woman}\approx\vec{queen}$).
+- **Representations climbed a ladder of meaning:** raw counts (BoW) → frequency-weighted counts (TF-IDF) → dense semantic vectors (**word2vec/GloVe**) → contextual vectors (transformers); **n-grams** add a little local word-order back to the order-blind models.
+- **Embeddings encode meaning geometrically** — similar words sit close, and analogies become vector arithmetic ($\vec{king}-\vec{man}+\vec{woman}\approx\vec{queen}$) — which also means they inherit and reflect the **biases** in their training text.
 - **A language model predicts the next token**; n-grams count, neural LMs generalize, and **perplexity** scores prediction (lower = better, but tokenizer-dependent).
 - **Sequence labeling** (POS, NER with BIO tags) needs label-transition structure (CRF) on top of per-token scores; **classification** (sentiment, intent) maps a whole document to a category.
 - **Translation** went statistical → neural **seq2seq** → attention, evaluated by **BLEU** (n-gram precision + brevity penalty).
 - **Dialogue** spans retrieval (safe, fixed) to generative (fluent, risky), with **RAG** blending them; task bots decompose into **intent + slots**.
-- **Match the metric to the task**: F1 for labeling, BLEU for translation, ROUGE for summarization, and human/LLM judgment as the real ground truth.
+- **Match the metric to the task**: F1 for labeling, BLEU for translation, ROUGE for summarization, and human/LLM judgment as the real ground truth — and always slice metrics by **subgroup** to catch fairness failures aggregate numbers hide.
 
-## 20.12 — See also
+## 20.14 — See also
 
 - **Recurrent & Sequence Models** — the RNN/LSTM backbone behind seq2seq, BiLSTM tagging, and neural LMs.
 - **Attention & Transformers** — contextual embeddings and the architecture that now dominates NLP.
-- **Large Language Models** — instruction tuning, RAG, and function calling that power modern chatbots.
+- **Large Language Models** — instruction tuning, RAG, function calling, and alignment/safety that power modern chatbots.
 - **Generative Models** — the broader family of sequence and text generation.
 - **Speech & Audio Processing** — turning audio into text that feeds these NLP pipelines.
 - **Model Evaluation & Tuning** — precision/recall/F1, confusion matrices, and cross-validation in depth.

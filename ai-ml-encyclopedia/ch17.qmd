@@ -129,6 +129,9 @@ $$
 \text{Attention}(Q, K, V) = \text{softmax}\!\left(\frac{QK^\top}{\sqrt{d_k}}\right)V
 $$
 
+**In words:** score every query against every key (the $QK^\top$ table), shrink the scores so softmax stays well-behaved, turn each row of scores into weights that sum to 1, and use those weights to mix the values.
+**Also written:** per output row $i$, $o_i = \sum_j \text{softmax}_j\!\left(\frac{q_i \cdot k_j}{\sqrt{d_k}}\right) v_j$ — a weighted average of value vectors.
+
 Here $d_k$ is the dimension of the key/query vectors. $QK^\top$ is the matrix of all pairwise scores; the softmax is applied row by row; the result multiplies $V$.
 
 **Why divide by $\sqrt{d_k}$?** This scaling is the part people forget and it matters. If the entries of $q$ and $k$ are roughly independent with unit variance, their dot product $q\cdot k = \sum_{i=1}^{d_k} q_i k_i$ has variance $\approx d_k$ — so its magnitude grows with dimension. For $d_k = 64$, raw scores swing around $\pm 8$ or more. Feed scores that large into softmax and it **saturates**: one weight goes to ~1, the rest to ~0, and the gradient through softmax goes nearly flat (vanishing gradients, no learning). Dividing by $\sqrt{d_k}$ rescales the scores back to unit variance, keeping softmax in its responsive region.
@@ -172,6 +175,21 @@ V = np.array([[10.],[20.],[30.]])
 print(attention(Q, K, V))                     # ~[[20.0]]
 ```
 
+And the same operation in PyTorch — note this single built-in call is what production code actually uses (it dispatches to a fused, memory-efficient kernel under the hood):
+
+```python
+import torch
+import torch.nn.functional as F
+
+Q = torch.randn(1, 8, 10, 64)   # (batch, heads, seq, d_k)
+K = torch.randn(1, 8, 10, 64)
+V = torch.randn(1, 8, 10, 64)
+
+# scaled dot-product attention, fused; pass is_causal=True for a decoder
+out = F.scaled_dot_product_attention(Q, K, V)   # (1, 8, 10, 64)
+print(out.shape)
+```
+
 ::: {.callout-tip}
 Mantra: **attention is a similarity-weighted average of values.** Q vs K decides *how much*, V decides *of what*. Everything else (scaling, masking, heads) is engineering around that core.
 :::
@@ -183,6 +201,9 @@ In the previous section $Q$, $K$, and $V$ arrived ready-made. Where do they come
 $$
 Q = XW_Q, \quad K = XW_K, \quad V = XW_V
 $$
+
+**In words:** the same input $X$ is run through three different learned "lenses" — one that asks (Q), one that advertises (K), one that carries content (V).
+**Also written:** row-wise, $q_t = W_Q^\top x_t$, $k_t = W_K^\top x_t$, $v_t = W_V^\top x_t$ for each token $x_t$.
 
 where $W_Q, W_K, W_V$ are weight matrices learned by gradient descent. "Self" means every position attends to every position in the *same* sequence — so the word "it" can reach back and pull meaning from "the animal" earlier in the sentence. This is how a Transformer builds context: each token's new representation is a blend of all tokens, weighted by relevance.
 
@@ -206,11 +227,14 @@ The picture below traces one token's query fanning out to every key in its own s
   <text x="430" y="152" font-size="11" fill="#444">mostly "animal"</text>
 </svg>
 
-**Multi-head attention.** A single attention pass produces one set of weights — one "opinion" about what is relevant. But a token may relate to others in several different ways at once: syntactically, semantically, positionally. **Multi-head attention** runs $h$ attention operations in parallel, each with its *own* projections $W_Q^{(i)}, W_K^{(i)}, W_V^{(i)}$ into a smaller subspace of dimension $d_k = d_{\text{model}}/h$. Each **head** learns to focus on a different kind of relationship; their outputs are concatenated and passed through a final projection $W_O$:
+**Multi-head attention.** A single attention pass produces one set of weights — one "opinion" about what is relevant. But a token may relate to others in several different ways at once: syntactically, semantically, positionally. Think of it like a committee reading the same sentence: one member tracks grammar, another tracks meaning, another tracks who-refers-to-whom — then they pool their notes. **Multi-head attention** runs $h$ attention operations in parallel, each with its *own* projections $W_Q^{(i)}, W_K^{(i)}, W_V^{(i)}$ into a smaller subspace of dimension $d_k = d_{\text{model}}/h$. Each **head** learns to focus on a different kind of relationship; their outputs are concatenated and passed through a final projection $W_O$:
 
 $$
 \text{MultiHead}(X) = \text{Concat}(\text{head}_1, \dots, \text{head}_h)\,W_O, \qquad \text{head}_i = \text{Attention}(XW_Q^{(i)}, XW_K^{(i)}, XW_V^{(i)})
 $$
+
+**In words:** run $h$ separate small attention computations, glue their outputs side by side, then mix them with one final linear layer.
+**Also written:** $\text{MultiHead}(X) = \sum_{i=1}^{h} \text{head}_i\, W_O^{(i)}$, where $W_O$ is split row-wise into per-head blocks $W_O^{(i)}$ — concatenation-then-project is the same as project-each-then-sum.
 
 With $d_{\text{model}}=512$ and $h=8$, each head works in 64 dimensions, so multi-head costs about the same as one full-width head but buys eight independent views. In practice, trained heads specialize in interpretable ways — one tracks the previous token, another links verbs to their subjects, another follows coreference.
 
@@ -239,7 +263,18 @@ def multihead(X, Wq, Wk, Wv, Wo, h):
     return np.concatenate(out, -1) @ Wo      # join heads, mix
 ```
 
-**Cross-attention.** Self-attention takes $Q$, $K$, $V$ from one sequence. **Cross-attention** takes the queries from one sequence and the keys/values from *another*. This is how a decoder consults an encoder: in translation, each output position (query) looks over the entire source sentence (keys/values) to decide what to attend to. Same formula, two sources — it is the mechanism that lets one modality or sequence read from another (and reappears in Multimodal AI, Chapter 24).
+In real code you never hand-roll this — PyTorch ships the whole block:
+
+```python
+import torch, torch.nn as nn
+
+mha = nn.MultiheadAttention(embed_dim=512, num_heads=8, batch_first=True)
+x = torch.randn(2, 10, 512)                  # (batch, seq, d_model)
+out, attn_weights = mha(x, x, x)             # query=key=value=x -> self-attention
+print(out.shape, attn_weights.shape)         # (2,10,512)  (2,10,10)
+```
+
+**Cross-attention.** Self-attention takes $Q$, $K$, $V$ from one sequence. **Cross-attention** takes the queries from one sequence and the keys/values from *another*. This is how a decoder consults an encoder: in translation, each output position (query) looks over the entire source sentence (keys/values) to decide what to attend to. Same formula, two sources — it is the mechanism that lets one modality or sequence read from another (and reappears in Multimodal AI, Chapter 24). In `nn.MultiheadAttention` above, you get cross-attention simply by passing a different sequence as the query: `mha(decoder_x, encoder_x, encoder_x)`.
 
 | Variant | Queries from | Keys / values from | Typical use |
 |---|---|---|---|
@@ -260,6 +295,13 @@ Attention mixes information *across* positions, but it is entirely linear in the
 3. **Feed-forward network (FFN)** — a small MLP applied to each token *independently*: $\text{FFN}(x) = \max(0,\ xW_1 + b_1)W_2 + b_2$, usually expanding to $4\times$ width and back. This is where per-token nonlinear "thinking" happens.
 4. **Residual + layer norm** again.
 
+The FFN formula in plain terms and an alternative reading:
+
+$$\text{FFN}(x) = \max(0,\ xW_1 + b_1)\,W_2 + b_2$$
+
+**In words:** blow each token's vector up to a wider space, keep only the positive parts (ReLU), then squeeze it back down — a per-token nonlinear transformation.
+**Also written:** $\text{FFN}(x) = \text{ReLU}(xW_1 + b_1)W_2 + b_2$; modern models often swap ReLU for GELU or a gated SwiGLU unit, $\text{FFN}(x) = \big(\text{SiLU}(xW_g) \odot (xW_1)\big)W_2$.
+
 The **residual connection** ($x + \text{sublayer}(x)$) gives gradients a clean highway straight through the network, which is what makes stacking dozens of blocks trainable (the same idea as ResNet, Chapter 15). **Layer normalization** rescales each token's vector to zero mean and unit variance across its features, stabilizing the distribution that each sublayer sees. Stack $N$ identical blocks and you have the body of a Transformer.
 
 **A note on Pre-LN vs Post-LN.** The original Transformer placed layer norm *after* each residual add (Post-LN). Modern Transformers (GPT-2 onward) put it *before* each sublayer (Pre-LN: $x + \text{sublayer}(\text{LN}(x))$), which keeps the residual path completely clean and makes very deep stacks trainable without a learning-rate warmup crutch. The diagram below shows the common Pre-LN arrangement.
@@ -275,6 +317,28 @@ flowchart TB
   R1 -->|residual| R2((+))
   F --> R2
   R2 --> O[Block output → next block]
+```
+
+A Pre-LN block is only a few lines in PyTorch:
+
+```python
+import torch, torch.nn as nn
+
+class TransformerBlock(nn.Module):
+    def __init__(self, d=512, h=8, mult=4):
+        super().__init__()
+        self.ln1, self.ln2 = nn.LayerNorm(d), nn.LayerNorm(d)
+        self.attn = nn.MultiheadAttention(d, h, batch_first=True)
+        self.ffn = nn.Sequential(nn.Linear(d, mult*d), nn.GELU(),
+                                 nn.Linear(mult*d, d))
+
+    def forward(self, x, mask=None):
+        a, _ = self.attn(self.ln1(x), self.ln1(x), self.ln1(x), attn_mask=mask)
+        x = x + a                                # residual around attention
+        x = x + self.ffn(self.ln2(x))            # residual around FFN
+        return x
+
+print(TransformerBlock()(torch.randn(2, 10, 512)).shape)   # (2, 10, 512)
 ```
 
 **Worked example — the shapes.** Take $d_{\text{model}}=512$, FFN hidden $=2048$, sequence length $n=10$. The input is $X \in \mathbb{R}^{10\times512}$. Self-attention keeps the shape at $10\times512$. The FFN lifts each of the 10 token vectors $512 \to 2048$, applies ReLU, projects $2048 \to 512$ — back to $10\times512$. Every sublayer is shape-preserving, which is exactly why blocks stack: the output of block $k$ is a drop-in input to block $k{+}1$.
@@ -300,6 +364,9 @@ flowchart LR
 $$
 \text{mask}_{ij} = \begin{cases} 0 & j \le i \\ -\infty & j > i \end{cases}
 $$
+
+**In words:** a token may attend to itself and everything before it, but the future is blanked out so softmax assigns it zero weight.
+**Also written:** the masked score matrix is $\frac{QK^\top}{\sqrt{d_k}} + M$ where $M$ is lower-triangular-zero / upper-triangular-$(-\infty)$; equivalently `scores.masked_fill(j > i, -inf)`.
 
 <svg viewBox="0 0 320 170" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif" font-size="12">
   <text x="10" y="16" font-weight="bold">Causal mask (rows=query, cols=key)</text>
@@ -348,6 +415,9 @@ $$
 PE_{(pos,\,2i)} = \sin\!\left(\frac{pos}{10000^{2i/d}}\right), \qquad PE_{(pos,\,2i+1)} = \cos\!\left(\frac{pos}{10000^{2i/d}}\right)
 $$
 
+**In words:** each pair of feature slots is a clock hand spinning at its own speed; reading all the hands at once gives a unique time-stamp for every position.
+**Also written:** with angular frequency $\omega_i = 10000^{-2i/d}$, the pair is $\big(\sin(pos\,\omega_i),\ \cos(pos\,\omega_i)\big)$ — a point on the unit circle at angle $pos\,\omega_i$.
+
 Each dimension is a sinusoid of a different frequency, so the full vector is like a binary-clock fingerprint of the position — low dimensions tick fast, high dimensions tick slowly. A neat property: the encoding for position $pos+k$ is a fixed linear function of the encoding at $pos$, so the model can learn to attend by *relative* offset. And because it is a deterministic function, it extrapolates to sequence lengths never seen in training.
 
 **Worked example — telling two positions apart.** Take $d=4$, so two frequency pairs. The denominators are $10000^{0/4}=1$ and $10000^{2/4}=100$. Position 0 gives $[\sin 0, \cos 0, \sin 0, \cos 0] = [0, 1, 0, 1]$. Position 1 gives $[\sin 1, \cos 1, \sin(0.01), \cos(0.01)] \approx [0.84, 0.54, 0.01, 1.00]$. The fast pair (dims 0–1) swings a lot between adjacent positions; the slow pair (dims 2–3) barely moves — together they form a unique code per position that the model adds onto each token embedding.
@@ -372,9 +442,9 @@ def sinusoidal_pe(n, d):
     return pe                                     # add to token embeddings
 ```
 
-**Learned positional embeddings** (BERT, GPT-2). Instead of a fixed formula, just keep a trainable embedding vector per position, learned like any other parameter. Simpler and often slightly better in-distribution — but it cannot generalize past the maximum length seen in training, since position 2049 has no learned vector if you only trained to 2048.
+**Learned positional embeddings** (BERT, GPT-2). Instead of a fixed formula, just keep a trainable embedding vector per position, learned like any other parameter. Simpler and often slightly better in-distribution — but it cannot generalize past the maximum length seen in training, since position 2049 has no learned vector if you only trained to 2048. In PyTorch this is literally one `nn.Embedding(max_len, d_model)` indexed by position.
 
-**Rotary Position Embedding (RoPE)** (LLaMA, GPT-NeoX, most modern LLMs). RoPE takes a different tack: instead of *adding* a position vector, it *rotates* the query and key vectors by an angle proportional to their position, in 2D feature pairs. Because the dot product of two rotated vectors depends only on the *difference* of their rotation angles, the resulting attention score naturally encodes **relative** position — token distance, not absolute index. This makes RoPE work directly inside the attention dot product, behave well on long contexts, and extrapolate via tricks like frequency scaling. It is the de facto standard in today's large language models (Chapter 23).
+**Rotary Position Embedding (RoPE)** (LLaMA, GPT-NeoX, most modern LLMs). RoPE takes a different tack: instead of *adding* a position vector, it *rotates* the query and key vectors by an angle proportional to their position, in 2D feature pairs. Because the dot product of two rotated vectors depends only on the *difference* of their rotation angles, the resulting attention score naturally encodes **relative** position — token distance, not absolute index. This makes RoPE work directly inside the attention dot product, behave well on long contexts, and extrapolate via tricks like frequency scaling. It is the de facto standard in today's large language models (Chapter 23), and §17.5 develops it in full.
 
 <svg viewBox="0 0 420 170" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif" font-size="12">
   <text x="10" y="16" font-weight="bold">RoPE: rotate q and k by an angle ∝ position</text>
@@ -417,6 +487,9 @@ Group the $d$-dimensional query and key into $d/2$ pairs of coordinates, so each
 
 $$R(m\theta_i)\begin{bmatrix} x_1 \\ x_2 \end{bmatrix} = \begin{bmatrix} \cos m\theta_i & -\sin m\theta_i \\ \sin m\theta_i & \cos m\theta_i \end{bmatrix}\begin{bmatrix} x_1 \\ x_2 \end{bmatrix}$$
 
+**In words:** take each pair of coordinates as a 2D arrow and spin it by an angle that grows with the token's position — far-along tokens get more twist.
+**Also written:** in complex form, treat $z = x_1 + i x_2$; then the rotation is just $z \mapsto z\,e^{i m \theta_i}$ (multiply by a unit complex number).
+
 Low-index pairs use a high frequency (they spin fast as position grows); high-index pairs use a low frequency (they barely turn). The standard choice is $\theta_i = 10000^{-2i/d}$ — the same geometric spread of wavelengths used by sinusoidal encoding, but applied as *rotation* rather than *addition*.
 
 <svg viewBox="0 0 420 220" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif" font-size="12">
@@ -442,6 +515,9 @@ A single token's vector is rotated by its **own absolute angle** $m\theta_i$. Th
 Here is why rotation is the right tool. Attention scores come from the dot product $q \cdot k$. A rotation is a rigid turn — it preserves lengths and angles between vectors. So when you rotate the query by $m\theta_i$ and the key by $n\theta_i$, their dot product within each 2D pair depends only on the *difference* of the two rotation angles:
 
 $$\big(R(m\theta_i)\,q\big) \cdot \big(R(n\theta_i)\,k\big) = q^\top R\big((n-m)\theta_i\big)\,k$$
+
+**In words:** rotating both vectors and then taking their dot product is the same as rotating just one of them by the *gap* between the two positions — the absolute positions cancel out.
+**Also written:** since rotations satisfy $R(a)^\top R(b) = R(b - a)$, we have $(R(m)q)^\top(R(n)k) = q^\top R(m)^\top R(n)\,k = q^\top R(n-m)\,k$.
 
 The absolute positions $m$ and $n$ cancel; only $(n - m)$ survives. So even though RoPE *applies* an absolute rotation to each token independently (cheap, no cross-token bookkeeping), the *attention it produces* is automatically **relative**. You get relative-position behavior for free, without ever computing a relative offset.
 
@@ -488,6 +564,13 @@ The two scores match because both pairs sit three positions apart — the absolu
 
 RoPE injects position by rotating $q$ and $k$. **ALiBi** (Attention with Linear Biases) takes an even more direct route: don't touch the embeddings at all — just **subtract a penalty from each attention score that grows with the distance between the two tokens**. Before the softmax, the score for a query attending $j$ positions back gets a bias of $-s \cdot j$, where $s$ is a fixed per-head slope (different heads use different slopes, so some look near, others far). Tokens far in the past are gently discouraged; nearby tokens dominate.
 
+The biased score is a one-line change:
+
+$$\text{score}_{ij} = \frac{q_i \cdot k_j}{\sqrt{d_k}} - s\,(i - j)$$
+
+**In words:** start from the usual match score and shave off a fixed amount for every step the key is further in the past — the farther back, the bigger the penalty.
+**Also written:** add a distance bias matrix to the scores, $S' = \frac{QK^\top}{\sqrt{d_k}} + B$ with $B_{ij} = -s\,(i-j)$ for $j \le i$ (and $-\infty$ for $j > i$ to keep it causal).
+
 <svg viewBox="0 0 420 130" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif" font-size="12">
   <text x="10" y="20" fill="currentColor">score += bias, where bias = −slope × distance</text>
   <g transform="translate(20,40)">
@@ -515,13 +598,93 @@ Because the bias is a simple linear function of distance, it keeps working at an
 | T5 relative bias | Add a learned bias per distance bucket | Yes | Limited by bucket range |
 | NoPE | Nothing explicit — relies on the causal mask | Implicit | Surprisingly decent at small scale |
 
----
+## 17.7 — Inference: the KV cache and attention variants that shrink it
 
-Editor flags resolved: removed the preamble; unified the gap convention to $(n-m)$ throughout §17.90; relabeled the RoPE SVG as one vector rotated by its own absolute angle $m\theta$ (not two queries, not the relative term) and seated both arrowheads on their line ends; renamed the ALiBi slope to $s$ to avoid colliding with query position $m$; trimmed the RoPE-extension paragraph to one sentence naming PI / NTK / YaRN; and hedged the NoPE claim to "can, in some settings."
+So far we have treated attention as a one-shot computation over a fixed sequence. But a decoder-only model *generates* text one token at a time, and that streaming setting exposes a different cost — one that dominates the economics of serving LLMs.
 
-Not delivered here (and not in scope of these two sections): the MoE routing diagram, the modern-decoder-block `{mermaid}`, and the model-comparison table the ch17-rope checklist also lists. These two sections (§17.90, §17.91) contain no MoE / modern-component content, so if the checklist requires those visuals they must live in sibling sections — confirm they are delivered elsewhere, or they are missing.
+**The intuition.** Imagine writing an essay where, to add each new word, you re-read every word you have written so far from the beginning. That is exactly what a naive decoder does: to produce token 1000 it recomputes the keys and values for tokens 1 through 999, even though those never change. The fix is the obvious one — write each word's notes down once and keep them. That notebook is the **KV cache**.
 
-## 17.7 — Beyond Quadratic Attention: Efficient Attention and State-Space Models
+**What gets cached.** At generation step $t$, the new token's query $q_t$ must attend over the keys and values of *all* previous tokens. But $k_1,\dots,k_{t-1}$ and $v_1,\dots,v_{t-1}$ were already computed at earlier steps and do not depend on $t$. So we store them and, each step, only compute the *new* $k_t, v_t$, append them, and run one query against the growing cache:
+
+$$
+o_t = \text{softmax}\!\left(\frac{q_t [k_1,\dots,k_t]^\top}{\sqrt{d_k}}\right)[v_1,\dots,v_t]
+$$
+
+**In words:** at each step you append one new key/value to a stored list and attend the single new query over the whole list — no past key or value is ever recomputed.
+**Also written:** with cache $\mathcal{C}_t = \mathcal{C}_{t-1} \cup \{(k_t, v_t)\}$, step cost is $O(t\,d)$ instead of the $O(t^2 d)$ of recomputing from scratch.
+
+This turns per-step work from quadratic-in-position back down to linear, and it is why every production LLM serving stack (vLLM, TGI, llama.cpp) is built around the KV cache. The price is **memory**: the cache holds $2 \times n_{\text{layers}} \times n_{\text{heads}} \times n \times d_k$ numbers and grows with every generated token. For a long conversation it can dwarf the model weights themselves — the KV cache, not the parameters, is usually what fills GPU memory at long context.
+
+```python
+# Hugging Face does KV-caching for you; use_cache=True is the default at generation.
+from transformers import AutoModelForCausalLM, AutoTokenizer
+tok = AutoTokenizer.from_pretrained("gpt2")
+model = AutoModelForCausalLM.from_pretrained("gpt2")
+ids = tok("Attention is all you", return_tensors="pt").input_ids
+out = model.generate(ids, max_new_tokens=20, use_cache=True)   # cache on
+print(tok.decode(out[0]))
+```
+
+**Shrinking the cache.** Because the cache is the bottleneck, modern architectures cut its size by *sharing keys and values across query heads*:
+
+- **Multi-Query Attention (MQA)** — all query heads share a *single* key/value head. The cache shrinks by a factor of $h$, but quality can dip.
+- **Grouped-Query Attention (GQA)** — the middle ground used by Llama-2/3, Mistral, and most current models: query heads are split into a few groups, each group sharing one K/V head. A handful of K/V heads (say 8 query heads sharing 1, repeated for 8 groups) recovers nearly full quality at a fraction of the cache.
+
+```{mermaid}
+flowchart TB
+  subgraph MHA["Multi-Head: 8 Q, 8 KV"]
+    direction LR
+    q1[Q×8] --- kv1[KV×8]
+  end
+  subgraph GQA["Grouped-Query: 8 Q, 2 KV"]
+    direction LR
+    q2[Q×8] --- kv2[KV×2]
+  end
+  subgraph MQA["Multi-Query: 8 Q, 1 KV"]
+    direction LR
+    q3[Q×8] --- kv3[KV×1]
+  end
+```
+
+| Scheme | KV heads (for 8 query heads) | KV cache size | Quality | Used by |
+|---|---|---|---|---|
+| Multi-head (MHA) | 8 | $1\times$ (full) | Best | original Transformer, GPT-2 |
+| Grouped-query (GQA) | 2–4 | $\tfrac14$–$\tfrac12$ | ≈ MHA | Llama-2/3, Mistral |
+| Multi-query (MQA) | 1 | $\tfrac18$ | slight drop | PaLM, Falcon |
+
+::: {.callout-tip}
+A useful rule of thumb when sizing a deployment: at long context the KV cache, not the weights, is what you run out of. GQA and MQA exist almost entirely to make that cache fit — they are inference-economics decisions baked into the architecture.
+:::
+
+## 17.8 — Positional encoding meets vision: the Vision Transformer
+
+Attention is not just for text. The intuition that transfers: if you can chop *anything* into a sequence of pieces and embed each piece as a vector, a Transformer can model it. Images are the cleanest example, and the **Vision Transformer (ViT)** showed that the very same encoder block from §17.3 — no convolutions at all — can match or beat CNNs on image classification given enough data.
+
+**The trick is "patchify."** A $224\times224$ image is sliced into a grid of, say, $16\times16$-pixel patches — $14\times14 = 196$ patches. Each patch is flattened ($16\times16\times3 = 768$ numbers) and run through one linear layer to become a token embedding, exactly like a word embedding. Add a positional encoding (so the model knows which patch sat where), prepend a learnable `[CLS]` token whose final representation feeds the classifier, and pour the sequence into a standard Transformer encoder.
+
+```{mermaid}
+flowchart LR
+  IMG[224×224 image] --> P[split into 16×16 patches]
+  P --> E[linear embed each patch → tokens]
+  E --> POS[+ positional encoding, prepend CLS]
+  POS --> T[Transformer encoder stack]
+  T --> CLS[CLS token → classifier]
+```
+
+```python
+# A pretrained Vision Transformer in a few lines with Hugging Face.
+from transformers import ViTImageProcessor, ViTForImageClassification
+from PIL import Image
+proc = ViTImageProcessor.from_pretrained("google/vit-base-patch16-224")
+model = ViTForImageClassification.from_pretrained("google/vit-base-patch16-224")
+inputs = proc(images=Image.open("cat.jpg"), return_tensors="pt")
+logits = model(**inputs).logits
+print(model.config.id2label[logits.argmax(-1).item()])
+```
+
+**Why this matters beyond images.** The patchify idea generalizes: audio becomes a sequence of spectrogram patches, video adds a time axis of frame-patches, and AlphaFold treats residues as tokens. The lesson is architectural — *attention is a general-purpose set-mixing operator*, and "what is a token?" is a modeling choice. Positional encoding is what re-injects the structure (2D grid position for images, time for audio) that flattening into a set threw away. This is the doorway into Multimodal AI (Chapter 24), where cross-attention (§17.2) lets a text query read directly from a sequence of image patches.
+
+## 17.9 — Beyond Quadratic Attention: Efficient Attention and State-Space Models
 
 Self-attention is wonderful because every token can look at every other token directly. That is also its curse. The moment you write down the attention scores, you have committed to a table with one row and one column for every token in the sequence. For a 1,000-token document that is a million entries; for a 100,000-token book it is ten billion. The dream of feeding a model an entire codebase, a legal contract, or an hour of audio keeps running into the same wall: attention costs grow with the *square* of the sequence length. This section is about how we climb over that wall — first by approximating attention so it scales linearly, and then by abandoning the attention formula entirely in favor of **state-space models** that process sequences the way a running tally processes numbers.
 
@@ -558,7 +721,7 @@ flowchart LR
     style W fill:#fee,stroke:#c33
 ```
 
-## 17.8 — Linear and Efficient Attention: Getting Rid of the Square
+## 17.10 — Linear and Efficient Attention: Getting Rid of the Square
 
 The first family of fixes keeps the attention recipe but reorganizes the arithmetic so the $n \times n$ matrix never appears. The cleanest version is **linear attention**, and the trick is a piece of associativity you already know from multiplying matrices in a smart order.
 
@@ -570,6 +733,9 @@ $$
 o_i = \frac{\sum_j \big(\phi(q_i)^\top \phi(k_j)\big)\, v_j}{\sum_j \phi(q_i)^\top \phi(k_j)}
     = \frac{\phi(q_i)^\top \Big(\sum_j \phi(k_j) v_j^\top\Big)}{\phi(q_i)^\top \sum_j \phi(k_j)} .
 $$
+
+**In words:** because the similarity splits into a query-part times a key-part, you can sum up all the keys-and-values *once* into a small running summary, then let each query read from that summary instead of touching every key.
+**Also written:** the whole layer is $O = \big(\phi(Q)\big)\big(\phi(K)^\top V\big)$ — compute the small $d'\times d$ matrix $\phi(K)^\top V$ first, instead of the big $n\times n$ matrix $\phi(Q)\phi(K)^\top$.
 
 Look at what happened. The inner sum $\sum_j \phi(k_j) v_j^\top$ does not depend on $i$ at all. We can compute it *once* — it is a $d' \times d$ matrix, where $d'$ is the feature dimension — and then every query just reads from it. We never form an $n \times n$ object. The cost drops to $O(n\, d' d)$: linear in sequence length.
 
@@ -626,6 +792,9 @@ $$
 S_t = S_{t-1} + \phi(k_t)\, v_t^\top, \qquad o_t = \frac{\phi(q_t)^\top S_t}{\phi(q_t)^\top z_t}, \qquad z_t = z_{t-1} + \phi(k_t).
 $$
 
+**In words:** keep a running tally of all keys-times-values seen so far; each new token adds its own contribution to the tally, and the output is just the current query read against that tally.
+**Also written:** $S_t = \sum_{j \le t} \phi(k_j) v_j^\top$ — the recurrence is the prefix sum of the parallel form, so both compute the same $S_t$.
+
 So linear attention has two faces: a **parallel** form for training (compute all features, do one big matrix product) and a **recurrent** form for inference (carry a fixed-size state, $O(1)$ per new token). This duality — parallel to train, recurrent to generate — is exactly the property that the next family, state-space models, takes to its logical conclusion.
 
 ### Other efficient-attention strategies
@@ -643,7 +812,7 @@ Linear attention is one branch of a larger family. The main ideas, briefly:
 FlashAttention is often lumped in with "efficient attention," but it is a different kind of win: it computes *exact* softmax attention and is still $O(n^2)$ in arithmetic. What it removes is the $O(n^2)$ *memory* traffic by never writing the full score matrix to slow GPU memory. Do not expect it to make a million-token context cheap — it makes the contexts you already use faster and lighter, but the quadratic compute wall is still there.
 :::
 
-## 17.9 — State-Space Models: S4 and Mamba
+## 17.11 — State-Space Models: S4 and Mamba
 
 Sparse and linear attention chip away at the constant; state-space models change the algorithm. The starting point is an idea borrowed from control theory and signal processing: model a sequence as a **continuous system with a hidden state that evolves over time**. You feed in a signal $u(t)$, an internal state $x(t)$ integrates it, and you read out $y(t)$.
 
@@ -654,6 +823,9 @@ A linear state-space model is defined by four matrices $A, B, C, D$:
 $$
 x'(t) = A\,x(t) + B\,u(t), \qquad y(t) = C\,x(t) + D\,u(t).
 $$
+
+**In words:** a fixed-size memory ($x$) drifts and decays on its own ($A$), absorbs each new input ($B$), and the output is read off the memory ($C$), plus an optional direct passthrough of the input ($D$).
+**Also written:** in discrete time this becomes $x_t = \bar A x_{t-1} + \bar B u_t,\ y_t = C x_t$ — an RNN whose update has no nonlinearity inside it.
 
 The state $x(t)$ is a fixed-size vector — say 64 numbers — that summarizes everything the model has seen so far. $A$ says how the state decays and mixes on its own; $B$ says how new input enters; $C$ says how to read an output off the state. To use this on a sequence of discrete tokens, we discretize it with step size $\Delta$, turning the differential equation into a plain recurrence:
 
@@ -671,6 +843,9 @@ $$
 y_t = \sum_{j=0}^{t} C\,\bar{A}^{\,t-j}\,\bar{B}\; u_j
     = \sum_{j=0}^{t} \bar{K}_{t-j}\, u_j, \qquad \bar{K}_k = C\,\bar{A}^k\,\bar{B}.
 $$
+
+**In words:** unrolling the linear recurrence shows each output is a weighted sum of *all* past inputs, where the weights $\bar K_k$ are a single fixed filter — so running the SSM is the same as sliding one big kernel over the input.
+**Also written:** $y = \bar K * u$ — a convolution of the input with kernel $\bar K = (\bar K_0, \bar K_1, \dots)$, computable in $O(n\log n)$ with an FFT.
 
 That sum is a **convolution**. The whole output sequence is the input convolved with a single long kernel $\bar{K} = (\bar{K}_0, \bar{K}_1, \bar{K}_2, \dots)$. So an SSM has the same dual nature as linear attention, but more dramatically:
 
@@ -747,7 +922,7 @@ State-space models are not a free lunch that dominates transformers. Their fixed
 
 The throughline across this whole section is one idea seen from three angles. Attention keeps all of history and pays $O(n^2)$. A recurrence compresses history into a fixed state and pays $O(n)$ but cannot parallelize. Linear attention and state-space models thread the needle: a linear update that can be *unrolled into a parallel form for training* and *rolled up into a recurrent form for inference*. Whether you arrive there by factorizing the softmax or by discretizing a differential equation, the destination is the same — subquadratic sequence modeling that finally lets the context window grow.
 
-## 17.10 — Key takeaways
+## 17.12 — Key takeaways
 
 - **Attention is a soft, learned dictionary lookup**: a query is compared against all keys, softmax turns the match scores into weights, and the output is a weighted average of the values — $\text{softmax}(QK^\top/\sqrt{d_k})V$.
 - **The $\sqrt{d_k}$ scaling** keeps dot-product magnitudes from growing with dimension and pushing softmax into saturated, no-gradient regions.
@@ -755,14 +930,17 @@ The throughline across this whole section is one idea seen from three angles. At
 - **Multi-head attention** runs several attention operations in parallel subspaces, letting each head specialize in a different relationship, then concatenates them.
 - **A Transformer block** = multi-head attention + feed-forward network, each wrapped in a residual connection and layer norm; stack $N$ of them. Encoders see all tokens; decoders add causal masking and cross-attention.
 - **Transformers beat RNNs** through full sequence parallelism and $O(1)$ path length between any two tokens — at the price of $O(n^2)$ attention cost.
-- **Order must be injected**: self-attention is permutation-equivariant, so positional encoding (sinusoidal, learned, or RoPE) is mandatory.
+- **Order must be injected**: self-attention is permutation-equivariant, so positional encoding (sinusoidal, learned, RoPE, or ALiBi) is mandatory; RoPE's rotation makes attention depend only on relative distance and is today's default.
+- **Inference is dominated by the KV cache**: caching past keys/values turns generation from quadratic to linear per step, and GQA/MQA shrink that cache to make long context fit.
+- **Attention is a general set-mixer**: patchify an image (ViT), spectrogram, or video and the same Transformer block applies — "what is a token?" is a modeling choice.
+- **Subquadratic alternatives** (linear attention, S4, Mamba) buy long context by compressing history into a fixed state that trains in parallel and generates recurrently — trading exact recall for cheap scaling.
 
-## 17.11 — See also
+## 17.13 — See also
 
 - **Chapter 16 — Recurrent & Sequence Models**: the RNN/LSTM approach Transformers replaced, and the vanishing-gradient problem attention sidesteps.
 - **Chapter 14 — Neural Networks (Core)**: residual connections, layer normalization, and the feed-forward MLP inside each block.
-- **Chapter 23 — Large Language Models**: decoder-only Transformers, RoPE, and scaling attention to billions of parameters.
-- **Chapter 24 — Multimodal AI**: cross-attention as the mechanism for letting one modality read from another.
+- **Chapter 23 — Large Language Models**: decoder-only Transformers, RoPE, KV-caching, and scaling attention to billions of parameters.
+- **Chapter 24 — Multimodal AI**: cross-attention as the mechanism for letting one modality read from another, and patch-tokens for images.
 - **Chapter 30 — AI Infrastructure & Efficient Inference**: taming the $O(n^2)$ cost with FlashAttention, KV-caching, and long-context methods.
 - **Chapter 15 — Convolutional Neural Networks**: residual connections (ResNet) and the Vision Transformer's reuse of attention for images.
 

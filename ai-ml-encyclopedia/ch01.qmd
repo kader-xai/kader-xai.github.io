@@ -128,11 +128,16 @@ Two operations generate everything else. **Addition** is tip-to-tail: add compon
   <text x="185" y="38" fill="#dc2626" font-size="13">v+w=[4,5]</text>
 </svg>
 
-The **dot product** measures alignment. Multiply matching components and sum: $\mathbf{v}\cdot\mathbf{w} = \sum_i v_i w_i$. For $[3,2]\cdot[1,3] = 3 + 6 = 9$. Its geometric meaning is the keystone:
+The **dot product** measures alignment. Intuition: it answers "how much do these two arrows agree?" — point the same way and it's big and positive, stand at right angles and it's zero, point opposite and it goes negative. Mechanically, multiply matching components and sum: $\mathbf{v}\cdot\mathbf{w} = \sum_i v_i w_i$. For $[3,2]\cdot[1,3] = 3 + 6 = 9$. Its geometric meaning is the keystone:
 
 $$\mathbf{v}\cdot\mathbf{w} = \|\mathbf{v}\|\,\|\mathbf{w}\|\cos\theta$$
 
+**In words:** the dot product equals the two lengths multiplied together, scaled by how aligned they are (the cosine of the angle between them).
+**Also written:** $\mathbf{v}\cdot\mathbf{w} = \mathbf{v}^\top\mathbf{w} = \sum_i v_i w_i$ — the same number as a row-times-column matrix product or an explicit sum.
+
 So the dot product is positive when vectors point the same way, zero when **orthogonal** (perpendicular, $\theta = 90°$), negative when opposed. This single number powers cosine similarity in search, the score inside every neuron, and the kernels of Chapter 9.
+
+A small worked **cosine similarity** to make it concrete: a search query embedding $\mathbf{q}=[1,0,1]$ against two documents $\mathbf{d}_1=[1,0,1]$ (identical topic) and $\mathbf{d}_2=[0,1,0]$ (unrelated). Then $\mathbf{q}\cdot\mathbf{d}_1 = 2$ with cosine $=2/(\sqrt2\sqrt2)=1.0$ (perfect match), while $\mathbf{q}\cdot\mathbf{d}_2 = 0$ with cosine $=0$ (no overlap). That is literally how a vector search engine ranks results.
 
 ```python
 import numpy as np
@@ -142,6 +147,19 @@ print(2 * v)              # [6 4]   scaling
 print(v @ w)              # 9       dot product
 cos = (v @ w) / (np.linalg.norm(v) * np.linalg.norm(w))
 print(round(cos, 3))      # 0.832   -> ~33.7 degrees apart
+```
+
+The same cosine similarity in **PyTorch** and **scikit-learn**, the form you actually use for embeddings:
+
+```python
+import torch
+import torch.nn.functional as F
+a = torch.tensor([[3., 2.]])
+b = torch.tensor([[1., 3.]])
+print(F.cosine_similarity(a, b).item())   # 0.832
+
+from sklearn.metrics.pairwise import cosine_similarity
+print(cosine_similarity([[3, 2]], [[1, 3]])[0, 0])   # 0.832
 ```
 
 ::: {.callout-tip}
@@ -183,6 +201,9 @@ The mechanical rule: entry $(i,j)$ of $AB$ is the dot product of row $i$ of $A$ 
 
 $$\begin{bmatrix} 1 & 2 \\ 0 & 1 \end{bmatrix}\begin{bmatrix} 3 \\ 4 \end{bmatrix} = \begin{bmatrix} 1\cdot3 + 2\cdot4 \\ 0\cdot3 + 1\cdot4 \end{bmatrix} = \begin{bmatrix} 11 \\ 4 \end{bmatrix}$$
 
+**In words:** each output number is a dot product of one row of the matrix with the input vector — row 1 gives 11, row 2 gives 4.
+**Also written:** $A\mathbf{x} = 3\begin{bmatrix}1\\0\end{bmatrix} + 4\begin{bmatrix}2\\1\end{bmatrix}$ — the output is the input's entries weighting the matrix's *columns* (the linear-combination view).
+
 That matrix is a **shear**: it slides points horizontally in proportion to their height. The point $[3,4]$ slides to $[11,4]$.
 
 <svg viewBox="0 0 360 180" xmlns="http://www.w3.org/2000/svg" width="380">
@@ -202,6 +223,15 @@ x = np.array([3,4])
 print(A @ x)             # [11  4]   matrix as transformation
 B = np.array([[0,-1],[1,0]])   # 90-degree rotation
 print(A @ B)             # chain: rotate, then shear
+```
+
+In a real model a "layer" is exactly this matrix multiply, applied to a whole **batch** at once. In **PyTorch** a linear layer is a matrix of weights times the input batch plus a bias:
+
+```python
+import torch
+layer = torch.nn.Linear(in_features=784, out_features=128)  # a 128x784 weight matrix
+x = torch.randn(32, 784)        # batch of 32 examples, 784 features each
+print(layer(x).shape)           # torch.Size([32, 128]) -> one matmul, 32 rows transformed
 ```
 
 Matrix multiplication is **associative** ($A(BC)=(AB)C$) and **distributive**, but *not commutative*: $AB \neq BA$ in general — rotating then shearing differs from shearing then rotating. The **transpose** $A^\top$ flips rows and columns; the **identity** $I$ leaves vectors untouched ($I\mathbf{x}=\mathbf{x}$), the matrix equivalent of multiplying by 1.
@@ -230,6 +260,9 @@ The **inverse** $A^{-1}$ undoes what $A$ does: $A^{-1}A = AA^{-1} = I$. If $A$ r
 The **determinant** $\det(A)$ is a single number measuring how much the transformation scales **area** (2D) or **volume** (nD). $\det = 2$ doubles areas; $\det = 1$ preserves them; $\det = 0$ collapses space onto a lower dimension. For a $2\times 2$:
 
 $$\det\begin{bmatrix} a & b \\ c & d \end{bmatrix} = ad - bc$$
+
+**In words:** the area-scaling factor of a 2×2 matrix is the main-diagonal product minus the off-diagonal product.
+**Also written:** $\det(A) = \lambda_1\lambda_2$ — the determinant is also the product of the eigenvalues (§1.4), and in $n$ dimensions $\det(A)=\prod_i\lambda_i$.
 
 The critical fact: **$A$ is invertible if and only if $\det(A) \neq 0$.** A zero determinant means the transformation squashed space flat — information was destroyed, and you cannot uniquely reverse it. Such a matrix is **singular**.
 
@@ -268,6 +301,9 @@ Almost never compute `inv(A)` to solve $A\mathbf{x}=\mathbf{b}$. Use `np.linalg.
 Most vectors get knocked off their line when you apply a matrix. An **eigenvector** is special: the transformation only *stretches* it, never rotates it. It stays on its own line. The stretch factor is its **eigenvalue** $\lambda$:
 
 $$A\mathbf{v} = \lambda\mathbf{v}, \quad \mathbf{v}\neq\mathbf{0}$$
+
+**In words:** applying the matrix to this special vector gives back the *same direction*, just scaled by $\lambda$ — no rotation, only stretch.
+**Also written:** $(A - \lambda I)\mathbf{v} = \mathbf{0}$ — rearranged, the eigenvector lives in the null space of $A-\lambda I$, which is why a nonzero solution forces $\det(A-\lambda I)=0$.
 
 Eigenvectors are the **natural axes** of a transformation — the directions along which it acts as pure scaling. They are everywhere in ML: the principal components of PCA are eigenvectors of the covariance matrix (Chapter 7), PageRank is the dominant eigenvector of the web's link matrix, and the eigenvalues of the loss Hessian govern whether training converges or diverges (Chapter 3).
 
@@ -325,6 +361,9 @@ Eigendecomposition only works for square matrices. **SVD** generalizes it to *an
 
 $$A = U\Sigma V^\top$$
 
+**In words:** any matrix's action splits into "rotate the input, stretch along clean axes, rotate the output."
+**Also written:** $A = \sum_{i} \sigma_i\,\mathbf{u}_i\mathbf{v}_i^\top$ — a sum of rank-1 outer products, each weighted by its singular value (truncating this sum is exactly low-rank approximation).
+
 $U$ ($m\times m$) and $V$ ($n\times n$) are **orthogonal** (pure rotations/reflections, columns are perpendicular unit vectors). $\Sigma$ is diagonal, holding the **singular values** $\sigma_1 \geq \sigma_2 \geq \cdots \geq 0$ — the scaling factors, sorted biggest-first. Geometrically, $A$ takes the unit circle, rotates it by $V^\top$, stretches it into an ellipse with axis lengths $\sigma_i$, then rotates by $U$.
 
 <svg viewBox="0 0 380 130" xmlns="http://www.w3.org/2000/svg" width="400">
@@ -348,6 +387,17 @@ print(s)                       # singular values, descending
 # Rank-1 reconstruction: keep only the largest singular value
 A1 = s[0] * np.outer(U[:,0], Vt[0])
 print(np.round(A1, 2))         # best rank-1 approximation of A
+```
+
+In practice, for large sparse matrices you reach for **scikit-learn**'s truncated SVD, which computes only the top $k$ factors (the engine behind latent semantic analysis on a term–document matrix):
+
+```python
+from sklearn.decomposition import TruncatedSVD
+import numpy as np
+X = np.random.default_rng(0).random((1000, 300))   # 1000 docs x 300 terms
+svd = TruncatedSVD(n_components=10)                 # keep top 10 latent factors
+Z = svd.fit_transform(X)                            # (1000, 10) compressed reps
+print(Z.shape, svd.explained_variance_ratio_.sum())  # fraction of energy kept
 ```
 
 The fraction of "energy" kept by $k$ components is $\sum_{i\le k}\sigma_i^2 / \sum_i \sigma_i^2$ — often you keep 95% of the energy with a tenth of the components. SVD also defines the **pseudo-inverse** that solves least squares even for non-square or singular matrices (§1.9).
@@ -413,6 +463,9 @@ The canonical example is a **recommender system**. Take the Netflix-style matrix
 
 $$\hat{r}_{ui} = \mathbf{w}_u \cdot \mathbf{h}_i = \sum_{f=1}^{k} w_{uf}\,h_{if}$$
 
+**In words:** the predicted rating is how strongly user $u$'s taste vector aligns with movie $i$'s feature vector — a dot product over $k$ hidden factors.
+**Also written:** $\hat{R} = W H$ — stacking all users and movies, every predicted rating is one entry of the matrix product.
+
 The factors are learned, not labeled, but often turn out interpretable — one might capture "action vs. romance", another "indie vs. blockbuster". Crucially, you fit $W$ and $H$ only on *observed* ratings, then multiply them out to **fill in the blanks** for movies a user hasn't seen. That's the recommendation.
 
 ```{mermaid}
@@ -449,6 +502,26 @@ These four scalars and properties are the everyday measuring tools of linear alg
 A **norm** measures the "size" or length of a vector. The **L2 (Euclidean) norm** $\|\mathbf{v}\|_2 = \sqrt{\sum v_i^2}$ is ordinary straight-line length. The **L1 norm** $\|\mathbf{v}\|_1 = \sum |v_i|$ is the taxicab distance. The distinction is load-bearing in ML: **L2 regularization** (ridge) shrinks weights smoothly, while **L1 regularization** (lasso) drives them to *exactly zero*, producing sparse, feature-selecting models (Chapter 8).
 
 $$\|\mathbf{v}\|_2 = \sqrt{\textstyle\sum_i v_i^2}, \qquad \|\mathbf{v}\|_1 = \textstyle\sum_i |v_i|$$
+
+**In words:** the L2 norm is straight-line "as the crow flies" distance; the L1 norm is the total of the absolute steps, like blocks walked in a grid city.
+**Also written:** $\|\mathbf{v}\|_2 = \sqrt{\mathbf{v}^\top\mathbf{v}}$ (square root of the dot product with itself), the special case $p=2$ of the general $p$-norm $\|\mathbf{v}\|_p = (\sum_i |v_i|^p)^{1/p}$.
+
+The shape of each "unit ball" (all points at distance 1 from the origin) is the visual reason L1 drives weights to zero: the L1 ball is a diamond with sharp corners on the axes, so a solution constrained to it tends to land on a corner where some coordinates are exactly 0; the L2 ball is a smooth circle with no such preference.
+
+<svg viewBox="0 0 320 180" xmlns="http://www.w3.org/2000/svg" width="340" font-family="sans-serif" font-size="11">
+  <!-- L1 diamond -->
+  <line x1="20" y1="90" x2="150" y2="90" stroke="currentColor" stroke-opacity="0.4"/>
+  <line x1="85" y1="25" x2="85" y2="155" stroke="currentColor" stroke-opacity="0.4"/>
+  <polygon points="85,35 145,90 85,145 25,90" fill="#f59e0b" fill-opacity="0.25" stroke="#f59e0b" stroke-width="2"/>
+  <circle cx="85" cy="35" r="3" fill="#f59e0b"/>
+  <circle cx="145" cy="90" r="3" fill="#f59e0b"/>
+  <text x="55" y="172" fill="currentColor">L1 ball ‖v‖₁=1</text>
+  <!-- L2 circle -->
+  <line x1="180" y1="90" x2="310" y2="90" stroke="currentColor" stroke-opacity="0.4"/>
+  <line x1="245" y1="25" x2="245" y2="155" stroke="currentColor" stroke-opacity="0.4"/>
+  <circle cx="245" cy="90" r="55" fill="#38bdf8" fill-opacity="0.25" stroke="#38bdf8" stroke-width="2"/>
+  <text x="218" y="172" fill="currentColor">L2 ball ‖v‖₂=1</text>
+</svg>
 
 The **rank** of a matrix is the number of genuinely independent directions in it — how many of its columns aren't just combinations of the others. A $1000\times 50$ data matrix where 10 features are duplicates of others has rank 40; the other 10 add nothing. Low rank means redundancy, which is exactly what factorization (§1.7) and dimensionality reduction exploit. The **trace** is the sum of the diagonal entries, $\text{tr}(A)=\sum_i a_{ii}$; it equals the sum of the eigenvalues, a handy invariant.
 
@@ -507,6 +580,9 @@ A **projection** drops a vector onto a subspace, finding the closest point in it
 
 $$A^\top A\,\hat{\mathbf{x}} = A^\top \mathbf{b} \quad\Longrightarrow\quad \hat{\mathbf{x}} = (A^\top A)^{-1}A^\top \mathbf{b}$$
 
+**In words:** pick the coefficients $\hat{\mathbf{x}}$ that make the leftover error perpendicular to every column you fit on — the closest reachable point to $\mathbf{b}$.
+**Also written:** $\hat{\mathbf{x}} = A^{+}\mathbf{b}$, where $A^{+} = (A^\top A)^{-1}A^\top$ is the **pseudo-inverse** (and SVD computes it stably even when $A^\top A$ is singular).
+
 The residual $\mathbf{b} - A\hat{\mathbf{x}}$ ends up orthogonal to the column space — there's no leftover signal pointing in a direction the model could have used. This single formula *is* linear regression's closed-form solution (Chapter 8).
 
 <svg viewBox="0 0 280 180" xmlns="http://www.w3.org/2000/svg" width="320">
@@ -528,6 +604,18 @@ y = np.array([2.1, 3.9, 6.2, 7.8])
 A = np.column_stack([x, np.ones_like(x)])   # design matrix [x | 1]
 xhat = np.linalg.solve(A.T @ A, A.T @ y)    # solve normal equations
 print(np.round(xhat, 3))                    # [slope, intercept] ≈ [1.92, 0.15]
+```
+
+The stable, production way — let the library use QR/SVD instead of forming $A^\top A$:
+
+```python
+# NumPy's lstsq (QR/SVD under the hood) and scikit-learn's LinearRegression
+coef, *_ = np.linalg.lstsq(A, y, rcond=None)
+print(np.round(coef, 3))                    # same [slope, intercept]
+
+from sklearn.linear_model import LinearRegression
+reg = LinearRegression().fit(x.reshape(-1, 1), y)
+print(round(reg.coef_[0], 3), round(reg.intercept_, 3))   # 1.92  0.15
 ```
 
 ::: {.callout-warning}
@@ -582,6 +670,17 @@ flat = batch.reshape(32, -1)         # flatten each image to a vector
 print(flat.shape)                    # (32, 2352)  -> ready for a dense layer
 bias = np.array([1.,2.,3.])          # length-3 channel bias
 print((batch + bias).shape)          # (32,28,28,3) via broadcasting
+```
+
+The identical moves in **PyTorch**, where these tensors live on the GPU and carry gradients:
+
+```python
+import torch
+batch = torch.zeros(32, 3, 28, 28)   # PyTorch convention: (N, C, H, W)
+flat = batch.reshape(32, -1)         # (32, 2352) for a Linear layer
+print(flat.shape)
+bias = torch.tensor([1., 2., 3.]).reshape(1, 3, 1, 1)  # broadcast over N,H,W
+print((batch + bias).shape)          # torch.Size([32, 3, 28, 28])
 ```
 
 ::: {.callout-tip}
@@ -945,7 +1044,98 @@ The through-line of this whole section: at scale, *how* you compute is as import
 A low *training loss* or a clean *residual* can hide an ill-conditioned problem — the numbers look fine until the inputs shift slightly and the answer explodes. Check `np.linalg.cond` on matrices you invert or solve against, watch for singular values spanning many orders of magnitude, and never write your own softmax/cross-entropy without the max-subtraction trick. The library versions (`scipy.special.logsumexp`, framework `log_softmax`) already do it.
 :::
 
-## 1.17 — Key takeaways
+## 1.17 — Change of basis & diagonalization
+
+Intuition first: a vector is a fixed arrow in space, but its *coordinates* depend on the ruler you measure it with. Describe a city block in "north/east" units or in "along-the-street/across-the-street" units and you get different numbers for the same place. A **basis** is just your chosen set of measuring axes, and **change of basis** is the act of re-expressing the same vector in a more convenient set of axes. The whole point of eigenvectors and PCA is to *find the basis where the problem is easy*.
+
+Precisely: if the columns of a matrix $P$ are a new set of basis vectors, then a vector with coordinates $\mathbf{x}$ in the standard basis has coordinates $P^{-1}\mathbf{x}$ in the new basis, and a transformation $A$ becomes $P^{-1}AP$ in those new coordinates.
+
+$$A' = P^{-1} A P$$
+
+**In words:** to apply $A$ while working in a different coordinate system, translate into that system ($P^{-1}$), do the transformation there ($A$ is now $A'$), and translate back ($P$).
+**Also written:** $A = P A' P^{-1}$ — solving the same relation the other way; $A$ and $A'$ are called **similar** matrices and share eigenvalues, trace, and determinant.
+
+The magic happens when $P$'s columns are the **eigenvectors** of $A$. Then $A' = P^{-1}AP = \Lambda$ is **diagonal**, holding the eigenvalues. This is **diagonalization** $A = P\Lambda P^{-1}$: in the eigenvector basis, the transformation is pure scaling — every messy off-diagonal coupling vanishes.
+
+$$A = P\,\Lambda\,P^{-1}, \qquad \Lambda = \mathrm{diag}(\lambda_1,\dots,\lambda_n)$$
+
+**In words:** rewrite the matrix in its own eigenvector coordinates and it collapses to a list of stretch factors on the diagonal.
+**Also written:** for a symmetric $A$ the eigenvectors are orthonormal, so $P$ is orthogonal and $A = Q\Lambda Q^\top$ (the spectral theorem from §1.4) — the inverse is just a transpose.
+
+Why this matters: powers become trivial. Computing $A^{10}$ directly is ten matrix multiplies, but in the eigenbasis $A^{k} = P\Lambda^{k}P^{-1}$, and $\Lambda^k$ just raises each diagonal eigenvalue to the $k$. This is the engine behind Markov-chain steady states, PageRank's repeated link-following, and analyzing whether a recurrent system explodes or settles.
+
+<svg viewBox="0 0 420 150" xmlns="http://www.w3.org/2000/svg" width="430" font-family="sans-serif" font-size="11">
+  <rect x="10" y="55" width="70" height="40" rx="5" fill="#6366f1" fill-opacity="0.2" stroke="#6366f1"/>
+  <text x="22" y="80" fill="currentColor">x (std basis)</text>
+  <text x="92" y="80" fill="currentColor">→</text>
+  <text x="84" y="50" fill="#6366f1">P⁻¹</text>
+  <rect x="110" y="55" width="80" height="40" rx="5" fill="#22c55e" fill-opacity="0.2" stroke="#22c55e"/>
+  <text x="120" y="80" fill="currentColor">eigen coords</text>
+  <text x="200" y="80" fill="currentColor">→</text>
+  <text x="196" y="50" fill="#22c55e">Λ scale</text>
+  <rect x="220" y="55" width="80" height="40" rx="5" fill="#f59e0b" fill-opacity="0.2" stroke="#f59e0b"/>
+  <text x="230" y="80" fill="currentColor">scaled coords</text>
+  <text x="310" y="80" fill="currentColor">→</text>
+  <text x="312" y="50" fill="#f59e0b">P back</text>
+  <rect x="330" y="55" width="80" height="40" rx="5" fill="#ec4899" fill-opacity="0.2" stroke="#ec4899"/>
+  <text x="345" y="80" fill="currentColor">Ax (result)</text>
+</svg>
+
+```python
+import numpy as np
+A = np.array([[2., 1.], [1., 2.]])
+vals, P = np.linalg.eig(A)          # eigenvalues (Λ) and eigenvectors (P)
+Lam = np.diag(vals)
+print(np.round(P @ Lam @ np.linalg.inv(P), 3))   # reconstructs A
+# Cheap matrix power via the eigenbasis: A^5 = P Λ^5 P⁻¹
+A5 = P @ np.diag(vals**5) @ np.linalg.inv(P)
+print(np.round(A5, 1))              # same as np.linalg.matrix_power(A, 5)
+```
+
+::: {.callout-tip}
+"Find the right basis" is the secret plot of half this chapter. PCA rotates into the basis where features are uncorrelated; diagonalization rotates into the basis where a transformation is pure scaling; SVD does it even for non-square maps. Hard problem? Often the fix is a better set of axes.
+:::
+
+## 1.18 — Gram matrices, kernels & the kernel trick
+
+Here is a small object with outsized importance. Given a set of vectors stacked as the columns of $X$, the **Gram matrix** is $G = X^\top X$ — every entry $G_{ij}$ is the dot product $\mathbf{x}_i\cdot\mathbf{x}_j$, the alignment of example $i$ with example $j$. Intuition: it is the full table of "how similar is everything to everything else," built entirely from dot products.
+
+$$G = X^\top X, \qquad G_{ij} = \mathbf{x}_i^\top \mathbf{x}_j$$
+
+**In words:** the Gram matrix collects the pairwise dot products of a set of vectors into one symmetric grid of similarities.
+**Also written:** $G = \sum_{\text{features}} (\text{column outer products})$; and $G$ is always **symmetric positive semi-definite** ($\mathbf{z}^\top G\mathbf{z} = \|X\mathbf{z}\|^2 \ge 0$), which is exactly why Cholesky (§1.6) applies to it.
+
+Gram matrices are everywhere: they *are* the covariance matrix (up to centering and scaling, Chapter 7), they appear as $A^\top A$ in the normal equations (§1.9), and the **style loss** in neural style transfer compares the Gram matrices of feature maps to match texture.
+
+The deep payoff is the **kernel trick**. Many algorithms — ridge regression, SVMs, PCA — touch the data *only* through dot products $\mathbf{x}_i\cdot\mathbf{x}_j$, never the raw vectors. So if we secretly replace each dot product with a **kernel function** $k(\mathbf{x}_i,\mathbf{x}_j)$ that equals the dot product in some richer, higher-dimensional feature space, we get all the power of that space without ever computing coordinates in it.
+
+$$k(\mathbf{x}_i,\mathbf{x}_j) = \phi(\mathbf{x}_i)^\top \phi(\mathbf{x}_j)$$
+
+**In words:** a kernel is a similarity score that equals a dot product in some (possibly enormous) transformed space $\phi(\cdot)$ — but you compute the score directly, never the transform.
+**Also written:** the popular RBF/Gaussian kernel $k(\mathbf{x},\mathbf{y}) = \exp(-\gamma\|\mathbf{x}-\mathbf{y}\|^2)$ corresponds to an *infinite*-dimensional $\phi$, yet is one cheap formula.
+
+A tiny worked example shows the trick paying off. Take 1-D points and the kernel $k(x,y)=(xy+1)^2$. Expanding, $(xy+1)^2 = x^2y^2 + 2xy + 1 = \phi(x)^\top\phi(y)$ with $\phi(x)=[x^2,\sqrt2\,x,1]$. So computing one cheap product $k(2,3)=(6+1)^2=49$ is identical to lifting both points into 3-D and taking the dot product there — we got a quadratic feature space for the cost of a multiply and a square.
+
+```python
+import numpy as np
+from sklearn.svm import SVC
+from sklearn.datasets import make_circles
+
+# Two rings: NOT linearly separable in 2-D, trivial with an RBF kernel
+X, y = make_circles(n_samples=200, noise=0.05, factor=0.4, random_state=0)
+clf = SVC(kernel="rbf", gamma=1.0).fit(X, y)   # kernel trick: no explicit lift
+print("train accuracy:", clf.score(X, y))      # ~1.0
+
+# The Gram (kernel) matrix the SVM works through, by hand
+G = X @ X.T                                     # linear Gram matrix
+print(G.shape, np.allclose(G, G.T))            # (200, 200) True (symmetric)
+```
+
+::: {.callout-tip}
+Whenever an algorithm can be written using only dot products between examples, it can be "kernelized" — swap the dot product for a kernel and you gain nonlinear power for free. That single observation turns linear regression into kernel ridge regression and the linear separator into the kernel SVM of Chapter 9.
+:::
+
+## 1.19 — Key takeaways
 
 - **Data is vectors, models are matrices.** Examples are vectors of features; a model layer is a matrix that transforms them. The dot product — alignment of two vectors — is the atomic operation underneath neurons, similarity, and kernels.
 - **A matrix is a transformation.** Multiplication chains transformations; the determinant measures volume scaling and flags non-invertibility (zero ⇒ singular); shapes must conform.
@@ -954,8 +1144,10 @@ A low *training loss* or a clean *residual* can hide an ill-conditioned problem 
 - **Norms, rank, and orthogonality are the measuring tools.** L1 vs. L2 norms drive sparse vs. smooth regularization; rank exposes redundancy; orthogonal matrices transform without distorting error.
 - **Least squares is a projection.** Regression projects $\mathbf{b}$ onto the column space; the residual is orthogonal. Prefer QR/SVD solvers over the normal equations for stability.
 - **Tensors generalize matrices** to the n-dimensional arrays deep learning runs on — and `.shape` is your best debugging friend.
+- **The right basis makes hard problems easy.** Change of basis and diagonalization ($A=P\Lambda P^{-1}$) turn coupled transformations into pure scaling; it is the same plot as PCA and SVD — rotate into friendlier axes.
+- **Everything similarity-based runs on dot products.** The Gram matrix collects pairwise dot products; the kernel trick swaps that dot product for a kernel to buy nonlinear power without leaving linear algebra.
 
-## 1.18 — See also
+## 1.20 — See also
 
 - **Calculus & Differentiation** — gradients and the chain rule that train the transformations defined here.
 - **Optimization** — how eigenvalues of the Hessian and conditioning govern convergence.

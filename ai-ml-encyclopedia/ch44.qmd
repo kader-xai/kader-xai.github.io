@@ -117,6 +117,8 @@ A neural network only ever sees numbers. Before any training happens, you need a
 
 The dominant algorithm is **Byte-Pair Encoding (BPE)**. The idea is borrowed from a 1990s compression scheme: start with the smallest units you have, then repeatedly merge the most frequent adjacent pair into a new unit. Each merge becomes a vocabulary entry. You stop when you hit your target vocabulary size.
 
+**Intuition first:** think of how a child learns to read. They don't memorize every word as a whole picture, nor do they sound out every single letter forever. They learn chunks — `-ing`, `-tion`, `un-`, `the` — and snap new words together from familiar pieces. BPE discovers exactly those chunks automatically, just by counting which pairs of symbols show up next to each other most often.
+
 ### A worked merge example
 
 Take a tiny corpus where word counts are: `low` ×5, `lower` ×2, `newest` ×6, `widest` ×3. We start from characters (a special `·` marks a word boundary so the tokenizer can later glue words back together). Count every adjacent pair across the corpus, weighted by word frequency:
@@ -168,6 +170,29 @@ print(bpe_train(corpus, 4))
 
 At inference time you don't recount anything — you just apply the learned merge list in order to each new word.
 
+### Using a real tokenizer
+
+In practice you almost never hand-roll BPE — you train or load one with Hugging Face `tokenizers` (the fast Rust-backed library) or reach for an existing one. Here is both: training a byte-level BPE from scratch, and inspecting how a production tokenizer chops text.
+
+```python
+# 1) Train a byte-level BPE tokenizer with Hugging Face `tokenizers`
+from tokenizers import Tokenizer, models, trainers, pre_tokenizers
+
+tok = Tokenizer(models.BPE())
+tok.pre_tokenizer = pre_tokenizers.ByteLevel(add_prefix_space=True)
+trainer = trainers.BpeTrainer(vocab_size=8000,
+                              special_tokens=["<|endoftext|>"])
+tok.train(["corpus.txt"], trainer)          # learns the merge list
+print(tok.encode("lowest newest").tokens)   # -> subword pieces
+
+# 2) Inspect a production tokenizer (GPT-style, via tiktoken)
+import tiktoken
+enc = tiktoken.get_encoding("cl100k_base")   # GPT-4-class vocab
+print(enc.encode("The number 1234 costs $5."))
+print([enc.decode([t]) for t in enc.encode("1234")])  # how digits split
+# e.g. ['123', '4'] — note arithmetic-unfriendly chunking
+```
+
 ### Byte-level BPE and vocabulary size
 
 What happens with an emoji, a Korean character, or a byte sequence the corpus never contained? Character-level BPE would emit an unknown token. **Byte-level BPE** (used by GPT-2 onward) sidesteps this entirely: it runs BPE not over Unicode characters but over the 256 possible *bytes*. Any string in any language or encoding decomposes into bytes, so there is *no* out-of-vocabulary case, ever. The base vocabulary is exactly 256 symbols, and merges build up from there.
@@ -192,6 +217,8 @@ A bigger vocabulary means each token carries more text, so sequences are shorter
 
 Here is the counterintuitive fact that governs LLM systems: a modern GPU can do arithmetic far faster than it can fetch the numbers to operate on. An NVIDIA A100 delivers roughly 312 teraFLOP/s of bf16 compute but only about 2 TB/s of memory bandwidth from its main memory. That gap means many operations finish their math and then sit idle, waiting for the next batch of data to arrive.
 
+**Everyday analogy:** imagine a world-class chef (the compute units) who can chop and cook almost instantly, but ingredients arrive from the pantry down a single narrow hallway (the memory bus). If a recipe needs lots of trips to the pantry for very little cooking, the chef spends the day standing around waiting for deliveries. The fix is not a faster chef — it is doing more cooking per pantry trip.
+
 GPU memory is a hierarchy, and the speeds differ by orders of magnitude:
 
 <svg viewBox="0 0 560 260" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif" font-size="13">
@@ -213,6 +240,10 @@ GPU memory is a hierarchy, and the speeds differ by orders of magnitude:
 ### Arithmetic intensity, worked
 
 The deciding ratio is **arithmetic intensity** = FLOPs performed per byte read from HBM. Compare it to the hardware's ratio of (peak FLOP/s) / (bandwidth). For the A100 that ceiling is $312\text{e}12 / 2\text{e}12 \approx 156$ FLOPs/byte. An operation must do at least ~156 floating-point ops per byte it loads just to keep the compute units busy.
+
+$$ \text{arithmetic intensity} = \frac{\text{FLOPs performed}}{\text{bytes moved from HBM}} $$
+
+**In words:** how much useful math you squeeze out of each byte you bothered to fetch from main memory. **Also written:** $I = \text{FLOPs} / \text{bytes}$; the op is compute-bound when $I > \text{(peak FLOP/s)}/\text{(bandwidth)}$ and memory-bound otherwise.
 
 Consider adding two vectors of length $n$ (bf16, 2 bytes each): you read $2n$ values, write $n$, and do $n$ additions. That is $n$ FLOPs for $6n$ bytes — an intensity of $1/6$. You are nowhere near 156, so vector addition is hopelessly memory-bound; the GPU's compute sits ~99% idle. A large matrix multiply, by contrast, reuses each loaded value across many multiply-adds and can reach intensities in the hundreds — that is why GPUs love big matmuls and hate elementwise ops.
 
@@ -243,6 +274,8 @@ The same picture drawn against the hardware ceiling is the **roofline**: below t
 
 Standard self-attention is a textbook example of a needlessly memory-bound operation. For a sequence of length $N$, the naive implementation computes the score matrix $S = QK^\top$ (size $N \times N$), writes it to HBM, reads it back to apply softmax, writes the probabilities, reads them again to multiply by $V$. That $N \times N$ matrix is the problem: for $N = 8192$ it is 67 million entries, written and re-read several times. The expensive part is not the math — it is shuttling that giant matrix in and out of HBM.
 
+**Intuition first:** imagine grading a giant pile of exams where you only need the class average and the top scorer. The wasteful way is to lay every exam out on a huge table (you need a warehouse), then walk the whole table again to average. The smart way is to process exams in small stacks that fit on your desk, keeping just a running total and a running maximum — you never need the whole pile spread out at once, and you get the exact same answer. FlashAttention is that running-total trick applied to attention.
+
 **FlashAttention** computes the *exact* same result without ever materializing the full $N \times N$ matrix in HBM. The trick is **tiling**: split $Q$, $K$, $V$ into blocks that fit in SRAM, and process the attention block by block, keeping a running softmax as you go.
 
 ```{mermaid}
@@ -257,6 +290,12 @@ flowchart LR
 ```
 
 The mathematical enabler is the **online softmax**: softmax can be computed incrementally over blocks if you carry a running maximum $m$ and a running normalizer $\ell$, rescaling the partial result each time you see a larger value. So the algorithm never needs all scores at once. Concretely, when a new block has max $m_2$ and you held running max $m_1$, the new global max is $m = \max(m_1, m_2)$ and you rescale the old accumulator by $e^{m_1 - m}$ and the new block's contribution by $e^{m_2 - m}$ before adding — this keeps every exponential numerically safe and the final result bit-for-bit equal to a full softmax.
+
+The softmax itself, written in the numerically stable shifted form FlashAttention uses block-by-block:
+
+$$ \text{softmax}(s_j) = \frac{e^{s_j - m}}{\sum_k e^{s_k - m}}, \qquad m = \max_k s_k $$
+
+**In words:** subtract the largest score before exponentiating so nothing overflows, then divide each by the total — and that running max/total can be updated one block at a time. **Also written:** $\text{softmax}(s)_j = e^{s_j} / \sum_k e^{s_k}$ (the unshifted form; subtracting $m$ leaves the result unchanged because the constant cancels top and bottom).
 
 ```python
 import numpy as np
@@ -280,6 +319,29 @@ print(round(got, 6))
 
 The payoff is dramatic. Naive attention does $O(N^2)$ HBM accesses; FlashAttention does $O(N^2 / M)$ where $M$ is the SRAM block size — often a 5–20× reduction in memory traffic and a 2–4× wall-clock speedup, with *lower* memory use because the $N \times N$ matrix is never stored. It is exact, not an approximation. This single IO-aware rewrite is much of what made long context windows economically feasible.
 
+### Using FlashAttention in practice
+
+You rarely call FlashAttention by hand — modern PyTorch ships it behind a single function, and Hugging Face enables it with a config flag.
+
+```python
+import torch
+import torch.nn.functional as F
+
+q = torch.randn(2, 8, 4096, 64, device="cuda", dtype=torch.bfloat16)
+k = torch.randn_like(q); v = torch.randn_like(q)
+
+# PyTorch picks a fused FlashAttention kernel automatically when shapes/dtypes allow
+with torch.backends.cuda.sdp_kernel(enable_flash=True):
+    out = F.scaled_dot_product_attention(q, k, v, is_causal=True)
+
+# Hugging Face: opt in per model
+# from transformers import AutoModelForCausalLM
+# model = AutoModelForCausalLM.from_pretrained(
+#     "meta-llama/Llama-3.1-8B",
+#     attn_implementation="flash_attention_2",
+#     torch_dtype=torch.bfloat16)
+```
+
 ### A note on Triton kernels
 
 FlashAttention is written as a custom GPU **kernel** — a low-level program that controls exactly which bytes move between HBM and SRAM. Historically that meant CUDA C++, which is painful. **Triton** (an OpenAI-originated Python-like language) lets you write fused kernels at the block level — you describe how to tile the data and Triton handles the register allocation and memory coalescing. Much modern kernel work, including teaching versions of FlashAttention, is written in Triton precisely because it makes IO-aware programming accessible without dropping all the way to CUDA.
@@ -296,11 +358,15 @@ The Chinchilla fit itself is a clean, memorable form — loss decomposes into an
 
 $$ L(N, D) = E + \frac{A}{N^{\alpha}} + \frac{B}{D^{\beta}} $$
 
+**In words:** the loss you reach is an unbeatable floor $E$ (the inherent randomness of language) plus a penalty for having too few parameters plus a penalty for having seen too little data — and both penalties shrink as smooth power laws. **Also written:** in log space the two penalty terms are straight lines, $\log(L - E) \approx \log A - \alpha \log N$ when data is plentiful (and symmetrically $\log B - \beta \log D$ when parameters are plentiful) — which is why scaling-law plots are log-log straight lines.
+
 with fitted constants where $\alpha \approx 0.34$ and $\beta \approx 0.28$ are close enough that the optimal allocation splits compute roughly evenly between growing $N$ and growing $D$. $E$ is the entropy of natural text you can never train away.
 
 The governing approximation everyone uses for the compute cost is the FLOP count for a dense Transformer:
 
 $$ C \approx 6 N D $$
+
+**In words:** total training cost is about six floating-point operations for every (parameter, token) pair — two for the forward pass and four for the backward pass. **Also written:** $C \approx C_{\text{fwd}} + C_{\text{bwd}} = 2ND + 4ND$, so the FLOPs scale linearly in both how big the model is and how much data it sees.
 
 where $C$ is total training FLOPs, $N$ is parameter count, and $D$ is the number of training tokens. (The 6 comes from roughly 2 FLOPs per parameter for the forward pass and 4 for the backward pass.)
 
@@ -359,6 +425,10 @@ flowchart TB
 
 The bubble is worth seeing concretely. With $p$ pipeline stages and $m$ microbatches, the fraction of time a stage sits idle is roughly $(p-1)/(m + p - 1)$ — so the cure is simply *more microbatches*:
 
+$$ \text{bubble fraction} = \frac{p-1}{m + p - 1} $$
+
+**In words:** the share of wasted GPU time is the number of "warm-up/drain" stages over the total number of scheduled steps — pour in more microbatches $m$ and the waste vanishes. **Also written:** as $m \to \infty$, $\frac{p-1}{m+p-1} \to 0$; e.g. with $p=4$ stages, $m=4$ microbatches wastes $3/7 \approx 43\%$, but $m=32$ wastes only $3/35 \approx 9\%$.
+
 <svg viewBox="0 0 480 170" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif" font-size="11">
   <text x="10" y="20" fill="#555">stage</text>
   <!-- 4 stages, fill = busy, hatched = bubble -->
@@ -380,6 +450,18 @@ The bubble is worth seeing concretely. With $p$ pipeline stages and $m$ microbat
 
 In practice these compose as a grid — a frontier run might use 8-way tensor parallel *within* a node, 12-way pipeline parallel *across* nodes, and data parallel on top of that, often called **3D parallelism**.
 
+### Collective communication: the primitives underneath
+
+Every form of parallelism above is built on a handful of **collective operations** — group communication patterns implemented by NCCL on NVIDIA hardware. Three matter most:
+
+| Collective | What it does | Used by |
+|-----------|-------------|---------|
+| **all-reduce** | Sum a tensor across all GPUs, give everyone the result | DP gradient sync |
+| **all-gather** | Each GPU has a shard; everyone ends with the full concatenation | FSDP weight gather, TP |
+| **reduce-scatter** | Sum across GPUs, but each GPU keeps only its shard of the result | FSDP gradient reduction |
+
+**Intuition:** all-reduce is "everyone shouts their number, everyone walks away knowing the total." A clever ring implementation moves only about $2(k-1)/k$ times the tensor size per GPU regardless of how many GPUs $k$ you have, which is why gradient sync stays affordable at scale. Note the identity that ZeRO exploits: **all-reduce = reduce-scatter then all-gather** — so sharding the optimizer step (next subsection) does not add a fundamentally new communication cost, it just splits the all-reduce into its two halves.
+
 ### ZeRO / FSDP: sharding the optimizer state
 
 Even with the model replicated, a huge hidden cost is the **optimizer state**. Training with Adam in mixed precision, each parameter drags along: an fp32 master copy of the weight (4 bytes), an fp32 momentum (4 bytes), and an fp32 variance (4 bytes) — 12 bytes of optimizer state per parameter, on top of the bf16 weight and gradient. For a 7B model that is ~84 GB of optimizer state alone, far past a single GPU.
@@ -394,9 +476,38 @@ Even with the model replicated, a huge hidden cost is the **optimizer state**. T
 
 At ZeRO-3 / FSDP, each GPU permanently holds only $1/k$ of the parameters (for $k$ GPUs); when a layer is needed, its full weights are **all-gathered** just in time, used, then discarded. The tradeoff is more communication for far less memory — letting you train models that would otherwise be impossible, at the cost of bandwidth. (This connects to the distributed-training discussion in Ch 30.)
 
+In PyTorch this is a thin wrapper around your model — the framework inserts the all-gather/reduce-scatter automatically:
+
+```python
+import torch
+from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
+from torch.distributed.fsdp import MixedPrecision, ShardingStrategy
+
+mp = MixedPrecision(param_dtype=torch.bfloat16,      # compute in bf16
+                    reduce_dtype=torch.float32)       # reduce grads in fp32
+
+model = FSDP(model,
+             sharding_strategy=ShardingStrategy.FULL_SHARD,  # = ZeRO-3
+             mixed_precision=mp,
+             device_id=torch.cuda.current_device())
+
+# Activation checkpointing pairs naturally with FSDP (see 44.7)
+# from torch.distributed.algorithms._checkpoint.checkpoint_wrapper import (
+#     apply_activation_checkpointing)
+
+# The training loop looks completely ordinary — FSDP handles the sharding:
+for batch in loader:
+    loss = model(**batch).loss
+    loss.backward()        # reduce-scatter gradients across shards
+    optimizer.step()       # each rank updates only its 1/k of params
+    optimizer.zero_grad()
+```
+
 ## 44.6 Mixture-of-Experts: more parameters, not more compute
 
 Every dense model pays the same price for every token: all parameters fire on every input. **Mixture-of-Experts (MoE)** breaks that link. Replace the single feed-forward block in a Transformer layer with $E$ parallel feed-forward "experts" plus a small **router** network. For each token, the router picks the **top-$k$** experts (often $k=2$) and sends the token only to those. The other experts stay dark for that token.
+
+**Everyday analogy:** a hospital does not send every patient to every doctor. A triage nurse (the router) glances at each patient and routes them to the two most relevant specialists. The hospital can employ a hundred specialists (huge total capacity) while any single patient only ever consumes two consultations (small per-patient cost). MoE gives a model a large staff of specialists but only "consults" a couple per token.
 
 The consequence is the headline property: you grow *total* parameters (knowledge capacity) without growing the *active* compute per token. A model with 8 experts of which 2 fire has ~4× the parameters of its dense FFN but only ~2× the FFN compute. Mixtral 8×7B, for example, has ~47B total parameters but activates only ~13B per token.
 
@@ -415,6 +526,12 @@ flowchart LR
     classDef off fill:#eee,stroke:#bbb,color:#999;
 ```
 
+The MoE layer output for a token $x$ is the gated sum over only the chosen experts:
+
+$$ y = \sum_{i \in \text{top-}k} g_i \, E_i(x), \qquad g = \text{softmax}\big(\text{top-}k(x W_r)\big) $$
+
+**In words:** run the token through the few experts the router picked, then blend their outputs weighted by the router's confidence in each. **Also written:** $y = \sum_{i=1}^{E} g_i\,E_i(x)$ where $g_i = 0$ for every expert outside the top-$k$ — a sum over all experts in which all but $k$ gates are zeroed out.
+
 ### The load-balancing problem
 
 Left alone, the router collapses: it learns to favor a few experts, those get more gradient, get better, attract even more tokens — a rich-get-richer death spiral that leaves most experts untrained and wastes the parameters you paid for. The standard fix is an **auxiliary load-balancing loss** added to the training objective, which penalizes uneven routing and pushes traffic toward a uniform spread across experts.
@@ -422,6 +539,8 @@ Left alone, the router collapses: it learns to favor a few experts, those get mo
 A common formulation (Switch Transformer) for $E$ experts over a batch is:
 
 $$ \mathcal{L}_{aux} = \alpha \, E \sum_{i=1}^{E} f_i \, P_i $$
+
+**In words:** multiply, for each expert, how many tokens it actually got by how confident the router was about it, sum across experts — this is smallest when every expert gets an equal share, so minimizing it spreads the load. **Also written:** $\mathcal{L}_{aux} = \alpha\,E\,\langle f, P\rangle$, the (scaled) dot product of the routing-fraction vector $f$ and the mean-probability vector $P$; its minimum over the simplex is $\alpha$ at $f_i = P_i = 1/E$.
 
 where $f_i$ is the *fraction of tokens* actually routed to expert $i$ and $P_i$ is the *average router probability* assigned to expert $i$. The product is minimized when both are uniform ($1/E$ each), so the loss nudges the router toward balanced utilization; $\alpha$ is a small weight (e.g. 0.01).
 
@@ -458,6 +577,25 @@ Beyond parallelism, a handful of techniques decide whether a training run fits i
 | fp8 (E4M3) | 1 / 4 / 3 | narrow | very low | frontier matmuls, per-tensor scaled |
 
 **Gradient (activation) checkpointing.** The backward pass needs the activations from the forward pass, and storing every layer's activations is often the single biggest memory consumer. Checkpointing keeps only a sparse set of activations and **recomputes** the rest during the backward pass — trading roughly 30% more compute for a large drop in activation memory. It is the standard knob for fitting longer sequences or bigger batches.
+
+In PyTorch, mixed precision and checkpointing are each a few lines:
+
+```python
+import torch
+from torch.utils.checkpoint import checkpoint
+
+# Mixed precision: autocast picks bf16 for matmuls, keeps reductions in fp32
+for batch in loader:
+    with torch.autocast("cuda", dtype=torch.bfloat16):
+        loss = model(**batch).loss
+    loss.backward()           # bf16 needs no GradScaler; fp16 would
+    optimizer.step(); optimizer.zero_grad()
+
+# Activation checkpointing: wrap an expensive block to recompute it in backward
+def block_forward(x):
+    return transformer_block(x)
+y = checkpoint(block_forward, x, use_reentrant=False)   # ~30% more compute, big memory cut
+```
 
 ### Worked: optimizer-state memory math
 
@@ -501,6 +639,10 @@ flowchart LR
 
 The one piece worth seeing mechanically is near-dedup. MinHash estimates the **Jaccard similarity** of two documents' shingle (n-gram) sets cheaply: hash each document's shingles many ways, keep the minimum hash per function, and the fraction of matching minima estimates the overlap — no pairwise comparison of full documents required.
 
+$$ J(A, B) = \frac{|A \cap B|}{|A \cup B|} \;\approx\; \Pr\big[\min h(A) = \min h(B)\big] $$
+
+**In words:** the true overlap between two shingle sets (shared shingles over total distinct shingles) equals the probability that a random hash function picks the same minimum from both — so counting matching minima across many hashes estimates similarity without ever comparing documents directly. **Also written:** $\hat{J} = \frac{1}{n}\sum_{i=1}^{n}\mathbb{1}[\min h_i(A) = \min h_i(B)]$, the fraction of the $n$ hash functions whose minima agree.
+
 ```python
 import numpy as np
 def shingles(text, k=5):                    # k-word shingles as a set
@@ -523,19 +665,136 @@ Finally, **mixing**: you don't train on the raw source proportions. Curated high
 **Intuition:** more tokens is not better; more *unique, high-quality* tokens is better. A smaller, aggressively deduplicated and filtered corpus routinely beats a larger raw one at the same compute. Data work is where a lot of the quiet quality gains in modern models actually come from.
 :::
 
-## 44.9 Inference systems: serving the model efficiently
+## 44.9 Parameter-efficient fine-tuning: adapting without retraining
+
+The 112 GB above was for training a 7B model from scratch — full fine-tuning of an existing model costs the same, because you still hold the optimizer state for *every* parameter. But most people who adapt an open model do not want to move all 7 billion weights; they want to teach it one new skill or style on a modest GPU. **Parameter-efficient fine-tuning (PEFT)** freezes the pretrained weights and trains a tiny number of new ones.
+
+**Intuition first:** you don't rewrite an entire textbook to add a chapter of margin notes. PEFT keeps the original "textbook" (the frozen base model) untouched and trains a thin set of "sticky notes" — a few million parameters — that nudge the model's behavior. Because there is no optimizer state for the frozen 99%+ of weights, the memory cost collapses.
+
+The dominant method is **LoRA (Low-Rank Adaptation)**. The key observation: the *update* a fine-tune applies to a big weight matrix $W \in \mathbb{R}^{d \times d}$ is empirically low-rank — it can be well approximated by the product of two skinny matrices. So instead of learning $\Delta W$ directly (which is $d^2$ numbers), you learn $\Delta W = BA$ where $A \in \mathbb{R}^{r \times d}$ and $B \in \mathbb{R}^{d \times r}$ with rank $r \ll d$.
+
+$$ W' = W + \Delta W = W + \frac{\alpha}{r}\,BA $$
+
+**In words:** keep the frozen weight and add a small correction built from two thin matrices, scaled by $\alpha/r$ — you only ever train $A$ and $B$. **Also written:** the layer's output is $h = Wx + \tfrac{\alpha}{r}B(Ax)$; with $d=4096$ and $r=8$ that is $2 \cdot 4096 \cdot 8 \approx 66\text{K}$ trainable params instead of $4096^2 \approx 16.8\text{M}$ — a ~250× reduction per matrix.
+
+<svg viewBox="0 0 460 180" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif" font-size="12">
+  <rect x="30" y="40" width="90" height="90" rx="4" fill="rgba(99,102,241,0.18)" stroke="#6366f1"/>
+  <text x="75" y="88" text-anchor="middle" fill="currentColor" font-weight="bold">W</text>
+  <text x="75" y="104" text-anchor="middle" fill="#777" font-size="10">frozen d×d</text>
+  <text x="135" y="90" text-anchor="middle" fill="currentColor" font-size="16">+</text>
+  <rect x="160" y="40" width="22" height="90" rx="3" fill="rgba(236,72,153,0.3)" stroke="#ec4899"/>
+  <text x="171" y="148" text-anchor="middle" fill="#777" font-size="10">B (d×r)</text>
+  <rect x="190" y="78" width="90" height="22" rx="3" fill="rgba(34,197,94,0.3)" stroke="#22c55e"/>
+  <text x="235" y="118" text-anchor="middle" fill="#777" font-size="10">A (r×d)</text>
+  <text x="300" y="90" fill="currentColor" font-size="11">trainable,</text>
+  <text x="300" y="106" fill="currentColor" font-size="11">tiny (rank r)</text>
+  <text x="230" y="22" text-anchor="middle" fill="#777" font-size="11">ΔW = B·A  (low rank)</text>
+</svg>
+
+The wins compound: tiny optimizer state (only $A,B$ get momentum/variance), the frozen base can be loaded once and **quantized** (this is **QLoRA** — a 4-bit frozen base plus LoRA adapters fine-tunes a 70B model on a single 48 GB GPU), and adapters are a few megabytes you can swap per task without touching the base. At inference you can fold $BA$ back into $W$ so there is zero added latency.
+
+```python
+# LoRA fine-tuning with Hugging Face PEFT (+ 4-bit base = QLoRA)
+from transformers import AutoModelForCausalLM, BitsAndBytesConfig
+from peft import LoraConfig, get_peft_model
+
+bnb = BitsAndBytesConfig(load_in_4bit=True,
+                         bnb_4bit_quant_type="nf4",
+                         bnb_4bit_compute_dtype="bfloat16")
+base = AutoModelForCausalLM.from_pretrained(
+    "meta-llama/Llama-3.1-8B", quantization_config=bnb, device_map="auto")
+
+lora = LoraConfig(r=8, lora_alpha=16, lora_dropout=0.05,
+                  target_modules=["q_proj", "v_proj"],  # adapt attention projections
+                  task_type="CAUSAL_LM")
+model = get_peft_model(base, lora)
+model.print_trainable_parameters()
+# trainable params: ~3.4M || all params: ~8B || trainable%: 0.04
+# ...then train with a normal Trainer; only A,B receive gradients
+```
+
+::: {.callout-tip}
+**Intuition:** full fine-tuning and LoRA usually land at similar quality for adapting a model to a new domain or instruction style, because the adaptation really is low-rank. Reach for full fine-tuning only when you are changing the model's *fundamental* capabilities, not its surface behavior.
+:::
+
+## 44.10 Post-training: from base model to assistant
+
+A model that has only done next-token prediction is a brilliant *autocomplete*, not an *assistant*: ask it a question and it might continue with more questions, because that is what often follows a question on the web. Turning a pretrained base into something helpful, honest, and harmless is **post-training**, and it has two main stages.
+
+**Supervised fine-tuning (SFT).** First you fine-tune on a curated set of (prompt, ideal-response) pairs — high-quality demonstrations of the behavior you want: answering questions, following instructions, refusing harmful requests, using a consistent format. This is ordinary supervised next-token training, just on demonstration data rather than raw web text. It teaches the model the *shape* of being an assistant.
+
+**Preference optimization (RLHF and successors).** SFT alone can't easily teach "this answer is *better* than that one" when both are plausible. The fix is to learn from **human preferences**: collect pairs where a human marked one response as preferred over another, then push the model toward the winners and away from the losers.
+
+```{mermaid}
+flowchart LR
+    A["Pretrained<br/>base model"] --> B["SFT<br/>(demonstrations)"]
+    B --> C["Collect preference pairs<br/>(human picks better of two)"]
+    C --> D["RLHF: train reward model<br/>+ PPO against it"]
+    C --> E["DPO: optimize preferences<br/>directly, no reward model"]
+    D --> F["Aligned<br/>assistant"]
+    E --> F
+```
+
+Classic **RLHF** does this in two steps: train a **reward model** to predict which response a human prefers, then use reinforcement learning (**PPO**) to fine-tune the LLM to maximize that reward — while a KL penalty keeps it from drifting too far from the SFT model and "hacking" the reward. It works but is finicky: you maintain a separate reward model and an unstable RL loop.
+
+**Direct Preference Optimization (DPO)** is the now-common simplification. A clever derivation shows you can skip the explicit reward model and the RL entirely, optimizing the policy *directly* on preference pairs with a simple classification-style loss:
+
+$$ \mathcal{L}_{DPO} = -\,\mathbb{E}_{(x, y_w, y_l)}\Big[\log \sigma\Big(\beta \log \tfrac{\pi_\theta(y_w|x)}{\pi_{ref}(y_w|x)} - \beta \log \tfrac{\pi_\theta(y_l|x)}{\pi_{ref}(y_l|x)}\Big)\Big] $$
+
+**In words:** raise the model's probability of the human-preferred answer $y_w$ relative to the rejected one $y_l$, measured against a frozen reference model so it doesn't wander off — it's just a logistic loss on the *difference* of log-probability ratios. **Also written:** with the per-response "implicit reward" $\hat r(y) = \beta\log\frac{\pi_\theta(y|x)}{\pi_{ref}(y|x)}$, the loss is simply $-\log\sigma(\hat r(y_w) - \hat r(y_l))$ — the same form as training a binary classifier to prefer the winner.
+
+```python
+# DPO with the TRL library — no reward model, no PPO loop
+from trl import DPOTrainer, DPOConfig
+# dataset rows: {"prompt": ..., "chosen": ..., "rejected": ...}
+trainer = DPOTrainer(
+    model=policy_model,            # the SFT model being tuned
+    ref_model=reference_model,     # frozen SFT copy (the π_ref baseline)
+    args=DPOConfig(beta=0.1, learning_rate=5e-7, output_dir="dpo-out"),
+    train_dataset=pref_dataset,
+    processing_class=tokenizer,
+)
+trainer.train()
+```
+
+::: {.callout-note}
+This pairs naturally with PEFT (44.9): SFT and DPO are very often done with LoRA adapters on a frozen, quantized base, which is how a small team can align a 70B model without a training cluster. Newer variants (RLAIF, where an LLM provides the preference labels; GRPO, used for reasoning models) follow the same skeleton — collect preferences, optimize toward them.
+:::
+
+## 44.11 Inference systems: serving the model efficiently
 
 Training happens once; inference happens billions of times, so its economics dominate the lifetime cost of a model. LLM inference has a peculiar structure: it runs in two distinct phases. **Prefill** ingests the whole prompt in one parallel forward pass — this is compute-bound and fast per token. **Decode** then emits one token at a time, and each step re-reads the entire model from HBM to produce a single token — this is **memory-bound** and is where the latency lives. Recognizing that decode is memory-bound is the key that unlocks almost every trick below. (These are introduced in Ch 23/Ch 31; here is how they fit the systems picture.)
+
+**Everyday analogy for the two phases:** prefill is like *reading* a whole letter at a glance — your eyes take in the page in parallel. Decode is like *writing* the reply by hand, one word at a time, where each word depends on all the words before it. Reading is fast and parallel; writing is serial and slow, and that is where you spend your afternoon.
 
 **KV cache.** Generating token $t$ requires attending to all previous tokens' keys and values. Recomputing them every step would be quadratic; instead you **cache** the K and V tensors for every past token and reuse them. This is the single most important inference optimization — but the cache grows linearly with sequence length and batch size and quickly becomes the dominant memory consumer, larger than the model itself for long contexts. Its size is concrete and worth being able to estimate:
 
 $$ \text{KV bytes} = 2 \times L \times n_{kv} \times d_{head} \times N_{tok} \times \text{bytes} $$
+
+**In words:** the cache stores a key and a value (the leading 2) for every layer, every key/value head, every head dimension, and every token in the sequence — multiply them all by the bytes per number. **Also written:** $\text{KV bytes} = 2\,L\,n_{kv}\,d_{head}\,N_{tok}\,b$; since $n_{kv}\,d_{head} = d_{kv}$ (the total key/value width per layer), this is $2\,L\,d_{kv}\,N_{tok}\,b$.
 
 The leading 2 is K *and* V, $L$ is layers, $n_{kv}$ the number of key/value heads, $N_{tok}$ the sequence length. For a 7B-class model (32 layers, 32 KV heads, 128 head dim) at bf16, a single 8K-token sequence costs $2 \times 32 \times 32 \times 128 \times 8192 \times 2 \approx 4.3$ GB — which is exactly why grouped-query attention (fewer $n_{kv}$) and cache quantization matter so much, and why memory, not compute, caps your batch size.
 
 **PagedAttention / vLLM.** The KV cache is awkward to store: a naive contiguous allocation per request wastes huge amounts of memory to fragmentation, because you must reserve for the *maximum* possible length. **PagedAttention** (the core idea in **vLLM**) borrows virtual-memory paging from operating systems: the cache is split into fixed-size blocks allocated on demand and tracked by a block table, so memory is used only as tokens are actually generated. The result is far higher GPU utilization and bigger effective batch sizes.
 
 **Continuous batching.** Requests arrive at different times and finish at different lengths. Static batching forces fast requests to wait for the slowest in their batch. **Continuous (in-flight) batching** instead lets a finished sequence drop out and a newly arrived one slot into the batch at the next step, keeping the GPU saturated. It is one of the largest throughput wins in production serving.
+
+In practice you get PagedAttention and continuous batching for free by serving with vLLM rather than implementing them:
+
+```python
+# vLLM applies PagedAttention + continuous batching automatically
+from vllm import LLM, SamplingParams
+
+llm = LLM(model="meta-llama/Llama-3.1-8B-Instruct",
+          quantization="awq",          # int4 weights -> fewer HBM bytes/token
+          gpu_memory_utilization=0.9)   # how much VRAM to give the KV cache
+
+params = SamplingParams(temperature=0.7, max_tokens=256)
+# Pass many prompts at once; the scheduler batches them in-flight
+outputs = llm.generate(["Explain the KV cache.", "What is FlashAttention?"], params)
+for o in outputs:
+    print(o.outputs[0].text)
+```
 
 **Quantization.** Since decode is memory-bound, shrinking the weights directly speeds it up. Post-training quantization to **int8** or **int4** (methods like GPTQ and AWQ) cuts the bytes read from HBM per token — roughly halving or quartering the dominant cost — for a small, often negligible, quality loss. A 70B model that needs 140 GB in bf16 fits in ~35 GB at int4.
 
@@ -558,23 +817,37 @@ The output is **provably identical** to what the target model would have produce
 
 A last framing that ties the serving knobs together: you are always trading two metrics. **Latency** is what one user feels — time-to-first-token (dominated by prefill) and inter-token latency (dominated by decode). **Throughput** is total tokens/second across all users, which is what determines cost-per-token. Bigger batches raise throughput but worsen per-user latency; speculative decoding cuts latency but spends extra compute; quantization helps both. There is no single optimum — you tune the batch size and these techniques to a target latency SLA, then maximize throughput under it.
 
+A small worked example makes the cost concrete. Suppose decode reads the full 7B model (14 GB in bf16) from HBM once per token on an A100 (~2 TB/s):
+
+```python
+model_bytes = 14e9          # 7B params * 2 bytes (bf16)
+bandwidth   = 2e12          # A100 HBM ~2 TB/s
+sec_per_tok = model_bytes / bandwidth
+print(f"~{1/sec_per_tok:.0f} tokens/sec, single stream (memory-bound floor)")
+# ~143 tokens/sec  -> int4 quantization (3.5 GB) would roughly 4x this
+```
+
+The number is set by *bandwidth divided by bytes read*, not by FLOPs — which is precisely why quantization (fewer bytes) and large batches (amortize the read across many sequences) are the two levers that move it.
+
 ## 44.1 — Key takeaways
 
 - **Tokenization is foundational and frozen.** Byte-level BPE guarantees no out-of-vocabulary tokens (WordPiece and Unigram/SentencePiece are the alternatives); vocabulary size trades sequence length and embedding cost against rare-token quality. Tokenizer quirks explain a surprising amount of model behavior (bad arithmetic, per-language cost).
 - **Memory bandwidth, not FLOPs, is usually the bottleneck.** The HBM↔SRAM gap means most LLM kernel work is about *moving less data*. Arithmetic intensity versus the roofline ridge decides whether an op is compute- or memory-bound.
-- **FlashAttention** computes exact attention without materializing the $N\times N$ matrix, via tiling and online softmax — a key enabler of long context. Custom kernels are increasingly written in **Triton**.
+- **FlashAttention** computes exact attention without materializing the $N\times N$ matrix, via tiling and online softmax — a key enabler of long context. Custom kernels are increasingly written in **Triton**; in practice you call it via `scaled_dot_product_attention` or `attn_implementation="flash_attention_2"`.
 - **Scaling laws** make loss predictable via $L(N,D)=E+A/N^{\alpha}+B/D^{\beta}$. Chinchilla's ~20 tokens/parameter overturned Kaplan; $C \approx 6ND$ lets you project model and data size from a compute budget — though inference economics often justify overtraining smaller models.
-- **Distributed training** composes data, tensor, pipeline, and sequence parallelism (3D parallelism); the pipeline bubble shrinks with more microbatches; **ZeRO/FSDP** shard optimizer state, gradients, and parameters to fit models that dwarf a single GPU.
+- **Distributed training** composes data, tensor, pipeline, and sequence parallelism (3D parallelism); the pipeline bubble shrinks with more microbatches; the collective primitives (all-reduce, all-gather, reduce-scatter) underlie all of it; **ZeRO/FSDP** shard optimizer state, gradients, and parameters to fit models that dwarf a single GPU.
 - **Mixture-of-Experts** grows parameters without proportional compute via top-$k$ routing, kept healthy by a load-balancing loss and expert-capacity limits — but all experts must fit in memory and routing adds all-to-all communication.
 - **The training stack** (bf16/fp8 mixed precision, loss scaling for fp16, gradient checkpointing, Adam's 16 bytes/param) decides what fits; a "small" 7B model needs ~112 GB before activations.
 - **Data quality** — dedup (MinHash/LSH), filtering, decontamination, mixing — is a top differentiator; unique high-quality tokens beat raw volume.
+- **PEFT/LoRA** freezes the base and trains a low-rank update $\Delta W = \tfrac{\alpha}{r}BA$, slashing trainable parameters ~250×; QLoRA adds a 4-bit frozen base so a 70B model fine-tunes on one GPU.
+- **Post-training** turns a base model into an assistant: supervised fine-tuning on demonstrations, then preference optimization (RLHF with a reward model + PPO, or the simpler reward-model-free DPO).
 - **Inference** splits into compute-bound prefill and memory-bound decode; KV cache (size it with the formula), PagedAttention/vLLM, continuous batching, quantization, and speculative decoding together trade latency against throughput to make serving affordable.
 
 ## 44.2 — See also
 
 - **Chapter 23 — Large Language Models:** the Transformer decoder architecture, pretraining objective, and what these systems are built to train and serve.
 - **Chapter 30 — Distributed & Scalable ML:** the general data/model parallelism and collective-communication primitives (all-reduce, all-gather) that 44.5 specializes to LLMs.
-- **Chapter 31 — MLOps & Serving / Inference Optimization:** the broader serving context for the KV cache, batching, and quantization techniques in 44.9.
+- **Chapter 31 — MLOps & Serving / Inference Optimization:** the broader serving context for the KV cache, batching, and quantization techniques in 44.11.
 - **Chapter 09 — Attention & Transformers:** the attention math that FlashAttention (44.3) rewrites to be IO-aware.
 - **Chapter 03 — Numerical Computing & Hardware:** floating-point formats and the compute/memory tradeoffs underlying mixed precision (44.7).
 

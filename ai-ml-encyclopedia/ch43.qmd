@@ -137,6 +137,22 @@ After lowercasing and tokenizing, the dictionary maps each term to a postings li
 
 A **Boolean query** combines terms with `AND`, `OR`, `NOT` by intersecting, unioning, or differencing postings lists. The query `cat AND sat` intersects `{1,3}` with `{1,2}` to return `{1}`. Because postings are kept **sorted by docID**, intersection is a linear merge — walk two pointers, advance the smaller, emit on a match — in $O(|A|+|B|)$ rather than $O(|A|\cdot|B|)$.
 
+Here is the two-pointer merge as a picture — two sorted lists, fingers walking down, emitting only where they meet:
+
+<svg viewBox="0 0 360 150" xmlns="http://www.w3.org/2000/svg">
+  <text x="20" y="20" font-size="11" fill="currentColor">A: cat</text>
+  <text x="20" y="120" font-size="11" fill="currentColor">B: sat</text>
+  <g font-size="12" fill="currentColor" text-anchor="middle">
+    <rect x="70" y="30" width="34" height="26" rx="4" fill="#22c55e" fill-opacity="0.25" stroke="currentColor"/><text x="87" y="48">1</text>
+    <rect x="150" y="30" width="34" height="26" rx="4" fill="#6366f1" fill-opacity="0.18" stroke="currentColor"/><text x="167" y="48">3</text>
+    <rect x="70" y="100" width="34" height="26" rx="4" fill="#22c55e" fill-opacity="0.25" stroke="currentColor"/><text x="87" y="118">1</text>
+    <rect x="150" y="100" width="34" height="26" rx="4" fill="#6366f1" fill-opacity="0.18" stroke="currentColor"/><text x="167" y="118">2</text>
+  </g>
+  <line x1="87" y1="58" x2="87" y2="98" stroke="#22c55e" stroke-width="2.5"/>
+  <text x="240" y="78" font-size="11" fill="#22c55e">1 = 1 → emit ✓</text>
+  <text x="240" y="98" font-size="10" fill="currentColor" opacity="0.7">then 3 vs 2: advance smaller</text>
+</svg>
+
 ```python
 # merge-intersect two sorted postings lists
 def intersect(a, b):
@@ -152,6 +168,9 @@ assert intersect([1,3], [1,2]) == [1]     # cat AND sat -> doc 1
 
 **Index construction** at scale uses block-based sort-merge: parse documents into `(term, docID)` pairs, sort, and group. When the corpus exceeds memory, sort blocks on disk and merge them (BSBI/SPIMI). The dictionary itself is kept in memory; postings live on disk.
 
+In words: the formula for the cost of intersection, $O(|A|+|B|)$, says *we touch each posting in each list at most once* — there is no nested loop comparing every pair.
+**Also written:** $O(n)$ where $n = |A| + |B|$ is the total length of both postings lists.
+
 ### Postings compression
 
 Postings lists are huge, so we compress them. Two ideas do most of the work. First, store **gaps** (delta encoding) instead of absolute docIDs: a postings list `824, 829, 1001` becomes `824, 5, 172`. Gaps are small for frequent terms, and small numbers compress well. Second, encode those gaps with a **variable-byte** or bit-level code (Elias-gamma, or modern SIMD-friendly schemes like PForDelta) so a gap of 5 costs one byte, not four.
@@ -160,9 +179,24 @@ Postings lists are huge, so we compress them. Two ideas do most of the work. Fir
 Gap encoding works because a sorted list of increasing integers has small successive differences. The more frequent the term, the denser the postings, the smaller the gaps — so the most expensive lists compress the best.
 :::
 
+### Phrase and proximity queries: positional indexes
+
+Boolean `cat AND sat` finds documents with both words *anywhere*. But searching for the **phrase** "new york" should not match a document about a "new park in york." The fix is a **positional index**: each posting stores not just the docID but the **list of positions** where the term occurs.
+
+The intuition: knowing a word is *present* is not enough; you need to know *where* so you can check that query words sit next to each other. Extend the postings to `term → docID: [pos1, pos2, ...]`:
+
+| term | postings (docID: positions) |
+|---|---|
+| new | 1: [0, 17], 4: [3] |
+| york | 1: [1], 4: [9] |
+
+A phrase query "new york" intersects the docID lists as before, then for each shared doc checks whether some position of "york" equals a position of "new" **plus one**. In doc 1, "new" at 0 and "york" at 1 → adjacent → match. In doc 4, "new" at 3 and "york" at 9 → 6 apart → no phrase match. A **proximity query** ("new" NEAR/3 "york") relaxes "+1" to "within $k$." Positional indexes are larger — every occurrence is stored — but they unlock phrase, proximity, and the field-position features that downstream rankers love.
+
 ## 43.2 The vector-space model and TF-IDF
 
 Boolean retrieval returns a *set* — a document either matches or it does not — with no notion of which match is best. Real search needs **ranking**. The **vector-space model** treats each document and the query as a vector in a space with one dimension per vocabulary term, then ranks documents by how close their vector points to the query's.
+
+The everyday picture: imagine every document as an arrow in a giant space where each axis is a word. Two documents about the same topic point in nearly the same direction, even if one is a paragraph and the other a book. Ranking is just measuring the angle between the query's arrow and each document's arrow.
 
 The weight on each term needs to capture two intuitions:
 
@@ -175,6 +209,9 @@ $$
 \text{idf}_t = \log \frac{N}{\text{df}_t}, \qquad w_{t,d} = (1 + \log \text{tf}_{t,d}) \cdot \text{idf}_t
 $$
 
+**In words:** a term's weight in a document is *how much it shows up here* (with diminishing returns from the log) times *how rare it is across the whole corpus* (the idf).
+**Also written:** $w_{t,d} = (1 + \log \text{tf}_{t,d}) \cdot \log(N / \text{df}_t)$, i.e. substitute the idf definition directly into the weight.
+
 The log on tf reflects diminishing returns (the 10th occurrence adds less than the 2nd); the idf log dampens the dominance of common terms.
 
 Documents are ranked by **cosine similarity** between query and document vectors:
@@ -182,6 +219,9 @@ Documents are ranked by **cosine similarity** between query and document vectors
 $$
 \cos(\mathbf{q}, \mathbf{d}) = \frac{\mathbf{q} \cdot \mathbf{d}}{\|\mathbf{q}\|\,\|\mathbf{d}\|}
 $$
+
+**In words:** line up the two vectors and ask *how aligned are they?* — 1 means same direction (identical term mix), 0 means no shared terms; the denominator cancels out document length.
+**Also written:** $\cos(\mathbf{q},\mathbf{d}) = \hat{\mathbf{q}} \cdot \hat{\mathbf{d}}$ where $\hat{\mathbf{q}} = \mathbf{q}/\|\mathbf{q}\|$ and $\hat{\mathbf{d}} = \mathbf{d}/\|\mathbf{d}\|$ are the unit-normalized vectors — cosine is just the dot product of normalized vectors.
 
 Cosine, not raw dot product, because we want **direction** (which terms, in what proportion) not **magnitude** (a long document should not win just for being long).
 
@@ -198,6 +238,21 @@ Cosine, not raw dot product, because we want **direction** (which terms, in what
   <text x="250" y="150" font-size="10" fill="#c44">raw tf — linear, unbounded</text>
 </svg>
 
+**Doing it with scikit-learn.** In practice you never build TF-IDF by hand — `TfidfVectorizer` builds the term–document matrix and `cosine_similarity` ranks:
+
+```python
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.metrics.pairwise import cosine_similarity
+
+docs = ["the cat sat", "the dog sat", "the cat ran"]
+vec = TfidfVectorizer()                 # lowercases + tokenizes for you
+X = vec.fit_transform(docs)             # sparse (n_docs x n_terms) TF-IDF matrix
+q = vec.transform(["cat ran"])          # query uses the SAME vocabulary
+scores = cosine_similarity(q, X).ravel()
+ranking = scores.argsort()[::-1]        # doc 3 ("the cat ran") ranks first
+print(ranking, scores.round(2))
+```
+
 ## 43.3 BM25 and BM25F
 
 TF-IDF works, but its tf term grows without bound and it ignores document length crudely. **BM25** (Best Match 25) is the probabilistic-retrieval refinement that has been the production default for two decades. It fixes two things: tf **saturation** and **length normalization**.
@@ -207,6 +262,9 @@ For query $q$ with terms $t$, document $d$ of length $|d|$, average document len
 $$
 \text{BM25}(q,d) = \sum_{t \in q} \text{idf}_t \cdot \frac{\text{tf}_{t,d}\,(k_1 + 1)}{\text{tf}_{t,d} + k_1\!\left(1 - b + b\,\dfrac{|d|}{\text{avgdl}}\right)}
 $$
+
+**In words:** for each query term, score *how rare it is* times *a saturating function of how often it appears here, with a penalty for the document being longer than average*; sum those over the query terms.
+**Also written:** $\text{BM25}(q,d) = \sum_{t \in q} \text{idf}_t \cdot \dfrac{\text{tf}_{t,d}}{\text{tf}_{t,d}/(k_1+1) + K/(k_1+1)}$ with $K = k_1(1 - b + b\,|d|/\text{avgdl})$ — the same fraction, scaled so the saturation ceiling reads off directly.
 
 Two intuitions live in the formula:
 
@@ -226,11 +284,24 @@ The idf in BM25 is the probabilistic form $\log\frac{N - \text{df}_t + 0.5}{\tex
 
 Going from tf=10 to tf=100 — a 10× jump — barely moves the score (3.93 → 4.35). That is saturation doing its job; TF-IDF's $(1+\log\text{tf})$ would have grown much faster and unboundedly.
 
+**Using a real engine.** Production search uses BM25 out of the box. With the `rank-bm25` library you can score a toy corpus in a few lines:
+
+```python
+from rank_bm25 import BM25Okapi
+corpus = [d.split() for d in ["the cat sat", "the dog sat", "the cat ran"]]
+bm25 = BM25Okapi(corpus, k1=1.2, b=0.75)     # builds df, avgdl, idf internally
+print(bm25.get_scores("cat ran".split()))    # one BM25 score per document
+# Lucene / Elasticsearch / OpenSearch use BM25 as the default similarity.
+```
+
 **BM25F** extends this to **structured (fielded) documents** — title, body, anchor text. Instead of scoring fields separately and summing (which double-counts saturation), BM25F combines field term frequencies into a single weighted pseudo-frequency *before* applying saturation:
 
 $$
 \tilde{\text{tf}}_{t,d} = \sum_{f} w_f \cdot \frac{\text{tf}_{t,f}}{1 - b_f + b_f\,\frac{|d_f|}{\text{avgdl}_f}}
 $$
+
+**In words:** before saturating, build one combined term-frequency that adds up the term's count in each field — title, body, anchors — weighted by how much that field matters and length-normalized per field.
+**Also written:** $\tilde{\text{tf}}_{t,d} = \sum_f w_f\, \text{tf}_{t,f} / B_f$ where $B_f = 1 - b_f + b_f\,|d_f|/\text{avgdl}_f$ is the per-field length normalizer.
 
 then feeds $\tilde{\text{tf}}$ through the BM25 saturation. The point: a term in the **title** ($w_{\text{title}}$ large) counts more than the same term buried in the body, with per-field length normalization $b_f$.
 
@@ -238,7 +309,38 @@ then feeds $\tilde{\text{tf}}$ through the BM25 saturation. The point: a term in
 Don't run BM25 per field and add the scores. Saturation is nonlinear, so summing per-field BM25 lets a term that appears a little in *every* field rack up a high total. BM25F deliberately pools the frequencies first, then saturates once.
 :::
 
-## 43.4 Evaluating retrieval: precision, recall, MAP, nDCG
+## 43.4 Query expansion and relevance feedback
+
+A query is a few words; the relevant documents may phrase the idea differently. **Query expansion** widens the query with related terms to bridge that gap — the lightweight cousin of the neural vocabulary-mismatch fixes in §43.7.
+
+The everyday picture: you search "car insurance," and the engine quietly also looks for "auto," "vehicle," "coverage," because it has learned those travel together. You get the documents you meant, not just the ones that used your exact words.
+
+**Relevance feedback** uses the user's (or a model's) judgment of the first results to refine the query. The classic **Rocchio** update, in the vector-space model, pushes the query vector *toward* documents marked relevant and *away* from non-relevant ones:
+
+$$
+\mathbf{q}_{\text{new}} = \alpha\,\mathbf{q}_{0} + \beta\,\frac{1}{|D_r|}\sum_{\mathbf{d}\in D_r}\mathbf{d} \;-\; \gamma\,\frac{1}{|D_{nr}|}\sum_{\mathbf{d}\in D_{nr}}\mathbf{d}
+$$
+
+**In words:** the new query is the old query, plus a nudge toward the average relevant document, minus a nudge away from the average irrelevant one.
+**Also written:** $\mathbf{q}_{\text{new}} = \alpha\,\mathbf{q}_0 + \beta\,\bar{\mathbf{d}}_r - \gamma\,\bar{\mathbf{d}}_{nr}$, where $\bar{\mathbf{d}}_r$ and $\bar{\mathbf{d}}_{nr}$ are the centroids of the relevant and non-relevant sets.
+
+When no human is in the loop, **pseudo-relevance feedback** (blind feedback) just *assumes* the top-$k$ results are relevant, expands from their frequent terms, and re-runs — often a free quality bump, at the risk of **query drift** if the top-$k$ were off-topic. Modern systems add **synonym expansion** (WordNet, learned embeddings) and **spelling/normalization**; LLM-based **query rewriting** (HyDE: generate a hypothetical answer document, then retrieve with *its* embedding) is the current incarnation of the same idea.
+
+<svg viewBox="0 0 360 200" xmlns="http://www.w3.org/2000/svg">
+  <line x1="30" y1="170" x2="340" y2="170" stroke="#888" stroke-width="1"/>
+  <line x1="30" y1="170" x2="30" y2="20" stroke="#888" stroke-width="1"/>
+  <circle cx="90" cy="120" r="6" fill="#6366f1"/><text x="78" y="112" font-size="10" fill="#6366f1">q₀</text>
+  <g fill="#22c55e"><circle cx="250" cy="50" r="5"/><circle cx="270" cy="70" r="5"/><circle cx="230" cy="75" r="5"/></g>
+  <text x="285" y="55" font-size="10" fill="#22c55e">relevant</text>
+  <g fill="#ec4899"><circle cx="120" cy="60" r="5"/><circle cx="100" cy="45" r="5"/></g>
+  <text x="60" y="45" font-size="10" fill="#ec4899">non-rel</text>
+  <circle cx="190" cy="90" r="6" fill="#f59e0b"/><text x="198" y="86" font-size="10" fill="#f59e0b">q_new</text>
+  <path d="M96,116 L184,93" stroke="#f59e0b" stroke-width="2" marker-end="url(#ah)"/>
+  <defs><marker id="ah" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6 Z" fill="#f59e0b"/></marker></defs>
+  <text x="120" y="190" font-size="10" fill="currentColor" opacity="0.7">Rocchio pulls the query toward relevant, away from non-relevant</text>
+</svg>
+
+## 43.5 Evaluating retrieval: precision, recall, MAP, nDCG
 
 You cannot improve a ranker you cannot measure. IR evaluation needs **relevance judgments** — for each query, which documents are relevant — then scores how well the ranking surfaces them.
 
@@ -247,6 +349,9 @@ You cannot improve a ranker you cannot measure. IR evaluation needs **relevance 
 $$
 \text{Precision} = \frac{\text{relevant retrieved}}{\text{retrieved}}, \qquad \text{Recall} = \frac{\text{relevant retrieved}}{\text{all relevant}}
 $$
+
+**In words:** precision is *how clean was what I showed*; recall is *how much of the good stuff did I catch*.
+**Also written:** with true positives $tp$, false positives $fp$, false negatives $fn$: $\text{Precision} = tp/(tp+fp)$, $\text{Recall} = tp/(tp+fn)$.
 
 Precision asks "of what I showed, how much was good?"; recall asks "of all the good stuff, how much did I find?". (See Ch. 06 for the classification view.) But ranking quality is about **order**, so we need order-aware metrics.
 
@@ -270,6 +375,9 @@ We divide by 3 (total relevant), so missing a relevant document entirely is pena
 $$
 \text{DCG@}k = \sum_{i=1}^{k} \frac{2^{\text{rel}_i} - 1}{\log_2(i+1)}, \qquad \text{nDCG@}k = \frac{\text{DCG@}k}{\text{IDCG@}k}
 $$
+
+**In words:** add up each result's usefulness ($2^{\text{rel}}-1$, so higher grades count a lot more), shrinking each by how far down the list it sits, then divide by the score of the best-possible ordering so it lands between 0 and 1.
+**Also written:** $\text{DCG@}k = \sum_{i=1}^{k} g_i \cdot d_i$ with gain $g_i = 2^{\text{rel}_i}-1$ and discount $d_i = 1/\log_2(i+1)$ — a gain term times a position-discount term.
 
 IDCG is the DCG of the *ideal* ranking (relevances sorted descending), so nDCG lands in $[0,1]$ and is comparable across queries.
 
@@ -297,7 +405,17 @@ def ndcg(rels):
 assert abs(ndcg([3,1,2]) - 0.97) < 0.01
 ```
 
-## 43.5 Learning to rank and LambdaMART
+**With scikit-learn.** `ndcg_score` does the same, taking true relevance grades and predicted scores:
+
+```python
+from sklearn.metrics import ndcg_score
+import numpy as np
+true_rel = np.array([[3, 1, 2]])        # graded relevance of 3 docs
+scores   = np.array([[0.9, 0.4, 0.6]])  # ranker's scores (same order)
+print(round(ndcg_score(true_rel, scores), 2))   # 0.97
+```
+
+## 43.6 Learning to rank and LambdaMART
 
 BM25 has a handful of hand-tuned knobs. Modern search blends **hundreds of signals** — BM25 over several fields, freshness, click-through rate, PageRank, query-document embeddings. **Learning to rank (LTR)** trains a model to combine them, supervised by relevance judgments. The three families differ in what the loss looks at:
 
@@ -320,9 +438,25 @@ $$
 \lambda_{ij} = \frac{-1}{1 + e^{\,s_i - s_j}} \cdot \bigl|\Delta\text{nDCG}_{ij}\bigr|
 $$
 
+**In words:** the push on a pair is *how surprised we are that $i$ isn't already clearly above $j$* (the sigmoid factor) times *how much the metric would improve if we got this pair right* (the $\Delta$nDCG factor).
+**Also written:** $\lambda_{ij} = -\sigma(s_j - s_i)\cdot|\Delta\text{nDCG}_{ij}|$ where $\sigma(x) = 1/(1+e^{-x})$ is the logistic sigmoid — the RankNet gradient weighted by the metric delta.
+
 The first factor is the pairwise (RankNet) gradient; the $|\Delta\text{nDCG}|$ factor is the listwise insight — **pairs whose swap most damages the metric get the strongest push**. Each document's gradient is the sum of lambdas over all pairs it participates in, and gradient boosting fits trees to those lambdas. The result is a model trained pairwise but *aware of* a listwise metric.
 
-## 43.6 Neural IR: dense retrieval, late interaction, learned sparse
+**In a framework.** LightGBM and XGBoost both ship LambdaMART under an `lambdarank`/`rank:ndcg` objective; you pass a `group` array telling the model which rows belong to the same query:
+
+```python
+import lightgbm as lgb
+# X: features, y: relevance grades, group: #docs per query (sums to len(X))
+train = lgb.Dataset(X, label=y, group=group)
+ranker = lgb.train(
+    {"objective": "lambdarank", "metric": "ndcg", "ndcg_eval_at": [5, 10]},
+    train, num_boost_round=100,
+)
+# ranker.predict(X_new) -> scores; sort within each query group to rank.
+```
+
+## 43.7 Neural IR: dense retrieval, late interaction, learned sparse
 
 BM25 matches **exact terms**. It cannot tell that "car" and "automobile" mean the same thing — this is the **vocabulary mismatch** problem. Neural IR uses learned representations (Ch. 14, Ch. 18) to match on **meaning**. Three architectures dominate, trading off quality against cost.
 
@@ -351,9 +485,24 @@ $$
 S(q,d) = \sum_{i \in q} \max_{j \in d} \; \mathbf{v}_i^q \cdot \mathbf{v}_j^d
 $$
 
+**In words:** every query word finds its single best-matching word in the document and contributes that match score; add those best matches up.
+**Also written:** $S(q,d) = \sum_{i \in q} \max_{j \in d} \langle \mathbf{v}_i^q, \mathbf{v}_j^d \rangle$, the sum over query tokens of the row-maxima of the query-by-document token similarity matrix.
+
 This recovers token-level matching (so "car" can find "automobile" *and* still reward exact overlaps) while keeping encoding independent enough to precompute document tokens. The cost is storage — many vectors per document.
 
 **Learned sparse (SPLADE).** Predict a **sparse** vector over the vocabulary: each document is expanded into a weighted bag of terms, including terms it does not literally contain (learned expansion fixes vocabulary mismatch), with most weights zero. Because the output is sparse and term-indexed, you can serve it on a **classic inverted index** — getting neural semantics with the mature, fast infrastructure of §43.1.
+
+**Building a dense retriever in practice.** `sentence-transformers` wraps a two-tower encoder; you embed the corpus once, then do a cosine/dot-product search per query:
+
+```python
+from sentence_transformers import SentenceTransformer, util
+model = SentenceTransformer("all-MiniLM-L6-v2")
+corpus = ["a cat sat on the mat", "automobiles need insurance", "dogs love to run"]
+doc_emb = model.encode(corpus, convert_to_tensor=True)        # precompute offline
+q_emb   = model.encode("car coverage", convert_to_tensor=True)
+hits = util.semantic_search(q_emb, doc_emb, top_k=2)          # ANN-style lookup
+print(hits[0])   # ranks "automobiles need insurance" first despite no shared word
+```
 
 These power **RAG** (retrieval-augmented generation): retrieve passages with dense/sparse/hybrid search, then feed them to an LLM as context. The retriever quality caps the generator — garbage retrieved is garbage generated. See **Ch. 23** for the full RAG pipeline.
 
@@ -361,7 +510,35 @@ These power **RAG** (retrieval-augmented generation): retrieve passages with den
 In practice the strongest systems are **hybrid**: BM25 (exact, cheap, great on rare terms and IDs) plus a dense retriever (semantic), with scores fused (e.g. reciprocal-rank fusion) and a cross-encoder **reranker** on the top-k. Each method covers the other's blind spot.
 :::
 
-## 43.7 Near-duplicate detection: shingling, MinHash, LSH
+## 43.8 Link analysis: PageRank and HITS
+
+When documents link to each other — web pages, citations, social follows — the **link graph** itself carries a query-independent signal of importance, on top of the textual match. The founding idea of web search: a page is important if important pages link to it.
+
+The everyday picture: imagine a bored web surfer clicking links at random forever. Pages they end up visiting most often are the "important" ones. **PageRank** is exactly the long-run fraction of time this random surfer spends on each page.
+
+$$
+\text{PR}(p) = \frac{1-d}{N} + d \sum_{q \to p} \frac{\text{PR}(q)}{L(q)}
+$$
+
+**In words:** a page's rank is a small baseline everyone gets (the random teleport), plus a share of the rank flowing in from each page that links to it, split evenly across that linking page's outgoing links.
+**Also written:** in matrix form $\mathbf{r} = \frac{1-d}{N}\mathbf{1} + d\,M\mathbf{r}$, where $M_{pq} = 1/L(q)$ if $q\to p$ — the stationary distribution (dominant eigenvector) of the "random surfer" transition matrix. $d \approx 0.85$ is the damping factor; the $(1-d)$ teleport keeps the chain from getting stuck in dead ends and guarantees a unique solution.
+
+You solve it by **power iteration**: start uniform, repeatedly apply the update until the ranks stop moving.
+
+**Worked intuition.** Three pages: A→B, A→C, B→C, C→A. C is pointed to by both A and B, so rank pools at C; C then feeds A, which feeds B and C again. Iterating converges to C highest, A next, B lowest — matching the eyeball verdict that "most-linked-to wins, but who links matters."
+
+```python
+import numpy as np
+M = np.array([[0,0,1],[0.5,0,0],[0.5,1,0]])   # column q -> rows it links to
+r = np.ones(3)/3; d = 0.85
+for _ in range(50):
+    r = (1-d)/3 + d * M @ r                     # power iteration
+print(r.round(3))                               # C > A > B
+```
+
+**HITS** (Hyperlink-Induced Topic Search) splits importance into two roles: **hubs** (pages that link to many good pages — a directory) and **authorities** (pages many hubs link to — the canonical source). Each reinforces the other: a good hub points to good authorities, a good authority is pointed to by good hubs. Where PageRank is one global query-independent score, HITS is computed on a query-focused subgraph. The same eigenvector machinery underlies both, and both connect to the graph-centrality ideas in Ch. 40.
+
+## 43.9 Near-duplicate detection: shingling, MinHash, LSH
 
 The web is full of near-duplicates — mirror sites, boilerplate, lightly-edited reposts. Comparing every pair of $N$ documents is $O(N^2)$, impossible at scale. The shingling → MinHash → LSH pipeline finds near-duplicate *pairs* in roughly linear time.
 
@@ -371,11 +548,17 @@ $$
 J(A,B) = \frac{|A \cap B|}{|A \cup B|}
 $$
 
+**In words:** of all the distinct shingles appearing in either document, what fraction appear in *both*?
+**Also written:** $J(A,B) = \dfrac{|A \cap B|}{|A| + |B| - |A \cap B|}$ — expand the union via inclusion–exclusion.
+
 **Step 2 — MinHash.** Jaccard on full shingle sets is expensive to store and compare. MinHash compresses each set to a short **signature** of $n$ integers with a magic property: **the probability that two sets' MinHash values agree equals their Jaccard similarity**.
 
 $$
 \Pr[\,h_{\min}(A) = h_{\min}(B)\,] = J(A,B)
 $$
+
+**In words:** under a random shuffle of all possible shingles, the chance that the two sets' smallest elements coincide is exactly their Jaccard overlap.
+**Also written:** $\mathbb{E}\big[\frac{1}{n}\sum_{k=1}^{n}\mathbb{1}[h^{(k)}_{\min}(A) = h^{(k)}_{\min}(B)]\big] = J(A,B)$ — averaging agreement over $n$ independent hashes is an unbiased estimator of Jaccard.
 
 Why? Apply a random permutation to the universe of shingles; $h_{\min}$ is the smallest element under that permutation. The minimum coincides exactly when the overall-smallest element lies in $A\cap B$, which happens with probability $|A\cap B| / |A\cup B|$. Use $n$ independent hashes and the **fraction of matching signature slots** estimates $J$.
 
@@ -403,6 +586,9 @@ $$
 P(\text{candidate}) = 1 - (1 - s^{\,r})^{b}
 $$
 
+**In words:** a pair matches a single band only if all $r$ of its rows agree ($s^r$); it becomes a candidate unless it fails *every* one of the $b$ bands — hence one minus the chance of all-band failure.
+**Also written:** $P(\text{candidate}) = 1 - \big(1 - s^{r}\big)^{b}$, with single-band match $p = s^r$ and all-band miss $(1-p)^b$.
+
 This is an **S-curve** with a threshold near $t \approx (1/b)^{1/r}$: pairs above the threshold almost always collide, pairs below almost never do. Tune $b$ and $r$ to place the steep part where you want it.
 
 <svg viewBox="0 0 360 200" xmlns="http://www.w3.org/2000/svg">
@@ -421,7 +607,7 @@ This is an **S-curve** with a threshold near $t \approx (1/b)^{1/r}$: pairs abov
 LSH trades exactness for speed. **False negatives** (similar pairs that never collide) below the threshold are lost forever — there is no second pass. Pick $b,r$ so the S-curve threshold sits *below* your true similarity cutoff, accepting more false-positive candidates (cheap to filter) rather than missing real duplicates.
 :::
 
-## 43.8 Mining streams with sublinear memory
+## 43.10 Mining streams with sublinear memory
 
 When data arrives as an unbounded **stream** — clicks, packets, log lines — you cannot store it all. The goal is a **one-pass** algorithm using memory **sublinear** in the stream size, accepting an approximate answer. Five classics cover the common questions.
 
@@ -440,11 +626,31 @@ def reservoir(stream, k):
 
 **Bloom filter — approximate set membership.** A bit array of $m$ bits and $h$ hash functions. To insert $x$, set the $h$ bits at $\text{hash}_1(x)\dots\text{hash}_h(x)$. To query, check those bits: if any is 0, $x$ is **definitely not** present; if all are 1, $x$ is **probably** present. **No false negatives, tunable false positives**, and no stored elements — just bits. Used everywhere: "have I seen this URL?", database read-skipping, CDN caches. False-positive rate $\approx (1 - e^{-hn/m})^h$.
 
+**In words:** the false-positive rate is the chance that all $h$ of an absent item's bits happen to have been switched on by the $n$ items already inserted.
+**Also written:** $\varepsilon \approx \big(1 - e^{-hn/m}\big)^{h}$, minimized when $h = (m/n)\ln 2$, giving $\varepsilon \approx 0.6185^{\,m/n}$.
+
+Here is the Bloom filter as a doodle — three hash functions lighting up three bits per insert; a query that finds any unlit bit is a guaranteed "no":
+
+<svg viewBox="0 0 360 140" xmlns="http://www.w3.org/2000/svg">
+  <g font-size="11" fill="currentColor">
+    <text x="10" y="40">insert "cat"</text>
+    <g stroke="currentColor"><rect x="20" y="60" width="26" height="26" fill="#22c55e" fill-opacity="0.4"/><rect x="46" y="60" width="26" height="26"/><rect x="72" y="60" width="26" height="26" fill="#22c55e" fill-opacity="0.4"/><rect x="98" y="60" width="26" height="26"/><rect x="124" y="60" width="26" height="26" fill="#22c55e" fill-opacity="0.4"/><rect x="150" y="60" width="26" height="26"/></g>
+    <text x="20" y="105" font-size="9" opacity="0.7">h₁,h₂,h₃ → set 3 bits to 1</text>
+    <text x="220" y="40">query "dog"</text>
+    <g stroke="currentColor"><rect x="220" y="60" width="26" height="26" fill="#22c55e" fill-opacity="0.4"/><rect x="246" y="60" width="26" height="26" fill="#ec4899" fill-opacity="0.5"/><rect x="272" y="60" width="26" height="26" fill="#22c55e" fill-opacity="0.4"/></g>
+    <text x="246" y="76" font-size="14" text-anchor="middle" fill="#ec4899">0</text>
+    <text x="220" y="105" font-size="9" opacity="0.7">one 0 bit → definitely absent</text>
+  </g>
+</svg>
+
 **Flajolet–Martin / HyperLogLog — count distinct elements.** How many *unique* users, with kilobytes instead of gigabytes? The trick: hash each element to a bit string; track the **maximum number of leading zeros** seen. A hash with $\rho$ leading zeros appears with probability $2^{-(\rho+1)}$, so seeing $\rho$ leading zeros suggests roughly $2^{\rho}$ distinct elements. **HyperLogLog** refines this by splitting the hash into $2^p$ registers (each holding a max-leading-zeros count), then taking a bias-corrected **harmonic mean** across registers. With ~1.5 KB it estimates cardinalities into the billions at ~2% error.
 
 **Worked intuition.** If the longest run of leading zeros you have ever seen in a hashed stream is 10, then a 1-in-$2^{10}$ ≈ 1-in-1024 event has occurred — evidence of roughly 1024 distinct items. One number, the running max, summarizes the whole stream.
 
 **Count–Min sketch — approximate frequency of any item.** A 2D array of counters with $d$ rows, each row owning an independent hash into $w$ columns. To record an item, increment one counter per row ($d$ counters total). To query its count, take the **minimum** across the $d$ rows — collisions only ever *add* to a counter, so the smallest row is the least-polluted estimate. It **never underestimates**, overestimates with bounded error, and answers "how often did this IP/term/key appear?" in $O(d\cdot w)$ space instead of one counter per distinct key. The natural companion to HyperLogLog: HLL counts *how many distinct*, Count–Min counts *how often each*.
+
+**In words:** the estimate is the smallest of the $d$ counters the item hashes to, because every collision can only inflate a counter, never deflate it — so the minimum is the least-contaminated guess.
+**Also written:** $\hat{f}(x) = \min_{r=1}^{d} C[r,\,h_r(x)]$, with the guarantee $f(x) \le \hat{f}(x) \le f(x) + \varepsilon\|f\|_1$ holding with probability $1-\delta$ when $w = \lceil e/\varepsilon\rceil$, $d = \lceil\ln(1/\delta)\rceil$.
 
 **DGIM — count 1s in a sliding window.** Over the last $N$ bits of a 0/1 stream, how many are 1? Storing $N$ bits is too much. **DGIM** keeps **buckets** of exponentially increasing size ($1,1,2,2,4,4,\dots$ ones each), at most two of each size, storing only each bucket's **end timestamp**. Drop buckets that fall out of the window; estimate the count by summing bucket sizes and halving the oldest (still-partially-in-window) bucket. This needs only $O(\log^2 N)$ bits and answers within a guaranteed 50% relative error (tightenable by keeping more buckets per size).
 
@@ -456,7 +662,18 @@ def reservoir(stream, k):
 | how often is $x$? | Count–Min sketch | $O(d\cdot w)$ |
 | how many 1s in last $N$? | DGIM | $O(\log^2 N)$ |
 
-## 43.9 Frequent itemsets and the PCY refinement
+**Off-the-shelf sketches.** You rarely hand-roll these in production. `datasketch` provides battle-tested HyperLogLog and MinHash-LSH:
+
+```python
+from datasketch import HyperLogLog
+hll = HyperLogLog(p=14)                  # ~16 KB, ~1% error
+for visitor_id in stream:                # one pass, no per-id storage
+    hll.update(visitor_id.encode("utf8"))
+print(int(hll.count()))                  # estimated distinct visitors
+# datasketch also ships MinHash + MinHashLSH for the §43.9 dedup pipeline.
+```
+
+## 43.11 Frequent itemsets and the PCY refinement
 
 A staple of data mining: find sets of items that **co-occur** frequently in transactions — "customers who buy bread and butter also buy jam". An itemset is **frequent** if it appears in at least a *support* threshold $s$ of baskets. The classic **Apriori** algorithm (covered in **Ch. 11**) exploits the **downward-closure** property: a $k$-itemset can be frequent only if *all* its $(k\!-\!1)$-subsets are frequent, so it builds up level by level, pruning aggressively.
 
@@ -473,7 +690,22 @@ flowchart LR
 
 The payoff is memory: the bucket bitmap is tiny compared to a full pair-count table, letting PCY handle datasets where Apriori's candidate set would not fit. The win is largest when the bucket table is well-filled early — turning idle pass-1 cycles into pruning power for free.
 
-## 43.10 Submodular optimization for coverage and influence
+**With mlxtend.** For mining frequent itemsets and association rules in practice, `mlxtend` provides Apriori and FP-Growth on a one-hot basket matrix:
+
+```python
+import pandas as pd
+from mlxtend.frequent_patterns import apriori, association_rules
+baskets = pd.DataFrame({                 # one-hot: rows = transactions
+    "bread":  [1, 1, 0, 1],
+    "butter": [1, 1, 0, 1],
+    "jam":    [1, 0, 0, 1],
+})
+freq = apriori(baskets, min_support=0.5, use_colnames=True)
+rules = association_rules(freq, metric="confidence", min_threshold=0.7)
+print(rules[["antecedents", "consequents", "support", "confidence", "lift"]])
+```
+
+## 43.12 Submodular optimization for coverage and influence
 
 Many mining tasks are **selection** problems: pick $k$ sensors to cover an area, $k$ documents to summarize a topic, $k$ seed users to maximize influence in a social network. These share a structure that makes a simple greedy algorithm provably near-optimal: **submodularity**, the formal version of **diminishing returns**.
 
@@ -483,6 +715,9 @@ $$
 f(A \cup \{x\}) - f(A) \;\ge\; f(B \cup \{x\}) - f(B)
 $$
 
+**In words:** the same new item is worth more when you have little than when you already have a lot — diminishing returns, written exactly.
+**Also written:** defining the marginal gain $\Delta_f(x \mid S) = f(S \cup \{x\}) - f(S)$, submodularity is $\Delta_f(x \mid A) \ge \Delta_f(x \mid B)$ for all $A \subseteq B$.
+
 It is **monotone** if adding elements never hurts ($f(A) \le f(B)$ when $A \subseteq B$). Coverage is the canonical example: the first document you pick covers many topics; once you have ten, an eleventh covers little new ground — exactly diminishing returns.
 
 The remarkable result: for a **monotone submodular** $f$ with a cardinality constraint, the **greedy** algorithm — repeatedly add the element with the largest **marginal gain** — achieves at least
@@ -490,6 +725,9 @@ The remarkable result: for a **monotone submodular** $f$ with a cardinality cons
 $$
 \left(1 - \tfrac{1}{e}\right) \approx 0.632
 $$
+
+**In words:** the dumb "grab the biggest remaining gain each round" loop is guaranteed to reach at least 63% of the best-possible value, no matter the problem.
+**Also written:** $f(S_{\text{greedy}}) \ge (1 - 1/e)\,f(S^{*})$, where $S^{*}$ is the optimal size-$k$ set.
 
 of the optimal value. No polynomial algorithm does better in general (under standard assumptions), so a one-line greedy loop gets you within ~37% of optimal on an otherwise NP-hard problem.
 
@@ -506,11 +744,24 @@ Greedy step 2: $S_2$ adds $\{6\}$ = 1 new; $S_3$ adds $\{6,7,8\}$ = 3 new → pi
 
 Greedy found the optimum here. The $1-1/e$ bound is the *worst-case* guarantee; in practice greedy is usually much closer. This same machinery underlies **influence maximization** (Kempe–Kleinberg) for viral marketing, where $f$ is the expected number of users influenced — also monotone submodular.
 
+```python
+# greedy max-coverage in a few lines
+def greedy_cover(sets, k):
+    chosen, covered = [], set()
+    for _ in range(k):
+        best = max(sets, key=lambda s: len(set(s) - covered))   # largest marginal gain
+        chosen.append(best); covered |= set(best)
+    return chosen, covered
+
+sets = {"S1":[1,2,3,4,5], "S2":[4,5,6], "S3":[6,7,8]}
+print(greedy_cover(sets.values(), 2))   # picks S1 then S3 -> all 8 elements
+```
+
 ::: {.callout-tip}
 For huge ground sets, **lazy greedy** (CELF) exploits submodularity: a marginal gain can only *shrink* as the selected set grows, so cache gains in a priority queue and re-evaluate only the top candidate. Same answer as greedy, often orders of magnitude faster.
 :::
 
-## 43.11 CUR decomposition: interpretable low-rank approximation
+## 43.13 CUR decomposition: interpretable low-rank approximation
 
 Low-rank approximation compresses a big matrix into a small one. **SVD** (Ch. 03) gives the *optimal* rank-$k$ approximation $A \approx U_k \Sigma_k V_k^\top$ — but its factors are **dense linear combinations** of all rows and columns. The 3rd singular vector of a customer-by-product matrix is a blend of every product with positive and negative weights: mathematically optimal, humanly meaningless.
 
@@ -519,6 +770,9 @@ Low-rank approximation compresses a big matrix into a small one. **SVD** (Ch. 03
 $$
 A \approx C\,U\,R
 $$
+
+**In words:** approximate the matrix as *some of its real columns* times *a small glue matrix* times *some of its real rows* — so the building blocks are actual data, not abstract directions.
+**Also written:** $A \approx C\,U\,R$ with $U = (C^{+} A R^{+})$ (or, in the classic construction, the pseudo-inverse of the row–column intersection $W$), where $C^{+}$ denotes the Moore–Penrose pseudo-inverse.
 
 where $C$ is a sample of **actual columns** of $A$, $R$ is a sample of **actual rows**, and $U$ is a small linking matrix (the pseudo-inverse of the intersection of the chosen rows and columns). Because $C$ and $R$ are real data — real products, real customers — the factors *mean* something. They are also **sparse if $A$ is sparse** (SVD's factors are dense even when $A$ is sparse, a serious memory problem at web scale).
 
@@ -568,25 +822,42 @@ flowchart TB
 
 The shape is universal: **cheap recall-oriented candidate generation** (BM25, ANN) narrows billions to thousands, then **expensive precision-oriented reranking** (cross-encoder, LambdaMART) orders the few. Mining algorithms thread throughout — LSH dedupes the corpus, HyperLogLog tracks distinct queries, Bloom filters skip seen URLs during crawl.
 
+**Hybrid fusion in a few lines.** The fusion box above is often just **reciprocal-rank fusion (RRF)** — combine two ranked lists by summing $1/(k+\text{rank})$, no score calibration needed:
+
+```python
+def rrf(rankings, k=60):                  # rankings: list of ranked docID lists
+    scores = {}
+    for ranked in rankings:
+        for rank, doc in enumerate(ranked, start=1):
+            scores[doc] = scores.get(doc, 0) + 1/(k + rank)
+    return sorted(scores, key=scores.get, reverse=True)
+
+bm25_list  = ["d3", "d1", "d7"]
+dense_list = ["d1", "d3", "d9"]
+print(rrf([bm25_list, dense_list]))       # d1 and d3 rise via agreement
+```
+
 ## 43.2 — Key takeaways
 
-- The **inverted index** (term → sorted postings, gap-compressed) makes Boolean and ranked retrieval fast; sorted postings turn intersection into a linear merge.
+- The **inverted index** (term → sorted postings, gap-compressed) makes Boolean and ranked retrieval fast; sorted postings turn intersection into a linear merge. **Positional indexes** add phrase and proximity search.
 - **TF-IDF** ranks by term importance; **BM25** fixes its flaws with tf **saturation** ($k_1$) and length **normalization** ($b$); **BM25F** pools fielded frequencies before saturating.
+- **Query expansion / relevance feedback** (Rocchio, pseudo-relevance, LLM rewriting) bridges vocabulary gaps before retrieval even runs.
 - Evaluate ranking with order-aware metrics: **MAP** (binary relevance), **nDCG** (graded relevance + position discount). Always normalize against the ideal ranking.
 - **Learning to rank** spans pointwise → pairwise → listwise; **LambdaMART** trains boosted trees with gradients scaled by $\Delta$nDCG — pairwise mechanics, listwise awareness.
 - **Neural IR** beats vocabulary mismatch: **dense/DPR** (one vector, ANN search), **ColBERT** (per-token MaxSim), **SPLADE** (learned sparse on an inverted index). Hybrid + rerank wins; these feed **RAG** (Ch. 23).
+- **Link analysis**: **PageRank** (query-independent random-surfer importance) and **HITS** (hubs and authorities) rank by graph structure, not just text.
 - Near-duplicate detection: **shingling → MinHash** (match probability = Jaccard) **→ LSH banding** (S-curve threshold $\approx (1/b)^{1/r}$); tune to avoid false negatives.
 - **Streaming** with sublinear memory: **reservoir sampling** (uniform sample), **Bloom filters** (membership, no false negatives), **HyperLogLog** (distinct counts), **Count–Min sketch** (per-item frequency), **DGIM** (window counts).
 - **PCY** prunes Apriori's pair candidates with a free pass-1 bucket bitmap. **Submodular greedy** gets $1-1/e$ of optimal for coverage/influence. **CUR** is interpretable, sparsity-preserving low-rank approximation when SVD's abstract factors won't do.
 
 ## 43.3 — See also
 
-- **Ch. 03 — Linear algebra:** SVD, leverage scores, the low-rank approximation CUR approximates.
+- **Ch. 03 — Linear algebra:** SVD, leverage scores, the low-rank approximation CUR approximates; eigenvectors behind PageRank/HITS.
 - **Ch. 06 — Evaluation:** precision/recall and the classification view of relevance.
 - **Ch. 11 — Classical ML / association rules:** gradient-boosted trees (MART) behind LambdaMART, and the Apriori algorithm PCY refines.
 - **Ch. 14 / 18 — Deep learning & Transformers:** the encoders powering dense, ColBERT, and SPLADE retrieval.
 - **Ch. 23 — LLMs & RAG:** approximate nearest-neighbor indexes and the full retrieval-augmented generation pipeline neural IR feeds.
-- **Ch. 40 — Graph ML:** influence maximization on social graphs, where submodular maximization is applied.
+- **Ch. 40 — Graph ML:** influence maximization on social graphs, where submodular maximization is applied; graph centrality behind PageRank/HITS.
 
 ------------------------------------------------------------------------
 

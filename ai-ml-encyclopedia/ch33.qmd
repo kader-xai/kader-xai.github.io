@@ -115,7 +115,14 @@ Knowledge Representation and Reasoning (KRR) is the branch of AI that asks how t
 
 The foundation of symbolic reasoning is **formal logic**: a language with a precise syntax and a notion of *truth* that lets us derive conclusions mechanically, without hand-waving.
 
+**Think of it like a board game with no luck.** The connectives are the rules, the knowledge base is the starting position, and entailment is "every legal way the game can play out ends the same way." Nothing is left to chance — if the rules force a conclusion, it is forced in *every* world, not just the likely ones.
+
 **Propositional logic** is the simplest such language. Its atoms are whole statements that are either true or false — call them $P$ ("it is raining"), $Q$ ("the ground is wet"). You combine them with connectives: $\neg$ (not), $\wedge$ (and), $\vee$ (or), $\rightarrow$ (implies), $\leftrightarrow$ (iff). A **knowledge base (KB)** is just a set of such formulas asserted true. **Entailment**, written $KB \models \alpha$, means: in *every* world where the KB is true, $\alpha$ is also true. That is the whole game — we want to know what is guaranteed, not merely likely.
+
+$$KB \models \alpha \quad\Longleftrightarrow\quad \text{for every model } m,\; (m \models KB) \Rightarrow (m \models \alpha)$$
+
+**In words:** $\alpha$ follows from the KB exactly when there is no possible world that makes everything in the KB true while making $\alpha$ false.
+**Also written:** $KB \models \alpha \iff \{m : m \models KB\} \subseteq \{m : m \models \alpha\}$ — the worlds satisfying the KB are a subset of the worlds satisfying $\alpha$.
 
 The plainest way to check entailment is a **truth table**: enumerate every assignment of true/false to the atoms and verify $\alpha$ holds wherever the KB does. With $n$ atoms there are $2^n$ rows, so this is exponential, but it is mechanically certain.
 
@@ -130,15 +137,26 @@ Worked example. Let $KB = \{P \rightarrow Q,\; P\}$. Does $KB \models Q$?
 
 Only the first row satisfies the whole KB, and there $Q$ is true. So $KB \models Q$. This single-step pattern — from $P\rightarrow Q$ and $P$ conclude $Q$ — is the ancient rule **modus ponens**.
 
+$$\frac{\alpha \rightarrow \beta \qquad \alpha}{\beta}$$
+
+**In words:** if "$\alpha$ implies $\beta$" is true and $\alpha$ is true, then $\beta$ must be true.
+**Also written:** the inference $\{\alpha \rightarrow \beta,\ \alpha\} \vdash \beta$, equivalently the tautology $\big((\alpha \rightarrow \beta) \wedge \alpha\big) \rightarrow \beta$.
+
 **First-order logic (FOL)** adds the machinery propositional logic lacks: *objects*, *relations*, and *quantifiers*. Now we can say something about every member of an infinite domain. The pieces are **constants** ($socrates$), **variables** ($x$), **predicates** that denote relations ($Human(x)$, $Loves(x,y)$), **functions** ($motherOf(x)$), and two quantifiers: $\forall$ ("for all") and $\exists$ ("there exists"). The classic syllogism becomes:
 
 $$\forall x\,\big(Human(x) \rightarrow Mortal(x)\big), \quad Human(socrates) \;\models\; Mortal(socrates).$$
+
+**In words:** if everything human is mortal, and Socrates is human, then Socrates is mortal.
+**Also written:** instantiating $x := socrates$ gives $Human(socrates) \rightarrow Mortal(socrates)$, then modus ponens with $Human(socrates)$ yields $Mortal(socrates)$.
 
 FOL is vastly more expressive, but that power costs us: entailment in FOL is only **semi-decidable** — if $\alpha$ follows, a procedure can confirm it in finite time, but if it does *not* follow, the procedure may run forever.
 
 The dominant mechanical inference procedure is **resolution**, and it rests on one beautiful trick: instead of proving $KB \models \alpha$ directly, prove that $KB \wedge \neg\alpha$ is *unsatisfiable* — that assuming the negation of your goal leads to a contradiction. This is **proof by refutation**. To run it, everything is first converted to **conjunctive normal form (CNF)**: a conjunction of **clauses**, where each clause is a disjunction of **literals** (an atom or its negation). The single **resolution rule** then says: if one clause contains a literal $L$ and another contains $\neg L$, you may combine them, cancelling that pair:
 
 $$\frac{(A \vee L) \qquad (B \vee \neg L)}{(A \vee B)}$$
+
+**In words:** two clauses that disagree on exactly one literal can be merged into a new clause with that contradictory pair struck out.
+**Also written:** since $A \vee L \equiv \neg A \rightarrow L$ and $B \vee \neg L \equiv L \rightarrow B$, resolution is just chaining $\neg A \rightarrow L \rightarrow B$, i.e. $\neg A \rightarrow B \equiv A \vee B$.
 
 Keep resolving until you derive the **empty clause** $\square$ (a clause with no literals, meaning *false*) — that is your contradiction, and the original entailment is proved.
 
@@ -203,6 +221,31 @@ flowchart LR
 **Intuition:** resolution is "proof by trying to break it." You assume the opposite of what you want and show the assumption explodes. If the only way to keep the KB consistent is to accept your goal, the goal is proved.
 :::
 
+### Doing it in practice — Prolog and a Python SAT check
+
+From-scratch resolution is great for understanding, but in practice you reach for a mature engine. The logic-programming language **Prolog** runs SWI-Prolog's resolution engine for you; from Python you can call it via `pyswip`, or you can hand a propositional question to a SAT solver:
+
+```python
+# Propositional entailment via a real SAT solver (pip install python-sat).
+# KB |= Q  iff  KB ∧ ¬Q is UNSATISFIABLE.
+from pysat.solvers import Glucose3      # CDCL solver (see §33.10)
+
+# Vars: P=1, Q=2.  KB = (¬P ∨ Q) ∧ P ;  goal = Q.
+solver = Glucose3()
+solver.add_clause([-1, 2])             # P -> Q
+solver.add_clause([1])                 # P
+solver.add_clause([-2])                # ¬Q  (negated goal)
+print("KB |= Q ?", not solver.solve()) # UNSAT -> entailed -> True
+solver.delete()
+```
+
+```prolog
+% The same syllogism in Prolog (SWI-Prolog). Backward resolution is built in.
+mortal(X) :- human(X).      % rule: ∀X human(X) -> mortal(X)
+human(socrates).            % fact
+% ?- mortal(socrates).      % query -> true
+```
+
 ## 33.2 — Rule-Based / Expert Systems (Forward vs Backward Chaining, the Inference Engine)
 
 An **expert system** packages human expertise as a large set of **if–then rules** and lets an **inference engine** apply them to specific cases. The 1970s–80s systems MYCIN (diagnosing blood infections) and DENDRAL (identifying molecules) showed that, in a narrow domain, a few hundred rules could rival a specialist. The architecture cleanly separates three parts: the **knowledge base** (rules), the **working memory** (known facts about the current case), and the **inference engine** (the reasoning loop). That separation is the whole appeal — domain experts edit rules without touching code.
@@ -221,6 +264,8 @@ flowchart TB
 ```
 
 The engine runs the rules in one of two directions. **Forward chaining** is **data-driven**: start from the known facts and fire any rule whose conditions are satisfied, adding its conclusions to working memory, and repeat until nothing new fires. It is the natural choice when you have data and want to know *everything it implies* (monitoring, alarms). **Backward chaining** is **goal-driven**: start from a hypothesis you want to confirm and work *backwards*, asking "what would I need to prove this?", recursively turning each premise into a sub-goal until you bottom out in known facts. It is the natural choice for diagnosis — you have a specific question and want only the facts relevant to answering it.
+
+**Everyday analogy.** Forward chaining is a cook who looks at whatever is in the fridge and figures out every dish they *could* make. Backward chaining is a cook who wants lasagna and works backwards to the exact shopping list. Same kitchen, same recipes — opposite starting point.
 
 Worked example. Rules and facts:
 
@@ -245,6 +290,27 @@ print(sorted(facts))                   # ['barks','dog','has_fur','mammal']
 assert "mammal" in facts
 ```
 
+The two directions visualised — the same rule graph, traversed opposite ways:
+
+<svg viewBox="0 0 480 170" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif" font-size="12">
+  <rect x="10" y="60" width="90" height="30" rx="5" fill="rgba(56,189,248,0.25)" stroke="#38bdf8"/>
+  <text x="55" y="80" text-anchor="middle" fill="currentColor">barks, has_fur</text>
+  <rect x="190" y="60" width="70" height="30" rx="5" fill="rgba(99,102,241,0.25)" stroke="#6366f1"/>
+  <text x="225" y="80" text-anchor="middle" fill="currentColor">dog</text>
+  <rect x="350" y="60" width="100" height="30" rx="5" fill="rgba(34,197,94,0.25)" stroke="#22c55e"/>
+  <text x="400" y="80" text-anchor="middle" fill="currentColor">mammal</text>
+  <line x1="100" y1="75" x2="188" y2="75" stroke="#22c55e" stroke-width="2" marker-end="url(#fwd)"/>
+  <line x1="260" y1="75" x2="348" y2="75" stroke="#22c55e" stroke-width="2" marker-end="url(#fwd)"/>
+  <line x1="348" y1="55" x2="262" y2="55" stroke="#f59e0b" stroke-width="2" stroke-dasharray="4" marker-end="url(#bwd)"/>
+  <line x1="188" y1="55" x2="102" y2="55" stroke="#f59e0b" stroke-width="2" stroke-dasharray="4" marker-end="url(#bwd)"/>
+  <text x="240" y="120" text-anchor="middle" fill="#22c55e">forward: facts → conclusions (R1, R2)</text>
+  <text x="240" y="40" text-anchor="middle" fill="#f59e0b">backward: goal → needed facts</text>
+  <defs>
+    <marker id="fwd" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6 Z" fill="#22c55e"/></marker>
+    <marker id="bwd" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6 Z" fill="#f59e0b"/></marker>
+  </defs>
+</svg>
+
 | | Forward chaining | Backward chaining |
 |---|---|---|
 | Driven by | available data | a goal/hypothesis |
@@ -256,6 +322,28 @@ assert "mammal" in facts
 ::: {.callout-warning}
 **Common mistake:** assuming forward and backward chaining give different *answers*. For a given rule set and facts they prove exactly the same things — they differ only in *efficiency* and which intermediate facts they bother to compute. Pick the direction that touches fewer irrelevant rules.
 :::
+
+### Production rules in practice — the Rete idea and a real engine
+
+Firing rules by re-scanning every rule on every change (as the toy loop above does) is $O(\text{rules} \times \text{passes})$ — fine for a handful of rules, hopeless for thousands. Real production systems (CLIPS, Drools, the `experta` Python port) use the **Rete algorithm**, which builds a network that remembers partial matches so only the rules affected by a changed fact are re-evaluated. The trade is memory for speed — it caches match state so the engine reacts incrementally instead of recomputing from scratch.
+
+```python
+# Forward chaining with a real rule engine (pip install experta).
+from experta import KnowledgeEngine, Rule, Fact, DefFacts
+
+class Animals(KnowledgeEngine):
+    @DefFacts()
+    def init(self):
+        yield Fact(barks=True); yield Fact(has_fur=True)
+
+    @Rule(Fact(barks=True), Fact(has_fur=True))
+    def is_dog(self):    self.declare(Fact(dog=True))
+
+    @Rule(Fact(dog=True))
+    def is_mammal(self): self.declare(Fact(mammal=True)); print("mammal derived")
+
+engine = Animals(); engine.reset(); engine.run()   # -> "mammal derived"
+```
 
 ## 33.3 — Semantic Networks, Frames, Ontologies, the Semantic Web (RDF/OWL), and Knowledge Graphs
 
@@ -280,6 +368,10 @@ A **semantic network** is a graph whose nodes are concepts and whose labelled ed
   <text x="300" y="140" fill="#ca8a04">property</text>
 </svg>
 
+::: {.callout-note}
+**Default inheritance and its bite.** Slots with defaults make networks compact but introduce **non-monotonic** reasoning: adding a fact can *retract* a conclusion. The textbook case is *Tweety the penguin* — *Bird* has default *can-Fly = true*, so we infer Tweety flies; then we learn *Penguin* overrides *can-Fly = false*, and the earlier conclusion is withdrawn. Classical logic is **monotonic** (new facts never cancel old conclusions); default/inheritance reasoning deliberately is not, which is both its convenience and its hazard.
+:::
+
 An **ontology** is a formal, shared specification of the concepts in a domain and the constraints among them — the vocabulary plus the rules of the game. Scaled to the whole web, this became the **Semantic Web**, whose data model is **RDF (Resource Description Framework)**: every fact is a **triple** of *(subject, predicate, object)*, with things named by URIs so they are globally unambiguous. **OWL (Web Ontology Language)** layers expressive class axioms on top (e.g. "every *Parent* is a *Person* who *hasChild* some *Person*"), and **SPARQL** is the query language for triple stores.
 
 A **knowledge graph** is the pragmatic, industrial descendant: a large graph of real-world entities and their relationships, powering Google's search panels, Wikidata, and enterprise data integration. The same triple shows up everywhere:
@@ -301,6 +393,29 @@ flowchart LR
     OWL --> KG["Knowledge Graphs<br/>(Wikidata, Google)"]
 ```
 
+### Building and querying triples in practice
+
+The Python library `rdflib` lets you build a graph of triples, attach the RDFS subclass axiom, run a transitive-closure reasoner, and query with SPARQL — the whole Semantic Web stack in a dozen lines:
+
+```python
+# pip install rdflib
+from rdflib import Graph, Namespace, RDF, RDFS
+from rdflib.namespace import OWL
+
+EX = Namespace("http://ex.org/")
+g = Graph()
+g.add((EX.Socrates, RDF.type, EX.Human))            # :Socrates a :Human
+g.add((EX.Human, RDFS.subClassOf, EX.Mortal))       # :Human ⊑ :Mortal
+
+# Materialise entailments (RDFS rule: type + subClassOf -> type)
+from rdflib.plugins import sparql  # noqa
+import owlrl
+owlrl.RDFSClosure.RDFS_Semantics(g, False, False, False).closure()
+
+q = "SELECT ?x WHERE { ?x a <http://ex.org/Mortal> }"
+print([str(r.x) for r in g.query(q)])   # -> ['http://ex.org/Socrates']  (derived!)
+```
+
 ::: {.callout-tip}
 **Intuition:** a triple store is just "subject–predicate–object" sentences at web scale. Reasoning is the act of writing down all the *unstated* sentences those sentences force to be true.
 :::
@@ -314,6 +429,9 @@ The cleanest framework is **probability**: replace "$P$ is true" with "$P$ holds
 Worked example — one step of **Bayes' rule**. A medical test is 90% sensitive ($P(\text{pos}\mid\text{disease})=0.9$) and has a 10% false-positive rate ($P(\text{pos}\mid\neg\text{disease})=0.1$); the disease affects 1% of people ($P(\text{disease})=0.01$). A patient tests positive — how worried should they be?
 
 $$P(\text{disease}\mid\text{pos}) = \frac{P(\text{pos}\mid\text{disease})\,P(\text{disease})}{P(\text{pos})} = \frac{0.9 \times 0.01}{0.9\times0.01 + 0.1\times0.99} = \frac{0.009}{0.108} \approx 0.083.$$
+
+**In words:** the chance you are sick *given* a positive test is the fraction of all positive tests that come from genuinely sick people — true positives divided by all positives.
+**Also written:** $P(D\mid +) = \dfrac{P(+\mid D)\,P(D)}{P(+\mid D)\,P(D) + P(+\mid \neg D)\,P(\neg D)}$ (denominator expanded by the law of total probability).
 
 Despite a positive result on a fairly accurate test, the probability of disease is only about **8%** — because the disease is rare, most positives are false alarms. The clearest way to *see* this is to drop the fractions and reason over 1000 actual people: only 10 have the disease (and ~9 of them test positive), while 990 are healthy (and ~99 of those *still* test positive). So of the ~108 positives, only ~9 are truly sick:
 
@@ -337,6 +455,16 @@ Despite a positive result on a fairly accurate test, the probability of disease 
   <text x="240" y="190" text-anchor="middle" fill="#1e293b">Of 108 positives, only 9 are truly sick → 9 / 108 ≈ 8%</text>
 </svg>
 
+```python
+# The same base-rate calculation, the way you'd actually write it.
+P_pos_given_D, P_pos_given_notD, P_D = 0.9, 0.1, 0.01
+P_notD = 1 - P_D
+P_pos  = P_pos_given_D*P_D + P_pos_given_notD*P_notD     # law of total prob.
+post   = P_pos_given_D*P_D / P_pos                       # Bayes
+print(round(post, 3))                                   # 0.083
+assert abs(post - 0.083) < 1e-3
+```
+
 A logical engine cannot express this nuance; a probabilistic one captures it exactly. Beyond probability there are other formalisms — **fuzzy logic** for vague predicates ("tall"), **Dempster–Shafer** theory for representing ignorance — but Bayesian methods dominate. The deep treatment of these graphical models lives in its own chapter; here the point is only that KRR is not confined to certainty.
 
 ::: {.callout-warning}
@@ -352,6 +480,9 @@ A DL knowledge base has two parts. The **TBox** ("terminology") holds the schema
 For example, the concept "a parent of only doctors" is written:
 
 $$HappyParent \equiv Person \sqcap \exists hasChild.\top \sqcap \forall hasChild.Doctor.$$
+
+**In words:** a HappyParent is exactly anyone who is a person, *and* has at least one child, *and* whose every child is a doctor.
+**Also written:** in plain FOL, $HappyParent(x) \iff Person(x) \wedge \big(\exists y\, hasChild(x,y)\big) \wedge \forall y\,\big(hasChild(x,y) \rightarrow Doctor(y)\big)$.
 
 Given that definition (TBox) plus facts about individuals (ABox), a DL **reasoner** can automatically deduce class memberships nobody stated. Here is the derivation drawn out — TBox on the left, ABox facts feeding in, and the conclusion the reasoner adds:
 
@@ -384,6 +515,29 @@ Step by step: *bob* is a $Person$ (given); *bob* has *some* child, namely *carol
 | Classification | Compute the full subclass hierarchy of the TBox |
 
 The naming convention encodes expressiveness: $\mathcal{ALC}$ is the base logic; adding letters ($\mathcal{S}$, $\mathcal{H}$, $\mathcal{O}$, $\mathcal{I}$, $\mathcal{N}$, $\mathcal{Q}$) for features like role hierarchies and number restrictions yields $\mathcal{SHOIN}$ (≈ OWL DL) and $\mathcal{SROIQ}$ (≈ OWL 2 DL). Each added feature buys expressiveness at a known cost in worst-case complexity — the trade made explicit and tunable.
+
+### Authoring a TBox/ABox and letting a reasoner classify it
+
+The Python library `owlready2` lets you declare classes, restrictions, and individuals as ordinary Python, then runs the **HermiT** or **Pellet** DL reasoner to materialise inferred memberships:
+
+```python
+# pip install owlready2  (needs Java for the HermiT reasoner)
+from owlready2 import *
+
+onto = get_ontology("http://ex.org/onto.owl")
+with onto:
+    class Person(Thing): pass
+    class Doctor(Person): pass
+    class hasChild(Person >> Person): pass
+    class HappyParent(Person):                       # TBox: equivalent-to definition
+        equivalent_to = [Person & hasChild.some(Person) & hasChild.only(Doctor)]
+
+    carol = Doctor("carol")
+    bob   = Person("bob"); bob.hasChild = [carol]    # ABox: bob's only child is carol
+
+sync_reasoner(onto)                                  # run HermiT
+print(HappyParent in bob.is_a or bob in HappyParent.instances())  # True (derived)
+```
 
 ::: {.callout-tip}
 **Intuition:** description logics are "object-oriented modelling with a proof engine." You define classes by their *necessary and sufficient* conditions, and the reasoner figures out the class hierarchy and memberships for you — even ones you never wrote down.
@@ -423,7 +577,39 @@ The table makes the contrast precise — and notice the strengths are almost exa
 **Common mistake:** reading this list as "symbolic AI lost." It didn't — it became *infrastructure*. Knowledge graphs, ontologies, and rule engines quietly run search, fraud checks, and clinical decision support today. The lesson is that hand-authored knowledge does not *scale to the open world alone*, not that it is worthless.
 :::
 
-## 33.7 — The Modern Neurosymbolic Revival
+## 33.7 — The Frame Problem and Closed- vs Open-World Assumptions
+
+Before reasoning systems can be trusted, two foundational assumptions have to be pinned down — and getting them wrong is the source of a surprising amount of grief. Both are about *what a system is entitled to conclude from silence*.
+
+**The closed-world assumption (CWA)** says: anything not provable from the KB is taken to be *false*. The **open-world assumption (OWA)** says the opposite: anything not stated is merely *unknown*, neither true nor false. The choice is not cosmetic — it changes the answers.
+
+**Everyday analogy.** A flight-booking database uses CWA: if "Flight 42 to Tokyo" is not in the table, the app confidently says "no such flight." A medical ontology uses OWA: if the record does not say a patient is allergic to penicillin, the reasoner must *not* conclude they are safe — absence of a stated allergy is not evidence of no allergy. Databases and Prolog (via negation-as-failure) assume a closed world; OWL and the Semantic Web assume an open one, precisely because the web is never complete.
+
+<svg viewBox="0 0 480 130" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif" font-size="12">
+  <rect x="20" y="25" width="200" height="80" rx="8" fill="rgba(99,102,241,0.18)" stroke="#6366f1"/>
+  <text x="120" y="45" text-anchor="middle" fill="currentColor" font-weight="bold">Closed world</text>
+  <text x="120" y="68" text-anchor="middle" fill="currentColor">not proven ⇒ FALSE</text>
+  <text x="120" y="88" text-anchor="middle" fill="#6366f1">SQL · Prolog · planners</text>
+  <rect x="260" y="25" width="200" height="80" rx="8" fill="rgba(245,158,11,0.18)" stroke="#f59e0b"/>
+  <text x="360" y="45" text-anchor="middle" fill="currentColor" font-weight="bold">Open world</text>
+  <text x="360" y="68" text-anchor="middle" fill="currentColor">not stated ⇒ UNKNOWN</text>
+  <text x="360" y="88" text-anchor="middle" fill="#f59e0b">OWL · RDF · the web</text>
+</svg>
+
+The **frame problem** is the other foundational headache, and it bites whenever a system reasons about *change* (planning, robotics, action). When an action happens, you must specify not only what it changes but the vast number of things it *leaves alone*. If a robot moves a cup, the logic must somehow know the colour of the wall, the time of day, and the positions of every other object are all unaffected — yet stating every such non-effect explicitly is hopeless. The practical fix is the **frame axiom / commonsense law of inertia**: assume every fact persists across an action *unless* a rule explicitly changes it.
+
+$$\text{Holds}(f, s) \wedge \neg \text{Affects}(a, f) \;\rightarrow\; \text{Holds}(f, \text{do}(a, s))$$
+
+**In words:** a fact $f$ that held in situation $s$ still holds after doing action $a$, as long as $a$ does not affect $f$.
+**Also written:** in event-calculus style, $\text{HoldsAt}(f, t) \wedge \neg\exists e\,[\text{Happens}(e,t) \wedge \text{Terminates}(e,f,t)] \rightarrow \text{HoldsAt}(f, t{+}1)$ — a fluent persists unless some event terminates it.
+
+This single idea — *inertia by default, change only when forced* — is exactly what underlies the STRIPS action representation used by planners (Chapter on Planning) and is why frame, closed-world, and non-monotonic reasoning all show up together: they are the machinery for reasoning sensibly about an incompletely-specified, changing world.
+
+::: {.callout-warning}
+**Common mistake:** silently importing a database's closed-world habit into an ontology. Asking an OWL reasoner "is Bob *not* a doctor?" returns *unknown*, not *yes* — and code that treats "not returned" as "false" will quietly fabricate conclusions the KB never licensed.
+:::
+
+## 33.8 — The Modern Neurosymbolic Revival
 
 If symbolic systems are interpretable but brittle, and neural networks are robust but opaque, the obvious move is to combine them — and that is exactly what **neurosymbolic AI** sets out to do. The goal is a system that *perceives* with neural networks and *reasons* with symbolic logic, getting data-driven robustness and rule-based guarantees in one pipeline.
 
@@ -443,6 +629,11 @@ This is also where KRR meets today's frontier. **Large language models** absorb 
 
 Worked illustration — **logic as a constraint on a classifier**. Suppose a network outputs probabilities for *is-cat* and *is-dog*, and we know the rule "an animal cannot be both." We turn that rule into a penalty — $p_{cat}\cdot p_{dog}$ — which is *positive whenever both fire* and *zero* as soon as either drops to zero. Adding it to the training loss therefore pushes the model away from the impossible "both" corner:
 
+$$\mathcal{L} = \mathcal{L}_{\text{data}} + \lambda\, p_{cat}\, p_{dog}$$
+
+**In words:** train on the usual data loss, plus a tunable penalty $\lambda$ times the "both-fired" product, so the optimiser is pushed away from logically impossible answers.
+**Also written:** as a soft (product/Gödel) t-norm reading of the rule $\neg(cat \wedge dog)$, the constraint loss is $\lambda \cdot t\text{-}norm(p_{cat}, p_{dog})$ with $t\text{-}norm(a,b)=ab$.
+
 ```python
 import numpy as np
 # Model's raw beliefs for one image:
@@ -460,12 +651,25 @@ print(f"constraint violation penalty = {loss_logic:.2f}")
 
 Note what the code does and does *not* show: it computes the *penalty*, not a gradient step. The point is that the penalty is **positive precisely when the constraint is violated** and vanishes when it is satisfied — so minimising it (via whatever optimiser trains the network) steers the model away from logically impossible answers. The network still *learns* from data; the symbolic rule just adds a force pulling it toward consistency — neural perception and symbolic knowledge pulling in the same harness.
 
+The same idea, written as a real training step in PyTorch — the logic term is just another addend in the loss, fully differentiable:
+
+```python
+import torch, torch.nn.functional as F
+
+logits = model(x)                       # raw scores for [cat, dog]
+p = torch.sigmoid(logits)               # independent probabilities
+data_loss  = F.binary_cross_entropy(p, targets)
+logic_loss = (p[:, 0] * p[:, 1]).mean() # penalise P(cat)·P(dog): "not both"
+loss = data_loss + 0.5 * logic_loss     # λ = 0.5 weights the constraint
+loss.backward()                         # gradients flow through the rule too
+optimizer.step()
+```
+
 ::: {.callout-tip}
 **Intuition:** let each tradition do what it is good at. Neurons handle the fuzzy, high-bandwidth job of turning the world into symbols; logic handles the crisp, auditable job of reasoning over them. Neurosymbolic AI is the wiring that connects the two.
 :::
 
-
-## 33.8 — Resolution and Proof by Refutation
+## 33.9 — Resolution and Proof by Refutation
 
 The honest way to prove a statement is to assume it is false and watch the world catch fire. If assuming "the opposite" forces a contradiction, the original statement had to be true. This is **proof by refutation**, and it is the engine inside almost every automated theorem prover.
 
@@ -474,6 +678,9 @@ Resolution is the single inference rule that makes refutation mechanical. The in
 Formally, working in **conjunctive normal form** (CNF) — an AND of clauses, where each clause is an OR of literals — the resolution rule is:
 
 $$\frac{(A \lor \ell) \qquad (B \lor \lnot \ell)}{(A \lor B)}$$
+
+**In words:** from two clauses where one has $\ell$ and the other has its negation, derive a new clause containing everything else from both, with the clashing pair removed.
+**Also written:** as a set operation on clauses, $\text{resolve}(C_1, C_2) = (C_1 \setminus \{\ell\}) \cup (C_2 \setminus \{\lnot\ell\})$ whenever $\ell \in C_1$ and $\lnot\ell \in C_2$.
 
 The new clause $(A \lor B)$ is the **resolvent**. If $A$ and $B$ are both empty, the resolvent is the **empty clause** $\square$, which is unsatisfiable by definition — there is no literal left to make true. Deriving $\square$ is the contradiction we were hunting for.
 
@@ -542,13 +749,16 @@ Resolution is **refutation-complete**: if a set of clauses is genuinely unsatisf
 Resolution proves *unsatisfiability*, not satisfiability. If it never derives $\square$ and runs out of new clauses, the goal simply does not follow — but on large problems "runs out" can take astronomically long, and naive resolution generates oceans of useless tautological clauses if you do not prune them.
 :::
 
-## 33.9 — Unification: Pattern-Matching for First-Order Logic
+## 33.10 — Unification: Pattern-Matching for First-Order Logic
 
 Propositional resolution cancels $\ell$ against $\lnot \ell$ — an exact match. First-order logic has variables, so $Loves(x, \text{Mary})$ and $Loves(\text{John}, y)$ *ought* to cancel too: there is clearly a way to make them the same statement. **Unification** is the algorithm that finds that way, computing the substitution that makes two expressions identical.
 
 The intuition is jigsaw matching. A variable is a blank that can take any shape; a constant is a fixed shape; a function term is a shape with its own blanks. Unification slides the pieces together and records what each blank had to become. The result is the **most general unifier (MGU)** — the least committal substitution that works, leaving everything not forced to be equal still free.
 
 $$\text{unify}(Loves(x,\text{Mary}),\; Loves(\text{John},y)) = \{\,x/\text{John},\; y/\text{Mary}\,\}$$
+
+**In words:** to make "x loves Mary" and "John loves y" the same sentence, x has to be John and y has to be Mary — and nothing more is forced.
+**Also written:** a unifier $\theta$ is any substitution with $s\theta = t\theta$; the MGU is the $\theta$ such that every other unifier $\sigma$ factors as $\sigma = \theta\circ\gamma$ for some further substitution $\gamma$.
 
 The rules are short:
 
@@ -594,11 +804,37 @@ The MGU is $\{x/a,\ y/b,\ z/f(b)\}$. Apply it to either term and both become $P(
 
 With unification in hand, first-order resolution generalizes the propositional rule: to resolve two clauses, find a literal in one and a negated literal in the other whose atoms **unify**, apply the MGU to both clauses, and drop the matched pair. This is how a prover reasons over "all men are mortal, Socrates is a man" without ever enumerating every individual — the variable does the quantifying.
 
+A runnable, self-contained MGU on simple nested tuples — handy for testing the algorithm without a full term library:
+
+```python
+# Variables are strings starting uppercase; constants/functors are everything else.
+# Terms: 'a' (atom) or ('f', arg1, arg2, ...) (compound).
+def walk(t, s):
+    while isinstance(t, str) and t[:1].isupper() and t in s: t = s[t]
+    return t
+
+def unify(x, y, s):
+    if s is None: return None
+    x, y = walk(x, s), walk(y, s)
+    if x == y: return s
+    if isinstance(x, str) and x[:1].isupper(): return {**s, x: y}   # var = y
+    if isinstance(y, str) and y[:1].isupper(): return {**s, y: x}
+    if isinstance(x, tuple) and isinstance(y, tuple) and len(x) == len(y) and x[0] == y[0]:
+        for a, b in zip(x[1:], y[1:]):
+            s = unify(a, b, s)
+        return s
+    return None                                                     # clash
+
+mgu = unify(('P', 'a', 'Y', ('f', 'Y')), ('P', 'X', 'b', 'Z'), {})
+assert mgu == {'X': 'a', 'Y': 'b', 'Z': ('f', 'b')}
+print(mgu)
+```
+
 ::: {.callout-warning}
 Variables in two different clauses are unrelated even if spelled the same. Always **standardize apart** (rename variables uniquely per clause) before unifying, or you will accidentally force $x$ in one fact to equal $x$ in an unrelated fact and derive nonsense.
 :::
 
-## 33.10 — DPLL and CDCL: Inside Modern SAT Solvers
+## 33.11 — DPLL and CDCL: Inside Modern SAT Solvers
 
 The **Boolean satisfiability problem** (SAT) asks: given a CNF formula, is there any assignment of true/false to the variables that makes every clause true? It was the first problem proven NP-complete, and in the worst case nothing beats trying assignments. Yet today's solvers routinely crack formulas with *millions* of variables. The gap between "exponential in theory" and "fast in practice" is the story of two algorithms.
 
@@ -632,6 +868,16 @@ Formula: $(x_1 \lor x_2) \land (\lnot x_1 \lor x_3) \land (\lnot x_3)$.
 
 Propagation alone solved it — that is why it dominates solver runtime.
 
+```python
+# The same formula handed to a production CDCL solver (pip install python-sat).
+from pysat.formula import CNF
+from pysat.solvers import Glucose3
+cnf = CNF(from_clauses=[[1, 2], [-1, 3], [-3]])      # (x1∨x2)∧(¬x1∨x3)∧(¬x3)
+with Glucose3(bootstrap_with=cnf.clauses) as s:
+    print(s.solve())          # True  (SAT)
+    print(s.get_model())      # e.g. [-1, 2, -3]  ->  x1=F, x2=T, x3=F
+```
+
 ### CDCL: learning from every mistake
 
 Plain DPLL, on hitting a conflict, just flips the most recent decision — it forgets *why* the conflict happened and will often rediscover the same dead end elsewhere. **CDCL** (Conflict-Driven Clause Learning) is the upgrade that powers every serious modern solver. When propagation hits a conflict, CDCL analyzes the **implication graph** — which decisions and forced assignments led here — and distills the root cause into a brand-new **learned clause** that it adds permanently to the formula. That clause forbids the entire class of assignments that caused the conflict, so the solver never repeats it.
@@ -649,7 +895,7 @@ CDCL then performs **non-chronological backtracking** (backjumping): instead of 
 SAT solvers expect CNF. Converting an arbitrary formula to CNF by distributing $\lor$ over $\land$ can blow up exponentially. Real tools use the **Tseitin transformation**, which introduces fresh auxiliary variables to keep the encoding linear in size — never hand-distribute a large formula into CNF.
 :::
 
-## 33.11 — Model Checking: Verifying Systems Exhaustively
+## 33.12 — Model Checking: Verifying Systems Exhaustively
 
 Testing shows the presence of bugs, never their absence — you only ever check the inputs you thought to try. **Model checking** flips this: it explores *every* reachable state of a system and proves a property holds in all of them, or hands you a concrete **counterexample** trace showing exactly how it breaks. Where a theorem prover reasons about formulas, a model checker reasons about a finite (or finitely-abstracted) state machine.
 
@@ -661,6 +907,30 @@ Properties are written in **temporal logic**, which adds operators for "over tim
 - $\mathbf{F}\,\varphi$ — *finally*: $\varphi$ eventually holds (a liveness property, e.g. "every request is eventually served").
 - $\mathbf{X}\,\varphi$ — $\varphi$ holds in the *next* state.
 - $\varphi\,\mathbf{U}\,\psi$ — $\varphi$ holds *until* $\psi$ becomes true.
+
+A small timeline makes the four operators concrete — each row marks where $\varphi$ (●) must hold along a path:
+
+<svg viewBox="0 0 480 170" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif" font-size="12">
+  <g stroke="currentColor" stroke-width="1">
+    <line x1="120" y1="20" x2="460" y2="20"/><line x1="120" y1="55" x2="460" y2="55"/>
+    <line x1="120" y1="90" x2="460" y2="90"/><line x1="120" y1="125" x2="460" y2="125"/>
+  </g>
+  <text x="10" y="24" fill="#6366f1" font-weight="bold">G φ</text>
+  <text x="10" y="59" fill="#22c55e" font-weight="bold">F φ</text>
+  <text x="10" y="94" fill="#38bdf8" font-weight="bold">X φ</text>
+  <text x="10" y="129" fill="#f59e0b" font-weight="bold">φ U ψ</text>
+  <!-- G: all states -->
+  <g fill="#6366f1"><circle cx="160" cy="20" r="6"/><circle cx="220" cy="20" r="6"/><circle cx="280" cy="20" r="6"/><circle cx="340" cy="20" r="6"/><circle cx="400" cy="20" r="6"/></g>
+  <!-- F: eventually -->
+  <circle cx="340" cy="55" r="6" fill="#22c55e"/>
+  <!-- X: next state -->
+  <circle cx="220" cy="90" r="6" fill="#38bdf8"/>
+  <!-- U: φ until ψ -->
+  <g fill="#f59e0b"><circle cx="160" cy="125" r="6"/><circle cx="220" cy="125" r="6"/><circle cx="280" cy="125" r="6"/></g>
+  <circle cx="340" cy="125" r="6" fill="#ec4899"/>
+  <text x="340" y="148" text-anchor="middle" fill="#ec4899">ψ</text>
+  <text x="120" y="160" fill="currentColor" font-size="11">time →   ● = φ holds here</text>
+</svg>
 
 ### Worked example: a two-process mutual-exclusion check
 
@@ -703,11 +973,18 @@ formula &= Or(*[Bad(s[i]) for i in range(k+1)])       # some state violates safe
 # if UNSAT -> property holds for all paths up to length k
 ```
 
+The BMC unrolling expressed as a single propositional formula:
+
+$$\text{Init}(s_0) \;\wedge\; \bigwedge_{i=0}^{k-1}\text{Trans}(s_i, s_{i+1}) \;\wedge\; \bigvee_{i=0}^{k}\text{Bad}(s_i)$$
+
+**In words:** start in a legal initial state, take $k$ legal steps, and require that *some* state along the way is bad — if a solver can satisfy this, that satisfying run is a real counterexample.
+**Also written:** SAT of this formula $\equiv$ "$\exists$ a length-$\le k$ path from Init to a Bad state"; its negation being valid (UNSAT) $\equiv$ the bounded safety property $\text{Init} \rightarrow \mathbf{G}_{\le k}\,\lnot\text{Bad}$.
+
 ::: {.callout-warning}
 BMC with bound $k$ only proves "no bug within $k$ steps." Declaring a system correct outright requires a **completeness threshold** (a $k$ large enough to cover the whole state space) or an unbounded method like BDD-based checking or k-induction. A clean BMC run at small $k$ is reassuring, not a proof.
 :::
 
-## 33.12 — Where This Powers Planning and Verification
+## 33.13 — Where This Powers Planning and Verification
 
 These four ideas are not museum pieces — they are the substrate under tools that ship real software and fly real spacecraft. The unifying trick is **reduction**: take a problem that does not look like logic, encode it as satisfiability or a reachability query, and let a decades-optimized solver do the work.
 
@@ -733,26 +1010,42 @@ flowchart LR
 
 **Beyond plain SAT: SMT.** Most real problems mix Boolean logic with arithmetic, arrays, and bit-vectors. **SMT** (Satisfiability Modulo Theories) solvers — Z3, CVC5 — wrap a CDCL core with dedicated *theory solvers* that understand "$x + y \le 10$" or "array $a$ at index $i$." The Boolean engine handles the logical skeleton; the theory solvers check that the chosen literals are consistent in their domain. This combination is what lets a verifier reason about actual program semantics, and it is the bridge from the pure logic of this chapter to the messy, typed, arithmetic world of the systems we actually build.
 
+A real SMT query in Python — the `z3-solver` library proves a tiny arithmetic fact by failing to find a counterexample:
+
+```python
+# pip install z3-solver
+from z3 import Int, Solver, Not, Implies, And, sat
+
+x, y = Int('x'), Int('y')
+s = Solver()
+# Claim: x>0 ∧ y>0  →  x+y>1.  Prove by checking the negation is UNSAT.
+s.add(Not(Implies(And(x > 0, y > 0), x + y > 1)))
+print(s.check())          # unsat  -> the claim holds for all integers
+assert s.check() != sat   # no counterexample exists
+```
+
 ::: {.callout-tip}
 The throughline of this whole topic: you rarely build a bespoke reasoner. You translate your question — a plan, an invariant, a proof obligation — into clauses, and ride the enormous engineering investment poured into SAT/SMT solvers and model checkers over the last thirty years. Knowing *how to encode* is now more valuable than knowing how to search.
 :::
 
-## 33.13 — Key Takeaways
+## 33.14 — Key Takeaways
 
 - **Logic is the foundation:** propositional logic reasons over whole statements; **first-order logic** adds objects, relations, and quantifiers. **Resolution** mechanises proof by refutation — assume the negation of the goal and derive a contradiction (the empty clause). For FOL, **unification** (e.g. $\{x/socrates\}$) finds the substitution that lets a complementary pair cancel.
 - **Expert systems** separate a rule **knowledge base**, **working memory**, and an **inference engine**. **Forward chaining** is data-driven (facts → conclusions); **backward chaining** is goal-driven (goal → needed facts). They prove the same things, differing only in efficiency.
 - **Structured representations** — semantic networks, frames, ontologies, RDF triples, OWL, and **knowledge graphs** — store knowledge as a graph and derive unstated facts via inheritance and axioms.
 - **Description logics** are decidable FOL fragments (TBox schema + ABox data) that power OWL; reasoners perform subsumption, consistency, and instance checking with termination guarantees.
 - **Uncertainty** is handled by moving from truth values to probabilities; **Bayes' rule** and base rates expose traps that pure logic hides.
+- **Foundational assumptions matter:** the **closed-world** vs **open-world** choice changes what silence means, and the **frame problem** forces a default law of inertia for reasoning about change — both underpin planning and non-monotonic reasoning.
 - Symbolic AI's strengths are **interpretability and provable guarantees**; its weaknesses are **brittleness** and the **knowledge-acquisition bottleneck** — complementary to neural networks' profile.
+- **Mechanised reasoning scales via reduction:** resolution, **DPLL/CDCL SAT solvers**, **SMT**, and **model checking** turn proofs, plans, and verification into satisfiability or reachability queries you hand to a decades-optimised engine.
 - **Neurosymbolic AI** fuses the two: neural perception feeds symbolic reasoning, and logic constrains or grounds neural models — the modern antidote to LLM hallucination.
 
-## 33.14 — See Also
+## 33.15 — See Also
 
 - **Probabilistic Graphical Models** — Bayesian networks and the rigorous treatment of reasoning under uncertainty referenced in §33.4.
 - **Search & Problem Solving** — the state-space search machinery underlying chaining and theorem proving.
 - **Planning, Constraint Satisfaction & Game Playing** — logic-based action representation and constraint reasoning, the sibling of KRR in symbolic AI.
-- **Large Language Models** — statistical knowledge, hallucination, and retrieval-augmented grounding that §33.7 pairs with symbolic methods.
+- **Large Language Models** — statistical knowledge, hallucination, and retrieval-augmented grounding that §33.8 pairs with symbolic methods.
 - **Explainable AI & Interpretability** — the modern formalisation of the transparency that symbolic systems offer natively.
 - **Frontier & Emerging Directions** — where the neurosymbolic program is heading next.
 

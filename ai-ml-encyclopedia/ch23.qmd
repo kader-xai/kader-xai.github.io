@@ -213,6 +213,9 @@ merges(corpus, 3)
 
 $$L(N) \approx L_\infty + \left(\frac{N_c}{N}\right)^{\alpha}, \qquad \alpha \approx 0.07$$
 
+**In words:** the model's loss is a floor it can never beat (the entropy of language) plus an extra penalty that keeps shrinking — by a fixed *percentage* — every time you multiply the model's size.
+**Also written:** $\;L(N) - L_\infty \approx N_c^{\alpha}\,N^{-\alpha}$, i.e. $\log\!\big(L(N)-L_\infty\big) \approx \alpha\log N_c - \alpha\log N$ — a straight line of slope $-\alpha$ on a log-log plot.
+
 Here $L_\infty$ is the irreducible loss (the entropy of language itself), and the second term is the avoidable error that shrinks as $N$ grows. The **Chinchilla** result refined this: for a fixed compute budget you should scale parameters and tokens *together* (roughly 20 tokens per parameter), not just make the model bigger. A model that is huge but undertrained wastes its compute; balance beats raw size.
 
 **Emergent abilities** are capabilities — multi-step arithmetic, instruction following, word unscrambling — that are near-random at small scale then jump sharply once the model crosses some size threshold, as if a switch flipped. Some of that sharpness is real and some is an artifact of all-or-nothing metrics (a smoother metric reveals a smoother climb), but either way, big models can do things small ones simply cannot. **In-context learning** is the headline emergent skill: the model learns a task *from examples in the prompt*, with no weight updates at all (Section 23.3). The weights are frozen; the "learning" happens entirely in the forward pass as the model conditions on what it just read.
@@ -264,6 +267,9 @@ The payoff is the whole point of MoE: **total parameters scale with the number o
 **The router.** The router is just a small learned linear layer $W_g$ followed by a softmax over the $N$ experts. For a token's hidden vector $x$ it produces a score per expert, keeps the top-$k$, and uses those (renormalized) scores as mixing weights:
 
 $$g = \text{softmax}(W_g\, x), \qquad \mathcal{T} = \text{top-}k(g), \qquad y = \sum_{i \in \mathcal{T}} g_i \, E_i(x)$$
+
+**In words:** score every expert for this token, keep the few that scored highest, run only those, and blend their outputs in proportion to their scores.
+**Also written:** $\;y = \sum_{i=1}^{N} m_i\, g_i\, E_i(x)$ where $m_i = 1$ if $i \in \text{top-}k(g)$ and $0$ otherwise — a hard binary mask zeroing out every non-selected expert.
 
 Only the experts in $\mathcal{T}$ are evaluated; the output is their **weighted sum**, weighted by how strongly the router chose each one.
 
@@ -334,7 +340,7 @@ Today's frontier open models are all the same animal: a **decoder-only transform
 
 **SwiGLU feed-forward.** The old FFN was two linear layers with a ReLU or GELU between them. Modern blocks use **SwiGLU**: a *gated* unit where one projection is passed through a SiLU/Swish activation and multiplied elementwise by a second, parallel projection before the output projection. The gate lets the network modulate information flow per-channel, and at matched parameter budgets it consistently beats the plain MLP — so it's now the default.
 
-**MoE feed-forward and local attention.** Two scaling levers stack on top. The FFN can be replaced by a **sparse MoE block** (§23.90) to grow capacity without growing per-token compute. And for long context, some models alternate **sliding-window / local attention** layers — each token attends only to the last $W$ tokens (Mistral, Gemma) — which bounds the attention cost and KV cache per layer while global information still propagates across stacked layers.
+**MoE feed-forward and local attention.** Two scaling levers stack on top. The FFN can be replaced by a **sparse MoE block** (§23.2) to grow capacity without growing per-token compute. And for long context, some models alternate **sliding-window / local attention** layers — each token attends only to the last $W$ tokens (Mistral, Gemma) — which bounds the attention cost and KV cache per layer while global information still propagates across stacked layers.
 
 Putting it together, one modern decoder block looks like this:
 
@@ -373,6 +379,9 @@ An LLM is built in stages, and the bulk of its knowledge comes from the first, u
 
 $$\mathcal{L} = -\frac{1}{T}\sum_{t=1}^{T} \log p_\theta(x_t \mid x_{<t})$$
 
+**In words:** average, over every position in the text, how *surprised* the model was by the word that actually came next — and try to make that surprise small.
+**Also written:** $\;\mathcal{L} = -\frac{1}{T}\log p_\theta(x_1,\dots,x_T) = \frac{1}{T}\sum_t \text{CE}\big(x_t,\, p_\theta(\cdot\mid x_{<t})\big)$ — the per-token cross-entropy, whose exponential $e^{\mathcal{L}}$ is the model's **perplexity**.
+
 Read this literally: at each position the model puts a probability on the token that actually came next, and the loss is the average negative log of those probabilities. Guess the true next token with high probability and the loss is near zero; be surprised by it and you pay a large penalty. Minimizing this over trillions of tokens forces the model to internalize grammar, facts, and reasoning patterns, because predicting the next word well *requires* understanding the preceding words — to finish "The capital of France is ___" you must actually know the answer. This stage costs millions of dollars in GPU time and is done once.
 
 **Full fine-tuning vs PEFT (LoRA, QLoRA).** Pretraining gives a raw "base model" that completes text but does not reliably follow instructions. **Fine-tuning** adapts it to a task or a style. **Full fine-tuning** updates all parameters — accurate but expensive (you must store optimizer state for billions of weights) and it produces a full copy of the model per task, which is a storage and serving nightmare if you have many tasks.
@@ -380,6 +389,9 @@ Read this literally: at each position the model puts a probability on the token 
 **PEFT** (Parameter-Efficient Fine-Tuning) freezes the base model and trains a tiny number of new parameters instead. The dominant method is **LoRA** (Low-Rank Adaptation). The insight is that the *change* a fine-tune makes to a weight matrix is usually low-rank — it can be captured by a thin product. So instead of updating a weight matrix $W \in \mathbb{R}^{d\times d}$, you freeze it and learn a low-rank correction $\Delta W = BA$, where $A \in \mathbb{R}^{r\times d}$ and $B \in \mathbb{R}^{d\times r}$ with rank $r \ll d$ (often 8–64). The forward pass becomes:
 
 $$h = Wx + \frac{\alpha}{r}\,BAx$$
+
+**In words:** keep the big pretrained weight exactly as it is, and add a small, scaled side-correction built from two thin matrices that are the only thing you actually train.
+**Also written:** $\;h = (W + \tfrac{\alpha}{r}BA)\,x = W'x$ with $W' = W + \Delta W$, $\Delta W = \tfrac{\alpha}{r}BA$ a rank-$r$ update — the two forms are identical, but the left one never *materializes* the merged $W'$ during training.
 
 The frozen $W$ does the heavy lifting; the small $BA$ nudges it toward your task. For $d=4096$ and $r=8$, the full matrix has about 16.8M parameters but the LoRA adapter has only $2 \cdot 4096 \cdot 8 \approx 65$K — a **256× reduction** in trainable weights. **QLoRA** goes one step further: it quantizes the frozen base model to 4-bit (the **NF4** format) so even a 65B model fits on a single GPU, then trains LoRA adapters on top in full precision. The base is cheap to store; the adapter is cheap to train; quality stays close to a full fine-tune.
 
@@ -408,6 +420,27 @@ print("full params:", W.size, " LoRA params:", A.size + B.size)
 ```
 
 Note the detail that $B$ is initialized to zeros: at step zero the adapter contributes nothing, so the fine-tune *starts* as an exact copy of the base model and only departs from it as training nudges $B$ away from zero. That is why LoRA training is stable — it can only improve on the base, never start from a random mangling of it.
+
+In practice you never wire LoRA by hand — the Hugging Face **PEFT** library bolts adapters onto any model in a few lines, and **bitsandbytes** supplies the 4-bit NF4 base for QLoRA:
+
+```python
+# QLoRA fine-tune with Hugging Face: 4-bit frozen base + LoRA adapters
+from transformers import AutoModelForCausalLM, BitsAndBytesConfig
+from peft import LoraConfig, get_peft_model
+
+bnb = BitsAndBytesConfig(load_in_4bit=True, bnb_4bit_quant_type="nf4",
+                         bnb_4bit_compute_dtype="bfloat16")
+base = AutoModelForCausalLM.from_pretrained("meta-llama/Llama-3.1-8B",
+                                            quantization_config=bnb, device_map="auto")
+lora = LoraConfig(r=8, lora_alpha=16, target_modules=["q_proj", "v_proj"],
+                  lora_dropout=0.05, task_type="CAUSAL_LM")
+model = get_peft_model(base, lora)
+model.print_trainable_parameters()
+# trainable params: 3.4M || all params: 8.03B || trainable%: 0.04
+# -> then hand `model` to transformers.Trainer / trl.SFTTrainer as usual
+```
+
+The 0.04% trainable line is the whole pitch: an 8B model adapts by touching a few million weights, and the resulting adapter is a ~10 MB file you can swap per task over one shared frozen base.
 
 **Instruction tuning / SFT.** After pretraining, the base model is taught to *follow instructions* via **Supervised Fine-Tuning (SFT)**, also called **instruction tuning**. You collect a dataset of `(instruction, ideal response)` pairs — "Summarize this article: … → …" — and fine-tune (often with LoRA) on them. This is still next-token prediction, but the *content* of the training data changes what the model learns: now it learns the *format* of being a helpful assistant — answering the question rather than continuing it, producing a complete response, adopting a helpful register. SFT is the bridge from a raw text-completer to a usable chatbot; alignment (Section 23.5) then polishes *how well* it behaves.
 
@@ -469,6 +502,9 @@ An LLM only knows what was in its training data, frozen at its cutoff date, and 
 
 $$\text{sim}(q, d) = \frac{q \cdot d}{\lVert q\rVert\,\lVert d\rVert}$$
 
+**In words:** ignore how long the two vectors are and measure only whether they point the same way — same direction means same meaning.
+**Also written:** $\;\text{sim}(q,d) = \hat q \cdot \hat d = \cos\theta$, where $\hat q = q/\lVert q\rVert$ and $\hat d = d/\lVert d\rVert$ are the unit-normalized vectors; on normalized vectors, ranking by cosine is the same as ranking by Euclidean distance.
+
 Cosine similarity is just the cosine of the angle between two vectors: $1$ means same direction (same meaning), $0$ means unrelated, $-1$ means opposite. "What is Saudi Arabia's capital?" and "Riyadh is the capital of Saudi Arabia" share almost no keywords with the query phrasing, yet their embeddings point nearly the same way — which is exactly why semantic search beats keyword matching here. A **vector database** (FAISS, Pinecone, Chroma, pgvector) stores millions of these vectors and answers nearest-neighbor queries in milliseconds using an approximate index such as HNSW.
 
 The little diagram below shows the geometric intuition: the query arrow lands near the two Saudi-Arabia documents and far from the Paris one.
@@ -519,6 +555,25 @@ def retrieve(query, k=2):
 # retrieve("What is Saudi Arabia's capital?") -> the two Saudi chunks
 ```
 
+The real thing swaps the toy `embed` for a trained sentence-embedding model and the brute-force scan for a FAISS index:
+
+```python
+# Production-flavored retrieval: sentence-transformers + FAISS
+from sentence_transformers import SentenceTransformer
+import faiss, numpy as np
+
+enc = SentenceTransformer("all-MiniLM-L6-v2")     # 384-dim embeddings
+docs = ["Riyadh is the capital of Saudi Arabia.",
+        "The Eiffel Tower is in Paris.",
+        "Saudi Arabia's currency is the riyal."]
+E = enc.encode(docs, normalize_embeddings=True)   # unit vectors -> dot = cosine
+index = faiss.IndexFlatIP(E.shape[1]); index.add(E)   # inner-product index
+
+q = enc.encode(["What is Saudi Arabia's capital?"], normalize_embeddings=True)
+scores, ids = index.search(q, k=2)                # millisecond nearest-neighbor
+print([docs[i] for i in ids[0]])                  # -> the two Saudi chunks
+```
+
 RAG's failure modes are worth naming because they are where real systems break. If the retriever misses the right chunk, the model cannot answer correctly (and may hallucinate to fill the gap). If chunks are too large you burn context and dilute the signal; too small and you slice sentences apart and lose meaning. The usual levers are good **chunking** (split on semantic boundaries with a little overlap), a strong **embedding model**, and a **reranker** — a second, more careful model that re-scores the top candidates so the very best chunk lands at the top of the prompt.
 
 ::: {.callout-warning}
@@ -533,9 +588,15 @@ An SFT model is helpful but not yet *aligned* — left alone it may be verbose, 
 
 $$\mathcal{L}_{RM} = -\log \sigma\big(r_\phi(x, y_w) - r_\phi(x, y_l)\big)$$
 
+**In words:** train the scorer so the answer humans liked gets a higher number than the one they rejected — the more confidently it ranks them right, the smaller the loss.
+**Also written:** $\;\mathcal{L}_{RM} = -\log \dfrac{e^{r_\phi(x,y_w)}}{e^{r_\phi(x,y_w)}+e^{r_\phi(x,y_l)}}$ — the Bradley–Terry probability that $y_w$ beats $y_l$, i.e. a 2-class softmax / logistic loss on the score gap.
+
 When the preferred response already scores higher, the difference inside $\sigma$ is large and positive, $\sigma \to 1$, and the loss is near zero; when the model has it backwards, the loss is large and gradients flip the ranking. Third, use reinforcement learning — specifically **PPO** (Proximal Policy Optimization, Chapter 25) — to update the LLM so it generates responses the reward model scores highly, with a **KL penalty** that keeps the model from drifting too far from the SFT starting point and "gaming" the reward with degenerate text:
 
 $$\max_\theta\ \mathbb{E}\big[r_\phi(x,y)\big] - \beta\,\mathrm{KL}\big(\pi_\theta \,\Vert\, \pi_{\text{SFT}}\big)$$
+
+**In words:** push the model to write answers the reward model loves, but punish it for drifting too far from the trustworthy SFT model it started as.
+**Also written:** $\;\max_\theta\, \mathbb{E}_{x,\,y\sim\pi_\theta}\!\big[r_\phi(x,y) - \beta\log\tfrac{\pi_\theta(y\mid x)}{\pi_{\text{SFT}}(y\mid x)}\big]$ — folding the KL into the expectation makes it a per-sample *KL-shaped reward* $r_\phi - \beta\log(\pi_\theta/\pi_{\text{SFT}})$.
 
 The first term says *get a higher reward*; the second term, the KL leash, says *but stay recognizably like the model we trusted*. Without that leash, optimizers happily discover gibberish that the reward model mistakenly loves.
 
@@ -551,6 +612,9 @@ flowchart TB
 **DPO and the preference family.** RLHF is fiddly — training and stabilizing a separate reward model *and* running PPO is genuinely hard engineering. **DPO** (Direct Preference Optimization) is the popular simplification. Its mathematical insight is that the optimal RLHF policy has a closed form in terms of the reward, so you can algebraically eliminate the reward model entirely and optimize the policy *directly* on the preference pairs with a single classification-style loss:
 
 $$\mathcal{L}_{DPO} = -\log \sigma\!\left(\beta \log \frac{\pi_\theta(y_w|x)}{\pi_{\text{ref}}(y_w|x)} - \beta \log \frac{\pi_\theta(y_l|x)}{\pi_{\text{ref}}(y_l|x)}\right)$$
+
+**In words:** make the model raise the good answer and lower the bad one — each judged by *how much it moved* away from the frozen reference, not by its raw probability.
+**Also written:** $\;\mathcal{L}_{DPO} = -\log\sigma\big(\hat r_\theta(x,y_w) - \hat r_\theta(x,y_l)\big)$ with the *implicit reward* $\hat r_\theta(x,y) = \beta\log\tfrac{\pi_\theta(y\mid x)}{\pi_{\text{ref}}(y\mid x)}$ — exactly the reward-model loss above, but with the policy's own log-ratio standing in for $r_\phi$.
 
 In words: raise the model's probability on preferred responses and lower it on rejected ones, each measured *relative to* a frozen reference model so the policy cannot wander off. No reward model, no RL loop, no reward-hacking to babysit — just a stable supervised-style objective on pairs. That is why much of the open-source world moved to DPO; it gives comparable quality with a fraction of the moving parts. The broader **preference-optimization family** includes IPO, KTO, ORPO, and **RLAIF**, where an *AI* rather than a human provides the preference labels (as in Constitutional AI), trading some human judgment for enormous scale.
 
@@ -644,7 +708,12 @@ flowchart LR
 | GPTQ/AWQ 4-bit | 4 | ~40 GB | small drop |
 | NF4 (QLoRA) | 4 | ~40 GB | small drop |
 
-**Decoding strategies.** At each step the model outputs a probability over the whole vocabulary; the **decoding strategy** is the rule that picks the next token from that distribution, and it controls the whole feel of the output. **Greedy** always takes the argmax — deterministic but prone to dull, repetitive loops. **Temperature** $T$ reshapes the distribution before sampling, $p_i \propto \exp(z_i / T)$: $T<1$ sharpens it toward the top choice (safer, more focused), $T>1$ flattens it (more varied, more creative, more risk of nonsense). **Top-k** restricts sampling to the $k$ highest-probability tokens; **top-p (nucleus)** samples from the smallest set of tokens whose cumulative probability exceeds $p$, which adapts the cutoff to the model's confidence — narrow when the model is sure, wide when it is hesitating.
+**Decoding strategies.** At each step the model outputs a probability over the whole vocabulary; the **decoding strategy** is the rule that picks the next token from that distribution, and it controls the whole feel of the output. **Greedy** always takes the argmax — deterministic but prone to dull, repetitive loops. **Temperature** $T$ reshapes the distribution before sampling, $p_i \propto \exp(z_i / T)$: $T<1$ sharpens it toward the top choice (safer, more focused), $T>1$ flattens it (more varied, more creative, more risk of nonsense).
+
+**In words:** divide every logit by $T$ before the softmax — a small $T$ exaggerates the gaps so the favorite dominates, a large $T$ squashes the gaps so long-shots get a real chance.
+**Also written:** $\;p_i = \dfrac{e^{z_i/T}}{\sum_j e^{z_j/T}}$; as $T\to 0$ this becomes a hard $\arg\max$ (greedy), and as $T\to\infty$ it becomes the uniform distribution.
+
+**Top-k** restricts sampling to the $k$ highest-probability tokens; **top-p (nucleus)** samples from the smallest set of tokens whose cumulative probability exceeds $p$, which adapts the cutoff to the model's confidence — narrow when the model is sure, wide when it is hesitating.
 
 ```python
 import numpy as np
@@ -659,6 +728,21 @@ def top_p(probs, p=0.9):
     masked = np.zeros_like(probs); masked[keep] = probs[keep]
     return masked / masked.sum()                # renormalized nucleus
 print(top_p(softmax(logits), 0.9))
+```
+
+With a real model you do not implement any of this — the framework exposes every knob as a generation argument:
+
+```python
+# Hugging Face: the same decoding knobs as generate() kwargs
+from transformers import AutoModelForCausalLM, AutoTokenizer
+tok = AutoTokenizer.from_pretrained("meta-llama/Llama-3.1-8B-Instruct")
+model = AutoModelForCausalLM.from_pretrained("meta-llama/Llama-3.1-8B-Instruct",
+                                             device_map="auto")
+ids = tok("Explain attention in one sentence:", return_tensors="pt").to(model.device)
+out = model.generate(**ids, max_new_tokens=60,
+                     do_sample=True, temperature=0.7, top_p=0.9, top_k=50)
+print(tok.decode(out[0], skip_special_tokens=True))
+# do_sample=False -> greedy; temperature=0 is the deterministic limit.
 ```
 
 The diagram below shows how temperature reshapes the same logits before sampling — low temperature concentrates mass on the front-runner, high temperature spreads it around.
@@ -688,6 +772,20 @@ The diagram below shows how temperature reshapes the same logits before sampling
 
 **Batching and vLLM.** A GPU serving one request at a time is mostly idle, because generating a single token barely uses its parallel hardware. **Batching** runs many requests together to saturate the GPU. The catch is that requests in a batch finish at different times; **continuous batching** (a.k.a. in-flight batching) swaps a finished sequence out and slots a new one in mid-flight, instead of stalling the whole batch until its slowest member is done. **vLLM** is the popular open serving engine that pairs continuous batching with **PagedAttention** — it manages the KV cache in non-contiguous "pages" the way an OS manages virtual memory, eliminating the cache fragmentation that otherwise wastes most of the GPU's memory. Together they raise throughput by a large factor over naive serving.
 
+Standing up a quantized, continuously-batched server is a few lines — vLLM handles the KV cache, paging, and batching for you:
+
+```python
+# vLLM: continuous batching + PagedAttention + 4-bit, all on by default
+from vllm import LLM, SamplingParams
+llm = LLM(model="meta-llama/Llama-3.1-8B-Instruct", quantization="awq",
+          gpu_memory_utilization=0.9)          # AWQ 4-bit weights
+params = SamplingParams(temperature=0.7, top_p=0.9, max_tokens=128)
+# pass a whole list; vLLM batches them across the GPU automatically
+outs = llm.generate(["Capital of Saudi Arabia?", "Write a haiku about GPUs."], params)
+for o in outs: print(o.outputs[0].text)
+# In prod you'd run `vllm serve ...` to expose an OpenAI-compatible HTTP endpoint.
+```
+
 ::: {.callout-tip}
 **Rule of thumb:** for self-hosted serving, the default stack is *4-bit (or int8) quantization to fit memory + vLLM for continuous batching + the KV cache (on by default)*. That trio typically delivers an order-of-magnitude better throughput-per-dollar than naive single-request fp16 generation, with negligible quality loss.
 :::
@@ -700,6 +798,9 @@ The previous sections covered RLHF: train a reward model on human preferences, t
 **Direct Preference Optimization (DPO)** says no. The key insight is a piece of algebra: the optimal policy under the RLHF objective has a *closed-form* relationship to the reward. RLHF maximizes expected reward minus a KL penalty that keeps the policy near a reference model $\pi_{\text{ref}}$. The solution to that constrained problem is
 
 $$\pi^*(y\mid x) = \frac{1}{Z(x)}\,\pi_{\text{ref}}(y\mid x)\,\exp\!\Big(\tfrac{1}{\beta} r(x,y)\Big).$$
+
+**In words:** the best possible aligned model is just the reference model with each answer's probability tilted up or down by how much reward that answer earns.
+**Also written:** $\;\pi^*(y\mid x) \propto \pi_{\text{ref}}(y\mid x)\,e^{r(x,y)/\beta}$ — a Boltzmann/softmax reweighting of the reference, with temperature $\beta$ and normalizer $Z(x)=\sum_y \pi_{\text{ref}}(y\mid x)e^{r(x,y)/\beta}$.
 
 Rearrange and the reward is expressible *through the policy itself*: $r(x,y) = \beta \log \frac{\pi(y\mid x)}{\pi_{\text{ref}}(y\mid x)} + \beta \log Z(x)$. The intractable partition function $Z(x)$ is the same for both responses to a given prompt, so it cancels when you compare a preferred response $y_w$ against a rejected one $y_l$. What remains is a plain classification loss on preference pairs:
 
@@ -731,6 +832,24 @@ assert margin > 0   # check: chosen now out-ranks rejected
 
 The reference preferred $y_l$ (its implicit reward gap started negative), but the trained policy has flipped the ranking: the implicit reward of $y_w$ is now $+0.05$ versus $-0.10$ for $y_l$, a positive margin, and the loss has dropped below the $\log 2 \approx 0.693$ break-even point. No reward model was ever instantiated — the numbers $\pi_\theta$ and $\pi_{\text{ref}}$ produce *are* the reward.
 
+In real code this whole loss, the reference-model bookkeeping, and the training loop are one `DPOTrainer` call in Hugging Face **TRL** — you supply only a dataset of `prompt / chosen / rejected` triples:
+
+```python
+# DPO alignment with TRL — no reward model, no RL loop
+from trl import DPOTrainer, DPOConfig
+from datasets import Dataset
+
+prefs = Dataset.from_dict({
+    "prompt":   ["Explain gravity to a child."],
+    "chosen":   ["Gravity is what pulls things down toward the ground."],
+    "rejected": ["Gravity is a tensor field obeying Einstein's equations."],
+})
+cfg = DPOConfig(beta=0.1, output_dir="dpo-out", per_device_train_batch_size=2)
+trainer = DPOTrainer(model=model, ref_model=None,  # ref_model=None -> frozen copy of model
+                     args=cfg, train_dataset=prefs, processing_class=tok)
+trainer.train()   # optimizes exactly the L_DPO loss above
+```
+
 ### The preference-optimization family
 
 DPO opened a floodgate. Once you see preference tuning as a loss on log-ratios, you can redesign the loss. Each variant fixes a specific weakness:
@@ -757,7 +876,7 @@ flowchart LR
     C -->|max quality,<br/>online signal| E[RLHF: reward model + PPO/GRPO]
     D --> F[Aligned model]
     E --> F
-    F -.->|harder tasks:<br/>verifiable reward| G[RL for reasoning<br/>see 23.91]
+    F -.->|harder tasks:<br/>verifiable reward| G[RL for reasoning<br/>see 23.11]
 ```
 
 The practical decision rule: **start with DPO**. It is the default first-line alignment method now precisely because it is supervised, reproducible, and runs on a fixed dataset you can inspect and version. Reach for full RLHF with PPO (or GRPO) when you need the last few points of quality, when you have a live stream of fresh human feedback, or when the reward is something you can *check* rather than merely prefer — math correctness, passing unit tests, tool-call success — which is exactly the regime the next section is about.
@@ -897,7 +1016,82 @@ Standardized safety benchmarks make this measurable. **HarmBench** provides a br
 A high refusal rate on a safety benchmark is necessary but not sufficient. Models can be safe against known jailbreaks and fall to novel ones, and over-aggressive safety tuning creates the opposite failure — refusing benign requests ("how do I kill a Python process?"), which is its own kind of broken. Report both the harmful-compliance rate *and* the false-refusal rate; a model that is safe only because it refuses everything is useless, and one that is helpful only because it refuses nothing is dangerous. For agents, always evaluate safety with tools *live* in a sandbox, because a harmful plan that never executes and a harmful plan that drains an account score identically on text-only evals.
 :::
 
-## 23.13 — Key takeaways
+## 23.13 — Multimodal LLMs (vision-language models)
+
+Everything so far assumed the model reads and writes only text. But the frontier assistants — GPT-4o, Claude, Gemini — also *see*: you paste a screenshot, a chart, a photo of a whiteboard, and the model reasons about it. A **multimodal LLM** (often a **vision-language model**, VLM) is, at heart, the same decoder-only transformer, fed extra tokens that come from an image instead of from text.
+
+The intuition is a translator at a border. The language model only speaks "token"; an image speaks pixels. So you hire a **vision encoder** to translate the picture into a handful of token-shaped vectors, and from then on the LLM treats them like any other tokens in the prompt — attending over the photo and the question together in one sequence.
+
+Concretely there are three pieces:
+
+- A **vision encoder** (usually a Vision Transformer, often the image half of a **CLIP** model) cuts the image into patches and turns each into a vector — *visual tokens*.
+- A small **projector** (a linear layer or tiny MLP) maps those visual vectors into the LLM's text-embedding space, so they live in the same room as word embeddings. This is the cheap part most fine-tunes train.
+- The **frozen (or lightly tuned) LLM** then attends over the concatenated sequence `[visual tokens] + [text tokens]` exactly as if the picture were a paragraph it had read.
+
+```{mermaid}
+flowchart LR
+  IMG["🖼️ image"] --> VE["Vision encoder<br/>(ViT / CLIP)"] --> VT["visual tokens"]
+  VT --> PR["Projector<br/>(→ LLM embedding space)"]
+  TXT["'What is in this chart?'"] --> TT["text tokens"]
+  PR --> CAT["concatenate"]
+  TT --> CAT
+  CAT --> LLM["Decoder-only LLM"] --> OUT["text answer"]
+```
+
+This "encoder + projector + LLM" recipe (popularized by **LLaVA**, and the shape of Qwen-VL, InternVL, and friends) is why multimodality was added so fast: you reuse a pretrained image encoder *and* a pretrained LLM, and mostly just train the bridge between them on image-text pairs. The same idea generalizes — swap the vision encoder for an audio encoder and you get speech-in models; add an image *decoder* on the output side and the model can generate pictures too. Models that natively interleave many modalities in *both* directions are called **any-to-any**.
+
+A tiny worked sense of the token economics: a 512×512 image split into 16×16 patches is $32\times32 = 1024$ patches, so a single photo can cost on the order of a thousand tokens in your context window — which is why "send 20 high-res images" fills a context budget fast, and why models down-sample or tile large images.
+
+```python
+# A VLM in a few lines with Hugging Face — image + text in, text out
+from transformers import AutoProcessor, AutoModelForImageTextToText
+from PIL import Image
+
+proc = AutoProcessor.from_pretrained("llava-hf/llava-1.5-7b-hf")
+model = AutoModelForImageTextToText.from_pretrained("llava-hf/llava-1.5-7b-hf",
+                                                    device_map="auto")
+msgs = [{"role": "user", "content": [
+            {"type": "image"},
+            {"type": "text", "text": "What's happening in this picture?"}]}]
+prompt = proc.apply_chat_template(msgs, add_generation_prompt=True)
+inputs = proc(images=Image.open("photo.jpg"), text=prompt, return_tensors="pt").to(model.device)
+out = model.generate(**inputs, max_new_tokens=80)
+print(proc.decode(out[0], skip_special_tokens=True))
+```
+
+::: {.callout-tip}
+**Rule of thumb:** for a vision task, first ask whether a *generative* VLM is even needed. Pure classification or retrieval over images is often better served by a plain **CLIP** embedding + nearest-neighbor — the same "small encoder beats giant generator for labeling" lesson from §23.1, now in pixels. Reach for a full VLM when the task needs *reasoning or free-form description* about the image, not just a label.
+:::
+
+## 23.14 — Long context and context engineering
+
+Frontier models advertise 200K–1M-token context windows, but a window is not the same as *using* it well. Two separate problems hide here: **can** the model technically attend that far (an architecture/positional question), and **does** it actually pay attention to the middle of a long input (a behavioral question). Treating "huge context window" as "just dump everything in" is the most common — and most expensive — mistake in applied LLM work.
+
+**Extending the window: positional extrapolation.** A model trained on 4K tokens has never seen position 100,000, and RoPE (§23.3) encodes position as a rotation angle — feed it angles far outside the training range and attention degrades. The fix is **RoPE scaling**: stretch or interpolate the rotation frequencies so positions the model *did* see now cover a longer range. **Position interpolation** linearly squeezes new positions into the trained range; **NTK-aware** and **YaRN** scaling do this more cleverly per-frequency, and a short fine-tune on long documents locks it in. This is how a model pretrained at 8K is cheaply extended to 128K.
+
+**Lost in the middle.** Even when a model *can* read 100K tokens, it does not read them evenly. Empirically, accuracy is highest for facts near the **beginning** and **end** of the context and sags for facts buried in the **middle** — a U-shaped attention profile nicknamed *lost-in-the-middle*. The everyday analogy is skimming a long memo: you remember the opening and the last paragraph and your eyes glaze over page 14.
+
+<svg viewBox="0 0 420 200" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif" font-size="11">
+  <line x1="40" y1="160" x2="390" y2="160" stroke="currentColor"/>
+  <line x1="40" y1="30" x2="40" y2="160" stroke="currentColor"/>
+  <text x="215" y="190" text-anchor="middle" fill="currentColor">position of the fact in the context →</text>
+  <text x="30" y="95" text-anchor="middle" fill="currentColor" transform="rotate(-90 30 95)">accuracy →</text>
+  <!-- U-shaped curve -->
+  <path d="M55 50 Q150 175 215 150 Q280 175 375 55" fill="none" stroke="#f59e0b" stroke-width="3"/>
+  <text x="70" y="44" fill="currentColor" font-size="10">start: high</text>
+  <text x="215" y="172" text-anchor="middle" fill="currentColor" font-size="10">middle: sags</text>
+  <text x="330" y="48" fill="currentColor" font-size="10">end: high</text>
+</svg>
+
+The practical consequence: in a RAG prompt, put the *most relevant* retrieved chunk near the top or bottom, not in the middle of a wall of context, and prefer a few highly-relevant chunks over a giant low-signal dump.
+
+**Context engineering.** Because attention cost grows with sequence length and quality sags in the middle, *what you put in the window* matters as much as how big it is. **Context engineering** is the discipline of curating that window: retrieve and rank only what's needed (RAG, §23.6), **compress or summarize** older turns instead of carrying them verbatim, and use **prompt caching** — reusing the KV cache of a fixed prefix (a long system prompt or document) across many calls so you pay to encode it once. The lazy-but-correct instinct holds: the cheapest token is the one you never put in the context.
+
+::: {.callout-warning}
+**Common mistake:** equating a bigger context window with better answers. A longer prompt is slower (attention and KV-cache cost rise with length), more expensive (you pay per input token), and can actually *lower* accuracy by burying the key fact in the middle and adding distractors the model may latch onto. Retrieve-and-rank beats stuff-everything almost every time.
+:::
+
+## 23.15 — Key takeaways
 
 - An **LLM is a scaled-up Transformer**; almost all generative/chat models are **decoder-only** (causal attention, generates left-to-right), while **encoder-only** (BERT) models use bidirectional attention and excel at embeddings and classification.
 - Models read **tokens** (~4 chars each); token counts drive both **cost** and the **context window**. **Scaling laws** say quality improves as a smooth power law in parameters, data, and compute — and Chinchilla says scale them *together* (~20 tokens/param).
@@ -907,8 +1101,10 @@ A high refusal rate on a safety benchmark is necessary but not sufficient. Model
 - **Alignment** tunes *how* the model responds via comparisons, not demonstrations: RLHF (reward model + PPO + KL leash) or the simpler, reward-model-free **DPO** and its preference-tuning cousins.
 - **Agents** wrap the LLM in a reason→act→observe loop using **function calling**, standardized by **MCP**, with vector-store long-term memory and optional multi-agent roles — and the tools must be guarded against mistakes and prompt injection.
 - **Inference** is the recurring cost: the **KV cache** ($O(T^2)\to O(T)$), **quantization** (int8/NF4/GPTQ/AWQ), **decoding strategies** (greedy/temperature/top-k/top-p), and **continuous batching via vLLM/PagedAttention**.
+- **Multimodal LLMs** bolt a **vision encoder + projector** onto the same decoder, turning images into tokens the LLM attends over (LLaVA-style); for pure image labeling, a CLIP embedding still beats a full VLM.
+- **Long context** is two problems: *extending* the window (RoPE scaling — PI/NTK/YaRN) and *using* it well (the **lost-in-the-middle** sag). **Context engineering** — retrieve, rank, compress, cache — beats stuffing everything in.
 
-## 23.14 — See also
+## 23.16 — See also
 
 - **Attention & Transformers** — the architecture every LLM is built on (attention, masks, positional encoding).
 - **Natural Language Processing** — tokenization lineage, embeddings, and the language tasks LLMs subsume.

@@ -111,6 +111,26 @@ Most of the models in this encyclopedia learn to *discriminate* — given an inp
 🧭 **In context:** Deep Learning · used to synthesize new images, audio, and text by modeling the data distribution · the one key idea: instead of mapping input → label, learn $p(x)$ (or a way to sample from it) so you can generate fresh $x$.
 :::
 
+One picture is worth keeping in your head for the whole chapter: a **discriminative** model draws a fence between classes, while a **generative** model learns to *re-draw the animals*. The fence only needs to know where cats end and dogs begin; the painter needs to know what a cat actually looks like.
+
+<svg viewBox="0 0 560 180" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif" font-size="11">
+  <text x="140" y="20" text-anchor="middle" font-weight="bold" fill="currentColor">Discriminative: learn p(y | x)</text>
+  <circle cx="70" cy="80" r="6" fill="#38bdf8"/><circle cx="95" cy="100" r="6" fill="#38bdf8"/>
+  <circle cx="80" cy="120" r="6" fill="#38bdf8"/><circle cx="110" cy="70" r="6" fill="#38bdf8"/>
+  <circle cx="190" cy="80" r="6" fill="#ec4899"/><circle cx="210" cy="110" r="6" fill="#ec4899"/>
+  <circle cx="175" cy="120" r="6" fill="#ec4899"/><circle cx="215" cy="75" r="6" fill="#ec4899"/>
+  <line x1="145" y1="55" x2="145" y2="145" stroke="#f59e0b" stroke-width="3" stroke-dasharray="5 4"/>
+  <text x="145" y="165" text-anchor="middle" fill="#f59e0b">decision boundary</text>
+  <text x="420" y="20" text-anchor="middle" font-weight="bold" fill="currentColor">Generative: learn p(x)</text>
+  <ellipse cx="380" cy="95" rx="45" ry="38" fill="#6366f1" opacity="0.25"/>
+  <ellipse cx="470" cy="95" rx="45" ry="38" fill="#22c55e" opacity="0.25"/>
+  <circle cx="365" cy="85" r="6" fill="#6366f1"/><circle cx="390" cy="105" r="6" fill="#6366f1"/>
+  <circle cx="378" cy="115" r="6" fill="#6366f1"/>
+  <circle cx="460" cy="85" r="6" fill="#22c55e"/><circle cx="480" cy="108" r="6" fill="#22c55e"/>
+  <circle cx="470" cy="118" r="6" fill="#22c55e"/>
+  <text x="425" y="165" text-anchor="middle" fill="currentColor">model the shape of each blob</text>
+</svg>
+
 ## 18.1 — Autoencoders
 
 An **autoencoder** is a neural network trained to copy its input to its output — which sounds useless until you notice the trick: in the middle, the network is forced through a narrow **bottleneck** far smaller than the input. To reconstruct a 784-pixel digit from only 32 numbers, the network must *learn what matters* and throw away the rest. That squeeze is where the learning lives.
@@ -118,6 +138,9 @@ An **autoencoder** is a neural network trained to copy its input to its output �
 The architecture has three parts. The **encoder** $f$ maps the input $x$ to a compact **latent code** (or **latent vector**) $z = f(x)$. The **decoder** $g$ maps the code back to a reconstruction $\hat{x} = g(z)$. Training minimizes the **reconstruction loss**, typically squared error:
 
 $$\mathcal{L}(x) = \lVert x - g(f(x)) \rVert^2$$
+
+**In words:** push the input through the squeeze and back out, then measure how far the output drifted from the original — that gap is what training shrinks.
+**Also written:** $\mathcal{L}(x) = \sum_{i=1}^{d} (x_i - \hat{x}_i)^2$ with $\hat{x} = g(f(x))$ — the same squared error spelled out coordinate by coordinate.
 
 Because there are no labels — the target *is* the input — autoencoders are a form of self-supervised, unsupervised learning. The latent code is a learned, nonlinear compression; with linear layers and squared loss, an autoencoder in fact recovers the same subspace as PCA (see Chapter 7).
 
@@ -161,9 +184,37 @@ loss = np.mean((x - xh) ** 2)          # what training minimizes
 print(z.round(2), "loss:", round(loss, 3))
 ```
 
+And here is the same idea as an actual trainable model in PyTorch — the form you would really use, with a 784→32 bottleneck for MNIST-sized digits.
+
+```python
+import torch, torch.nn as nn
+
+class Autoencoder(nn.Module):
+    def __init__(self, d_in=784, d_lat=32):
+        super().__init__()
+        self.enc = nn.Sequential(nn.Linear(d_in, 128), nn.ReLU(),
+                                 nn.Linear(128, d_lat))
+        self.dec = nn.Sequential(nn.Linear(d_lat, 128), nn.ReLU(),
+                                 nn.Linear(128, d_in), nn.Sigmoid())
+    def forward(self, x):
+        z = self.enc(x)
+        return self.dec(z), z
+
+model = Autoencoder()
+opt   = torch.optim.Adam(model.parameters(), lr=1e-3)
+loss_fn = nn.MSELoss()
+
+x = torch.rand(64, 784)                 # a batch of 64 flattened images
+xh, z = model(x)
+loss = loss_fn(xh, x)                    # target IS the input
+opt.zero_grad(); loss.backward(); opt.step()
+```
+
 Two important variants change *what* the bottleneck must learn. A **denoising autoencoder** receives a corrupted input $\tilde{x}$ (e.g. with noise added or pixels masked) but is scored against the *clean* $x$; to undo the corruption it must learn the underlying structure rather than memorize a copy. A **sparse autoencoder** keeps the code wide but adds a penalty (an L1 term or a KL penalty on average activation) so that only a few latent units fire for any input — forcing each unit to specialize into an interpretable feature.
 
 The **latent space** itself is the prize. Points that are close in latent space tend to decode to similar inputs, so the code is a useful representation for downstream tasks, anomaly detection (high reconstruction error = unusual input), or denoising. But a plain autoencoder's latent space is *holey*: sample a random $z$ and the decoder often produces garbage, because nothing forced the codes to fill the space smoothly. Fixing that is exactly what the VAE does next.
+
+**A concrete use: fraud and defect detection.** Train an autoencoder only on *normal* credit-card transactions (or only on *good* parts on a factory line). It learns to reconstruct normal patterns with tiny error. When a fraudulent transaction or a cracked part comes in, it does not match the learned patterns, so the reconstruction error spikes — and that error, thresholded, becomes your anomaly alarm. No labeled fraud examples needed.
 
 ::: {.callout-tip}
 Think of the encoder as a zip compressor that is allowed to be lossy and learns its own file format tuned to your data. The bottleneck size is the compression ratio — too wide and it just copies, too narrow and it blurs.
@@ -173,15 +224,23 @@ Think of the encoder as a zip compressor that is allowed to be lossy and learns 
 
 A plain autoencoder learns *points*; a **variational autoencoder (VAE)** learns *distributions*. Instead of encoding $x$ to a single code, the encoder outputs the parameters of a probability distribution over latent codes — a mean $\mu$ and a variance $\sigma^2$ — and the actual code is *sampled* from $\mathcal{N}(\mu, \sigma^2)$. This single change turns the holey latent space into a smooth, continuous one you can sample from, which makes the VAE a true generative model: draw $z \sim \mathcal{N}(0, I)$, run the decoder, get a new sample.
 
+The intuition for *why* this fills the holes: a plain autoencoder is allowed to drop each input onto a single razor-thin point, leaving gulfs of empty space between codes. The VAE instead forces every input to claim a small *fuzzy cloud* of codes, and pushes all those clouds toward one shared blob (a unit Gaussian). Overlapping fuzzy clouds tile the space with no gaps — so any random point you pick decodes to something sensible.
+
 The training objective is the **ELBO** (evidence lower bound), which has two terms pulling in tension:
 
 $$\mathcal{L} = \underbrace{\mathbb{E}_{q(z|x)}[\log p(x|z)]}_{\text{reconstruction}} - \underbrace{D_{\mathrm{KL}}\big(q(z|x)\,\Vert\,p(z)\big)}_{\text{regularizer}}$$
+
+**In words:** decode the sampled code and reward it for rebuilding the input, but subtract a penalty for how far the encoder's cloud has wandered from the standard-normal blob.
+**Also written:** maximizing this is equivalent to *minimizing* $-\mathbb{E}_{q(z|x)}[\log p(x|z)] + D_{\mathrm{KL}}(q(z|x)\,\Vert\,p(z))$ — a reconstruction loss plus a KL regularizer, the form most code actually optimizes.
 
 The first term is the familiar reconstruction quality: decode the sampled $z$ and check it matches $x$. The second term, the **KL divergence**, measures how far the encoder's distribution $q(z|x)$ has drifted from a standard normal **prior** $p(z) = \mathcal{N}(0, I)$, and penalizes the drift. Reconstruction wants each input to grab its own private corner of latent space; the KL term pushes every code back toward the same unit Gaussian. The balance is what packs the codes together smoothly with no holes.
 
 There is one obstacle: you cannot backpropagate through a random sampling step. The **reparameterization trick** sidesteps it by moving the randomness outside the gradient path. Instead of sampling $z \sim \mathcal{N}(\mu, \sigma^2)$ directly, write
 
 $$z = \mu + \sigma \odot \epsilon, \qquad \epsilon \sim \mathcal{N}(0, I)$$
+
+**In words:** build the random code as a fixed center plus a scaled dose of external noise, so the network parts ($\mu$, $\sigma$) stay differentiable while the dice-roll lives in $\epsilon$.
+**Also written:** $z \sim \mathcal{N}(\mu, \operatorname{diag}(\sigma^2))$ — the very same sample, but expressed as a draw from the distribution instead of as a deterministic function of noise.
 
 Now $\epsilon$ is just external noise, and $\mu, \sigma$ are deterministic functions of the network — gradients flow through them cleanly.
 
@@ -207,6 +266,21 @@ kl = 0.5 * np.sum(sigma**2 + mu**2 - 1 - np.log(sigma**2))
 print("z:", z.round(2), " KL:", round(kl, 3))
 ```
 
+In a real framework the reparameterization and the closed-form KL are just a few lines of PyTorch:
+
+```python
+import torch, torch.nn as nn, torch.nn.functional as F
+
+def vae_loss(x, x_hat, mu, logvar):
+    recon = F.mse_loss(x_hat, x, reduction="sum")
+    kl = -0.5 * torch.sum(1 + logvar - mu.pow(2) - logvar.exp())
+    return recon + kl                      # the negative ELBO
+
+mu, logvar = torch.zeros(8, 2), torch.zeros(8, 2)   # encoder outputs
+std = torch.exp(0.5 * logvar)
+z = mu + std * torch.randn_like(std)       # reparameterization trick
+```
+
 The KL has a clean closed form for two Gaussians, shown above — no sampling needed for that term. A famous side effect of the smooth latent space is **interpolation**: pick the codes of two real inputs, walk a straight line between them, and decode each step — you get a smooth morph (one face slowly becoming another), evidence that the space is genuinely continuous and meaningful. The cost is that VAEs tend to produce slightly **blurry** samples, because the Gaussian likelihood and the averaging over $q(z|x)$ smear fine detail.
 
 ::: {.callout-warning}
@@ -220,6 +294,9 @@ A **GAN** (generative adversarial network) trains two networks locked in a conte
 This is a **minimax game** with a single value function:
 
 $$\min_G \max_D \; \mathbb{E}_{x \sim p_{\text{data}}}[\log D(x)] + \mathbb{E}_{z \sim p_z}[\log(1 - D(G(z)))]$$
+
+**In words:** the detective tunes itself to call real things real and fakes fake, while the forger simultaneously tunes itself to make the detective call its fakes real — same scoreboard, opposite goals.
+**Also written:** equivalently $\min_G \max_D \; \mathbb{E}_{x}[\log D(x)] + \mathbb{E}_{\hat{x}\sim p_G}[\log(1 - D(\hat{x}))]$ where $\hat{x} = G(z)$ is just a sample from the generator's distribution $p_G$.
 
 $D$ maximizes it (assign high probability to real, low to fake); $G$ minimizes it (make $D(G(z))$ high). At the theoretical optimum the generator's distribution matches the data and $D$ is stuck guessing $0.5$ everywhere. Crucially, there is **no reconstruction loss and no explicit likelihood** — the generator never sees a real image directly, it only ever gets gradient signal *through* the discriminator's verdict. That indirectness is what makes GAN samples so sharp (no blur-inducing pixel-averaging) and also what makes them so hard to train.
 
@@ -244,11 +321,54 @@ g_loss = -np.log(D_fake)                          # G wants D_fake high
 print("D loss:", round(d_loss,3), " G loss:", round(g_loss,3))
 ```
 
+The real training loop alternates the two updates. Here is the idiomatic PyTorch shape of one step, using the non-saturating generator loss discussed below:
+
+```python
+import torch, torch.nn as nn
+bce = nn.BCEWithLogitsLoss()
+
+def gan_step(G, D, opt_G, opt_D, real, z):
+    ones  = torch.ones(real.size(0), 1)
+    zeros = torch.zeros(real.size(0), 1)
+    # --- train D: real -> 1, fake -> 0 ---
+    fake = G(z).detach()                     # stop grads into G here
+    d_loss = bce(D(real), ones) + bce(D(fake), zeros)
+    opt_D.zero_grad(); d_loss.backward(); opt_D.step()
+    # --- train G: make D call the fake "real" (non-saturating) ---
+    g_loss = bce(D(G(z)), ones)
+    opt_G.zero_grad(); g_loss.backward(); opt_G.step()
+    return d_loss.item(), g_loss.item()
+```
+
 Two failure modes haunt GANs. **Mode collapse** is when the generator discovers one (or a few) outputs that reliably fool the discriminator and produces *only those* — a model trained on all ten digits that emits nothing but convincing 8s. It minimizes the loss while ignoring most of the data distribution. **Training instability** comes from the two-player dynamics: if the discriminator gets too good too fast, $\log(1 - D(G(z)))$ saturates and the generator's gradient vanishes; if it lags, the generator exploits it without really improving. Unlike a normal loss curve that slides downward, GAN training is a moving equilibrium that can oscillate or diverge. A common fix for the vanishing gradient is the **non-saturating loss** — train $G$ to maximize $\log D(G(z))$ instead of minimizing $\log(1 - D(G(z)))$, which gives a strong gradient exactly when the generator is losing.
+
+::: {.callout-note}
+**Wasserstein GAN (WGAN).** The single most influential stability fix replaces the discriminator's "real-vs-fake probability" with a *critic* that scores how realistic a sample is on an unbounded scale, and trains it to estimate the **Earth-Mover (Wasserstein) distance** between the real and generated distributions. The intuition: instead of asking "is this fake?" (a yes/no that gives no gradient once the answer is obvious), ask "how much work would it take to reshape the fake pile of dirt into the real pile?" — a smooth, always-informative signal. WGAN-GP enforces the needed mathematical constraint with a *gradient penalty* and largely tamed the vanishing-gradient and mode-collapse problems that plagued early GANs.
+:::
 
 ::: {.callout-warning}
 A falling generator loss does **not** mean better samples — the two losses are coupled, so each can drop simply because the *other* network got worse. Judge GANs by looking at samples or a metric like FID (Fréchet Inception Distance), never by the loss alone.
 :::
+
+### 18.3.1 — Evaluating generative models
+
+Because there is no single "accuracy" for a model that invents data, generative work leans on a handful of purpose-built metrics. The most common for images is the **Fréchet Inception Distance (FID)**: run both real and generated images through a fixed pretrained Inception network, take the feature activations, fit a Gaussian to each set, and measure the distance between those two Gaussians.
+
+$$\text{FID} = \lVert \mu_r - \mu_g \rVert^2 + \operatorname{tr}\!\big(\Sigma_r + \Sigma_g - 2(\Sigma_r \Sigma_g)^{1/2}\big)$$
+
+**In words:** summarize real and fake images each as a bell-shaped cloud of deep features, then measure how far apart the two clouds sit in both their centers and their spreads — lower is better.
+**Also written:** it is the squared **2-Wasserstein distance** between two Gaussians $\mathcal{N}(\mu_r,\Sigma_r)$ and $\mathcal{N}(\mu_g,\Sigma_g)$ fitted to Inception features.
+
+A lower FID means the generated feature distribution is closer to the real one, capturing both quality (sharp, realistic) and diversity (covers the modes) in one number — which is exactly why it catches mode collapse that the loss curve hides. Two companions are worth knowing: the older **Inception Score (IS)**, which rewards images that are individually confidently classified yet collectively varied, and **precision/recall for generative models**, which splits the single FID number into two — *precision* (are the samples realistic?) versus *recall* (do they cover the whole data distribution?), letting you see *which* of the two a model is failing.
+
+```python
+# Practical FID with a maintained library, not from scratch
+from torchmetrics.image.fid import FrechetInceptionDistance
+fid = FrechetInceptionDistance(feature=2048)
+fid.update(real_images, real=True)     # uint8 images, shape (N,3,H,W)
+fid.update(fake_images, real=False)
+print("FID:", fid.compute().item())    # lower is better
+```
 
 ## 18.4 — GAN Variants
 
@@ -259,6 +379,9 @@ The original GAN used fully-connected layers and was finicky on images. A cascad
 **CycleGAN** solves **unpaired image-to-image translation** — turning horses into zebras or summer photos into winter ones *without* matched before/after pairs, which are usually impossible to collect. It trains two generators ($G: A \to B$ and $F: B \to A$) and adds a **cycle-consistency loss**: if you translate an image to the other domain and back, you should recover the original, $F(G(a)) \approx a$. That round-trip constraint is what keeps the translation faithful instead of producing an arbitrary realistic-looking image of the target domain.
 
 $$\mathcal{L}_{\text{cyc}} = \mathbb{E}_a\big[\lVert F(G(a)) - a \rVert_1\big] + \mathbb{E}_b\big[\lVert G(F(b)) - b \rVert_1\big]$$
+
+**In words:** translate to the other domain and back, and demand you land on the original photo — in both directions.
+**Also written:** $\mathcal{L}_{\text{cyc}} = \mathbb{E}_a\big[\sum_i |F(G(a))_i - a_i|\big] + \mathbb{E}_b\big[\sum_i |G(F(b))_i - b_i|\big]$, the $\ell_1$ (absolute-value) reconstruction error written as an explicit sum.
 
 ```{mermaid}
 flowchart LR
@@ -282,13 +405,21 @@ A fourth variant worth knowing rounds out the picture. The **conditional GAN (cG
 
 **Diffusion models** generate by learning to *reverse* a gradual destruction of data, and they are the reason GANs lost their crown for image synthesis. The intuition: take a clean image and add a tiny bit of Gaussian noise, repeat hundreds of times until it is pure static — that is easy and needs no learning. Now train a network to undo *one* step of that process. Chain those learned denoising steps and you can start from pure noise and walk all the way back to a clean image.
 
+A homely analogy: imagine slowly stirring a drop of ink into a glass of water until the water is uniformly gray — that mixing is the easy forward process. The astonishing claim of diffusion is that if you learn, at each instant, exactly which way the ink was drifting, you can run the film backward and watch the uniform gray *un-mix* itself back into the original sharp drop.
+
 The **forward (noising) process** is fixed. Over $T$ steps it adds noise according to a schedule, and thanks to a closed-form shortcut you can jump directly to any noise level $t$ in one shot:
 
 $$x_t = \sqrt{\bar\alpha_t}\, x_0 + \sqrt{1 - \bar\alpha_t}\, \epsilon, \qquad \epsilon \sim \mathcal{N}(0, I)$$
 
+**In words:** any noisy version is just a faded copy of the clean image blended with a dose of pure noise, where the blend ratio is set by how far along the schedule you are.
+**Also written:** $x_t \sim \mathcal{N}\!\big(\sqrt{\bar\alpha_t}\,x_0,\;(1-\bar\alpha_t)I\big)$ — the same statement phrased as "$x_t$ is Gaussian centered on a shrunken copy of $x_0$."
+
 where $\bar\alpha_t$ shrinks from near 1 (barely any noise) to near 0 (almost pure noise) as $t$ grows. The **reverse (denoising) process** is learned: a network $\epsilon_\theta(x_t, t)$ is trained to predict the noise that was added, and the loss is dead simple — mean squared error between the true and predicted noise:
 
 $$\mathcal{L} = \mathbb{E}_{x_0, t, \epsilon}\big[\lVert \epsilon - \epsilon_\theta(x_t, t)\rVert^2\big]$$
+
+**In words:** show the network a noisy image and the timestep, and score it on how accurately it guesses the exact noise that was mixed in.
+**Also written:** $\mathcal{L} = \mathbb{E}\big[\sum_i (\epsilon_i - \epsilon_\theta(x_t,t)_i)^2\big]$ — a plain per-pixel squared-error regression on the noise vector.
 
 That stable regression objective — no adversarial game, no balancing act — is exactly why diffusion training is so much more robust than GAN training. The denoiser is almost always a **U-Net** (a convolutional encoder–decoder with skip connections), with the timestep $t$ fed in so the network knows how much noise to expect.
 
@@ -302,6 +433,28 @@ flowchart LR
   Y1 -.->|"εθ denoise"| Y0["x̂₀ generated"]
 ```
 
+<svg viewBox="0 0 560 150" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif" font-size="10">
+  <style>@keyframes fade18 {0%,100%{opacity:.35}50%{opacity:.9}}</style>
+  <text x="280" y="16" text-anchor="middle" font-weight="bold" fill="currentColor">forward: add noise →  ←  reverse: remove noise</text>
+  <!-- five tiles from clean to noise -->
+  <g>
+    <rect x="30"  y="40" width="70" height="70" fill="#6366f1" opacity="0.7"/>
+    <rect x="140" y="40" width="70" height="70" fill="#6366f1" opacity="0.55"/>
+    <rect x="250" y="40" width="70" height="70" fill="#6366f1" opacity="0.4"/>
+    <rect x="360" y="40" width="70" height="70" fill="#6366f1" opacity="0.28"/>
+    <rect x="470" y="40" width="70" height="70" fill="#94a3b8" opacity="0.5" style="animation:fade18 2.5s ease-in-out infinite"/>
+  </g>
+  <!-- speckle to suggest growing noise -->
+  <g fill="#f59e0b">
+    <circle cx="165" cy="60" r="2"/><circle cx="195" cy="95" r="2"/>
+    <circle cx="265" cy="55" r="2"/><circle cx="300" cy="80" r="2"/><circle cx="278" cy="100" r="2"/>
+    <circle cx="375" cy="55" r="2"/><circle cx="410" cy="70" r="2"/><circle cx="390" cy="95" r="2"/><circle cx="420" cy="100" r="2"/>
+  </g>
+  <text x="65"  y="128" text-anchor="middle" fill="currentColor">x₀ clean</text>
+  <text x="505" y="128" text-anchor="middle" fill="currentColor">x_T noise</text>
+  <text x="280" y="35" text-anchor="middle" fill="#22c55e">━━━━▶</text>
+</svg>
+
 ```python
 import numpy as np
 x0 = np.array([1.0, 0.5, -0.3])          # a tiny "clean" signal
@@ -312,6 +465,24 @@ xt   = np.sqrt(abar)*x0 + np.sqrt(1-abar)*eps   # forward (closed form)
 eps_pred = eps + 0.1*np.random.randn(3)  # pretend prediction
 loss = np.mean((eps - eps_pred)**2)
 print("xt:", xt.round(2), " loss:", round(loss,3))
+```
+
+In practice you rarely write the noising loop yourself — Hugging Face `diffusers` packages the scheduler and a U-Net so the whole training step is a few lines:
+
+```python
+import torch
+from diffusers import UNet2DModel, DDPMScheduler
+
+model = UNet2DModel(sample_size=32, in_channels=3, out_channels=3)
+sched = DDPMScheduler(num_train_timesteps=1000)
+
+x0 = torch.randn(8, 3, 32, 32)                       # a batch of clean images
+noise = torch.randn_like(x0)
+t = torch.randint(0, 1000, (8,))                     # random timestep per image
+xt = sched.add_noise(x0, noise, t)                   # forward, closed form
+noise_pred = model(xt, t).sample                     # U-Net predicts the noise
+loss = torch.nn.functional.mse_loss(noise_pred, noise)
+loss.backward()                                      # that is the whole objective
 ```
 
 Two refinements made diffusion dominant. **Classifier-free guidance** is how you steer generation with a text prompt: during training the model sometimes sees the prompt and sometimes sees a blank, learning both a conditional and an unconditional predictor. At sampling time you extrapolate *away* from the unconditional toward the conditional, $\epsilon = \epsilon_{\text{uncond}} + s\,(\epsilon_{\text{cond}} - \epsilon_{\text{uncond}})$, where the guidance scale $s > 1$ trades diversity for stronger adherence to the prompt. **Latent diffusion** fixes the cost problem: running hundreds of denoising steps on full-resolution pixels is brutally slow, so you first use a VAE-style autoencoder to compress the image into a small latent grid, run the entire diffusion process *there*, and decode once at the end. This is the engine inside Stable Diffusion, and it is why text-to-image went from research curiosity to commodity.
@@ -334,6 +505,9 @@ Two more families round out the generative landscape, each taking a fundamentall
 **Autoregressive models** make no attempt to model the whole image or sentence at once. They use the chain rule of probability to factor the joint distribution into a product of conditionals, generating one element at a time, each conditioned on everything before it:
 
 $$p(x) = \prod_{i=1}^{n} p(x_i \mid x_1, \dots, x_{i-1})$$
+
+**In words:** the probability of the whole thing is the chance of the first piece, times the chance of the second given the first, times the third given the first two, and so on to the end.
+**Also written:** $\log p(x) = \sum_{i=1}^{n} \log p(x_i \mid x_{<i})$ — taking logs turns the product into a sum, which is the form actually optimized.
 
 For text this means predicting the next token given the previous ones — exactly how large language models work (Chapter 20). For images, PixelRNN and PixelCNN predict each pixel given the pixels above and to the left. The payoff is a tractable, exact likelihood and very high sample quality; the price is **slow sequential sampling** — an $n$-pixel image needs $n$ forward passes, because each step depends on the last.
 
@@ -361,6 +535,9 @@ print("sampled:", x)                   # one pass per element
 
 $$\log p(x) = \log p(z) + \log\left| \det \frac{\partial z}{\partial x} \right|, \qquad z = f(x)$$
 
+**In words:** the likelihood of a data point equals the likelihood of where it lands in the simple Gaussian, corrected by how much the invertible map locally stretches or shrinks space.
+**Also written:** equivalently $p(x) = p(z)\,\big|\det J_f(x)\big|$ with $J_f = \partial z/\partial x$ — the non-log form of the change-of-variables formula.
+
 You train by directly maximizing this exact log-likelihood — no lower bound like the VAE's ELBO, no adversarial game. To sample, you run the network *backwards*: draw $z$ from the Gaussian and apply $f^{-1}$. The constraint that every transformation be invertible with a cheap Jacobian determinant (the trick behind RealNVP and Glow) is what limits flow expressiveness and keeps them less common than diffusion today, but they remain the cleanest example of exact-likelihood deep generation.
 
 | Family | Likelihood | Sampling | Signature tradeoff |
@@ -381,11 +558,17 @@ Before VAEs and GANs, the dominant idea in generative modeling was **energy-base
 
 $$p(v, h) = \frac{1}{Z} e^{-E(v, h)}, \qquad E(v,h) = -\sum_{i<j} w_{ij}\, s_i s_j - \sum_i b_i s_i$$
 
+**In words:** a configuration's probability falls off exponentially with its energy, so low-energy states are exponentially more likely — and $Z$ just rescales everything so the probabilities sum to one.
+**Also written:** $p(v,h) \propto \exp\!\big(\sum_{i<j} w_{ij} s_i s_j + \sum_i b_i s_i\big)$ — dropping the normalizer $Z$ and folding the minus sign into the exponent.
+
 The trouble is the **partition function** $Z$ — the sum over *all* possible configurations needed to normalize the probability. It is exponentially large and intractable, and the dense all-to-all connectivity makes inference hopelessly slow. The Boltzmann machine was elegant but barely usable.
 
 The **Restricted Boltzmann Machine (RBM)** added one restriction that changed everything: drop all visible–visible and hidden–hidden connections, keeping only the bipartite visible↔hidden links. Now, given the visible units, all hidden units are conditionally independent of each other (and vice versa), so you can sample an entire layer in parallel with a single sigmoid:
 
 $$p(h_j = 1 \mid v) = \sigma\Big(b_j + \sum_i w_{ij} v_i\Big)$$
+
+**In words:** with no within-layer wires, each hidden unit turns on independently with a probability set by a plain weighted sum of the visible units, squashed through a sigmoid.
+**Also written:** in vector form $p(h = 1 \mid v) = \sigma(b + W^\top v)$, computing the whole hidden layer's on-probabilities in one matrix multiply.
 
 <svg viewBox="0 0 360 170" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif" font-size="11">
   <text x="70" y="20" text-anchor="middle">hidden h</text>
@@ -410,6 +593,9 @@ $$p(h_j = 1 \mid v) = \sigma\Big(b_j + \sum_i w_{ij} v_i\Big)$$
 Training still can't compute $Z$, but **contrastive divergence (CD)** gives a cheap approximation. Start from a real data vector on the visible units, sample the hidden units, sample the visible units back ("reconstruction"), and nudge the weights to make the real data more probable than its reconstruction — usually after just *one* round-trip (CD-1). The update is the difference between the data correlations and the reconstruction correlations:
 
 $$\Delta w_{ij} \propto \langle v_i h_j \rangle_{\text{data}} - \langle v_i h_j \rangle_{\text{recon}}$$
+
+**In words:** strengthen a connection if a visible and a hidden unit fire together more on real data than on the model's own reconstruction, and weaken it otherwise.
+**Also written:** $\Delta W \propto \langle v h^\top \rangle_{\text{data}} - \langle v h^\top \rangle_{\text{recon}}$ — the same update as a difference of two outer-product (correlation) matrices.
 
 ```python
 import numpy as np
@@ -438,6 +624,9 @@ The intuition is a landscape. Picture the space of all images as a vast terrain,
 
 $$ p_\theta(x) = \frac{e^{-E_\theta(x)}}{Z(\theta)}, \qquad Z(\theta) = \int e^{-E_\theta(x)}\, dx. $$
 
+**In words:** an image's probability is set by how deep its energy valley is, divided by a grand total over every possible image so the whole thing integrates to one.
+**Also written:** $p_\theta(x) = \operatorname{softmax}(-E_\theta)$ in the continuous limit — the energies are turned into probabilities by exponentiating and normalizing, exactly like a softmax over an infinite set of outcomes.
+
 The numerator is easy: one forward pass through a network. The trouble is entirely in the denominator. $Z(\theta)$, the *partition function*, is the integral of $e^{-E_\theta(x)}$ over the entire input space — every possible image, molecule, or sentence. For anything beyond a few dimensions this integral is hopeless to compute exactly. And $Z$ is not a harmless constant we can ignore, because it depends on $\theta$: every time we nudge the weights, the whole normalizer shifts.
 
 ::: {.callout-tip}
@@ -455,6 +644,9 @@ $$ \nabla_\theta \log Z(\theta) = -\,\mathbb{E}_{x \sim p_\theta}\!\big[\nabla_\
 So the full gradient of the log-likelihood is
 
 $$ \nabla_\theta \log p_\theta(x) = -\nabla_\theta E_\theta(x_{\text{data}}) + \mathbb{E}_{x \sim p_\theta}\!\big[\nabla_\theta E_\theta(x)\big]. $$
+
+**In words:** to improve, dig the energy down at the real data point, and at the same time push the energy up wherever the model currently thinks data lives — and stop when those two pulls cancel.
+**Also written:** $\nabla_\theta \log p_\theta(x) = -\big(\nabla_\theta E_\theta(x_{\text{data}}) - \mathbb{E}_{x\sim p_\theta}[\nabla_\theta E_\theta(x)]\big)$ — the "positive phase minus negative phase" form, a single expectation gap.
 
 Read this as two opposing forces. The first term pushes energy *down* at observed data points — dig the valleys deeper. The second term pushes energy *up* at samples drawn from the model itself — flatten the hallucinated valleys the model currently believes in. At convergence the two cancel: the model's own samples look statistically like the data, so it stops digging. This is the celebrated "positive phase minus negative phase" structure, and it is exactly what makes EBMs hard, because the negative phase requires sampling from $p_\theta$, which itself requires the intractable $Z$.
 
@@ -505,6 +697,9 @@ The CD-$k$ update for a single example is
 
 $$ \Delta\theta \;\propto\; -\nabla_\theta E_\theta(x^{+}) \;+\; \nabla_\theta E_\theta(x^{-}), $$
 
+**In words:** lower the energy at the real example and raise it at the model's short-chain imitation, by exactly the gap between their energy gradients.
+**Also written:** $\Delta\theta \propto -\big(\nabla_\theta E_\theta(x^{+}) - \nabla_\theta E_\theta(x^{-})\big)$ — the exact EBM gradient of §18.8 with the true negative sample swapped for a $k$-step approximation $x^-$.
+
 where $x^{+}$ is the data point and $x^{-}$ is the result of $k$ chain steps started from $x^{+}$. Compare this to the exact gradient from the previous section: it is the *same expression*, except the negative-phase sample comes from a short, biased chain rather than the true $p_\theta$. CD is therefore a biased gradient estimator. It does not exactly follow the likelihood gradient, but it follows something close enough to learn good models in practice, and it is cheap.
 
 **Worked example on a tiny RBM.** Consider a restricted Boltzmann machine with visible units $v$ and hidden units $h$ and energy $E(v,h) = -v^\top W h - b^\top v - c^\top h$. The conditionals factorize, which is what makes Gibbs sampling easy: $p(h_j=1\mid v) = \sigma(c_j + \sum_i v_i W_{ij})$ and symmetrically $p(v_i=1\mid h) = \sigma(b_i + \sum_j W_{ij} h_j)$. CD-1 is then four lines.
@@ -544,9 +739,15 @@ Define the *score* of a distribution as the gradient of its log-density with res
 
 $$ s_\theta(x) \;=\; \nabla_x \log p_\theta(x). $$
 
+**In words:** at each point in input space, the score is the arrow pointing in the direction that most increases log-probability — "which way is more data-like from here."
+**Also written:** $s_\theta(x) = \big(\partial \log p_\theta/\partial x_1,\dots,\partial \log p_\theta/\partial x_d\big)$ — the gradient written out as its vector of partial derivatives.
+
 Now substitute the Boltzmann form. Since $\log p_\theta(x) = -E_\theta(x) - \log Z(\theta)$, and $\log Z(\theta)$ does not depend on $x$, its gradient with respect to $x$ is exactly zero:
 
 $$ \nabla_x \log p_\theta(x) \;=\; -\nabla_x E_\theta(x). $$
+
+**In words:** differentiating with respect to the *input* (not the parameters) wipes out the constant $Z$ entirely, leaving the score as just the downhill direction of the energy.
+**Also written:** $s_\theta(x) = -\nabla_x E_\theta(x)$ — the score is literally the negative force field of the energy landscape.
 
 The partition function vanishes. This is the whole idea in one line. The score is a vector field over input space — at every point it tells you which direction increases log-probability fastest, i.e. which way is "downhill" in energy. It carries no information about the *absolute* normalization, only about *relative* shape, and that is precisely the part we can learn cheaply.
 
@@ -572,9 +773,15 @@ So the new goal is: learn a network $s_\theta(x)$ whose output vector field matc
 
 $$ J(\theta) \;=\; \tfrac{1}{2}\,\mathbb{E}_{x\sim p_{\text{data}}}\big\|\, s_\theta(x) - \nabla_x \log p_{\text{data}}(x)\,\big\|^2. $$
 
+**In words:** average, over real data, how badly the model's arrow disagrees with the true data arrow at each point.
+**Also written:** $J(\theta) = \tfrac12\,\mathbb{E}_{p_{\text{data}}}\big[\sum_i (s_\theta(x)_i - \partial_{x_i}\log p_{\text{data}}(x))^2\big]$ — the squared norm spelled out per coordinate.
+
 But this looks circular — we do not know the true data score; that is the whole thing we are trying to learn. Hyvärinen's key result (2005) is that under mild boundary conditions you can integrate by parts to eliminate the unknown true score entirely, leaving an objective that depends only on the model:
 
 $$ J(\theta) \;=\; \mathbb{E}_{x\sim p_{\text{data}}}\!\left[\, \tfrac{1}{2}\,\|s_\theta(x)\|^2 \;+\; \operatorname{tr}\!\big(\nabla_x s_\theta(x)\big) \,\right] + \text{const}. $$
+
+**In words:** keep the model's arrows modest in length, but reward them for spreading inward toward the data — and the unknown true score has dropped out completely.
+**Also written:** $J(\theta) = \mathbb{E}\big[\tfrac12\|s_\theta(x)\|^2 + \sum_i \partial^2 \log p_\theta/\partial x_i^2\big] + \text{const}$ — the trace of the score's Jacobian is the sum of the log-density's second derivatives (its Laplacian).
 
 The second term is the trace of the Jacobian of the score — equivalently $\sum_i \partial^2 \log p_\theta / \partial x_i^2$, the sum of second derivatives. Intuitively the first term wants the score small everywhere (don't claim steep gradients without reason) while the trace term rewards the score for *converging* toward data (negative divergence at the modes). Together they pin the vector field to the data without ever touching $Z$.
 
@@ -582,7 +789,7 @@ The second term is the trace of the Jacobian of the score — equivalently $\sum
 
 $$ J(\theta) = \mathbb{E}_{x}\!\left[\tfrac12\theta^2 x^2 - \theta\right] = \tfrac12\theta^2\,\mathbb{E}[x^2] - \theta. $$
 
-Set $dJ/d\theta = \theta\,\mathbb{E}[x^2] - 1 = 0$, giving $\theta = 1/\mathbb{E}[x^2]$ — the same maximum-likelihood answer as in §18.90, but obtained with no partition function anywhere in sight. That is the payoff: an estimator that is consistent (it recovers the right parameters) yet never normalizes.
+Set $dJ/d\theta = \theta\,\mathbb{E}[x^2] - 1 = 0$, giving $\theta = 1/\mathbb{E}[x^2]$ — the same maximum-likelihood answer as in §18.8, but obtained with no partition function anywhere in sight. That is the payoff: an estimator that is consistent (it recovers the right parameters) yet never normalizes.
 
 ::: {.callout-warning}
 The Jacobian-trace term is the catch. For a $d$-dimensional input, computing $\operatorname{tr}(\nabla_x s_\theta)$ exactly costs $d$ backward passes — fatal for images where $d$ is in the millions. This is why plain score matching does not scale, and why two workarounds dominate practice: *sliced* score matching, which estimates the trace with random projections (Hutchinson's trick) at the cost of one extra pass, and *denoising* score matching, which we meet next as the bridge to diffusion.
@@ -599,6 +806,9 @@ The physical picture is a speck of pollen in water. It feels a deterministic dri
 The update rule, *Langevin Monte Carlo*, makes this concrete. Starting from any point $x_0$ (even pure noise), iterate
 
 $$ x_{t+1} \;=\; x_t \;+\; \tfrac{\epsilon}{2}\,\nabla_x \log p(x_t) \;+\; \sqrt{\epsilon}\;z_t, \qquad z_t \sim \mathcal{N}(0, I). $$
+
+**In words:** take a small step in the score's direction (toward higher density), then add a calibrated random jolt — repeat, and the parade of points traces out the target distribution.
+**Also written:** $x_{t+1} = x_t - \tfrac{\epsilon}{2}\,\nabla_x E(x_t) + \sqrt{\epsilon}\,z_t$, since the score equals the negative energy gradient — a noisy gradient *descent* on energy.
 
 The middle term is the score: a step *uphill in log-density*, i.e. downhill in energy. The last term is the random kick, scaled so that as the step size $\epsilon \to 0$ and the number of steps $\to \infty$, the distribution of $x_t$ converges to $p(x)$ exactly. Drop the noise term and you get ordinary gradient ascent that converges to the nearest mode and stops — a single image, not a sample from the distribution. The noise is what makes it a *sampler* rather than an *optimizer*.
 
@@ -628,22 +838,28 @@ print(samples.mean(), samples.std())       # ≈ 0.0, ≈ 1.0
 Starting every particle at zero and running the chain, the empirical mean and standard deviation come out near $0$ and $1$: the sampler has reconstructed the target distribution using nothing but its score.
 
 ::: {.callout-warning}
-Plain Langevin mixes painfully slowly when the distribution has well-separated modes. Between two clusters the density is near zero, the score is tiny, and the noise has to do all the work to ferry a particle across the empty gap — which can take astronomically many steps. Combined with the §18.92 observation that the *learned* score is unreliable in exactly those low-density gaps, naive "learn the score, then run Langevin" simply does not work on real data. The fix is the central trick of the next section: *add noise at many scales*, which both fills in the empty regions with usable gradient signal and smooths the landscape so the chain can travel.
+Plain Langevin mixes painfully slowly when the distribution has well-separated modes. Between two clusters the density is near zero, the score is tiny, and the noise has to do all the work to ferry a particle across the empty gap — which can take astronomically many steps. Combined with the §18.10 observation that the *learned* score is unreliable in exactly those low-density gaps, naive "learn the score, then run Langevin" simply does not work on real data. The fix is the central trick of the next section: *add noise at many scales*, which both fills in the empty regions with usable gradient signal and smooths the landscape so the chain can travel.
 :::
 
 The thing to carry forward is that Langevin dynamics decouples *learning* from *sampling*. You learn a single object, the score field, by whatever means (score matching, denoising). Then sampling is a fixed, model-free recipe: drift along the score, add noise, repeat. This clean separation is exactly the structure that diffusion models exploit, and the next section shows the two are the same theory written in different notation.
 
 ## 18.12 — The Score-SDE View: One Theory Behind Diffusion and Score Matching
 
-The previous chapter introduced diffusion models as a discrete chain: add Gaussian noise step by step until an image becomes static, then train a network to undo each step. §18.92–18.93 introduced score matching and Langevin sampling from the entirely separate world of energy-based models. The score-SDE framework of Song and colleagues (2021) revealed that these are not two ideas but one, viewed at two resolutions. The unification is one of the most clarifying results in modern generative modeling, and it falls out of taking the noise schedule to its continuous limit.
+The previous chapter introduced diffusion models as a discrete chain: add Gaussian noise step by step until an image becomes static, then train a network to undo each step. §18.10–18.11 introduced score matching and Langevin sampling from the entirely separate world of energy-based models. The score-SDE framework of Song and colleagues (2021) revealed that these are not two ideas but one, viewed at two resolutions. The unification is one of the most clarifying results in modern generative modeling, and it falls out of taking the noise schedule to its continuous limit.
 
 Start with the diffusion forward process but let the steps shrink to infinitesimals. The accumulation of tiny independent Gaussian perturbations is, in the continuum, a *stochastic differential equation* (SDE):
 
 $$ dx \;=\; f(x,t)\,dt \;+\; g(t)\,dw, $$
 
+**In words:** in each instant the data drifts a little (the $f$ term) and gets jostled a little (the $g\,dw$ noise term) — pile up enough instants and a clean image dissolves into static.
+**Also written:** the discrete one-step version is $x_{t+\Delta t} = x_t + f(x_t,t)\Delta t + g(t)\sqrt{\Delta t}\,z$, $z\sim\mathcal N(0,I)$ — the SDE is just this Euler step in the $\Delta t \to 0$ limit.
+
 where $f$ is a deterministic drift, $g$ scales the noise, and $dw$ is the increment of a Wiener process (Brownian motion). This forward SDE just describes data dissolving into noise as time $t$ runs from $0$ to $1$ — nothing is learned here. The remarkable part is a classical result by Anderson (1982): *every* such forward SDE has a corresponding **reverse-time SDE** that runs the clock backward, turning noise back into data, and it has an explicit form:
 
 $$ dx \;=\; \big[\,f(x,t) - g(t)^2\,\nabla_x \log p_t(x)\,\big]\,dt \;+\; g(t)\,d\bar w. $$
+
+**In words:** to run the noising film backward, follow the original drift but bend it toward higher density using the score, and keep a noise term — that single correction is all it takes to turn static back into images.
+**Also written:** the only data-dependent unknown is $\nabla_x \log p_t(x)$, the time-$t$ score; everything else ($f$, $g$) is copied from the fixed forward process.
 
 Look at what appears in the reverse drift: $\nabla_x \log p_t(x)$ — the **score** of the noised data distribution at time $t$. The only unknown needed to reverse diffusion is the score function. Diffusion is not a different mechanism from score-based generation; *training a diffusion model is estimating the time-dependent score, and sampling from it is integrating the reverse SDE — which, discretized, is Langevin dynamics with a schedule.*
 
@@ -658,15 +874,21 @@ flowchart LR
   S["score network sθ(x,t)<br/>trained by denoising score matching"] -.->|"supplies ∇ₓ log pₜ(x)"| Reverse
 ```
 
-This is where the §18.92 and §18.93 pitfalls dissolve. Recall the twin problems: the learned score is garbage in low-density regions, and Langevin cannot cross between modes. The forward SDE fixes *both at once* by indexing the score on a continuum of noise levels $t$. At high noise (large $t$) the distribution $p_t$ is broad and nearly Gaussian — its score is well-defined *everywhere*, including the empty gaps, and the landscape has one big basin so mixing is trivial. At low noise (small $t$) the distribution is sharp and detailed but the sampler is already near the right region. Sampling runs $t$ from high to low: start in the easy smooth regime, follow the score, and gradually anneal toward the sharp data distribution. This is **annealed Langevin dynamics**, and it is exactly what the reverse SDE prescribes.
+This is where the §18.10 and §18.11 pitfalls dissolve. Recall the twin problems: the learned score is garbage in low-density regions, and Langevin cannot cross between modes. The forward SDE fixes *both at once* by indexing the score on a continuum of noise levels $t$. At high noise (large $t$) the distribution $p_t$ is broad and nearly Gaussian — its score is well-defined *everywhere*, including the empty gaps, and the landscape has one big basin so mixing is trivial. At low noise (small $t$) the distribution is sharp and detailed but the sampler is already near the right region. Sampling runs $t$ from high to low: start in the easy smooth regime, follow the score, and gradually anneal toward the sharp data distribution. This is **annealed Langevin dynamics**, and it is exactly what the reverse SDE prescribes.
 
-Training uses *denoising score matching*, the scalable cousin promised in §18.92. The insight (Vincent, 2011) is that for data corrupted by Gaussian noise of variance $\sigma^2$, the score of the noised distribution has a closed form: it points from the noisy sample back toward the clean one. Concretely, if $\tilde x = x + \sigma\,\epsilon$ with $\epsilon \sim \mathcal N(0,I)$, then
+Training uses *denoising score matching*, the scalable cousin promised in §18.10. The insight (Vincent, 2011) is that for data corrupted by Gaussian noise of variance $\sigma^2$, the score of the noised distribution has a closed form: it points from the noisy sample back toward the clean one. Concretely, if $\tilde x = x + \sigma\,\epsilon$ with $\epsilon \sim \mathcal N(0,I)$, then
 
 $$ \nabla_{\tilde x} \log p_\sigma(\tilde x \mid x) \;=\; -\,\frac{\tilde x - x}{\sigma^2} \;=\; -\,\frac{\epsilon}{\sigma}. $$
+
+**In words:** the best direction to denoise a corrupted sample is simply "head back toward the clean original," scaled by the noise level — which is exactly the negative of the noise that was added.
+**Also written:** equivalently $s_\theta(\tilde x) \approx -\epsilon/\sigma$, so learning the score is the same task as predicting the added noise $\epsilon$ — the link to the diffusion noise-prediction objective.
 
 So matching the score reduces to *predicting the noise that was added* — no Jacobian trace, no partition function, just a regression. The training objective becomes the familiar denoising loss
 
 $$ \mathcal L(\theta) \;=\; \mathbb{E}_{t,\,x,\,\epsilon}\Big[\,\lambda(t)\,\big\| s_\theta(\tilde x, t) + \tfrac{\epsilon}{\sigma_t} \big\|^2\,\Big], $$
+
+**In words:** across all noise levels, push the model's score to equal "minus the added noise over sigma," weighted so each noise level contributes its fair share.
+**Also written:** reparametrizing $s_\theta = -\epsilon_\theta/\sigma_t$ turns this into $\mathbb{E}[\lambda(t)\sigma_t^{-2}\|\epsilon - \epsilon_\theta(\tilde x,t)\|^2]$ — exactly the diffusion noise-prediction MSE of §18.5, up to the weighting.
 
 which is, up to the weighting $\lambda(t)$ and a reparametrization, identical to the noise-prediction loss the diffusion chapter derived from a completely different starting point. Two derivations, one objective.
 
@@ -687,11 +909,13 @@ The conceptual takeaway closes the loop on the whole family. Energy-based models
 - **Generative models learn the data distribution** so they can synthesize new samples, rather than mapping inputs to labels.
 - **Autoencoders** compress through a bottleneck and reconstruct; denoising and sparse variants force more useful codes, but the plain latent space has holes you can't sample from.
 - **VAEs** make the latent space smooth by encoding distributions, optimizing the ELBO (reconstruction − KL), with the reparameterization trick to allow backprop through sampling; samples are smooth but slightly blurry.
-- **GANs** pit a generator against a discriminator in a minimax game — sharp samples, no likelihood, but plagued by mode collapse and training instability; judge by samples, not loss.
+- **GANs** pit a generator against a discriminator in a minimax game — sharp samples, no likelihood, but plagued by mode collapse and training instability; judge by samples, not loss (and stabilize with tricks like the Wasserstein critic).
+- **Evaluation** of generative models needs purpose-built metrics — FID (feature-distribution distance) is the standard for images, with precision/recall splitting quality from coverage.
 - **GAN variants** added capability: DCGAN (convolutional stability), cGAN (class-conditional generation), CycleGAN (unpaired translation via cycle-consistency), StyleGAN (controllable, photorealistic faces).
 - **Diffusion models** learn to reverse a fixed noising process with a stable MSE objective on a U-Net; classifier-free guidance steers them with prompts and latent diffusion makes them efficient — now the state of the art.
 - **Autoregressive and flow-based models** give *exact* likelihoods: autoregressive factorizes $p(x)$ via the chain rule (slow sequential sampling), flows use invertible transforms and change-of-variables (fast, but limited expressiveness).
 - **Boltzmann machines / RBMs** are energy-based models trained with contrastive divergence; historically pivotal for deep-learning pretraining and conceptually echoed in today's score-based diffusion.
+- **Energy-based models, score matching, Langevin dynamics, and diffusion are one theory** — learn the score of data smoothed across noise levels, then integrate backward from noise to data; the partition function is dodged by modeling gradients, not densities.
 
 ## 18.14 — See also
 

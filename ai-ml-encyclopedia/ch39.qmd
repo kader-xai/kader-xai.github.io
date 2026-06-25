@@ -125,6 +125,9 @@ $$
 \mathcal{L}_{i} = -\log \frac{\exp(\text{sim}(z_i, z_j)/\tau)}{\displaystyle\sum_{k \neq i} \exp(\text{sim}(z_i, z_k)/\tau)}
 $$
 
+**In words:** "Out of every candidate in the batch, how confidently does the model pick my true twin as the closest match?" — it's the softmax probability of the positive partner, negated and logged so that *more confident = lower loss*.
+**Also written:** as a cross-entropy with a one-hot target on the positive, $\mathcal{L}_i = \text{CE}\big(\text{softmax}_k(\text{sim}(z_i,z_k)/\tau),\, \mathbb{1}[k=j]\big)$, or equivalently $\mathcal{L}_i = -\,\text{sim}(z_i,z_j)/\tau + \log\sum_{k\neq i}\exp(\text{sim}(z_i,z_k)/\tau)$ (numerator term minus a log-sum-exp).
+
 Here the sum over $k \neq i$ includes $k = j$ (the positive) along with every negative; only the self-term $k = i$ is excluded. This is just a softmax cross-entropy where the "correct class" is the positive partner among all candidates in the batch.
 
 ```python
@@ -171,6 +174,26 @@ The **temperature** $\tau$ controls how harshly negatives are penalized. Small $
 Naïve contrastive learning can **collapse**: the encoder maps everything to the same point, making all positives trivially close. Defenses include enough negatives (large batches or a memory bank), stop-gradient tricks (BYOL, SimSiam), or redundancy-reduction losses (Barlow Twins). If your embeddings all look identical, collapse is the first suspect.
 :::
 
+**In a real framework.** You rarely hand-code InfoNCE in production. A faithful, idiomatic PyTorch version of the SimCLR loss over a batch of $2N$ stacked views:
+
+```python
+import torch, torch.nn.functional as F
+
+def info_nce(z, tau=0.1):
+    # z: (2N, d) — rows 0..N-1 and N..2N-1 are the two views; i and i+N are positives
+    z = F.normalize(z, dim=1)
+    sim = z @ z.T / tau                                  # (2N, 2N) cosine / temperature
+    n = z.shape[0] // 2
+    sim.fill_diagonal_(float("-inf"))                    # mask self (k = i)
+    targets = torch.cat([torch.arange(n) + n, torch.arange(n)])  # i's positive index
+    return F.cross_entropy(sim, targets.to(z.device))    # softmax CE = InfoNCE
+
+z = torch.randn(8, 16)            # 4 items × 2 views
+print(round(info_nce(z).item(), 3))   # ~log(7): random rows, 7 candidates each
+```
+
+The whole loss is a single `cross_entropy` once you set each row's target to its positive partner's index — the framework's autograd then backpropagates the pull-together / push-apart signal for free.
+
 ## 39.2 — Transfer, multi-task, and meta-learning
 
 Once you have a pretrained foundation model, you rarely train from scratch again. **Transfer learning** reuses the knowledge in a model trained on one task as a starting point for another. The early layers of a vision model learn edges and textures useful for *any* image task; you keep them and only retrain the final layers (**fine-tuning**) on your small target dataset. This is why a hospital with 500 labeled X-rays can build a strong classifier — it stands on a model that already saw millions of images.
@@ -185,6 +208,20 @@ flowchart LR
   S --> H3[Head C: language ID]
 ```
 
+**Transfer learning in scikit-learn / PyTorch.** The everyday version of transfer is "freeze the backbone, retrain the head." A few lines with a pretrained ResNet:
+
+```python
+import torch, torchvision
+net = torchvision.models.resnet18(weights="IMAGENET1K_V1")
+for p in net.parameters():            # freeze the pretrained backbone
+    p.requires_grad = False
+net.fc = torch.nn.Linear(net.fc.in_features, 2)   # new head for YOUR 2 classes
+# only net.fc.parameters() carry gradients -> trains on tiny data, fast
+opt = torch.optim.Adam(net.fc.parameters(), lr=1e-3)
+```
+
+Only the final linear layer learns; the millions of frozen weights below it stay exactly as ImageNet left them. That is the 500-X-rays scenario in code.
+
 **Meta-learning**, or *learning to learn*, goes one level up. Instead of learning a single task, the model learns *how to adapt quickly to new tasks from very few examples*. The classic algorithm is **MAML (Model-Agnostic Meta-Learning)**. It searches for an initialization $\theta$ such that, for any new task, *a single gradient step* lands on a good task-specific solution.
 
 The trick is a nested loop. In the **inner loop**, you take one task, do a few gradient steps to get adapted parameters $\theta'_t = \theta - \alpha \nabla_\theta \mathcal{L}_t(\theta)$. In the **outer loop**, you update the shared $\theta$ to make those adapted parameters perform well *after* adaptation:
@@ -192,6 +229,9 @@ The trick is a nested loop. In the **inner loop**, you take one task, do a few g
 $$
 \theta \leftarrow \theta - \beta \nabla_\theta \sum_{t} \mathcal{L}_t\big(\theta - \alpha \nabla_\theta \mathcal{L}_t(\theta)\big)
 $$
+
+**In words:** "Adjust the shared starting weights so that, after one quick practice step on each task, the result is as good as possible — averaged over all tasks." You optimize the *post-practice* score, not the score now.
+**Also written:** unrolling the inner step, $\theta \leftarrow \theta - \beta \sum_t (I - \alpha \nabla^2_\theta \mathcal{L}_t(\theta))\,\nabla_{\theta'}\mathcal{L}_t(\theta'_t)$ — the $\nabla^2$ (a Hessian) is the second-order term; dropping it ($I - \alpha\nabla^2 \approx I$) gives first-order MAML.
 
 The intuition: you are not optimizing for good performance *now*, but for being *one step away* from good performance on whatever comes next — a launchpad, not a destination.
 
@@ -238,6 +278,9 @@ $$
 c_n = \frac{1}{K} \sum_{i \in \text{class } n} f(x_i), \qquad \hat{y} = \arg\min_n \; \lVert f(x_q) - c_n \rVert
 $$
 
+**In words:** "Average each class's few examples into one representative point (its prototype), then label a new point by whichever prototype it sits closest to."
+**Also written:** the assignment is equivalently a softmax over negative squared distances, $\hat y = \arg\max_n \,\text{softmax}_n(-\lVert f(x_q)-c_n\rVert^2)$ — nearest-prototype and lowest-loss class coincide.
+
 ```python
 import numpy as np
 # 2-way 3-shot: class A near (1,1), class B near (4,4)
@@ -265,6 +308,19 @@ print("A" if np.linalg.norm(q-cA) < np.linalg.norm(q-cB) else "B")  # -> B
 </svg>
 
 **Zero-shot** learning needs a bridge between classes and a shared semantic space. Modern systems use *text*. **CLIP** (Chapter 24) trains an image encoder and a text encoder contrastively so that an image and its caption land nearby. To classify into never-seen classes, you embed the candidate label strings ("a photo of a zebra", "a photo of an okapi") and pick the label whose text embedding is closest to the image. The model recognizes an okapi it never trained on because the *word* sits in a meaningful place in the joint space.
+
+**Zero-shot with CLIP in three lines.** Hugging Face exposes exactly this as a pipeline — no training, just text prompts as the "classes":
+
+```python
+from transformers import pipeline
+clf = pipeline("zero-shot-image-classification", model="openai/clip-vit-base-patch32")
+out = clf("okapi.jpg", candidate_labels=["a photo of a zebra",
+                                         "a photo of an okapi",
+                                         "a photo of a horse"])
+print(out[0]["label"], round(out[0]["score"], 3))   # picks okapi, never trained on it
+```
+
+The labels are free-form strings you supply at inference, so you can classify into categories the model has never seen a labeled example of — the recognition rides entirely on where each *word* lands in CLIP's joint image–text space.
 
 ::: {.callout-warning}
 Few-shot benchmarks are easy to fool. If your pretraining data already contained the "novel" classes, you are measuring memorization, not generalization. Always check whether the test categories truly never appeared upstream — a common source of inflated zero-shot numbers.
@@ -298,6 +354,9 @@ $$
 \mathcal{L}_B(\theta) = \mathcal{L}_B^{\text{task}}(\theta) + \frac{\lambda}{2} \sum_i F_i \,(\theta_i - \theta^*_{A,i})^2
 $$
 
+**In words:** "Learn task B, but for each weight pay a fine proportional to how much it mattered to task A times how far you've dragged it from where A left it." Important weights become expensive to move; unimportant ones move free.
+**Also written:** in vector form with a diagonal importance matrix, $\mathcal{L}_B(\theta) = \mathcal{L}_B^{\text{task}}(\theta) + \tfrac{\lambda}{2}\,(\theta - \theta^*_A)^\top \mathrm{diag}(F)\,(\theta - \theta^*_A)$ — a Mahalanobis-style pull toward A's solution, weighted by Fisher information.
+
 Unimportant weights ($F_i \approx 0$) move freely to learn B; important ones are held in place, preserving A. It's like welding the load-bearing beams while remodeling the rest of the house.
 
 A two-weight example shows the penalty steering the update. Say task A settled at $\theta^*_A = (1.0,\ 1.0)$ with Fisher importances $F = (10,\ 0.1)$ — weight 0 mattered a lot to A, weight 1 barely at all. Now task B alone would prefer to pull both weights to $(0,\ 0)$. With $\lambda = 1$, the EWC objective is $\mathcal{L}_B^{\text{task}}(\theta) + \tfrac12[\,10(\theta_0-1)^2 + 0.1(\theta_1-1)^2\,]$, and the Fisher-weighted penalty makes the important weight far stickier than the unimportant one.
@@ -328,6 +387,13 @@ Sometimes the data can't move. Hospital records, phone keyboards, bank transacti
 
 The standard algorithm is **FedAvg**. The server broadcasts the current weights; each client runs a few local steps; the server averages the returned weights, weighted by how much data each client has.
 
+$$
+\theta^{t+1} = \sum_{k=1}^{K} \frac{n_k}{n}\, \theta_k^{t+1}, \qquad n = \sum_k n_k
+$$
+
+**In words:** "The new global model is a head-count average of every client's locally-trained model — clients with more data get a proportionally bigger vote."
+**Also written:** equivalently in update form, $\theta^{t+1} = \theta^t + \sum_k \frac{n_k}{n}\,\Delta_k$ where $\Delta_k = \theta_k^{t+1} - \theta^t$ is client $k$'s local change — averaging weights and averaging updates are the same thing.
+
 ```{mermaid}
 flowchart TB
   S[Server: global model θ] -->|broadcast| C1[Client 1 trains locally]
@@ -349,6 +415,24 @@ print(global_w)   # data-weighted FedAvg update
 ```
 
 But updates can still **leak**. Gradients sometimes allow partial reconstruction of the training data. Two tools harden FL further. **Differential privacy (DP)** adds calibrated noise so that no single individual's data measurably changes the output — formally, an algorithm is $(\varepsilon, \delta)$-DP if for any two datasets differing in one record, $\Pr[\mathcal{A}(D) \in S] \le e^{\varepsilon}\Pr[\mathcal{A}(D') \in S] + \delta$. Smaller $\varepsilon$ means stronger privacy and noisier results — a direct privacy/accuracy tradeoff. **Secure aggregation** uses cryptography so the server sees only the *sum* of updates, never any individual client's.
+
+**In words (the DP definition):** "Whether or not any one person is in the dataset, the odds of *any* outcome change by at most a small factor $e^{\varepsilon}$ (plus a tiny slack $\delta$) — so no result can betray that you were in it."
+**Also written:** as a bounded likelihood ratio, $\frac{\Pr[\mathcal{A}(D)\in S] - \delta}{\Pr[\mathcal{A}(D')\in S]} \le e^{\varepsilon}$ for all neighboring $D, D'$ and all outcome sets $S$.
+
+A pocket calculation makes the privacy/accuracy knob concrete. The standard recipe adds Gaussian noise with standard deviation $\sigma \propto 1/\varepsilon$. Halving $\varepsilon$ (stronger privacy) doubles the noise — so privacy and signal trade off directly:
+
+```python
+import numpy as np
+true_update = np.array([0.40, -0.20])     # the gradient we'd send in the clear
+sensitivity = 1.0                          # how much one record can shift it
+for eps in [8.0, 1.0, 0.25]:               # weaker -> stronger privacy
+    sigma = sensitivity / eps              # noise scale grows as eps shrinks
+    noisy = true_update + np.random.default_rng(0).normal(0, sigma, size=2)
+    print(f"eps={eps:<4}  sigma={sigma:<4}  noisy={np.round(noisy, 3)}")
+# small eps = strong privacy = large sigma = the real signal drowns in noise
+```
+
+At $\varepsilon = 8$ the noise barely perturbs the update; at $\varepsilon = 0.25$ it swamps it. There is no free lunch — every bit of guaranteed privacy is paid for in added noise, which is why DP deployments tune $\varepsilon$ to the weakest privacy the use case can ethically accept.
 
 ::: {.callout-warning}
 FL is not automatically private. Sending gradients instead of data feels safe but is not — gradient-inversion attacks can recover images from updates. Privacy guarantees come from DP and secure aggregation layered *on top* of FL, not from FL alone.
@@ -374,6 +458,9 @@ $$
 \bar{o}(x) = \sum_{o \in \mathcal{O}} \frac{\exp(\alpha_o)}{\sum_{o'} \exp(\alpha_{o'})} \, o(x)
 $$
 
+**In words:** "Instead of committing to one operation on this edge, run *all* of them and take a learnable weighted average — then let gradient descent decide which weight should win."
+**Also written:** with mixing weights $w = \text{softmax}(\alpha)$, simply $\bar o(x) = \sum_o w_o\, o(x) = w^\top [\,o_1(x), \dots, o_{|\mathcal O|}(x)\,]$ — a convex combination of the candidate ops' outputs.
+
 A three-operation example makes the mixture tangible. Suppose an edge can be a $3\times3$ convolution, a skip-connection, or a max-pool, with current architecture parameters $\alpha = (2.0,\ 1.0,\ 0.0)$. The softmax turns these raw scores into mixing weights, and the edge's output is the weighted blend of all three operations — fully differentiable, so gradient descent can nudge $\alpha$ toward whichever op lowers validation loss.
 
 ```python
@@ -386,11 +473,104 @@ print(np.round(w, 3))   # -> [0.665, 0.245, 0.090]: conv dominates the blend
 
 The convolution gets $\approx 67\%$ of the mixture, skip $24\%$, pool $9\%$. After training, you **discretize**: keep only the highest-weight operation (here the conv) on each edge. This turns an intractable discrete search into ordinary gradient descent, cutting the cost from thousands of GPU-days to a handful.
 
+**The pragmatic AutoML most people actually run.** Full NAS is rare in practice; automated *hyperparameter* search is everywhere. Optuna does it in a few lines, sampling configurations and pruning bad trials early:
+
+```python
+import optuna
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.model_selection import cross_val_score
+from sklearn.datasets import load_iris
+X, y = load_iris(return_X_y=True)
+
+def objective(trial):
+    n  = trial.suggest_int("n_estimators", 50, 400)
+    d  = trial.suggest_int("max_depth", 2, 16)
+    mf = trial.suggest_float("max_features", 0.3, 1.0)
+    clf = RandomForestClassifier(n_estimators=n, max_depth=d, max_features=mf)
+    return cross_val_score(clf, X, y, cv=5).mean()
+
+study = optuna.create_study(direction="maximize")
+study.optimize(objective, n_trials=30)
+print(study.best_params, round(study.best_value, 3))
+```
+
+This is the AutoML 90% of teams use: a search strategy (Optuna's TPE sampler) exploring a defined space and scoring each candidate on validation — the same three-part loop as NAS, just over hyperparameters instead of wiring.
+
 ::: {.callout-warning}
 NAS notoriously overfits to its benchmark. An architecture tuned to squeeze the last 0.1% on CIFAR-10 often fails to transfer. Strong hand-designed baselines (a well-tuned ResNet or transformer) remain hard to beat, and a random search over a good space is a shockingly strong NAS baseline — always include it.
 :::
 
-## 39.7 — Neurosymbolic AI
+## 39.7 — Parameter-efficient fine-tuning (LoRA, adapters, prompts)
+
+Fine-tuning a foundation model the old way means updating *all* its weights — for a 70-billion-parameter model that is a copy of all 70 billion weights per task, plus optimizer state on top. Imagine being told that to learn a new accent you must re-grow your entire brain. **Parameter-efficient fine-tuning (PEFT)** is the saner alternative: freeze the giant pretrained model and train only a *tiny* set of new parameters — often well under 1% of the total — that steer it toward the new task. One frozen base, many small swappable patches.
+
+The dominant method is **LoRA (Low-Rank Adaptation)**. The insight: the *change* a task needs is low-rank. Rather than learning a full weight update $\Delta W$ (huge — a $d \times d$ matrix), you learn it as a product of two skinny matrices $B$ ($d \times r$) and $A$ ($r \times d$) with a small rank $r$ like 8 or 16. The model uses $W + \Delta W$, but only $A$ and $B$ are trained:
+
+$$
+W' = W + \Delta W = W + \frac{\alpha}{r}\, B A, \qquad B \in \mathbb{R}^{d \times r},\; A \in \mathbb{R}^{r \times d},\; r \ll d
+$$
+
+**In words:** "Keep the frozen weight $W$, and add a small correction built from two thin matrices — a down-projection to $r$ dimensions and an up-projection back — scaled by $\alpha/r$. Only those two thin matrices learn."
+**Also written:** counting parameters, the full update has $d^2$ entries but the LoRA factors have only $2dr$; for $d = 4096, r = 8$ that is $\approx 65{,}000$ vs $16.7$ million — a $250\times$ reduction per layer.
+
+A tiny numeric check shows where the savings come from — a full $d\times d$ update versus its rank-$r$ factorization:
+
+```python
+import numpy as np
+d, r = 4096, 8
+full   = d * d                 # parameters in a dense weight update ΔW
+lora   = 2 * d * r             # parameters in B (d×r) and A (r×d)
+print(full, lora, round(full / lora, 1))   # 16,777,216  65,536  256.0x fewer
+
+# the update IS a real matrix, just built cheaply from two thin ones:
+B = np.random.randn(d, r) * 0.01
+A = np.random.randn(r, d) * 0.01
+dW = (1.0 / r) * B @ A          # full-size ΔW, rank ≤ r, stored as B,A
+print(dW.shape, np.linalg.matrix_rank(dW))   # (4096, 4096), rank 8
+```
+
+The reconstructed $\Delta W$ is a full-sized matrix — so at inference you can fold it into $W$ and pay *zero* extra latency — yet it was stored and trained as two pencil-thin matrices.
+
+<svg viewBox="0 0 420 150" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif" font-size="10">
+  <!-- frozen W -->
+  <rect x="20" y="30" width="80" height="80" fill="rgba(99,102,241,0.25)" stroke="#6366f1"/>
+  <text x="60" y="74" text-anchor="middle" fill="currentColor">W (frozen)</text>
+  <text x="60" y="125" text-anchor="middle" fill="#6366f1">d × d</text>
+  <text x="112" y="74" text-anchor="middle" fill="currentColor">+</text>
+  <!-- B -->
+  <rect x="130" y="30" width="22" height="80" fill="rgba(34,197,94,0.3)" stroke="#22c55e"/>
+  <text x="141" y="125" text-anchor="middle" fill="#22c55e">d × r</text>
+  <text x="161" y="74" text-anchor="middle" fill="currentColor">×</text>
+  <!-- A -->
+  <rect x="172" y="58" width="80" height="22" fill="rgba(245,158,11,0.35)" stroke="#f59e0b"/>
+  <text x="212" y="98" text-anchor="middle" fill="#f59e0b">r × d</text>
+  <text x="285" y="74" text-anchor="middle" fill="currentColor">→ only the thin</text>
+  <text x="285" y="88" text-anchor="middle" fill="currentColor">green + amber train</text>
+  <text x="285" y="40" text-anchor="middle" fill="#22c55e" font-weight="bold">&lt; 1% of weights</text>
+</svg>
+
+LoRA is one of a family. **Adapters** insert tiny trainable bottleneck layers between frozen transformer blocks. **Prompt / prefix tuning** prepends a handful of learned "virtual token" vectors to the input and trains *only those*, leaving the model itself untouched. **QLoRA** combines LoRA with a 4-bit quantized frozen base, letting you fine-tune a 65B model on a single consumer GPU. The common thread: most of the knowledge already lives in the frozen base; a task needs only a small nudge.
+
+**In a real framework.** Hugging Face's PEFT library wraps any model in a LoRA config in a few lines:
+
+```python
+from peft import LoraConfig, get_peft_model
+from transformers import AutoModelForCausalLM
+
+base = AutoModelForCausalLM.from_pretrained("gpt2")       # frozen backbone
+cfg  = LoraConfig(r=8, lora_alpha=16, target_modules=["c_attn"], lora_dropout=0.05)
+model = get_peft_model(base, cfg)
+model.print_trainable_parameters()
+# -> trainable params: ~0.3M || all params: ~124M || trainable%: ~0.24
+```
+
+Only ~0.24% of the parameters carry gradients; the rest stay frozen. Because each adapter is a few megabytes, you can keep dozens of task-specific LoRAs and hot-swap them onto one shared base — the practical reason PEFT now dominates fine-tuning.
+
+::: {.callout-tip}
+The rank $r$ is the main dial: bigger $r$ = more capacity to adapt but more parameters and more overfitting risk on small data. Start at $r = 8$–$16$, and remember the scaling factor $\alpha/r$ effectively controls how strongly the adapter speaks over the frozen base.
+:::
+
+## 39.8 — Neurosymbolic AI
 
 Neural networks are brilliant at perception and terrible at guarantees. They recognize a cat instantly but can't reliably tell you that 17 is prime or that "all men are mortal, Socrates is a man" entails Socrates is mortal. Symbolic systems (Chapters 32–34) are the mirror image: rigorous logic and exact reasoning, but brittle and unable to handle raw pixels. **Neurosymbolic AI** tries to fuse the two — neural perception feeding symbolic reasoning — to get the best of both.
 
@@ -427,7 +607,7 @@ The neural part handles perception (turning pixels into that table); the symboli
 The modern, lightweight version of neurosymbolic AI is an **LLM that writes code or calls a tool**: the model reasons in language, then offloads exact computation to a Python interpreter or calculator. Same division of labor — neural for the fuzzy parts, symbolic for the exact ones.
 :::
 
-## 39.8 — World models and model-based agents
+## 39.9 — World models and model-based agents
 
 An agent that learns purely by trial and error in the real world is dangerous and slow — every mistake costs a real crash. Humans avoid this by *imagining*: we run a mental simulation of "if I do this, what happens next?" before acting. A **world model** gives an agent that ability — a learned internal model of environment dynamics that predicts the next state (and reward) given the current state and an action.
 
@@ -464,7 +644,7 @@ Plan B reaches state 0 immediately and scores $0$ versus Plan A's $-5$, so the a
 A world model is only as good as its predictions. Agents are expert at finding and exploiting the model's errors — a planner will happily march toward a hallucinated high-reward state the model wrongly predicts. **Model exploitation** is the central failure mode; honest uncertainty estimates and short planning horizons are the usual guards.
 :::
 
-## 39.9 — Embodied AI and robotics learning
+## 39.10 — Embodied AI and robotics learning
 
 Most ML lives in a disembodied world of static datasets. **Embodied AI** studies agents with a *body* — a robot arm, a legged robot, a navigating drone — that must perceive, act, and learn through physical interaction. The defining difference is the **closed perception–action loop**: the agent's actions change what it sees next, so data is not given but *generated by its own behavior*.
 
@@ -500,7 +680,7 @@ The single-value policies gamble on guessing right and lose badly when wrong ($0
 Domain randomization embodies a deep principle: when you don't know a parameter's true value, don't guess it — train across its whole plausible range. Robustness to a distribution beats precision on a wrong point estimate.
 :::
 
-## 39.10 — Reasoning models and test-time compute
+## 39.11 — Reasoning models and test-time compute
 
 For years the recipe for better models was "make them bigger." A newer axis has opened: spend more compute *at inference time*, letting the model think longer before answering. The shift is from scaling *training* to scaling **test-time compute** — and it has produced a class of **reasoning models** that dramatically outperform their size on math, code, and logic.
 
@@ -528,13 +708,27 @@ vote = Counter(answers).most_common(1)[0][0]
 print(vote)   # -> 12: majority agrees, outvoting the two stray chains
 ```
 
+Why does voting help so reliably? If each chain is independently correct with probability $p > 0.5$, the chance the *majority* of $n$ chains is correct climbs toward 1 as $n$ grows — the same statistics that make a panel of mediocre judges beat one expert. The probability the majority is right is $\sum_{k > n/2} \binom{n}{k} p^k (1-p)^{n-k}$.
+
+**In words:** "Add up the chance that more than half the chains happen to be correct — and if each chain is even slightly better than a coin flip, that sum rushes toward certainty as you sample more chains."
+**Also written:** $\Pr[\text{majority correct}] = \Pr[\,\text{Binomial}(n, p) > n/2\,]$ — the upper tail of a binomial distribution.
+
+```python
+from math import comb
+def majority_correct(n, p):                 # prob the majority vote is right
+    return sum(comb(n, k) * p**k * (1-p)**(n-k) for k in range(n//2 + 1, n + 1))
+for n in [1, 5, 21]:
+    print(n, round(majority_correct(n, 0.6), 3))   # 0.6 -> 0.683 -> 0.826
+# each chain only 60% reliable, yet 21-chain vote is ~83% correct
+```
+
 Even when any single chain is only moderately reliable, agreement across independent chains concentrates probability on the correct answer — which is why self-consistency reliably lifts accuracy at the cost of generating several chains instead of one. **Tree-of-thoughts** goes further, exploring a branching tree of partial reasoning steps with evaluation and backtracking, turning inference into a search (echoing Chapter 32). The common thread: a **compute–accuracy tradeoff** at inference. More thinking — more samples, deeper search — buys more accuracy, and for the first time you can dial that knob *after* the model is trained.
 
 ::: {.callout-warning}
 A written chain of thought is not a faithful window into the model's actual computation — models can reach the right answer for reasons their stated reasoning doesn't reflect, and can produce plausible-but-wrong rationalizations. Treat CoT as a performance technique, not a guaranteed explanation (see Chapter 36 on interpretability).
 :::
 
-## 39.11 — Open questions on the road toward general intelligence
+## 39.12 — Open questions on the road toward general intelligence
 
 **Artificial general intelligence (AGI)** — a system that learns and reasons across the full breadth of tasks a human can, rather than excelling at narrow ones — remains undefined and unbuilt. Today's frontier models are astonishingly broad yet still fail in ways that reveal how far we are from general intelligence. It's worth naming the open problems honestly rather than the hype.
 
@@ -563,8 +757,25 @@ Several stand out. **Generalization beyond the training distribution** — model
 A useful frame: progress in AI has come less from one master algorithm than from removing bottlenecks — first compute, then data, then labels (via self-supervision), now reasoning depth (via test-time compute). The next leap likely comes from removing whichever bottleneck binds hardest next: probably data efficiency, continual learning, or grounding in the world.
 :::
 
+The animation below sketches that bottleneck-removal story as a relay — each constraint lifted hands off to the next.
 
-## 39.12 — Meta-Learning and Multi-Task Learning in Depth
+<svg viewBox="0 0 460 90" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif" font-size="10">
+  <style>
+    @keyframes ch39pulse { 0%,100% { opacity:.35 } 50% { opacity:1 } }
+    .ch39node { animation: ch39pulse 3s ease-in-out infinite; }
+    .ch39b { animation-delay:.6s } .ch39c { animation-delay:1.2s }
+    .ch39d { animation-delay:1.8s } .ch39e { animation-delay:2.4s }
+  </style>
+  <line x1="40" y1="45" x2="430" y2="45" stroke="currentColor" stroke-width="1" opacity="0.4"/>
+  <g class="ch39node"><circle cx="45" cy="45" r="11" fill="rgba(99,102,241,0.4)" stroke="#6366f1"/><text x="45" y="74" text-anchor="middle" fill="currentColor">compute</text></g>
+  <g class="ch39node ch39b"><circle cx="140" cy="45" r="11" fill="rgba(56,189,248,0.4)" stroke="#38bdf8"/><text x="140" y="74" text-anchor="middle" fill="currentColor">data</text></g>
+  <g class="ch39node ch39c"><circle cx="235" cy="45" r="11" fill="rgba(34,197,94,0.4)" stroke="#22c55e"/><text x="235" y="74" text-anchor="middle" fill="currentColor">labels</text></g>
+  <g class="ch39node ch39d"><circle cx="330" cy="45" r="11" fill="rgba(245,158,11,0.4)" stroke="#f59e0b"/><text x="330" y="74" text-anchor="middle" fill="currentColor">reasoning</text></g>
+  <g class="ch39node ch39e"><circle cx="425" cy="45" r="11" fill="rgba(236,72,153,0.4)" stroke="#ec4899"/><text x="425" y="74" text-anchor="middle" fill="currentColor">next?</text></g>
+  <text x="230" y="18" text-anchor="middle" fill="currentColor" opacity="0.7">bottlenecks removed, one by one →</text>
+</svg>
+
+## 39.13 — Meta-Learning and Multi-Task Learning in Depth
 
 Imagine a tutor who has taught hundreds of students. When a new student walks in, the tutor doesn't start from a blank slate — they already know roughly which explanations land, which mistakes are common, and how to adapt within the first few minutes. **Meta-learning** ("learning to learn") aims for exactly this: instead of training one model for one task, we train across *many* tasks so that adapting to a *new* task takes only a handful of examples and a few gradient steps. **Multi-task learning** is the sibling idea — train one model on several tasks *at once* so they share structure and regularize each other.
 
@@ -595,9 +806,15 @@ The inner loop adapts $\theta$ to task $i$ with one SGD step on the support loss
 
 $$\theta_i' = \theta - \alpha \nabla_\theta \mathcal{L}_{\mathcal{T}_i}^{\text{support}}(\theta)$$
 
+**In words:** "Take the shared weights and do one practice step on this task's few examples to get task-specialized weights."
+**Also written:** as a gradient-descent map $\theta_i' = g(\theta) = \theta - \alpha\, \mathbf{g}_i$ where $\mathbf{g}_i = \nabla_\theta \mathcal{L}_{\mathcal{T}_i}^{\text{support}}(\theta)$.
+
 The outer loop then nudges the *original* $\theta$ so that these adapted weights $\theta_i'$ do well on the *query* set:
 
 $$\theta \leftarrow \theta - \beta \nabla_\theta \sum_i \mathcal{L}_{\mathcal{T}_i}^{\text{query}}(\theta_i')$$
+
+**In words:** "Adjust the shared starting weights so that the *practiced* weights score well on held-out examples — improving how well adaptation generalizes, not how well it memorizes."
+**Also written:** since $\theta_i'$ depends on $\theta$, the chain rule gives $\theta \leftarrow \theta - \beta \sum_i (\partial \theta_i'/\partial\theta)^\top \nabla_{\theta_i'}\mathcal{L}_i^{\text{query}}$, and $\partial\theta_i'/\partial\theta = I - \alpha \nabla^2_\theta \mathcal{L}_i^{\text{support}}$ — the second-order term.
 
 Notice the subtlety: the outer gradient differentiates *through* the inner update, so it contains a second derivative (a gradient of a gradient). That is the source of MAML's power and its cost.
 
@@ -608,6 +825,9 @@ The intuition: MAML doesn't seek weights that are good *now*; it seeks weights t
 **Reptile** is the lazy, beautiful shortcut. Skip the second derivatives entirely. For each task, just run a few SGD steps to get $\tilde\theta_i$, then move the meta-parameters *toward* that adapted point:
 
 $$\theta \leftarrow \theta + \beta\,(\tilde\theta_i - \theta)$$
+
+**In words:** "After practicing a while on a task, take a small step in the direction the weights drifted — repeat across tasks and you settle near a point all tasks agree on."
+**Also written:** as an exponential moving average toward adapted solutions, $\theta \leftarrow (1-\beta)\,\theta + \beta\,\tilde\theta_i$.
 
 That's it — no differentiating through the inner loop. Surprisingly, this still works, because averaging "where each task pulled the weights" finds a point near all of them in a way that correlates with MAML's objective.
 
@@ -647,9 +867,15 @@ Optimization-based methods adapt *weights*. Metric-based methods don't adapt at 
 
 $$\mathbf{p}_c = \frac{1}{|S_c|}\sum_{x_j \in S_c} f_\phi(x_j)$$
 
+**In words:** "A class's prototype is just the average location of its few examples in the learned feature space — its center of mass."
+**Also written:** $\mathbf{p}_c = \frac{1}{|S_c|}\,F_c^\top \mathbf{1}$, the column-mean of the stacked support-embedding matrix $F_c$.
+
 Classify a query $x$ by softmax over *negative distances* to the prototypes:
 
 $$P(y = c \mid x) = \frac{\exp(-\|f_\phi(x) - \mathbf{p}_c\|^2)}{\sum_{c'} \exp(-\|f_\phi(x) - \mathbf{p}_{c'}\|^2)}$$
+
+**In words:** "Score each class by how close the query lands to its center, then turn those closeness scores into probabilities — nearest center wins, but softly."
+**Also written:** since $-\|f-\mathbf p_c\|^2 = 2\,\mathbf p_c^\top f - \|\mathbf p_c\|^2 - \|f\|^2$ and $\|f\|^2$ cancels in the softmax, this is a *linear* classifier with weights $2\mathbf p_c$ and biases $-\|\mathbf p_c\|^2$.
 
 <svg viewBox="0 0 420 230" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif" font-size="11">
   <rect x="0" y="0" width="420" height="230" fill="none"/>
@@ -695,11 +921,17 @@ flowchart TB
 
 **FiLM** (Feature-wise Linear Modulation) is a lightweight middle path: keep one shared backbone but let a task identifier produce per-task scale $\gamma$ and shift $\beta$ vectors that modulate the features, $\text{FiLM}(h) = \gamma \odot h + \beta$. One body, conditioned on which task it's doing — cheap and surprisingly expressive.
 
+**In words:** "Run one shared network, but for each task, stretch and slide its features with a task-specific dial — same machinery, different settings per task."
+**Also written:** per-channel, $\text{FiLM}(h)_c = \gamma_c\, h_c + \beta_c$ — an affine (scale-and-shift) transform applied feature-wise, with $\gamma, \beta$ predicted from the task id.
+
 The deep problem in multi-task training is **gradient conflict**: two tasks can want the shared weights to move in *opposing* directions. When their gradients point more than 90° apart, the sum can cancel useful signal, and a loud task can drown a quiet one.
 
 **PCGrad** ("gradient surgery") detects conflict by the dot product of two task gradients. If $g_i \cdot g_j < 0$, it *projects* $g_i$ onto the plane orthogonal to $g_j$, removing only the conflicting component:
 
 $$g_i \leftarrow g_i - \frac{g_i \cdot g_j}{\|g_j\|^2}\, g_j$$
+
+**In words:** "If task $i$'s gradient pushes partly *against* task $j$'s, subtract off just that opposing part — keep what helps $i$, drop what fights $j$."
+**Also written:** as a projection, $g_i \leftarrow (I - \hat g_j \hat g_j^\top)\, g_i$ with $\hat g_j = g_j/\|g_j\|$ — orthogonal projection of $g_i$ out of $g_j$'s direction.
 
 ```python
 import numpy as np
@@ -722,7 +954,7 @@ print(pcgrad([gA, gB]))                    # net update no longer fully cancels
 
 **GradNorm** attacks the *magnitude* side instead: it dynamically rescales each task's loss weight so that all tasks train at a similar *rate*, preventing the fast learner from hogging the shared backbone. PCGrad fixes direction; GradNorm balances speed. In practice they target the two ways multi-task training goes wrong — conflicting gradients and imbalanced ones — and are often worth more than yet another architecture tweak.
 
-## 39.13 — Self-Supervised and Contrastive Learning in Depth
+## 39.14 — Self-Supervised and Contrastive Learning in Depth
 
 Labels are expensive; raw data is nearly free. **Self-supervised learning (SSL)** turns that asymmetry into a strategy: hide part of the data and train the model to predict it from the rest. The "labels" are manufactured from the input itself, so a billion unlabeled images or a trillion words of text become supervision for free. The payoff is a **representation** — a feature space — that you can later fine-tune on a small labeled task.
 
@@ -739,6 +971,9 @@ The contrastive idea is almost embarrassingly simple: **pull together two views 
 The workhorse loss is **InfoNCE** (Noise-Contrastive Estimation). For a positive pair $(i, j)$ with embeddings $z_i, z_j$ and similarity $\text{sim}$ (cosine), over a batch of $2N$ views:
 
 $$\mathcal{L}_{i,j} = -\log \frac{\exp(\text{sim}(z_i, z_j)/\tau)}{\sum_{k \ne i} \exp(\text{sim}(z_i, z_k)/\tau)}$$
+
+**In words:** "Among everyone in the batch, treat finding my true partner as a classification problem — penalize the model when the right partner isn't the clear winner."
+**Also written:** as a temperature-scaled softmax cross-entropy, $\mathcal{L}_{i,j} = -\,s_{ij}/\tau + \log\sum_{k\ne i}\exp(s_{ik}/\tau)$ with $s_{ab} = \text{sim}(z_a, z_b)$.
 
 It is just a softmax classification: "which of all these candidates is my true partner?" The **temperature** $\tau$ sharpens or softens the contrast.
 
@@ -773,6 +1008,9 @@ print(round(info_nce(z_i, z_j, negs), 4))                  # small loss
 **SimCLR** showed this works spectacularly with three ingredients: heavy augmentation, a projection head (a small MLP applied before computing the loss, then discarded), and — crucially — *large batches*, because negatives come from the batch and more negatives mean a harder, more informative contrast.
 
 That batch dependence is a real burden. **MoCo** (Momentum Contrast) removes it by keeping a **queue** of negatives from recent batches and encoding them with a slowly-updated **momentum encoder** ($\theta_k \leftarrow m\,\theta_k + (1-m)\,\theta_q$, with $m$ near $0.999$). The queue decouples the number of negatives from the batch size, so you get thousands of negatives on modest hardware.
+
+**In words (the momentum update):** "The negative-encoder's weights are a slow-motion copy of the main encoder — mostly themselves, with a tiny dribble of the latest weights mixed in — so the negatives stay consistent across batches."
+**Also written:** as an exponential moving average, $\theta_k = m\,\theta_k^{\text{old}} + (1-m)\,\theta_q$; with $m=0.999$ the key encoder moves $\sim$1000× slower than the query encoder.
 
 ::: {.callout-warning}
 Contrastive methods can collapse to a constant if negatives are too easy, and they are sensitive to the augmentation recipe — too weak and positives are trivially close, too strong and they no longer share content. The augmentation policy is a real hyperparameter, not a detail.
@@ -826,7 +1064,7 @@ JEPA sits at an interesting crossroads of everything above: it predicts like mas
 | MAE | Masked | No | Pixels | Reconstruction target |
 | JEPA | Masked / joint | No | Embedding | EMA target + stop-grad |
 
-## 39.14 — Key takeaways
+## 39.15 — Key takeaways
 
 - **Self-supervised learning** removes the label bottleneck by predicting hidden parts of the data; it is the engine behind every foundation model. **Contrastive learning** (InfoNCE) pulls positive pairs together and pushes negatives apart, with the denominator running over the positive plus all negatives — watch for collapse.
 - **Transfer, multi-task, and meta-learning** form a ladder: reuse one model, train on many tasks at once, or learn an initialization that adapts fast (MAML lands at the point equidistant from all task optima).
@@ -834,12 +1072,13 @@ JEPA sits at an interesting crossroads of everything above: it predicts like mas
 - **Catastrophic forgetting** is the central obstacle to **continual learning**; defenses are regularization (EWC pins high-Fisher weights), replay, and per-task parameters — replay is a strong simple baseline.
 - **Federated learning** trains on data that never moves (FedAvg); true privacy needs **differential privacy** and **secure aggregation** on top.
 - **AutoML / NAS** automate model design; **DARTS** made architecture search differentiable via a softmax mixture over candidate ops — but always compare against strong hand-designed and random-search baselines.
+- **Parameter-efficient fine-tuning** (LoRA, adapters, prompt tuning) freezes the giant base model and trains under 1% new parameters — the practical way to adapt foundation models and hot-swap many tasks onto one backbone.
 - **Neurosymbolic AI** fuses neural perception with symbolic reasoning for data efficiency, interpretability, and hard constraints; the lightweight modern form is an LLM calling tools.
 - **World models** let agents learn dynamics and plan in imagination for huge sample efficiency; beware model exploitation. **Embodied AI** closes the perception–action loop and bridges the reality gap with sim-to-real and domain randomization.
 - **Reasoning models** scale **test-time compute** (chain-of-thought, self-consistency voting, tree-of-thoughts), trading inference compute for accuracy — but CoT is not a faithful explanation.
 - The road to **general intelligence** is gated by open problems: out-of-distribution robustness, genuine reasoning and causality, data/energy efficiency, continual learning, and alignment.
 
-## 39.15 — See also
+## 39.16 — See also
 
 - **Attention & Transformers** — the architecture underlying self-supervised foundation models.
 - **Large Language Models** — in-context learning, chain-of-thought, and the scaling story in depth.

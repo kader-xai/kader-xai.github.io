@@ -111,6 +111,18 @@ Most of machine learning is a magnificent engine for finding patterns — but a 
 🧭 **In context:** Responsible AI & Frontier · used to estimate the *effect of acting*, not just predict outcomes · the one key idea: $P(Y\mid X)$ (seeing) is not $P(Y\mid do(X))$ (doing).
 :::
 
+A useful mental picture before we start: think of a doctor versus a detective. A predictor is a detective who reads the clues already on the table and guesses what happened. A causal model is a doctor who must decide *what to do next* — and a treatment that merely *correlates* with recovery can still kill the patient if a hidden cause is pulling the strings. This chapter is about earning the right to act.
+
+```{=html}
+<div style="border-left:4px solid #6366f1;background:rgba(99,102,241,0.08);padding:10px 14px;border-radius:6px;margin:14px 0;font-size:0.95em">
+<b>The ladder of causation (Pearl), in one breath.</b><br>
+<span style="color:#38bdf8">① Seeing</span> — <i>"what is?"</i> &nbsp;$P(Y\mid X)$ — every supervised model lives here.<br>
+<span style="color:#f59e0b">② Doing</span> — <i>"what if I act?"</i> &nbsp;$P(Y\mid do(X))$ — interventions, policy, pricing.<br>
+<span style="color:#ec4899">③ Imagining</span> — <i>"what if I had acted differently?"</i> — counterfactuals, fairness, recourse.<br>
+Higher rungs answer questions lower rungs literally cannot. Most of ML is stuck on rung ①.
+</div>
+```
+
 ## 37.1 — Why ML patterns are not causal
 
 A standard supervised model learns $P(Y \mid X)$: the distribution of the target given the features *as they naturally occur*. That is exactly the right object when you only want to **observe and predict** — you see someone's features and guess their outcome. It is the wrong object the moment you want to **act**, because acting changes the world in a way that the observed correlation may not survive.
@@ -135,6 +147,8 @@ To make the danger concrete, imagine two worlds. In the **observed world**, ice 
 ## 37.2 — Confounding
 
 A **confounder** is a variable that influences *both* the treatment (the thing you might change) and the outcome (the thing you care about), creating a non-causal association between them. It is the central villain of causal inference. In the ice-cream story, heat is the confounder. In medicine, *disease severity* is the eternal confounder: sicker patients get more aggressive treatment *and* have worse outcomes, so naively the aggressive treatment "looks" harmful.
+
+Plain-language version: a confounder is a puppeteer standing behind *both* the lever you pull and the result you watch. When you tug the lever and the result moves, you can't tell whether *you* moved it or the puppeteer did. Causal inference is the art of cutting the puppeteer's strings — either physically (randomization) or on paper (adjustment).
 
 **Worked example.** Suppose a drug is given more often to severe cases. Look at recovery split by severity:
 
@@ -193,6 +207,8 @@ The **potential outcomes** framework (Neyman–Rubin) gives causation a crisp de
 
 The **individual causal effect** is $\tau_i = Y_i(1) - Y_i(0)$. The trouble — the **fundamental problem of causal inference** — is that you only ever observe *one* of the two. The other is the **counterfactual**: what *would have* happened under the road not taken. You can never see both for the same person, so individual effects are unobservable; we estimate *averages* instead.
 
+Intuition: it's like wanting to know whether a particular umbrella kept *you* dry today. You either carried it (and stayed dry) or didn't (and got wet) — you can't replay this exact afternoon both ways. The single thing you most want to measure is the one thing physics forbids you to observe. Causal inference's whole trick is borrowing the missing half from *other, comparable people*.
+
 **Worked example.** Picture five patients, with both potential outcomes filled in by an oracle (in reality you see only the column matching what they actually got):
 
 | Patient | $Y(0)$ | $Y(1)$ | $\tau_i = Y(1)-Y(0)$ |
@@ -209,9 +225,17 @@ The headline quantity is the **Average Treatment Effect**:
 
 $$\text{ATE} = \mathbb{E}[Y(1) - Y(0)].$$
 
+**In words:** on average across the whole population, how much better (or worse) is the outcome when *everyone* is treated versus when *no one* is — the gap between two whole worlds.
+
+**Also written:** $\text{ATE} = \mathbb{E}[Y(1)] - \mathbb{E}[Y(0)]$ (linearity of expectation splits the difference of averages into a difference of two world-averages).
+
 A naive estimate subtracts the average outcome of the treated from the average of the untreated. That equals the ATE *only* if the two groups are exchangeable — same distribution of confounders. Decompose it:
 
 $$\underbrace{\mathbb{E}[Y\mid T{=}1]-\mathbb{E}[Y\mid T{=}0]}_{\text{naive difference}} = \underbrace{\text{ATE}}_{\text{want}} + \underbrace{\text{selection bias}}_{\text{confounding}}.$$
+
+**In words:** the difference you actually measure between the treated and untreated equals the true effect you want *plus* a contamination term — how different the two groups already were before any treatment.
+
+**Also written:** $\text{bias} = \big(\mathbb{E}[Y\mid T{=}1]-\mathbb{E}[Y\mid T{=}0]\big) - \text{ATE}$; the naive comparison is unbiased exactly when this term is zero, which randomization guarantees.
 
 ```{mermaid}
 flowchart TB
@@ -224,9 +248,15 @@ flowchart TB
 
 The conditions that license the naive comparison are **ignorability** $\big(\{Y(0),Y(1)\}\perp T \mid X\big)$ — treatment is as-good-as-random once you condition on the covariates $X$ — and **positivity**, $0 < P(T{=}1\mid X) < 1$, every unit *could* have gone either way. Counterfactuals are also how modern AI defines fairness ("would the loan decision change if only the applicant's race flipped?") and explanation ("the smallest change to the input that flips the prediction").
 
+::: {.callout-note}
+**ATE vs ATT vs CATE — three flavors of "the effect."** ATE averages over *everyone*. The **Average Treatment effect on the Treated** (ATT), $\mathbb{E}[Y(1)-Y(0)\mid T{=}1]$, averages only over those who *actually got* the treatment — the right target when you're asking "did the program help the people we enrolled?" (it's what difference-in-differences in 37.8 estimates). The **CATE** (37.9) drills all the way down to a single covariate profile $x$. Same ladder, different altitude: population → the treated subgroup → one individual-like cell.
+:::
+
 ## 37.5 — Randomized experiments (A/B tests) as the gold standard
 
 If confounding comes from *who gets treated*, the cleanest fix is to remove choice entirely: assign treatment by a coin flip. **Randomization** makes the treatment independent of every covariate — measured *or unmeasured* — so the treated and control groups are exchangeable by construction. Selection bias vanishes, and the naive difference in means becomes an unbiased estimate of the ATE. This is why the **randomized controlled trial** (RCT), and its product-world cousin the **A/B test**, is the gold standard.
+
+Why does a coin flip work where careful adjustment struggles? Because the coin doesn't *know* anything about the patient — not their severity, not their genes, not the variables you forgot to record. It scatters every lurking confounder, named or unnamed, evenly across both arms. That is the one thing no amount of clever statistics on observational data can buy you.
 
 **Worked example.** Show variant B of a checkout page to a random 50% of visitors. Conversions: control 1,000/20,000 = 5.00%, variant 1,120/20,000 = 5.60%. Lift = 0.60 percentage points. Because assignment was random, no confounder can explain the gap — heavy buyers, mobile users, time-of-day all split evenly across arms in expectation. The only remaining question is whether 0.6 points is signal or noise, which a significance test answers:
 
@@ -242,6 +272,17 @@ print(round(pB-pA, 4), round(z, 2))        # 0.006  ~2.71  -> significant
 ```
 
 A $z$ of about 2.7 sits beyond the usual $\pm1.96$ cutoff, so the lift is unlikely to be chance — and because the arms were randomized, "real lift" here genuinely means "the change *causes* more conversions," not merely "correlates with."
+
+The same logic, expressed in the industry-standard library:
+
+```python
+from statsmodels.stats.proportion import proportions_ztest
+import numpy as np
+# successes and trials per arm
+count = np.array([1000, 1120]); nobs = np.array([20000, 20000])
+z, pval = proportions_ztest(count, nobs)   # two-proportion z-test
+print(round(z, 2), round(pval, 4))         # ~ -2.71  0.0067  -> reject H0
+```
 
 ::: {.callout-tip}
 Randomization buys you freedom from *unmeasured* confounders — its superpower. Observational methods (37.8) can only adjust for confounders you measured and named. When an experiment is feasible and ethical, run it.
@@ -276,9 +317,41 @@ flowchart LR
   end
 ```
 
+A handy way to remember which way conditioning flips the switch: a **fork or chain is a pipe** — information flows until you *close the valve* by conditioning. A **collider is a door that starts shut** — conditioning *props it open*. So "control for it" helps at forks and chains, and *backfires* at colliders.
+
+<svg viewBox="0 0 460 150" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif" font-size="11">
+  <style>@keyframes flow37 { from {stroke-dashoffset:24} to {stroke-dashoffset:0} }</style>
+  <!-- pipe (fork/chain): open by default -->
+  <text x="20" y="20" fill="currentColor">fork / chain = pipe (open; conditioning CLOSES)</text>
+  <line x1="30" y1="45" x2="200" y2="45" stroke="#22c55e" stroke-width="6" stroke-linecap="round"/>
+  <line x1="30" y1="45" x2="200" y2="45" stroke="#38bdf8" stroke-width="3" stroke-dasharray="6 6" style="animation:flow37 1.2s linear infinite"/>
+  <text x="210" y="49" fill="#22c55e">flows ▶</text>
+  <!-- collider: shut by default -->
+  <text x="20" y="95" fill="currentColor">collider = door (shut; conditioning OPENS)</text>
+  <line x1="30" y1="120" x2="110" y2="120" stroke="#f59e0b" stroke-width="6" stroke-linecap="round"/>
+  <rect x="110" y="108" width="10" height="24" fill="#ec4899"/>
+  <line x1="120" y1="120" x2="200" y2="120" stroke="#f59e0b" stroke-width="6" stroke-linecap="round" opacity="0.35"/>
+  <text x="210" y="124" fill="#f59e0b">blocked ✕ (until you condition)</text>
+</svg>
+
 A quick way to feel the collider effect: let talent and luck both independently cause a startup to get funded ($K$). In the whole population talent and luck are unrelated. But *among funded startups only* — conditioning on $K$ — a low-talent founder must have been lucky, and a lucky one needn't be talented, so the two become negatively correlated out of thin air. That manufactured correlation is the danger of "controlling for everything."
 
 The **do-operator** $do(X{=}x)$ is Pearl's notation for *intervention*: reach into the system, set $X$ to $x$, and — crucially — **delete every arrow pointing into $X$** (you overrode its natural causes). The interventional distribution $P(Y \mid do(X{=}x))$ is what an action produces, and it generally differs from the observational $P(Y\mid X{=}x)$. The entire game of causal inference from data is: *re-express the do-quantity you want in terms of do-free observational quantities you can estimate.* When that is possible, the effect is **identifiable**.
+
+The "delete the incoming arrows" rule has a vivid name — **graph surgery**. Picture the DAG, then take scissors to every arrow feeding into $X$, because *you* are now the only cause of $X$. This is the formal difference between the two worlds of 37.1: observing leaves the graph intact; doing cuts it.
+
+```{mermaid}
+flowchart LR
+  subgraph Obs["Observe: P(Y | X=x)"]
+    Co["C"] --> Xo["X"]
+    Co --> Yo["Y"]
+    Xo --> Yo
+  end
+  subgraph Do["Do: P(Y | do(X=x)) — arrows into X cut"]
+    Cd["C"] --> Yd["Y"]
+    Xd["X=x"] --> Yd
+  end
+```
 
 ::: {.callout-warning}
 The collider trap is the subtlest mistake in the field. "Controlling for more variables" is not always safer — conditioning on a collider (or a descendant of one) *manufactures* a correlation that isn't causal. More adjustment can mean more bias.
@@ -289,6 +362,10 @@ The collider trap is the subtlest mistake in the field. "Controlling for more va
 The DAG turns "which variables must I adjust for?" into a graph-reading exercise. A **backdoor path** from $T$ to $Y$ is any path that starts with an arrow *into* $T$ (i.e., $T \leftarrow \cdots Y$) — these are the confounding routes that fake an effect. The **backdoor criterion** says: a set $Z$ identifies the causal effect if $Z$ blocks every backdoor path and contains no descendant of $T$. Then:
 
 $$P(Y\mid do(T{=}t)) = \sum_{z} P(Y\mid T{=}t, Z{=}z)\,P(Z{=}z).$$
+
+**In words:** to find the effect of *setting* $T$, look at the outcome within each group of people who share the same confounder values, then average those group-results weighted by how common each group is — never letting the treatment itself change the group mix.
+
+**Also written:** $P(Y\mid do(T{=}t)) = \mathbb{E}_{Z}\big[\,P(Y\mid T{=}t, Z)\,\big]$ — an expectation over the confounder distribution; for continuous $Z$ swap the sum for $\int P(Y\mid t,z)\,p(z)\,dz$.
 
 This **adjustment formula** is exactly the stratify-then-average move from 37.2: estimate the effect within each level of the confounders, then weight by how common each level is. Re-using the drug numbers, $Z=\{$severity$\}$ blocks the only backdoor. The drug recovery rate, adjusted, is $0.90 \times P(\text{mild}) + 0.70 \times P(\text{severe})$; with an even 50/50 split of severity in the population that is $0.90(0.5)+0.70(0.5) = 0.80$, identical to the no-drug adjusted rate — recovering the truth that the drug is neutral, which the pooled 74%-vs-86% comparison hid.
 
@@ -304,7 +381,25 @@ Sometimes you *cannot* measure the confounder — there is no valid backdoor set
 
 $$P(Y\mid do(T{=}t)) = \sum_{m} P(M{=}m\mid T{=}t)\sum_{t'} P(Y\mid M{=}m,T{=}t')\,P(T{=}t').$$
 
+**In words:** push the effect through the middleman — first how strongly $T$ moves the mediator $M$, then how strongly $M$ moves the outcome $Y$ (averaged over treatment), and multiply the two legs together.
+
+**Also written:** as a product of two clean interventional steps, $P(Y\mid do(t)) = \sum_m P\big(m\mid do(t)\big)\,P\big(Y\mid do(m)\big)$, each leg itself identified by a backdoor adjustment.
+
 The classic illustration: smoking $\to$ tar in lungs $\to$ cancer, with a hidden genetic confounder behind smoking and cancer. Even unable to measure the gene, you can identify smoking's effect *through tar*.
+
+Modern practice rarely does this graph-reading by hand. The `DoWhy` library lets you state the DAG, auto-discover the identifying formula, estimate it, and then *refute* it:
+
+```python
+from dowhy import CausalModel
+# df has columns: T (treatment), Y (outcome), Z (confounder)
+model = CausalModel(data=df, treatment="T", outcome="Y", common_causes=["Z"])
+estimand = model.identify_effect()                       # finds backdoor/frontdoor formula
+est = model.estimate_effect(estimand,
+        method_name="backdoor.propensity_score_weighting")
+print(est.value)                                         # estimated ATE
+# stress-test the assumptions, not just the point estimate:
+model.refute_estimate(estimand, est, method_name="placebo_treatment_refuter")
+```
 
 ::: {.callout-tip}
 Workflow: draw the DAG, list backdoor paths, find a blocking set with no descendants of $T$. No valid set? Look for a frontdoor mediator. Neither? You need an instrument or a natural experiment (37.8).
@@ -318,6 +413,14 @@ When you cannot randomize, you exploit structure in observational data to *appro
 
 **Propensity scores.** Matching on many covariates is hard (the curse of dimensionality). The **propensity score** $e(x)=P(T{=}1\mid X{=}x)$ — the modeled probability of being treated — collapses all confounders into one number. Rosenbaum and Rubin proved that adjusting for $e(x)$ alone removes the same bias as adjusting for all of $X$. You then match, stratify, or **inverse-propensity weight** (re-weight each unit by $1/e(x)$ for treated, $1/(1-e(x))$ for control) to build a pseudo-population where treatment is independent of confounders.
 
+The IPW estimator written out:
+
+$$\widehat{\text{ATE}}_{\text{IPW}} = \frac{1}{n}\sum_{i=1}^{n}\left[\frac{T_i\,Y_i}{e(x_i)} - \frac{(1-T_i)\,Y_i}{1-e(x_i)}\right].$$
+
+**In words:** up-weight the rare-but-informative units (a treated person who *looked* unlikely to be treated, or vice versa) so that, after re-weighting, the treated and control arms have the same confounder mix — then just take a difference of weighted averages.
+
+**Also written:** $\widehat{\text{ATE}}_{\text{IPW}} = \frac{1}{n}\sum_i \frac{(T_i-e(x_i))\,Y_i}{e(x_i)\,(1-e(x_i))}$ — a single fraction that reduces to the two-term form above.
+
 ```python
 import numpy as np
 from sklearn.linear_model import LogisticRegression
@@ -330,11 +433,27 @@ ate = np.average(Y[T==1], weights=w[T==1]) \
 
 A unit with a low chance of treatment ($e=0.1$) who *was* treated is rare and informative, so weighting by $1/0.1 = 10$ lets it stand in for the many similar units who went untreated — re-balancing the arms.
 
-**Instrumental variables (IV).** When an unmeasured confounder blocks the backdoor, find an **instrument** $Z$ that (1) affects $T$, (2) affects $Y$ *only through* $T$, and (3) shares no confounder with $Y$. $Z$ injects "as-if-random" variation into $T$. The classic estimate (Wald) is the ratio of $Z$'s effect on $Y$ to $Z$'s effect on $T$: $\hat\tau = \frac{\text{Cov}(Z,Y)}{\text{Cov}(Z,T)}$. Example: to study schooling's effect on wages, use *distance to college* as an instrument — it nudges enrollment but plausibly doesn't touch wages except through schooling. If living near a college raises years of schooling by 0.3 and raises wages by \$300, the implied return is $300/0.3 = \$1{,}000$ per year of schooling.
+::: {.callout-note}
+**Trim and stabilize.** IPW blows up when a propensity nears 0 or 1 — one unit with $e=0.001$ gets weight 1000 and hijacks the estimate (a positivity violation in disguise). In practice: clip propensities to, say, $[0.01,0.99]$, use **stabilized weights**, or prefer a **doubly-robust** estimator (AIPW), which stays consistent if *either* the propensity model *or* the outcome model is right — two shots at correctness instead of one.
+:::
+
+**Instrumental variables (IV).** When an unmeasured confounder blocks the backdoor, find an **instrument** $Z$ that (1) affects $T$, (2) affects $Y$ *only through* $T$, and (3) shares no confounder with $Y$. $Z$ injects "as-if-random" variation into $T$. The classic estimate (Wald) is the ratio of $Z$'s effect on $Y$ to $Z$'s effect on $T$:
+
+$$\hat\tau = \frac{\text{Cov}(Z,Y)}{\text{Cov}(Z,T)}.$$
+
+**In words:** see how much the nudge $Z$ moves the outcome, divide by how much the same nudge moves the treatment, and the leftover ratio is the effect of treatment per unit of treatment — because $Z$ touches $Y$ *only* by way of $T$.
+
+**Also written:** $\hat\tau = \dfrac{\mathbb{E}[Y\mid Z{=}1]-\mathbb{E}[Y\mid Z{=}0]}{\mathbb{E}[T\mid Z{=}1]-\mathbb{E}[T\mid Z{=}0]}$ for a binary instrument — the "reduced-form effect ÷ first-stage effect" form, equivalent to two-stage least squares (2SLS).
+
+Example: to study schooling's effect on wages, use *distance to college* as an instrument — it nudges enrollment but plausibly doesn't touch wages except through schooling. If living near a college raises years of schooling by 0.3 and raises wages by \$300, the implied return is $300/0.3 = \$1{,}000$ per year of schooling.
 
 **Difference-in-differences (DiD).** When a treatment hits one group at a known time, compare the *change* in the treated group to the *change* in an untreated control group over the same period. Subtracting the control's trend removes anything common to both — under the **parallel trends** assumption (absent treatment, both groups would have moved together).
 
 $$\widehat{\text{ATT}} = \big(\bar Y^{\text{treat}}_{\text{after}}-\bar Y^{\text{treat}}_{\text{before}}\big) - \big(\bar Y^{\text{ctrl}}_{\text{after}}-\bar Y^{\text{ctrl}}_{\text{before}}\big).$$
+
+**In words:** measure how much the treated group changed, subtract how much the control group changed over the very same window, and what's left is the part of the change only the treatment can explain.
+
+**Also written:** as the interaction coefficient $\beta_3$ in the regression $Y = \beta_0 + \beta_1\,\text{Treat} + \beta_2\,\text{Post} + \beta_3\,(\text{Treat}\times\text{Post}) + \varepsilon$ — the "double difference" is exactly that interaction term.
 
 Concretely, if a state raises its minimum wage and employment there moves from 20 to 19 (down 1) while a neighboring control state moves from 18 to 16 (down 2), DiD estimates the policy *raised* employment by $(-1) - (-2) = +1$ relative to the trend both states shared.
 
@@ -357,6 +476,24 @@ Concretely, if a state raises its minimum wage and employment there moves from 2
 
 **Regression discontinuity (RD).** When treatment is assigned by a sharp cutoff on a running variable — a test score above 60 gets the scholarship, below 60 doesn't — units *just* above and *just* below the threshold are essentially identical except for treatment. Comparing outcomes in a narrow window around the cutoff gives a local randomized experiment for free. A student scoring 59 and one scoring 61 are indistinguishable in talent, so any later gap in their graduation rates is attributable to the scholarship, not the score.
 
+<svg viewBox="0 0 440 200" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif" font-size="12">
+  <line x1="50" y1="170" x2="420" y2="170" stroke="#888"/>
+  <line x1="50" y1="20" x2="50" y2="170" stroke="#888"/>
+  <line x1="235" y1="20" x2="235" y2="180" stroke="#bbb" stroke-dasharray="4"/>
+  <text x="200" y="195" fill="#777">cutoff</text>
+  <text x="120" y="195" fill="#777">running variable (e.g. test score)</text>
+  <!-- below-cutoff trend (untreated) -->
+  <line x1="60" y1="150" x2="235" y2="110" stroke="#38bdf8" stroke-width="2.5"/>
+  <!-- above-cutoff trend (treated), jumped up -->
+  <line x1="235" y1="75" x2="410" y2="40" stroke="#ec4899" stroke-width="2.5"/>
+  <!-- the jump -->
+  <line x1="235" y1="110" x2="235" y2="75" stroke="#f59e0b" stroke-width="3"/>
+  <text x="245" y="98" fill="#f59e0b">jump = local effect</text>
+  <circle cx="225" cy="112" r="4" fill="#38bdf8"/>
+  <circle cx="245" cy="74" r="4" fill="#ec4899"/>
+  <text x="60" y="40" fill="currentColor" font-size="11">just-below ≈ just-above, except for treatment</text>
+</svg>
+
 | Method | Key assumption | When to reach for it |
 |---|---|---|
 | Matching / propensity | All confounders measured (ignorability) | Rich covariates, no obvious unmeasured confounder |
@@ -374,7 +511,13 @@ The ATE is one number for the whole population, but interventions are usually *t
 
 $$\text{CATE}(x) = \mathbb{E}[Y(1)-Y(0)\mid X{=}x],$$
 
-the effect *for a unit with features $x$*. In marketing this sorts customers into four types:
+the effect *for a unit with features $x$*.
+
+**In words:** zoom the average effect down to one kind of person — among everyone who looks like $x$, how much does the treatment change their outcome.
+
+**Also written:** $\tau(x) = \mu_1(x) - \mu_0(x)$ where $\mu_t(x)=\mathbb{E}[Y\mid X{=}x, T{=}t]$ under ignorability — the gap between two outcome-response surfaces evaluated at $x$.
+
+In marketing this sorts customers into four types:
 
 - **Persuadables** — buy *only if* contacted (positive uplift; target these).
 - **Sure things** — buy either way (zero uplift; wasted spend).
@@ -393,6 +536,18 @@ m0 = GBR().fit(X[T==0], Y[T==0])         # outcome model | control
 uplift = m1.predict(X) - m0.predict(X)   # per-unit CATE; target uplift > 0
 ```
 
+The T-learner is the warm-up, not the state of the art. The **S-learner** (one model with $T$ as a feature), **X-learner** (better under treatment-imbalance), and **doubly-robust / DR-learner** are stronger meta-learners; and the **Causal Forest** estimates $\tau(x)$ with honest, tree-based splitting plus confidence intervals. The `EconML` and `causalml` libraries package these:
+
+```python
+from econml.dml import CausalForestDML
+from sklearn.ensemble import GradientBoostingRegressor as GBR
+# Y outcome, T treatment, X effect-modifiers, W confounders to adjust for
+est = CausalForestDML(model_y=GBR(), model_t=GBR(), discrete_treatment=True)
+est.fit(Y, T, X=X, W=W)
+tau_hat = est.effect(X)                  # per-unit CATE estimates
+lb, ub  = est.effect_interval(X)         # with confidence intervals
+```
+
 ```{mermaid}
 quadrantChart
   title Who to target (uplift = effect of contacting)
@@ -407,7 +562,31 @@ quadrantChart
 Evaluate uplift models with a **Qini curve** (cumulative incremental gain as you treat from highest predicted uplift downward), not accuracy. Accuracy rewards predicting *who buys*; Qini rewards predicting *whom your action changes* — the only thing that pays for the campaign.
 :::
 
-## 37.10 — Why causal thinking matters for robust, fair, actionable AI
+## 37.10 — Causal discovery: learning the graph from data
+
+So far the DAG has fallen from the sky — drawn by hand from domain knowledge. But what if you *don't* know the arrows? **Causal discovery** (a.k.a. structure learning) tries to recover the graph, or at least the parts of it the data can pin down, from observational (and sometimes interventional) data.
+
+The honest headline first: from observational data alone you can generally recover the graph only *up to its Markov equivalence class* — the set of DAGs that imply the exact same conditional independencies. Plain version: the data can often tell you that two variables are connected, but not always which way the arrow points, because $X\to Y$ and $X\leftarrow Y$ can fit the same correlations. Extra leverage — interventions, time order, or assumptions about the noise — is what breaks the tie.
+
+Two broad families:
+
+- **Constraint-based** (e.g. **PC**, **FCI**): run a battery of conditional-independence tests and keep only the edges the data refuses to make independent, then orient what you can using collider patterns. FCI even tolerates hidden confounders.
+- **Score-based** (e.g. **GES**, and modern continuous-optimization methods like **NOTEARS**): search over graphs for the one that best scores the data (fit minus a complexity penalty), turning structure search into something closer to ordinary optimization.
+
+```python
+# constraint-based discovery with causal-learn
+from causallearn.search.ConstraintBased.PC import pc
+import numpy as np
+data = np.asarray(df)                    # rows = samples, cols = variables
+cg = pc(data)                            # returns a CPDAG (equivalence class)
+cg.draw_pydot_graph(labels=list(df.columns))
+```
+
+::: {.callout-warning}
+Discovered graphs are *hypotheses*, not facts. They rest on assumptions (faithfulness, often no hidden confounders, correct independence tests) that are as untestable as the ones in 37.8. Treat the output as a candidate DAG to argue with and validate against domain knowledge — never as ground truth handed down by the algorithm.
+:::
+
+## 37.11 — Why causal thinking matters for robust, fair, actionable AI
 
 Causal reasoning is not an academic luxury bolted onto ML — it is what makes a model survive contact with the real world.
 
@@ -428,18 +607,19 @@ flowchart LR
 The one-line test before deploying any model to *drive a decision*: "Am I asking what *is*, or what *would happen if I act*?" If it's the second, you need a causal estimand and the assumptions to identify it — predictive accuracy alone will not save you.
 :::
 
-## 37.11 — Key takeaways
+## 37.12 — Key takeaways
 
-- $P(Y\mid X)$ (observing) and $P(Y\mid do(X))$ (acting) are different objects; ML learns the first, decisions need the second.
+- $P(Y\mid X)$ (observing) and $P(Y\mid do(X))$ (acting) are different objects; ML learns the first, decisions need the second. Pearl's ladder — seeing, doing, imagining — names the climb.
 - A **confounder** drives both treatment and outcome and fakes an effect; **Simpson's paradox** is confounding so strong the trend reverses on aggregation.
-- **Potential outcomes** define the effect as $Y(1)-Y(0)$; you never see both, so individual effects are unobservable and we estimate averages (ATE) under *ignorability* and *positivity*.
+- **Potential outcomes** define the effect as $Y(1)-Y(0)$; you never see both, so individual effects are unobservable and we estimate averages (ATE, ATT) under *ignorability* and *positivity*.
 - **Randomized experiments / A/B tests** are the gold standard because randomization neutralizes even *unmeasured* confounders.
-- **DAGs + the do-operator** turn identification into graph-reading; the **backdoor criterion** adjusts for confounders, the **frontdoor** routes the effect through a mediator, and **colliders** warn that adjusting for the wrong variable *creates* bias.
-- **Observational methods** (matching, propensity scores, IV, difference-in-differences, regression discontinuity) each approximate an experiment by trading data for one *untestable* assumption — state it.
-- **Uplift / CATE models** estimate *per-unit* effects to target persuadables and avoid sleeping dogs; evaluate with Qini, not accuracy.
+- **DAGs + the do-operator** turn identification into graph-reading (graph surgery cuts arrows into $X$); the **backdoor criterion** adjusts for confounders, the **frontdoor** routes the effect through a mediator, and **colliders** warn that adjusting for the wrong variable *creates* bias.
+- **Observational methods** (matching, propensity scores / IPW, IV, difference-in-differences, regression discontinuity) each approximate an experiment by trading data for one *untestable* assumption — state it; prefer doubly-robust estimators when you can.
+- **Uplift / CATE models** estimate *per-unit* effects to target persuadables and avoid sleeping dogs; meta-learners and causal forests scale this, and you evaluate with Qini, not accuracy.
+- **Causal discovery** can propose a graph from data, but only up to a Markov equivalence class — treat the output as a hypothesis.
 - Causal thinking is what makes AI **robust** (stable under shift), **fair** (counterfactual fairness), and **actionable** (recourse and policy are $do$-queries).
 
-## 37.12 — See also
+## 37.13 — See also
 
 - **Probability & Statistics** — distributions, expectation, hypothesis testing, the foundation for ATE estimation and A/B significance.
 - **Probabilistic Graphical Models** — Bayesian networks and d-separation, the machinery behind DAGs and the backdoor criterion.

@@ -115,6 +115,8 @@ Empirical curves tell you a model *did* well on the data you happened to test. L
 
 Suppose you train a classifier, measure 3% error on a held-out test set, and ship it. Two questions should nag you. First, how close is that 3% to the *true* error on the full distribution of inputs the model will face? Second, you tried fifty model configurations and picked the best — did you find a genuinely good model, or did you just get lucky on this particular test set? Learning theory answers both, and the answers are quantitative.
 
+**The intuition first.** Think of a chef tasting one spoonful from a giant pot of soup. The spoonful (your test set) tells you something about the whole pot (the true distribution) — but only if the soup is stirred (i.i.d. sampling) and the spoon is big enough (large $n$). Learning theory is the recipe for how big the spoon must be, and how confident you can be that the spoonful matches the pot, *especially* when you taste many pots and report the best one you found.
+
 The setup throughout this chapter: data points $(x, y)$ are drawn independently from some fixed but unknown distribution $\mathcal{D}$. A **hypothesis** $h$ maps inputs to predictions, and a **loss** $\ell(h(x), y)$ scores how wrong it is. We care about two quantities:
 
 $$
@@ -122,6 +124,9 @@ $$
 \qquad
 \underbrace{\hat R(h) = \frac{1}{n}\sum_{i=1}^{n} \ell(h(x_i), y_i)}_{\text{empirical risk}}
 $$
+
+**In words:** the true risk is the average mistake the model would make over *all possible* data; the empirical risk is the average mistake on the *finite sample* you actually have.
+**Also written:** $R(h) = \int \ell(h(x),y)\,d\mathcal{D}(x,y)$ and $\hat R(h) = \frac{1}{n}\langle \mathbf{1}, \boldsymbol{\ell}\rangle$ where $\boldsymbol{\ell}=(\ell(h(x_1),y_1),\dots,\ell(h(x_n),y_n))$ is the vector of per-example losses.
 
 We can only *measure* $\hat R$; we *care* about $R$. The entire field is the study of the gap $R(h) - \hat R(h)$, the **generalization gap**. Theory gives us statements of the form: with probability at least $1-\delta$ over the random training sample, this gap is at most some bound that shrinks with $n$ and grows with the "richness" of the models we allowed ourselves to consider.
 
@@ -132,6 +137,8 @@ We can only *measure* $\hat R$; we *care* about $R$. The entire field is the stu
 ## 42.2 The PAC framework
 
 **Probably Approximately Correct** (PAC) learning, introduced by Valiant, formalizes "learnable." We never demand a perfect classifier (impossible from finite noisy data) nor certainty (a freak unrepresentative sample is always possible). We settle for **approximately** correct (error $\le \varepsilon$) and **probably** so (with confidence $\ge 1-\delta$).
+
+**Plain-language version.** PAC says: *"Give me enough examples and I promise to hand you a model that is usually pretty good."* "Usually" is the **probably** (the $1-\delta$ confidence — you might draw a freak sample). "Pretty good" is the **approximately** (the $\varepsilon$ error — you can't expect perfection from finite data). Both knobs are tunable; you just pay in data.
 
 The ingredients:
 
@@ -150,15 +157,39 @@ Two regimes matter:
 
 Notice the agnostic case scales as $1/\varepsilon^2$ rather than $1/\varepsilon$ — handling noise is fundamentally more expensive. We will derive both. The key structural insight: sample complexity grows only *logarithmically* in the number of hypotheses, which is what makes learning over huge classes feasible.
 
+For the realizable sample complexity formula:
+
+**In words:** to halve the error you tolerate, you need twice the data; to add another order of magnitude of confidence ($\delta \to \delta/10$) you pay only an *additive* $\ln 10$; and a thousand-fold bigger hypothesis class costs only $\ln 1000 \approx 6.9$ more examples per unit of $1/\varepsilon$.
+**Also written:** $m \ge \varepsilon^{-1}\big(\log_e\lvert\mathcal H\rvert + \log_e \delta^{-1}\big)$ — equivalently the achievable error is $\varepsilon \le \tfrac{1}{m}(\ln\lvert\mathcal H\rvert + \ln\tfrac1\delta)$ after collecting $m$ samples.
+
 **Worked example (realizable, finite class).** Say $\lvert\mathcal{H}\rvert = 10^6$ candidate rules, and we want error $\le 1\%$ with 99% confidence. Then
 $$
 m \ge \frac{1}{0.01}\left(\ln 10^6 + \ln 100\right) = 100\,(13.8 + 4.6) \approx 1{,}840 \text{ examples.}
 $$
 A million hypotheses, fewer than two thousand examples. The logarithm is doing heroic work.
 
+```python
+# scikit-learn: empirically watch the generalization gap shrink as n grows,
+# the practical face of a PAC sample-complexity curve.
+import numpy as np
+from sklearn.tree import DecisionTreeClassifier
+from sklearn.model_selection import learning_curve
+from sklearn.datasets import make_classification
+
+X, y = make_classification(n_samples=4000, n_features=20, n_informative=8, random_state=0)
+sizes, train_sc, val_sc = learning_curve(
+    DecisionTreeClassifier(max_depth=5), X, y,
+    train_sizes=np.linspace(0.05, 1.0, 8), cv=5)
+gap = train_sc.mean(1) - val_sc.mean(1)        # train acc - val acc ≈ generalization gap
+for n, g in zip(sizes, gap):
+    print(f"n={n:5.0f}  gap={g:.3f}")          # gap shrinks roughly like 1/sqrt(n)
+```
+
 ## 42.3 Concentration inequalities: the toolkit
 
 Every generalization bound rests on a concentration inequality — a statement that a random average stays close to its mean. They form a ladder: each rung assumes more and pays off with a tighter bound.
+
+**Everyday picture.** These inequalities all answer one question: *"How surprised should I be if an average wanders far from where it should be?"* The more you know about the random thing (just its mean? its variance? that it's bounded?), the more confidently you can say "that far is essentially impossible." Knowing more buys you tighter guarantees — that is the whole ladder.
 
 ```{mermaid}
 graph LR
@@ -166,21 +197,45 @@ graph LR
   B --> C["Hoeffding<br/>needs: bounded range"]
   C --> D["Bernstein<br/>needs: variance + bound"]
   C --> E["Sub-Gaussian<br/>needs: light tails"]
-  style A fill:#fde,stroke:#a37
-  style C fill:#dfe,stroke:#3a7
+  style A fill:#ec4899,stroke:#a37
+  style C fill:#22c55e,stroke:#3a7
 ```
 
 **Markov.** For a non-negative random variable, $\Pr[X \ge a] \le \mathbb{E}[X]/a$. Crude — only uses the mean — but it is the seed from which the others grow.
 
+**In words:** a positive quantity can exceed several times its average only a small fraction of the time (it can't be twice its mean more than half the time, ten times more than a tenth of the time, etc.).
+**Also written:** equivalently $\Pr[X \ge k\,\mathbb{E}[X]] \le 1/k$ for $k>0$.
+
 **Chebyshev.** Apply Markov to $(X-\mu)^2$: $\Pr[|X-\mu|\ge a] \le \sigma^2/a^2$. Now tail probability falls as $1/a^2$.
+
+**In words:** the chance of landing more than $a$ away from the mean is capped by the variance divided by $a^2$ — spread out by $k$ standard deviations and the odds are at most $1/k^2$.
+**Also written:** $\Pr[|X-\mu| \ge k\sigma] \le 1/k^2$ (substitute $a = k\sigma$).
 
 **Hoeffding.** The workhorse. For independent variables $X_i \in [a_i, b_i]$ with mean $\bar X = \frac1n\sum X_i$,
 $$
 \Pr\!\left[\,|\bar X - \mathbb{E}\bar X| \ge t\,\right] \le 2\exp\!\left(\frac{-2n^2 t^2}{\sum_i (b_i-a_i)^2}\right).
 $$
+
+**In words:** the probability that an average of bounded independent numbers drifts by more than $t$ from its expected value dies off *exponentially* fast as you collect more samples.
+**Also written:** for the common case $X_i\in[0,1]$ this is $\Pr[\,|\bar X - \mathbb{E}\bar X|\ge t\,] \le 2e^{-2nt^2}$; rearranged into a confidence statement, w.p. $\ge 1-\delta$, $|\bar X - \mathbb{E}\bar X| \le \sqrt{\ln(2/\delta)/(2n)}$.
+
 The tail is **exponential** in $n$ — vastly stronger than Chebyshev's polynomial decay. This exponential is exactly what lets a union bound over many hypotheses survive (Section 42.4).
 
 **Bernstein / sub-Gaussian.** When the variance $\sigma^2$ is much smaller than the range, Bernstein's inequality replaces the range with the variance in the dominant term, giving the *fast rate* $\sim \sigma^2/n$ instead of $1/\sqrt{n}$. This is the formal reason low-noise problems learn faster (the realizable $1/\varepsilon$ vs. agnostic $1/\varepsilon^2$ split above).
+
+<svg viewBox="0 0 520 210" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif" font-size="13" fill="currentColor">
+  <style>@keyframes cncw{0%{opacity:.35}50%{opacity:1}100%{opacity:.35}}</style>
+  <text x="10" y="18" font-weight="bold">Tail decay: same deviation t, three promises</text>
+  <line x1="55" y1="175" x2="500" y2="175" stroke="currentColor"/>
+  <line x1="55" y1="30" x2="55" y2="175" stroke="currentColor"/>
+  <text x="220" y="200">sample size n →</text>
+  <text x="20" y="120" transform="rotate(-90 20 120)">P(|X̄−μ|≥t)</text>
+  <path d="M65 60 Q200 120 495 150" fill="none" stroke="#ec4899" stroke-width="2.5"/>
+  <text x="360" y="145" fill="#ec4899">Chebyshev ~ 1/n (polynomial)</text>
+  <path d="M65 60 Q140 150 495 173" fill="none" stroke="#22c55e" stroke-width="2.5" style="animation:cncw 3s ease-in-out infinite"/>
+  <text x="180" y="168" fill="#22c55e">Hoeffding ~ e^(−2nt²) (exponential)</text>
+  <text x="120" y="50" fill="#6366f1">both start high, exponential crushes the tail</text>
+</svg>
 
 ::: {.callout-tip}
 **Worked Hoeffding bound.** A coin has unknown bias $p$. Flip it $n=1000$ times, observe frequency $\hat p$. Each $X_i\in[0,1]$ so $b_i-a_i=1$. How far can $\hat p$ stray from $p$?
@@ -205,12 +260,17 @@ print(round(viol,4), round(bound,4))     # ~0.04  0.05  -> violations stay under
 
 Hoeffding bounds *one* fixed hypothesis. But the learner inspects the data and *picks* $\hat h = \arg\min_{h} \hat R(h)$, so $\hat h$ is correlated with the sample — a single-hypothesis bound does not apply to it. The fix is to bound *all* hypotheses simultaneously, then the chosen one is automatically covered.
 
+**Why one bound isn't enough — a lottery analogy.** Buy one lottery ticket and your odds of winning are tiny. Buy a million tickets and *someone's* ticket probably wins. Same here: any single hypothesis is unlikely to have a misleadingly low empirical error, but if you search over a million of them and *pick the luckiest-looking one*, you've effectively bought a million tickets. The union bound charges you for all those tickets up front so the winner you keep is trustworthy.
+
 For a finite class, the **union bound** does this. If each hypothesis individually fails its bound with probability $\le\delta'$, then the probability that *any* of the $\lvert\mathcal{H}\rvert$ hypotheses fails is at most $\lvert\mathcal{H}\rvert\cdot\delta'$. Set $\delta' = \delta/\lvert\mathcal{H}\rvert$ and invert Hoeffding:
 
 $$
 \text{w.p. } \ge 1-\delta,\quad \forall h\in\mathcal{H}:\quad
 R(h) \le \hat R(h) + \sqrt{\frac{\ln\lvert\mathcal{H}\rvert + \ln(2/\delta)}{2n}}.
 $$
+
+**In words:** simultaneously for *every* hypothesis in the class, the true error is no more than the measured error plus a cushion that grows with the log-size of the class and shrinks like $1/\sqrt{n}$.
+**Also written:** $R(h) - \hat R(h) \le \sqrt{\tfrac{1}{2n}\big(\ln\lvert\mathcal H\rvert + \ln 2 - \ln\delta\big)}$ for all $h\in\mathcal H$.
 
 ```{mermaid}
 graph TD
@@ -227,6 +287,8 @@ The obvious problem: most interesting classes are **infinite** — a linear clas
 
 Two hypothesis classes can both be infinite yet differ wildly in expressive power. **Shattering** measures expressiveness by what labelings a class can realize, ignoring the raw count of hypotheses.
 
+**Intuition.** Forget counting hypotheses — there are infinitely many. Ask instead: *how many points can this class label in every conceivable way?* If you hand the class a few points and it can produce **all** $\pm$ patterns over them, the class is genuinely flexible on that many points. The largest number of points it can fully "color any way you like" is its true expressive capacity. A class that can color any pattern over 1000 points is far more dangerous (likely to overfit) than one that maxes out at 3 points.
+
 A set of $k$ points is **shattered** by $\mathcal{H}$ if, for *every* one of the $2^k$ ways to label them $\pm$, some $h\in\mathcal{H}$ realizes that labeling. The **VC dimension** $d_{VC}(\mathcal{H})$ is the size of the largest set that $\mathcal{H}$ can shatter.
 
 **Worked example: thresholds on a line.** $\mathcal{H} = \{h_\theta(x) = \mathbb{1}[x > \theta]\}$.
@@ -236,23 +298,23 @@ A set of $k$ points is **shattered** by $\mathcal{H}$ if, for *every* one of the
 
 So $d_{VC} = 1$ for thresholds. For **intervals** $\mathbb{1}[a \le x \le b]$, the answer is 2; for **linear classifiers in $\mathbb{R}^d$**, it is $d+1$.
 
-<svg viewBox="0 0 520 200" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif" font-size="13">
+<svg viewBox="0 0 520 200" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif" font-size="13" fill="currentColor">
   <text x="10" y="20" font-weight="bold">Linear classifier in ℝ²: shatters 3 points (d_VC = 3)</text>
   <g>
     <text x="60" y="55">3 points, any of 8 labelings separable:</text>
-    <circle cx="90" cy="110" r="9" fill="#3a7" stroke="#163"/>
-    <circle cx="170" cy="90" r="9" fill="#3a7" stroke="#163"/>
-    <circle cx="130" cy="160" r="9" fill="#c44" stroke="#811"/>
-    <line x1="60" y1="175" x2="210" y2="95" stroke="#333" stroke-dasharray="5 4"/>
-    <text x="80" y="195" fill="#163">+ +</text><text x="120" y="195" fill="#811">−</text>
+    <circle cx="90" cy="110" r="9" fill="#22c55e" stroke="#163"/>
+    <circle cx="170" cy="90" r="9" fill="#22c55e" stroke="#163"/>
+    <circle cx="130" cy="160" r="9" fill="#ec4899" stroke="#811"/>
+    <line x1="60" y1="175" x2="210" y2="95" stroke="currentColor" stroke-dasharray="5 4"/>
+    <text x="80" y="195" fill="#22c55e">+ +</text><text x="120" y="195" fill="#ec4899">−</text>
   </g>
   <g>
     <text x="300" y="55">4 points: XOR labeling NOT separable ✗</text>
-    <circle cx="340" cy="90" r="9" fill="#3a7" stroke="#163"/>
-    <circle cx="440" cy="90" r="9" fill="#c44" stroke="#811"/>
-    <circle cx="340" cy="160" r="9" fill="#c44" stroke="#811"/>
-    <circle cx="440" cy="160" r="9" fill="#3a7" stroke="#163"/>
-    <text x="360" y="195" fill="#555">no single line separates the diagonal pairs</text>
+    <circle cx="340" cy="90" r="9" fill="#22c55e" stroke="#163"/>
+    <circle cx="440" cy="90" r="9" fill="#ec4899" stroke="#811"/>
+    <circle cx="340" cy="160" r="9" fill="#ec4899" stroke="#811"/>
+    <circle cx="440" cy="160" r="9" fill="#22c55e" stroke="#163"/>
+    <text x="360" y="195" fill="currentColor">no single line separates the diagonal pairs</text>
   </g>
 </svg>
 
@@ -261,6 +323,9 @@ The payoff is the **VC generalization bound** (Vapnik–Chervonenkis): with prob
 $$
 R(h) \le \hat R(h) + O\!\left(\sqrt{\frac{d_{VC}\,\ln(n/d_{VC}) + \ln(1/\delta)}{n}}\right).
 $$
+
+**In words:** true error stays within a $1/\sqrt{n}$-shrinking cushion of training error, where the cushion is set by the VC dimension (the class's effective capacity) rather than by counting hypotheses.
+**Also written:** the gap obeys $R(h)-\hat R(h) = O\!\big(\sqrt{d_{VC}/n}\big)$ up to log factors — i.e. it scales as $\sqrt{\text{capacity} / \text{data}}$.
 
 Here $d_{VC}$ plays the role $\ln\lvert\mathcal{H}\rvert$ played for finite classes — it is the *effective* log-cardinality. The Sauer–Shelah lemma is the engine: a class of VC dimension $d$ can produce at most $O(n^d)$ distinct labelings of $n$ points, *polynomially* many rather than $2^n$, so the union bound becomes tractable even over infinitely many hypotheses.
 
@@ -278,24 +343,48 @@ $$
 \hat{\mathfrak{R}}_S(\mathcal{H}) = \mathbb{E}_{\sigma}\left[\sup_{h\in\mathcal{H}} \frac{1}{n}\sum_{i=1}^n \sigma_i\, h(x_i)\right].
 $$
 
+**In words:** flip a coin to label every point at random, then measure how well the best hypothesis in the class can chase that meaningless noise — averaged over many coin-flip patterns. A class that can chase noise can also memorize, hence overfit.
+**Also written:** $\hat{\mathfrak{R}}_S(\mathcal{H}) = \mathbb{E}_{\sigma}\big[\sup_{h\in\mathcal H} \tfrac1n\,\boldsymbol{\sigma}^{\top} h(S)\big]$, the expected (normalized) inner product between a random sign vector $\boldsymbol{\sigma}$ and the class's prediction vector $h(S)=(h(x_1),\dots,h(x_n))$.
+
 If $\mathcal{H}$ can match pure noise (high $\hat{\mathfrak{R}}$), it will overfit; if it cannot, it must generalize. This yields the bound: w.p. $\ge 1-\delta$, for all $h$,
 $$
 R(h) \le \hat R(h) + 2\,\hat{\mathfrak{R}}_S(\mathcal{H}) + 3\sqrt{\frac{\ln(2/\delta)}{2n}}.
 $$
 
+**In words:** true error is at most training error, plus twice how much the class can fit noise, plus a small confidence cushion.
+**Also written:** $R(h) - \hat R(h) \le 2\hat{\mathfrak R}_S(\mathcal H) + 3\sqrt{\ln(2/\delta)/(2n)}$ — the data-dependent analogue of the VC gap, with $\hat{\mathfrak R}_S$ replacing $\sqrt{d_{VC}/n}$.
+
 **The margin connection (SVMs).** For linear classifiers, the relevant quantity is not the dimension but the **margin** $\gamma$ — the distance from the decision boundary to the nearest point. The Rademacher complexity of the class of unit-norm linear separators scales like $\frac{R}{\gamma\sqrt n}$, where $R$ bounds the data norm. Crucially this is **independent of the ambient dimension**. A wide-margin classifier generalizes well *even in infinite-dimensional feature spaces* (kernels!), because margin, not coordinate count, controls effective complexity. This is the theoretical heart of why **maximizing the margin** (Chapter on SVMs) is the right objective.
 
-<svg viewBox="0 0 480 200" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif" font-size="13">
+<svg viewBox="0 0 480 200" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif" font-size="13" fill="currentColor">
   <text x="10" y="18" font-weight="bold">Margin γ controls complexity, not dimension</text>
-  <line x1="240" y1="40" x2="240" y2="185" stroke="#333" stroke-width="2"/>
-  <line x1="205" y1="40" x2="205" y2="185" stroke="#3a7" stroke-dasharray="4 3"/>
-  <line x1="275" y1="40" x2="275" y2="185" stroke="#3a7" stroke-dasharray="4 3"/>
-  <text x="216" y="35" fill="#3a7">γ</text>
-  <circle cx="120" cy="80" r="8" fill="#3a7"/><circle cx="150" cy="140" r="8" fill="#3a7"/><circle cx="180" cy="100" r="8" fill="#3a7"/>
-  <circle cx="360" cy="70" r="8" fill="#c44"/><circle cx="330" cy="150" r="8" fill="#c44"/><circle cx="300" cy="110" r="8" fill="#c44"/>
-  <text x="60" y="180" fill="#163">class +</text><text x="340" y="180" fill="#811">class −</text>
-  <text x="285" y="30" fill="#555">wide γ ⇒ low Rademacher ⇒ generalizes</text>
+  <line x1="240" y1="40" x2="240" y2="185" stroke="currentColor" stroke-width="2"/>
+  <line x1="205" y1="40" x2="205" y2="185" stroke="#22c55e" stroke-dasharray="4 3"/>
+  <line x1="275" y1="40" x2="275" y2="185" stroke="#22c55e" stroke-dasharray="4 3"/>
+  <text x="216" y="35" fill="#22c55e">γ</text>
+  <circle cx="120" cy="80" r="8" fill="#22c55e"/><circle cx="150" cy="140" r="8" fill="#22c55e"/><circle cx="180" cy="100" r="8" fill="#22c55e"/>
+  <circle cx="360" cy="70" r="8" fill="#ec4899"/><circle cx="330" cy="150" r="8" fill="#ec4899"/><circle cx="300" cy="110" r="8" fill="#ec4899"/>
+  <text x="60" y="180" fill="#22c55e">class +</text><text x="340" y="180" fill="#ec4899">class −</text>
+  <text x="285" y="30" fill="currentColor">wide γ ⇒ low Rademacher ⇒ generalizes</text>
 </svg>
+
+```python
+# Estimate empirical Rademacher complexity of linear models by literally
+# fitting random sign labels: a rich class chases noise, a constrained one can't.
+import numpy as np
+from sklearn.linear_model import LogisticRegression
+rng = np.random.default_rng(0)
+X = rng.standard_normal((200, 50))
+def rademacher(C, reps=20):
+    vals = []
+    for _ in range(reps):
+        sigma = rng.choice([-1, 1], size=len(X))          # random ±1 labels
+        clf = LogisticRegression(C=C, max_iter=500).fit(X, sigma)
+        vals.append(np.mean(sigma * clf.decision_function(X)))  # correlation with noise
+    return np.mean(vals)
+print("loose (C=100):", round(rademacher(100), 3))   # higher -> fits noise well
+print("tight (C=0.01):", round(rademacher(0.01), 3)) # strong regularization -> can't
+```
 
 ## 42.7 The approximation–estimation decomposition
 
@@ -307,32 +396,72 @@ $$
 + \underbrace{\Big(\inf_{h\in\mathcal{H}} R(h) - R(h^{\star})\Big)}_{\text{approximation error}}.
 $$
 
+**In words:** your total shortfall versus the ideal predictor is "how far your fitted model is from the best the class can do" (estimation) plus "how far the best the class can do is from the true ideal" (approximation).
+**Also written:** with $h^{\star}_{\mathcal H}=\arg\min_{h\in\mathcal H}R(h)$, excess risk $= \big[R(\hat h)-R(h^{\star}_{\mathcal H})\big] + \big[R(h^{\star}_{\mathcal H})-R(h^{\star})\big]$ = variance-like term + bias-like term.
+
 - **Approximation error** — how good is the *best* hypothesis in $\mathcal{H}$? Shrinks as $\mathcal{H}$ grows richer. This is *bias*.
 - **Estimation error** — how far is *our* $\hat h$ from that best one, given only $n$ samples? Grows as $\mathcal{H}$ grows richer (more to search, bigger generalization gap $\sim\sqrt{d_{VC}/n}$). This is *variance*.
 
+**Everyday analogy.** Approximation error is *"is the right answer even on the menu I'm choosing from?"* — a wider menu (richer class) always contains better dishes. Estimation error is *"with only a few tastes, will I actually pick the best dish on the menu?"* — a longer menu makes that harder. The best total experience comes from a menu that's rich enough to contain something great but short enough that you can reliably find it.
+
 This is the bias–complexity tradeoff in its sharpest form: enlarging $\mathcal{H}$ *lowers* approximation error but *raises* estimation error. The classical U-shaped test-error curve is their sum.
 
-<svg viewBox="0 0 460 250" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif" font-size="13">
-  <line x1="50" y1="210" x2="430" y2="210" stroke="#333"/><line x1="50" y1="20" x2="50" y2="210" stroke="#333"/>
+<svg viewBox="0 0 460 250" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif" font-size="13" fill="currentColor">
+  <line x1="50" y1="210" x2="430" y2="210" stroke="currentColor"/><line x1="50" y1="20" x2="50" y2="210" stroke="currentColor"/>
   <text x="200" y="240" >hypothesis class richness →</text>
   <text x="15" y="120" transform="rotate(-90 15 120)">error</text>
-  <path d="M60 50 Q160 150 420 190" fill="none" stroke="#3a7" stroke-width="2"/>
-  <text x="300" y="185" fill="#163">approximation (bias)</text>
-  <path d="M60 200 Q220 180 420 50" fill="none" stroke="#c44" stroke-width="2"/>
-  <text x="300" y="70" fill="#811">estimation (variance)</text>
-  <path d="M60 130 Q200 80 420 130" fill="none" stroke="#36c" stroke-width="2.5" stroke-dasharray="6 3"/>
-  <text x="160" y="70" fill="#36c">total (U-shape)</text>
+  <path d="M60 50 Q160 150 420 190" fill="none" stroke="#22c55e" stroke-width="2"/>
+  <text x="300" y="185" fill="#22c55e">approximation (bias)</text>
+  <path d="M60 200 Q220 180 420 50" fill="none" stroke="#ec4899" stroke-width="2"/>
+  <text x="300" y="70" fill="#ec4899">estimation (variance)</text>
+  <path d="M60 130 Q200 80 420 130" fill="none" stroke="#6366f1" stroke-width="2.5" stroke-dasharray="6 3"/>
+  <text x="160" y="70" fill="#6366f1">total (U-shape)</text>
   <line x1="200" y1="85" x2="200" y2="210" stroke="#888" stroke-dasharray="3 3"/>
-  <text x="172" y="225" fill="#555">sweet spot</text>
+  <text x="172" y="225" fill="currentColor">sweet spot</text>
 </svg>
 
-## 42.8 Online learning and regret: no need to assume a distribution
+## 42.8 Stability, regularization, and the bias–variance bound
+
+There is a second, complementary lens on generalization that does not look at the hypothesis class at all — it looks at the *algorithm*. The intuition is wonderfully simple: **a trustworthy learner shouldn't change its mind much if you swap out one training example.** If deleting or replacing a single data point barely moves the learned model, then the model can't be memorizing individual points, so its training error must track its true error.
+
+This is **algorithmic stability**. Formally, an algorithm $A$ is *uniform-stability* $\beta$ if for any two training sets $S, S'$ differing in one example, the loss on any point changes by at most $\beta$:
+$$
+\sup_{z}\,\big|\,\ell(A_S, z) - \ell(A_{S'}, z)\,\big| \le \beta.
+$$
+
+**In words:** retrain on a dataset with one point swapped, and no individual prediction's loss can wobble by more than $\beta$.
+**Also written:** for all neighboring $S\simeq S'$ and all $z$, $\ell(A_S,z)\le \ell(A_{S'},z)+\beta$ — a Lipschitz-in-the-dataset condition on the trained predictor.
+
+The payoff: a $\beta$-stable algorithm has expected generalization gap bounded by $\beta$ (typically $O(1/n)$ for regularized methods). This is exactly *why regularization generalizes* — adding a $\frac{\lambda}{2}\|w\|^2$ penalty makes the minimizer move less when data changes (larger $\lambda$ → more stable → smaller gap, at the cost of higher bias). Ridge regression, SVMs, and weight decay all earn their generalization guarantees through stability, not VC counting. Stochastic gradient descent run for few enough steps is stable too, which is one modern explanation for why early stopping helps.
+
+```python
+# scikit-learn: stability in action — stronger ridge penalty = smaller change
+# when one training row is swapped out, and a smaller train/test gap.
+import numpy as np
+from sklearn.linear_model import Ridge
+from sklearn.datasets import make_regression
+X, y = make_regression(n_samples=200, n_features=40, noise=10.0, random_state=0)
+Xtr, ytr, Xte, yte = X[:150], y[:150], X[150:], y[150:]
+for lam in [0.01, 1.0, 100.0]:
+    base = Ridge(alpha=lam).fit(Xtr, ytr)
+    pert = Ridge(alpha=lam).fit(Xtr[1:], ytr[1:])          # drop one example
+    wobble = np.abs(base.predict(Xte) - pert.predict(Xte)).mean()
+    gap = base.score(Xtr, ytr) - base.score(Xte, yte)      # train R^2 - test R^2
+    print(f"lambda={lam:6.2f}  prediction wobble={wobble:6.3f}  gen-gap={gap:.3f}")
+```
+
+## 42.9 Online learning and regret: no need to assume a distribution
 
 Everything so far assumed i.i.d. data from a fixed $\mathcal{D}$. **Online learning** throws that away: an adversary may choose each example, even reacting to your past predictions. We can no longer talk about "true risk," so we change the goal to **regret** — how much worse we did than the single best fixed strategy *in hindsight*:
 
 $$
 \text{Regret}_T = \sum_{t=1}^{T} \ell_t(w_t) \;-\; \min_{w\in\mathcal{W}} \sum_{t=1}^{T} \ell_t(w).
 $$
+
+**In words:** add up the loss you actually paid round by round, then subtract the loss of the best single fixed decision you *could* have committed to from the start knowing everything in advance — that difference is your regret.
+**Also written:** $\text{Regret}_T = \big(\sum_t \ell_t(w_t)\big) - \min_{w}\sum_t \ell_t(w)$; "no-regret" means $\text{Regret}_T = o(T)$, equivalently $\tfrac1T\text{Regret}_T \to 0$.
+
+**Everyday picture.** You bet on a different horse each day. At the end of the season, regret is *"how much more I'd have won if I'd just backed the one horse that turned out best all season."* You can't know that horse in advance — but a no-regret strategy guarantees that, on *average per day*, you eventually match it.
 
 A learner is **no-regret** if $\text{Regret}_T / T \to 0$: over time its average loss matches the best fixed action, even against an adversary.
 
@@ -359,6 +488,10 @@ print(round(mw(L), 2))                # small vs T=500 -> sublinear regret
 $$
 w_{t+1} = \arg\min_{w\in\mathcal{W}} \;\sum_{s=1}^{t}\ell_s(w) + \frac{1}{\eta} r(w).
 $$
+
+**In words:** at every round, pick the decision that would have been best on *everything seen so far*, but nudged by a regularizer that stops you from over-reacting to the latest data.
+**Also written:** equivalently $w_{t+1}=\arg\min_w \big\langle \sum_{s\le t}\nabla\ell_s(w_s),\,w\big\rangle + \tfrac1\eta r(w)$ in its linearized form; with $r(w)=\tfrac12\|w\|^2$ this unrolls to the gradient step $w_{t+1}=w_t-\eta\nabla\ell_t(w_t)$.
+
 The regularizer $r$ prevents the wild swings that "follow the leader" alone would suffer. With a strongly convex $r$, FTRL achieves $O(\sqrt T)$ regret; online gradient descent is the special case $r(w)=\tfrac12\|w\|^2$. FTRL is not a toy — it is the workhorse behind large-scale ad click-through prediction systems.
 
 ```{mermaid}
@@ -369,7 +502,7 @@ graph LR
   F --> H["Exponentiated Gradient<br/>(r = entropy)"]
 ```
 
-## 42.9 Modern deep-learning theory: overparameterization, NTK, double descent
+## 42.10 Modern deep-learning theory: overparameterization, NTK, double descent
 
 Classical theory predicts disaster for modern nets: with more parameters than data points ($p \gg n$), VC dimension dwarfs $n$ and the bounds go vacuous. Yet these networks fit training data *exactly* — even random labels — and *still* generalize on real data. Resolving this paradox is the frontier.
 
@@ -381,19 +514,19 @@ Classical theory predicts disaster for modern nets: with more parameters than da
 
 **Double descent.** Plot test error against model size and you do *not* see the classical U-shape extended — you see something stranger. As capacity rises, error first descends (classical regime), then *peaks* exactly at the **interpolation threshold** where the model has just enough parameters to fit the training set perfectly ($p \approx n$), then *descends again* into the overparameterized regime, often reaching a *lower* error than the classical sweet spot.
 
-<svg viewBox="0 0 520 270" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif" font-size="13">
-  <line x1="55" y1="225" x2="500" y2="225" stroke="#333"/><line x1="55" y1="20" x2="55" y2="225" stroke="#333"/>
+<svg viewBox="0 0 520 270" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif" font-size="13" fill="currentColor">
+  <line x1="55" y1="225" x2="500" y2="225" stroke="currentColor"/><line x1="55" y1="20" x2="55" y2="225" stroke="currentColor"/>
   <text x="220" y="255">model capacity (params) →</text>
   <text x="18" y="135" transform="rotate(-90 18 135)">test error</text>
-  <line x1="250" y1="20" x2="250" y2="225" stroke="#c44" stroke-dasharray="4 4"/>
-  <text x="150" y="40" fill="#811">interpolation threshold (p≈n)</text>
-  <path d="M65 120 Q140 175 200 140 Q235 110 250 55" fill="none" stroke="#36c" stroke-width="2.5"/>
-  <path d="M250 55 Q300 150 360 175 Q430 195 495 190" fill="none" stroke="#36c" stroke-width="2.5"/>
-  <text x="85" y="195" fill="#36c">classical U</text>
-  <text x="380" y="160" fill="#36c">modern regime</text>
-  <circle cx="250" cy="55" r="4" fill="#c44"/>
-  <text x="255" y="50" fill="#811">peak</text>
-  <text x="395" y="185" fill="#555">often the global best</text>
+  <line x1="250" y1="20" x2="250" y2="225" stroke="#ec4899" stroke-dasharray="4 4"/>
+  <text x="150" y="40" fill="#ec4899">interpolation threshold (p≈n)</text>
+  <path d="M65 120 Q140 175 200 140 Q235 110 250 55" fill="none" stroke="#6366f1" stroke-width="2.5"/>
+  <path d="M250 55 Q300 150 360 175 Q430 195 495 190" fill="none" stroke="#6366f1" stroke-width="2.5"/>
+  <text x="85" y="195" fill="#6366f1">classical U</text>
+  <text x="380" y="160" fill="#6366f1">modern regime</text>
+  <circle cx="250" cy="55" r="4" fill="#ec4899"/>
+  <text x="255" y="50" fill="#ec4899">peak</text>
+  <text x="395" y="185" fill="currentColor">often the global best</text>
 </svg>
 
 Double descent reconciles the apparent contradiction: "more capacity always hurts" is *only* true up to the interpolation threshold. Beyond it, among many interpolating solutions, implicit regularization selects smooth ones, and error *falls again*. This is why "just make the model bigger" so often works in practice — and why classical bias–variance intuition (Section 42.7), while not wrong, is incomplete.
@@ -402,7 +535,23 @@ Double descent reconciles the apparent contradiction: "more capacity always hurt
 **Pitfall.** Double descent does not abolish overfitting. Right *at* the interpolation peak — a model just barely able to memorize — is the worst place to be: highly sensitive to noise. The safe regimes are well *below* (classical underparameterized) or well *above* (heavily overparameterized) the threshold. Landing a model at $p\approx n$ is the danger zone.
 :::
 
-## 42.10 Nonconvex landscapes: when local minima are global
+## 42.11 PAC-Bayes: bounds that actually track deep nets
+
+VC and Rademacher bounds become vacuous for deep nets because they charge for the *worst* hypothesis in a giant class. **PAC-Bayes** sidesteps this by bounding the average error of a *distribution* over hypotheses, and — this is the magic — it produces some of the only *non-vacuous* generalization bounds anyone has computed for real neural networks.
+
+**Intuition.** Instead of asking "could *any* network in this class be a disaster?", PAC-Bayes asks "if I add a little noise to *my* trained weights, how does the noisy ensemble do, and how far did training drag the weights from where they started?" A model that sits in a wide, flat basin of the loss landscape tolerates weight noise without its loss exploding — and PAC-Bayes rewards exactly that flatness with a tighter bound. This is the rigorous version of the folklore that **flat minima generalize better**.
+
+Let $P$ be a prior over hypotheses (chosen *before* seeing data, e.g. the random initialization) and $Q$ the posterior (your trained, possibly-noised weights). Then with probability $\ge 1-\delta$:
+$$
+\mathbb{E}_{h\sim Q}[R(h)] \le \mathbb{E}_{h\sim Q}[\hat R(h)] + \sqrt{\frac{\mathrm{KL}(Q\,\|\,P) + \ln\frac{n}{\delta}}{2(n-1)}}.
+$$
+
+**In words:** the average true error over your posterior is bounded by the average training error plus a cushion driven by how far the posterior drifted from the prior (the KL divergence) — move less from initialization, and you generalize better.
+**Also written:** the gap obeys $\mathbb{E}_Q[R] - \mathbb{E}_Q[\hat R] \le \sqrt{\big(\mathrm{KL}(Q\|P)+\ln(n/\delta)\big)/(2(n-1))}$, with $\mathrm{KL}(Q\|P)=\mathbb{E}_{h\sim Q}[\ln \frac{Q(h)}{P(h)}]$ playing the complexity role that $\ln|\mathcal H|$ and $d_{VC}$ played before.
+
+The lesson: the right "complexity" of a learned net is not its parameter count but **how much information training had to write into the weights** beyond the prior. A network that fits the data while staying close to a generic initialization is, in a precise sense, simple — and PAC-Bayes certifies it.
+
+## 42.12 Nonconvex landscapes: when local minima are global
 
 Deep learning optimizes nonconvex objectives, where in principle gradient descent could stall in a bad local minimum. In practice it rarely does — and for several important problems we can *prove* why.
 
@@ -414,13 +563,13 @@ Several canonical problems provably have this benign structure:
 - **Matrix completion** (the Netflix-style problem) under standard incoherence assumptions: no spurious local minima.
 - **Phase retrieval** and certain **shallow neural networks**: similar landscape guarantees.
 
-<svg viewBox="0 0 480 210" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif" font-size="13">
+<svg viewBox="0 0 480 210" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif" font-size="13" fill="currentColor">
   <text x="10" y="18" font-weight="bold">Strict-saddle landscape: escape saddles, reach global min</text>
-  <path d="M40 60 Q120 200 220 120 Q280 70 340 140 Q400 200 450 90" fill="none" stroke="#36c" stroke-width="2.5"/>
-  <circle cx="120" cy="168" r="5" fill="#3a7"/><text x="95" y="195" fill="#163">global min</text>
-  <circle cx="340" cy="143" r="5" fill="#3a7"/><text x="320" y="170" fill="#163">global min</text>
-  <circle cx="280" cy="70" r="5" fill="#c44"/><text x="255" y="55" fill="#811">strict saddle</text>
-  <text x="300" y="100" fill="#555">SGD noise slides off →</text>
+  <path d="M40 60 Q120 200 220 120 Q280 70 340 140 Q400 200 450 90" fill="none" stroke="#6366f1" stroke-width="2.5"/>
+  <circle cx="120" cy="168" r="5" fill="#22c55e"/><text x="95" y="195" fill="#22c55e">global min</text>
+  <circle cx="340" cy="143" r="5" fill="#22c55e"/><text x="320" y="170" fill="#22c55e">global min</text>
+  <circle cx="280" cy="70" r="5" fill="#ec4899"/><text x="255" y="55" fill="#ec4899">strict saddle</text>
+  <text x="300" y="100" fill="currentColor">SGD noise slides off →</text>
 </svg>
 
 The lesson: nonconvexity alone is not the enemy. *Structured* nonconvex problems can be as solvable as convex ones, and characterizing which losses have the strict-saddle / no-spurious-minima property is an active bridge between optimization theory and the empirical success of deep learning.
@@ -432,8 +581,10 @@ The lesson: nonconvexity alone is not the enemy. *Structured* nonconvex problems
 - **Concentration inequalities** are the toolkit. Hoeffding's exponential tail is the workhorse; its strength is what lets the **union bound** cover an entire finite class at once.
 - **VC dimension** (combinatorial, via shattering) and **Rademacher complexity** (data-dependent, via fitting random noise) extend bounds to infinite classes. The **margin** governs SVM/kernel generalization independent of dimension.
 - **Approximation–estimation** is the bias–complexity tradeoff: bigger $\mathcal{H}$ lowers bias, raises variance — the classical U-curve.
+- **Algorithmic stability** gives an algorithm-centric guarantee: a learner that barely changes when one example is swapped generalizes, which is *why* regularization and early stopping work.
 - **Online learning** drops the i.i.d. assumption and targets **regret**; multiplicative weights and **FTRL** are no-regret ($O(\sqrt T)$, with $\ln N$ dependence on experts).
 - **Modern theory** explains overparameterized nets: **NTK** makes wide-net training analyzable, (S)GD has **implicit max-margin bias**, and **double descent** shows test error can fall again past the interpolation threshold — but the threshold itself is the danger zone.
+- **PAC-Bayes** delivers the only non-vacuous bounds for real nets: complexity is *distance moved from the prior* (flat minima), not parameter count.
 - **Strict-saddle** structure (PCA, matrix completion) explains when nonconvex problems still reach global optima.
 
 ## 42.2 — See also
@@ -441,8 +592,8 @@ The lesson: nonconvexity alone is not the enemy. *Structured* nonconvex problems
 - **Chapter on Probability & Statistics** — expectations, variance, and the law of large numbers underlying every concentration bound.
 - **Chapter on Optimization** — convexity, gradient descent, and SGD, generalized here by online convex optimization and FTRL.
 - **Chapter on SVMs & Kernels** — the margin-maximization objective whose generalization is justified by Rademacher/margin bounds (42.6).
-- **Chapter on Deep Learning Foundations** — the architectures whose surprising generalization motivates NTK, implicit regularization, and double descent (42.9).
-- **Chapter on Regularization & Model Selection** — bias–variance in practice, cross-validation, and capacity control (42.7).
+- **Chapter on Deep Learning Foundations** — the architectures whose surprising generalization motivates NTK, implicit regularization, and double descent (42.10).
+- **Chapter on Regularization & Model Selection** — bias–variance in practice, cross-validation, and capacity control (42.7, 42.8).
 - **Chapter on Frontier & Open Problems** — where the gap between classical theory and deep-learning practice is still being closed.
 
 ------------------------------------------------------------------------

@@ -117,6 +117,11 @@ A **Bayesian network** (or *belief network*) is a **directed acyclic graph (DAG)
 
 $$P(X_1, \dots, X_n) = \prod_{i=1}^{n} P(X_i \mid \text{parents}(X_i))$$
 
+**In words:** the probability of the whole world is the product of "each variable given just the variables that point at it" — every node only has to know about its own parents.
+**Also written:** $\log P(X_1,\dots,X_n) = \sum_{i=1}^{n} \log P(X_i \mid \text{parents}(X_i))$ — turning the product into a sum of local log-tables, which is how engines actually accumulate it.
+
+Think of it like a company org chart: to know what any one person does, you only need to know what their direct manager told them, not the entire company's state. The arrows carry the "orders," and each person keeps a small lookup card ("if my manager says X, I do Y with probability p") instead of one company-wide rulebook.
+
 The savings are dramatic. Five binary variables have a joint table of $2^5 = 32$ entries. If the graph says each variable has at most two parents, the CPTs together hold far fewer numbers — and each number is something a human or a dataset can actually estimate.
 
 The classic teaching example is the *sprinkler* network. It rained or it didn't; the sprinkler was on or off; either can make the grass wet. Cloudy weather makes rain more likely and the sprinkler less likely.
@@ -132,6 +137,9 @@ graph TD
 This DAG asserts a specific factorization:
 
 $$P(C, S, R, W) = P(C)\,P(S \mid C)\,P(R \mid C)\,P(W \mid S, R)$$
+
+**In words:** weather happens on its own; sprinkler and rain each depend only on weather; wet grass depends only on sprinkler and rain.
+**Also written:** as one chain-rule product with the irrelevant conditioning *dropped* thanks to independence — $P(C)\,P(S\mid C)\,P(R\mid C,\cancel{S})\,P(W\mid S,R,\cancel{C})$.
 
 Count the savings concretely. The full joint over four binary variables needs $2^4 - 1 = 15$ free numbers. The factored form needs only $1$ (for $C$) $+ 2$ (for $S \mid C$) $+ 2$ (for $R \mid C$) $+ 4$ (for $W \mid S,R$) $= 9$. With four variables the gap is small; with fifty sparsely-connected variables it is the difference between a table that fits in memory and one with more entries than there are atoms in the room.
 
@@ -199,6 +207,26 @@ The three patterns drawn side by side make the logic visible — the dot marks t
 Arrows are about *direct dependence*, not literal causation — though if you draw them causally, the d-separation rules line up with how interventions behave (see the Causal Inference chapter). Rule of thumb: a fork or chain leaks information until you observe the middle; a collider is sealed until you observe the bottom.
 :::
 
+In practice you rarely hand-roll a Bayes net. The `pgmpy` library lets you declare the structure and CPTs, then query and even d-separation-check for you:
+
+```python
+from pgmpy.models import DiscreteBayesianNetwork
+from pgmpy.factors.discrete import TabularCPD
+from pgmpy.inference import VariableElimination
+
+m = DiscreteBayesianNetwork([("C","R"),("C","S"),("R","W"),("S","W")])
+m.add_cpds(
+    TabularCPD("C", 2, [[0.5],[0.5]]),
+    TabularCPD("R", 2, [[0.2,0.8],[0.8,0.2]], evidence=["C"], evidence_card=[2]),
+    TabularCPD("S", 2, [[0.5,0.9],[0.5,0.1]], evidence=["C"], evidence_card=[2]),
+    TabularCPD("W", 2, [[1,0.1,0.1,0.01],[0,0.9,0.9,0.99]],
+               evidence=["S","R"], evidence_card=[2,2]),
+)
+print(m.is_dconnected("C","W", observed=["S","R"]))   # False -> W ⟂ C | {S,R}
+q = VariableElimination(m).query(["R"], evidence={"W":1})
+print(q.values)                                        # P(R | W=T) ≈ [0.292, 0.708]
+```
+
 ## 13.2 — Worked Example: Inference in the Sprinkler Network
 
 Let's actually compute something. Question: **the grass is wet — what's the probability it rained?** i.e. $P(R = T \mid W = T)$.
@@ -239,19 +267,70 @@ graph LR
     P["prior P(R=T) = 0.50"] -->|"observe W=T"| Q["posterior P(R=T | W=T) = 0.71"]
 ```
 
-Enumeration is exact but costs $O(2^n)$ — fine for four variables, hopeless for four hundred. Real engines use **variable elimination** (push sums inward so partial results are reused instead of recomputed) or **belief propagation** (pass "messages" — partial summaries — along the edges of the graph). When even those are intractable, you fall back on the approximate sampling and variational methods of §13.6.
+Enumeration is exact but costs $O(2^n)$ — fine for four variables, hopeless for four hundred. Real engines use **variable elimination** (push sums inward so partial results are reused instead of recomputed) or **belief propagation** (pass "messages" — partial summaries — along the edges of the graph). When even those are intractable, you fall back on the approximate sampling and variational methods of §13.7.
 
 ::: {.callout-warning}
 Don't forget to normalize. The unnormalized number $\sum_{C,S} P(C,S,R{=}T,W{=}T)$ is *not* a probability — it's the joint $P(R{=}T, W{=}T)$. You must divide by $P(W{=}T)$ to get a conditional. Skipping $Z$ is the single most common inference bug.
 :::
 
-## 13.3 — Markov Random Fields
+## 13.3 — Naive Bayes: The Simplest Useful Bayesian Network
+
+Before leaving directed models, meet the one Bayesian network you have almost certainly used already, perhaps without knowing it: the **Naive Bayes classifier**. It is the simplest non-trivial DAG — a single hidden "class" node fanning out to all the features — and despite a wildly unrealistic assumption it remains a strong, fast baseline for text classification to this day.
+
+The intuition: to decide whether an email is spam, imagine each suspicious word ("free", "winner", "viagra") casting an independent vote, given the class. Naive Bayes assumes that **once you know the class, the features are mutually independent** — every feature points *out* from the class, and there are no arrows between features.
+
+```{mermaid}
+graph TD
+    Y["Class y (spam? topic?)"] --> X1["feature x₁"]
+    Y --> X2["feature x₂"]
+    Y --> X3["feature x₃"]
+    Y --> Xd["feature x_d"]
+```
+
+That fan-out shape forces the factorization
+
+$$P(y, x_1, \dots, x_d) = P(y)\prod_{i=1}^{d} P(x_i \mid y),$$
+
+so classification is just picking the class that maximizes the posterior:
+
+$$\hat{y} = \arg\max_{y}\; P(y)\prod_{i=1}^{d} P(x_i \mid y).$$
+
+**In words:** start with how common each class is (the prior), multiply in how well each feature fits that class, and choose the class with the biggest product.
+**Also written:** in log form to avoid underflow, $\hat{y} = \arg\max_{y}\big[\log P(y) + \sum_{i} \log P(x_i\mid y)\big]$ — a sum of log-scores, which (for two classes) is exactly a linear decision rule.
+
+The "naive" assumption — features independent given the class — is usually false (in real email, "free" and "money" co-occur), yet the classifier often still ranks the right class on top because it only needs the *argmax* to come out right, not the probabilities to be calibrated.
+
+A tiny worked example. Two classes, prior $P(\text{spam})=0.4$. Suppose for the words in a message, $\prod_i P(x_i\mid\text{spam}) = 0.010$ and $\prod_i P(x_i\mid\text{ham}) = 0.002$. Then the unnormalized scores are $0.4\times0.010 = 0.0040$ for spam and $0.6\times0.002 = 0.0012$ for ham; normalizing, $P(\text{spam}\mid\text{words}) = 0.0040/(0.0040+0.0012) \approx 0.77$ — flag it.
+
+In scikit-learn this is two lines, and `MultinomialNB` is still a go-to baseline for bag-of-words text:
+
+```python
+from sklearn.feature_extraction.text import CountVectorizer
+from sklearn.naive_bayes import MultinomialNB
+
+texts  = ["win free money now", "team meeting at noon", "free prize claim now"]
+labels = ["spam", "ham", "spam"]
+X = CountVectorizer().fit_transform(texts)
+clf = MultinomialNB().fit(X, labels)              # learns P(y) and P(word|y)
+print(clf.classes_, clf.predict(X))               # -> ['ham' 'spam'] correctly
+```
+
+::: {.callout-tip}
+Naive Bayes is the **generative** sibling of **logistic regression** (which models $P(y\mid\mathbf x)$ directly). Same fan-out picture, opposite arrow philosophy — and it foreshadows the generative-vs-discriminative split you just saw between HMMs and CRFs. With infinite data, the discriminative model usually wins; with little data, the generative one's built-in assumptions can win.
+:::
+
+## 13.4 — Markov Random Fields
 
 Bayesian networks use *directed* arrows, which carry a built-in sense of cause and order. But many systems have no natural direction — the pixels of an image, the atoms in a material, the votes of neighboring districts all just *influence each other mutually*. For these, the right tool is an **undirected** graphical model: a **Markov Random Field (MRF)**, also called a **Markov network**.
 
 In an MRF, an edge between two nodes simply means "these two directly interact," with no arrow and no parent/child roles. Because there is no DAG to multiply CPTs along, the joint is built from **potential functions** (also called **factors**) $\psi_C$, one per **clique** $C$ (a fully-connected subset of nodes). A potential is any non-negative function scoring how compatible a configuration of its nodes is — bigger means "this combination is more agreeable." The joint multiplies them and normalizes:
 
 $$P(\mathbf{x}) = \frac{1}{Z} \prod_{C} \psi_C(\mathbf{x}_C), \qquad Z = \sum_{\mathbf{x}} \prod_{C} \psi_C(\mathbf{x}_C)$$
+
+**In words:** score every configuration by multiplying its cliques' "compatibility" numbers, then divide by the total of all scores so the probabilities add up to 1.
+**Also written:** in exponential (Gibbs/energy) form, $P(\mathbf{x}) = \frac{1}{Z}\exp\!\big(-E(\mathbf{x})\big)$ with energy $E(\mathbf{x}) = -\sum_C \log \psi_C(\mathbf{x}_C)$ — low energy means high probability, exactly like a physical system settling into its most comfortable state.
+
+Picture a roomful of opinionated neighbors deciding how to vote: each pair has a "comfort score" for agreeing or disagreeing, and the configuration the whole room settles into is the one that keeps the most pairs comfortable at once. $Z$ is the bookkeeping that converts those raw comfort scores into honest probabilities.
 
 $Z$, the **partition function**, is the sum of the product over *every* joint configuration. It is what makes MRFs hard: unlike a Bayesian network (where the factorization is automatically normalized to 1), an MRF's potentials are unnormalized, so computing $Z$ — and hence any probability — generally means summing over exponentially many states.
 
@@ -305,7 +384,7 @@ print(P[(1,1)], P[(0,1)])                   # 0.333 vs 0.167 — agreeing is 2x 
 You cannot always convert a directed model to an undirected one (or vice versa) without losing independence information. Turning a Bayesian network into an MRF requires **moralization** — "marrying" the unconnected parents of every collider with an edge — which destroys the very explaining-away independence the collider encoded. The two families overlap but neither contains the other.
 :::
 
-## 13.4 — Markov Models & Hidden Markov Models
+## 13.5 — Markov Models & Hidden Markov Models
 
 A **Markov chain** models a sequence of states where the future depends on the present but not the past: $P(s_t \mid s_{t-1}, \dots, s_1) = P(s_t \mid s_{t-1})$. This **Markov property** ("the present screens off the past") is captured by a **transition matrix** $A$ where $A_{ij} = P(s_t{=}j \mid s_{t-1}{=}i)$. Weather modeled as "Sunny/Rainy with sticky days" is a Markov chain you can observe directly.
 
@@ -337,6 +416,9 @@ The **forward algorithm** is dynamic programming over a quantity it calls $\alph
 
 $$\alpha_t(j) = \Big[\sum_i \alpha_{t-1}(i)\,A_{ij}\Big]\,B_j(o_t)$$
 
+**In words:** the chance of "everything so far and being in state $j$ now" = (sum over wherever you could have come from) × (chance this state emits today's observation).
+**Also written:** vectorized, $\boldsymbol{\alpha}_t = \big(A^{\top}\boldsymbol{\alpha}_{t-1}\big) \odot \mathbf{b}(o_t)$, where $\odot$ is elementwise product and $\mathbf{b}(o_t)$ is the column of emission probabilities for today's symbol.
+
 **Forward–backward** adds a symmetric backward pass $\beta_t(i) = P(o_{t+1:T} \mid s_t{=}i)$ that summarizes the *future*, then multiplies the two: $P(s_t{=}i \mid o_{1:T}) \propto \alpha_t(i)\,\beta_t(i)$. This is **smoothing** — judging each step using the *whole* sequence, future included, not just the past.
 
 **Viterbi** is the same forward recursion with $\max$ replacing $\sum$, plus backpointers so you can retrace the winning path:
@@ -361,19 +443,42 @@ for t in range(T-1,0,-1): path.insert(0, ptr[t,path[0]])
 print(path)                                       # most likely hidden states -> [0, 1, 1]
 ```
 
-The Viterbi path is *globally* optimal as a sequence — which is **not** the same as stringing together the per-step most-likely states from forward–backward, because Viterbi respects which transitions are even possible. (Glue together independently-best steps and you can produce a path that includes a forbidden jump.) Learning the matrices $A$, $B$, $\pi$ from unlabeled emissions is done by **Baum–Welch**, which is just the EM algorithm of §13.7 specialized to HMMs.
+The Viterbi path is *globally* optimal as a sequence — which is **not** the same as stringing together the per-step most-likely states from forward–backward, because Viterbi respects which transitions are even possible. (Glue together independently-best steps and you can produce a path that includes a forbidden jump.) Learning the matrices $A$, $B$, $\pi$ from unlabeled emissions is done by **Baum–Welch**, which is just the EM algorithm of §13.8 specialized to HMMs.
 
 ::: {.callout-tip}
 Always run these recursions in **log space**. Multiplying hundreds of probabilities underflows to zero in floating point; adding logs (and using `logsumexp` in place of the forward sum) keeps you numerically safe with essentially no extra code.
 :::
 
-## 13.5 — Conditional Random Fields
+In real code you reach for `hmmlearn`, which packages all three algorithms plus Baum–Welch fitting behind a scikit-learn-style API:
+
+```python
+import numpy as np
+from hmmlearn import hmm
+
+model = hmm.CategoricalHMM(n_components=2)          # 2 hidden states
+model.startprob_     = np.array([0.6, 0.4])
+model.transmat_      = np.array([[0.7,0.3],[0.4,0.6]])
+model.emissionprob_  = np.array([[0.9,0.1],[0.2,0.8]])
+
+obs = np.array([[0],[1],[1]])                       # column of emission indices
+logprob, states = model.decode(obs, algorithm="viterbi")
+print(states)                                       # most likely path -> [0 1 1]
+print(model.predict_proba(obs).round(3))           # forward–backward smoothing per step
+# model.fit(long_sequence)  # Baum–Welch / EM learns A, B, π from unlabeled data
+```
+
+## 13.6 — Conditional Random Fields
 
 An HMM is **generative**: it models the full joint $P(\text{states}, \text{observations})$, including a story for how observations are produced. But for *labeling* tasks — tag each word in a sentence with its part of speech — you only ever care about $P(\text{labels} \mid \text{observations})$. Modeling how the words themselves arose is wasted effort, and worse, it forces an awkward independence assumption: each observation must depend only on its own state, so you can't easily use overlapping clues like "is this word capitalized *and* preceded by 'Mr.'".
 
-A **Conditional Random Field (CRF)** is the **discriminative** answer, and it is exactly the undirected, conditional cousin of the HMM — a Markov random field (§13.3) over the labels, conditioned on the input. It models $P(\mathbf{y} \mid \mathbf{x})$ directly, where $\mathbf{x}$ is the whole input sequence and $\mathbf{y}$ the label sequence. A **linear-chain CRF** scores label sequences with **feature functions** $f_k$ and learned weights $w_k$:
+A **Conditional Random Field (CRF)** is the **discriminative** answer, and it is exactly the undirected, conditional cousin of the HMM — a Markov random field (§13.4) over the labels, conditioned on the input. It models $P(\mathbf{y} \mid \mathbf{x})$ directly, where $\mathbf{x}$ is the whole input sequence and $\mathbf{y}$ the label sequence. A **linear-chain CRF** scores label sequences with **feature functions** $f_k$ and learned weights $w_k$:
 
 $$P(\mathbf{y} \mid \mathbf{x}) = \frac{1}{Z(\mathbf{x})} \exp\!\Big(\sum_t \sum_k w_k\, f_k(y_{t-1}, y_t, \mathbf{x}, t)\Big)$$
+
+**In words:** add up weighted "votes" from features that each inspect a label-pair-plus-context, exponentiate the total into a score, then normalize over all possible label sequences.
+**Also written:** as a softmax over label paths, $P(\mathbf{y}\mid\mathbf{x}) = \mathrm{softmax}_{\mathbf y}\big(\mathbf{w}^{\top}\mathbf{F}(\mathbf{x},\mathbf{y})\big)$ with $\mathbf{F} = \sum_t \mathbf{f}(y_{t-1},y_t,\mathbf{x},t)$ the summed feature vector — a logistic-regression-over-sequences.
+
+Think of each feature as a hiring panelist: one shouts "+3, this word ends in *-ing* so it's probably a verb," another "+5, previous tag was a determiner so a noun fits here." The CRF tallies all the panelists' weighted votes for *every* candidate labeling of the sentence and picks the labeling with the highest total — but, crucially, panelists may look at the whole résumé ($\mathbf{x}$), not just the one word.
 
 The liberating part is that each feature can look at the **entire input** $\mathbf{x}$ — the word's suffix, whether it's capitalized, the previous *and* next words, anything — precisely because we never have to explain how $\mathbf{x}$ arose. The normalizer $Z(\mathbf{x})$ sums over all label sequences and is computed by the very same forward algorithm as the HMM. Note that $Z(\mathbf{x})$ here depends on the input, so it is recomputed per example — cheaper than an MRF's global $Z$ because it only sums over label paths for one sentence.
 
@@ -402,11 +507,32 @@ The contrast in one table:
 
 For sequence labeling — named-entity recognition, POS tagging — CRFs historically beat HMMs because they exploit rich, overlapping features. Today a CRF layer often sits *on top* of a neural network (the **BiLSTM-CRF**) to enforce valid label transitions (for example, an `I-PER` tag cannot follow a `B-LOC` tag); the network proposes per-word scores and the CRF picks the best globally-consistent label sequence with Viterbi.
 
+A linear-chain CRF for sequence labeling is a few lines with `sklearn-crfsuite`, where features are just dictionaries of whatever clues you can dream up per token:
+
+```python
+from sklearn_crfsuite import CRF
+
+def feats(sent, i):
+    w = sent[i]
+    return {"lower": w.lower(), "is_cap": w[0].isupper(),
+            "suffix3": w[-3:], "prev": "" if i==0 else sent[i-1].lower()}
+
+sent = ["Mr", "Smith", "lives", "in", "Paris"]
+X = [[feats(sent, i) for i in range(len(sent))]]
+y = [["B-PER","I-PER","O","O","B-LOC"]]            # one labeled example
+
+crf = CRF(algorithm="lbfgs", max_iterations=50)
+crf.fit(X, y)                                       # learns weights w_k
+print(crf.predict(X))                               # Viterbi-decoded best label path
+```
+
+The overlapping features (`is_cap`, `prev`, `suffix3`) are exactly what an HMM cannot use — each one peeks at arbitrary parts of the input.
+
 ::: {.callout-warning}
 A CRF cannot tell you $P(\mathbf{x})$ — it never modeled the inputs, so it can't say whether a new input is unusual, and it can't generate synthetic data. If you need anomaly detection on the inputs or want to *sample* new sequences, you need a generative model. Discriminative sharpness is bought at the price of generative ability.
 :::
 
-## 13.6 — Inference: Exact and Approximate
+## 13.7 — Inference: Exact and Approximate
 
 Everything above hinges on one operation: given some evidence, compute a posterior or a marginal. This section names the toolbox. The split is between **exact** methods (right answer, but only feasible when the graph is small or tree-like) and **approximate** methods (the practical fallback when exactness is hopeless).
 
@@ -437,6 +563,10 @@ print(round(counts/(N-1001), 3))     # ≈ 0.708, matching exact inference
 
 The sampler lands on the same $0.708$ we computed exactly — but it would keep working on a graph with thousands of variables where enumeration is impossible. The other major approximate family, **variational inference**, replaces sampling with optimization; because it shares its machinery with EM, it gets its own section next.
 
+::: {.callout-warning}
+**MCMC needs babysitting.** Two practical pitfalls hide in that loop. (1) **Burn-in:** the walk starts at a possibly-silly state and needs time to "forget" it, so you discard the first samples (the `i > 1000` guard above). (2) **Convergence:** the only honest way to know the chain has mixed is to *check* — run several chains from different starts and confirm they agree. The standard diagnostic is the **Gelman–Rubin statistic** $\hat{R}$, which compares within-chain to between-chain variance; $\hat{R} \approx 1.0$ (say, below 1.01) means the chains have converged, while $\hat{R} \gg 1$ means keep sampling. Libraries like PyMC and NumPyro compute $\hat{R}$ and effective sample size for you.
+:::
+
 ```{mermaid}
 graph TD
     Q[need a posterior / marginal] --> Tree{graph small or tree-like?}
@@ -450,7 +580,7 @@ graph TD
 A quick way to pick: if the graph is a chain or a tree, use exact message passing and stop thinking. If it has loops but you want guarantees as samples accumulate, reach for MCMC. If you need speed and scale and can tolerate a biased-but-fast answer, use variational inference. Most deep probabilistic models live in that last box.
 :::
 
-## 13.7 — Variational Inference & EM
+## 13.8 — Variational Inference & EM
 
 For most interesting models, the posterior $P(\text{hidden} \mid \text{data})$ is intractable — its normalizing constant involves a sum or integral you cannot compute. Two workhorses tackle this: **EM**, when you have latent variables but only want point-estimate parameters, and **variational inference**, when you want an approximate posterior *distribution*.
 
@@ -468,11 +598,23 @@ graph LR
     Conv -->|yes| Done[done]
 ```
 
-EM is exactly how you fit a Gaussian mixture (§13.8); it is *soft* k-means. It never decreases the likelihood, but it can get stuck in local optima — so restart it from several initializations and keep the best.
+EM is exactly how you fit a Gaussian mixture (§13.10); it is *soft* k-means. It never decreases the likelihood, but it can get stuck in local optima — so restart it from several initializations and keep the best. In scikit-learn the whole E/M loop is hidden behind `.fit`:
+
+```python
+import numpy as np
+from sklearn.mixture import GaussianMixture
+X = np.r_[np.random.randn(100,2), np.random.randn(100,2)+5]   # two blobs
+gm = GaussianMixture(n_components=2, n_init=10).fit(X)        # EM with 10 restarts
+print(gm.means_.round(1))                                     # recovered blob centers
+print(gm.predict_proba(X[:1]).round(3))                       # soft assignment = E-step
+```
 
 **Variational inference (VI)** is more ambitious: it approximates the whole intractable posterior $p(z \mid x)$ with a simpler, tractable distribution $q(z)$ (say, a fully-factorized Gaussian), then *tunes $q$ to be as close as possible* to the true posterior. "Close" means small KL divergence $\mathrm{KL}(q \,\|\, p)$. We can't minimize that directly (it hides the same intractable term), so we instead **maximize the ELBO** — the Evidence Lower BOund:
 
 $$\log p(x) = \underbrace{\mathbb{E}_{q}\!\big[\log p(x, z)\big] - \mathbb{E}_q\!\big[\log q(z)\big]}_{\text{ELBO}} + \underbrace{\mathrm{KL}\!\big(q(z)\,\|\,p(z\mid x)\big)}_{\ge 0}$$
+
+**In words:** the (fixed) evidence equals a bound we *can* compute plus a leftover gap measuring how wrong our approximation $q$ is; shrink the gap and the bound rises to meet the evidence.
+**Also written:** rearranged, $\text{ELBO} = \log p(x) - \mathrm{KL}(q\|p(\cdot\mid x))$, which makes the bound explicit — the ELBO is always below $\log p(x)$ by exactly the KL gap.
 
 Because the KL term is non-negative, the ELBO is a *lower bound* on the log-evidence $\log p(x)$, tight exactly when $q$ equals the true posterior. So pushing the ELBO up simultaneously drags $q$ toward the posterior *and* tightens our estimate of the evidence. Read another way, the ELBO splits into two readable pieces:
 
@@ -484,7 +626,7 @@ $$\text{ELBO} = \underbrace{\mathbb{E}_q[\log p(x \mid z)]}_{\text{reconstructio
 EM is the special case of VI in which you let $q$ be the *exact* posterior in the E-step. Both are coordinate ascent on the same ELBO: the E-step (or "tune $q$") raises the bound by moving $q$; the M-step raises it by moving the parameters. Same staircase, climbed two legs at a time.
 :::
 
-## 13.8 — Gaussian Processes
+## 13.9 — Gaussian Processes
 
 Everything so far put distributions over *discrete states* or *parameters*. A **Gaussian Process (GP)** does something stranger and lovelier: it puts a distribution over **entire functions**. Instead of fitting one curve to your data, a GP maintains a probability over *all plausible curves at once* — and reports its own uncertainty, which widens far from data and pinches tight where you have observations.
 
@@ -495,6 +637,9 @@ $$f(x) \sim \mathcal{GP}\big(m(x),\, k(x, x')\big)$$
 The **kernel** is the soul of the GP — it encodes how similar two inputs' outputs ought to be. The common **RBF (squared-exponential)** kernel,
 
 $$k(x, x') = \sigma^2 \exp\!\Big(-\frac{(x-x')^2}{2\ell^2}\Big),$$
+
+**In words:** two outputs are correlated by how close their inputs are; the correlation falls off smoothly the farther apart the inputs sit, vanishing for distant points.
+**Also written:** for vector inputs, $k(\mathbf x,\mathbf x') = \sigma^2\exp\!\big(-\tfrac{1}{2}\|\mathbf x-\mathbf x'\|^2/\ell^2\big)$ — the squared Euclidean distance in place of the scalar gap.
 
 says "nearby inputs give similar outputs," with the **lengthscale** $\ell$ tuning how fast that correlation decays (small $\ell$ = wiggly functions, large $\ell$ = smooth ones). Conditioning the joint Gaussian on the observed points yields a closed-form posterior mean and variance at any new $x_*$ — no iterative training, just linear algebra.
 
@@ -536,15 +681,28 @@ var = rbf(Xs,Xs).diagonal() - (Ks@np.linalg.solve(K,Ks.T)).diagonal()
 # mu = predictions, sqrt(var) = the uncertainty band half-width
 ```
 
+scikit-learn wraps the same algebra plus automatic kernel-hyperparameter tuning (it learns $\ell$ and $\sigma$ by maximizing the marginal likelihood):
+
+```python
+from sklearn.gaussian_process import GaussianProcessRegressor
+from sklearn.gaussian_process.kernels import RBF, ConstantKernel as C
+import numpy as np
+
+X = np.array([[-2.],[0.],[2.]]); y = np.sin(X).ravel()
+gp = GaussianProcessRegressor(kernel=C()*RBF(length_scale=1.0)).fit(X, y)
+mu, std = gp.predict(np.linspace(-3,3,50).reshape(-1,1), return_std=True)
+# std is the calibrated error bar — wide between/beyond the 3 training points
+```
+
 ::: {.callout-warning}
 The catch is **cost**: GP inference inverts an $n \times n$ kernel matrix, which is $O(n^3)$ time and $O(n^2)$ memory. Past a few thousand points, exact GPs become impractical and you need sparse / inducing-point approximations. GPs shine on small-to-medium data where honest uncertainty matters — not on millions of rows.
 :::
 
-## 13.9 — Latent Variable Models
+## 13.10 — Latent Variable Models
 
 A **latent variable** is a quantity you never observe but that *explains* the data you do — a hidden cause. Positing one often turns a tangled distribution into a simple one: messy data becomes *simple-given-the-hidden-cause*. This is the unifying idea behind a whole family of models; they differ only in *what* the hidden variable is.
 
-The cleanest example is the **Gaussian Mixture Model (GMM)**. The data looks like several overlapping blobs; the latent variable is *which blob* (component) each point secretly belongs to. The generative story: pick a component $z$ with probability $\pi_z$, then draw the point from that component's Gaussian. You never see $z$ — you fit it with EM (§13.7), which softly assigns each point to components and re-estimates the Gaussians, round and round.
+The cleanest example is the **Gaussian Mixture Model (GMM)**. The data looks like several overlapping blobs; the latent variable is *which blob* (component) each point secretly belongs to. The generative story: pick a component $z$ with probability $\pi_z$, then draw the point from that component's Gaussian. You never see $z$ — you fit it with EM (§13.8), which softly assigns each point to components and re-estimates the Gaussians, round and round.
 
 ```{mermaid}
 graph TD
@@ -565,7 +723,29 @@ The same template, with a different choice of latent variable, gives a whole zoo
 
 **Latent Dirichlet Allocation (LDA)** treats each document as a mixture of a few hidden topics, and each topic as a distribution over words. The latents — the document's topic proportions, and each word's topic assignment — are never observed; you infer them (by EM-like or variational methods) and out fall interpretable themes ("sports," "finance") that nobody labeled. **Factor analysis** assumes a handful of unseen continuous factors drive many correlated measurements — the statistical ancestor of PCA (see the Dimensionality Reduction chapter), differing in that it is an explicit probabilistic generative model with a noise term.
 
-Here is a single GMM E-step "responsibility" — the soft assignment that *is* the latent posterior:
+### Plate notation: drawing models with repetition
+
+Real latent-variable models have *many* data points, each with its own copy of a latent variable — drawing 10,000 identical $z \to x$ subgraphs is hopeless. **Plate notation** is the textbook shorthand: wrap the repeated nodes in a rectangle (a "plate") labeled with how many times it repeats. Everything inside the box is duplicated; everything outside is shared.
+
+```{mermaid}
+graph TD
+    pi["π (shared)"] --> z["z_n"]
+    theta["θ (shared)"] --> x["x_n"]
+    z --> x
+    subgraph plate["repeat for each of N data points"]
+      z
+      x
+    end
+```
+
+The intuition is a cookie cutter: the plate is the cutter stamped $N$ times, and only the shared parameters ($\pi$, $\theta$) live outside it. Reading the GMM off this picture: the global mixing weights $\pi$ and component parameters $\theta$ sit outside the plate (one set for everyone), while each point's hidden component $z_n$ and observation $x_n$ sit inside (one per point). The same convention draws LDA (documents are an outer plate, words an inner plate nested inside) and every Bayesian hierarchical model — it is the lingua franca of papers in this field.
+
+Here is a single GMM E-step "responsibility" — the soft assignment that *is* the latent posterior. It is just Bayes' rule over the hidden component:
+
+$$r_{nk} = P(z_n{=}k \mid x_n) = \frac{\pi_k\,\mathcal{N}(x_n \mid \mu_k, \sigma_k)}{\sum_{j}\pi_j\,\mathcal{N}(x_n \mid \mu_j, \sigma_j)}.$$
+
+**In words:** how much point $n$ "belongs" to component $k$ is that component's prior-weighted likelihood, divided by the same quantity summed over all components.
+**Also written:** the softmax of log-scores, $r_{nk} = \mathrm{softmax}_k\big(\log\pi_k + \log\mathcal{N}(x_n\mid\mu_k,\sigma_k)\big)$.
 
 ```python
 import numpy as np
@@ -578,20 +758,36 @@ r = np.array(r)/sum(r)                 # responsibilities (posterior over hidden
 print(r.round(3))                      # e.g. [0.166 0.834] -> point likely from comp 1
 ```
 
-That responsibility vector — the posterior over the hidden cause — is the thread tying this section back through the whole chapter: it is a graphical-model inference (§13.2, §13.6), computed in the E-step of EM (§13.7), over a latent variable. The same machinery, applied to sequences, gives HMMs; applied to functions, GPs; applied to deep nets, VAEs.
+And the topic-model cousin, LDA, is a one-liner in scikit-learn — feed it a word-count matrix and out come latent topics nobody labeled:
+
+```python
+from sklearn.feature_extraction.text import CountVectorizer
+from sklearn.decomposition import LatentDirichletAllocation
+
+docs = ["stocks bonds market market", "goal match team team goal",
+        "market bonds yield", "team coach match goal"]
+X = CountVectorizer().fit_transform(docs)
+lda = LatentDirichletAllocation(n_components=2, random_state=0).fit(X)
+print(lda.transform(X).round(2))       # each doc's topic mixture (the latent z)
+```
+
+That responsibility vector — the posterior over the hidden cause — is the thread tying this section back through the whole chapter: it is a graphical-model inference (§13.2, §13.7), computed in the E-step of EM (§13.8), over a latent variable. The same machinery, applied to sequences, gives HMMs; applied to functions, GPs; applied to deep nets, VAEs.
 
 ::: {.callout-warning}
 Latent variable models suffer from **identifiability** and **label-switching** issues: the components of a mixture can be permuted without changing the likelihood, so "component 1" has no fixed meaning across runs. Don't over-interpret a single fit, and don't trust latent indices to be stable — interpret the *partition* of the data, not the label number attached to it.
 :::
 
 
-## 13.10 — Variable Elimination: Inference as Sums and Products
+## 13.11 — Variable Elimination: Inference as Sums and Products
 
 Imagine you have a joint distribution over many variables, factored into small pieces, and you want one marginal — say $P(D)$. The brute-force route is to write the full joint as a giant table and sum out everything else. That table has $2^n$ rows for $n$ binary variables, so it dies fast. Variable elimination is the simple observation that you don't have to build the table at all: you can push the summations *inside* the product, summing out one variable at a time, because most factors don't mention most variables.
 
 The intuition is the distributive law. To compute $\sum_b \sum_c f(a,b)\,g(b,c)$ you do not enumerate all $(b,c)$ pairs against $a$; you note that $a$ only appears in $f$, so
 
 $$\sum_b \sum_c f(a,b)\,g(b,c) = \sum_b f(a,b)\Big(\sum_c g(b,c)\Big).$$
+
+**In words:** don't drag $f$ through the inner sum it has nothing to do with — pull it outside and sum the small piece first.
+**Also written:** the factored-out inner sum is itself a new factor, $g'(b) = \sum_c g(b,c)$, leaving $\sum_b f(a,b)\,g'(b)$ — one fewer variable.
 
 The inner sum over $c$ produces a smaller factor over $b$ alone, which you then fold into the next sum. Each elimination replaces "multiply everything mentioning this variable, then sum it out" with one new factor over the *neighbors* of the eliminated variable.
 
@@ -618,7 +814,7 @@ flowchart LR
 The whole method is just the distributive law applied repeatedly: $\sum (ab) = a \sum b$ whenever $a$ doesn't depend on the summation index. "Push sums in as far as they go."
 :::
 
-## 13.11 — A Worked Elimination on a Tiny Chain
+## 13.12 — A Worked Elimination on a Tiny Chain
 
 Take a four-node chain $A \to B \to C \to D$, all binary. The joint factors as
 
@@ -669,7 +865,7 @@ print(PD)          # [0.72 0.28]
 
 Each elimination is one matrix–vector product because the chain is so thin. The cost is set by the *largest factor ever built*, not by the number of variables — on a chain that factor never exceeds two variables, so inference is linear in chain length.
 
-## 13.12 — Elimination Order and Treewidth: Why Some Graphs Are Hard
+## 13.13 — Elimination Order and Treewidth: Why Some Graphs Are Hard
 
 The chain was cheap because every intermediate factor touched at most two variables. On a denser graph the order in which you eliminate matters enormously, because summing out a variable *connects all its neighbors together* — they now share a new factor $\tau$ even if they were never directly linked before. These added edges are called **fill-in edges**, and they make later factors bigger.
 
@@ -718,7 +914,7 @@ Finding the optimal order is itself NP-hard, so in practice people use cheap gre
 Treewidth is a property of the *undirected* graph structure, not of the numbers in the tables. No clever choice of potentials rescues a high-treewidth graph; if the structure is a dense grid, exact elimination is hopeless regardless of how the probabilities are set. Moralize a Bayes net (marry co-parents, drop directions) before reading off its treewidth.
 :::
 
-## 13.13 — The Junction Tree: Reusing Work Across Many Queries
+## 13.14 — The Junction Tree: Reusing Work Across Many Queries
 
 Plain variable elimination answers *one* query. Ask for $P(D)$ and then $P(B)$ and you redo most of the sums. The junction tree (also called the **clique tree** or **join tree**) is the data structure that caches the shared work, so that after one inward-and-outward sweep you can read off the marginal of *every* variable. It is variable elimination organized so the intermediate factors become permanent nodes you can pass messages along in both directions.
 
@@ -753,13 +949,16 @@ For our chain $A\to B\to C\to D$, moralizing changes nothing (no co-parents), an
 
 The largest clique has two variables, matching the chain's treewidth of $1$ (width = clique size $-1$). A junction tree's cliques are exactly the factors elimination would have built under a good order — the tree just stores them so they can be reused.
 
-## 13.14 — Belief Propagation on the Junction Tree
+## 13.15 — Belief Propagation on the Junction Tree
 
 Once the tree exists, inference is a two-phase message-passing schedule, sometimes called the **Hugin** or **Shafer–Shenoy** algorithm and structurally identical to **belief propagation**. Each clique starts holding the product of the factors assigned to it (its initial *potential*). Pick any clique as root. Then:
 
 - **Collect (inward):** every leaf sends a message toward the root; each clique waits until it has heard from all its children, then sends upward. A message from clique $C_i$ to neighbor $C_j$ across separator $S$ is the clique's potential, multiplied by all incoming messages except $C_j$'s, then *marginalized down to the separator variables*:
 
 $$m_{i\to j}(S) = \sum_{C_i \setminus S} \psi_i \prod_{k \neq j} m_{k\to i}.$$
+
+**In words:** to tell neighbor $j$ what you believe, combine your own evidence with everything every *other* neighbor told you, then squeeze the result down to just the shared separator variables.
+**Also written:** as a belief divided by the back-message, $m_{i\to j} = \big(\sum_{C_i\setminus S}\text{belief}(C_i)\big) / m_{j\to i}$ — the Hugin "absorb" form, which avoids recomputing the product from scratch.
 
 - **Distribute (outward):** once the root has everything, messages flow back down the same edges by the same rule.
 
@@ -793,11 +992,13 @@ The root $\{C,D\}$ multiplies its own potential by this and sums out $C$ to get 
 On a tree-structured model the junction tree's two sweeps are exact and cost $O(m\,k^{w+1})$ — the same bound as one elimination, but amortized across *all* marginals. Run the identical message rule on a graph *with* loops and you get **loopy belief propagation**, which is no longer exact (messages double-count evidence around cycles) but is often a good, cheap approximation — the bridge to the approximate-inference methods covered earlier in this chapter.
 :::
 
-## 13.15 — Key takeaways
+## 13.16 — Key takeaways
 
 - A graph **factorizes** a giant joint distribution into small local pieces: **directed** (Bayesian networks, parent→child CPTs) or **undirected** (Markov random fields, clique potentials).
 - **Conditional independence** is read off the graph: by **d-separation** in directed models (the collider / "explaining away" pattern is the trap — observing a common effect couples its causes) and by simple **graph separation given neighbors** in undirected ones.
 - Bayes-net **inference** = sum out the unknowns, then **normalize**; undirected models pay an extra price for the global partition function $Z$.
+- **Naive Bayes** is the simplest useful Bayes net — a class node fanning out to conditionally-independent features — and still a strong, fast text-classification baseline; **plate notation** is the shorthand for drawing such repeated structure compactly.
+- **MCMC** needs **burn-in** and **convergence checks** ($\hat{R}\approx 1$); never trust a single un-diagnosed chain.
 - **HMMs** model hidden state sequences: **forward** scores evidence, **forward–backward** smooths per-step beliefs, **Viterbi** finds the single best path — all dynamic programming, run in log space; **Baum–Welch** (EM) learns the parameters.
 - **CRFs** are the discriminative, undirected counterpart to HMMs: they model $P(\mathbf{y}\mid\mathbf{x})$ directly, allowing rich overlapping features — better for labeling, but unable to generate inputs.
 - **Inference** divides into **exact** (variable elimination, belief propagation — for trees) and **approximate** (MCMC / Gibbs sampling, variational inference — for everything else).
@@ -805,7 +1006,7 @@ On a tree-structured model the junction tree's two sweeps are exact and cost $O(
 - **Gaussian Processes** are distributions over functions defined by a kernel; their gift is **calibrated uncertainty** that widens away from data, at $O(n^3)$ cost.
 - **Latent variable models** (GMM, LDA, factor analysis, HMM, VAE) all share one template — posit a hidden cause that makes the data simple, then infer it.
 
-## 13.16 — See also
+## 13.17 — See also
 
 - **Probability & Statistics** — the Bayes' rule, distributions, and KL divergence this chapter builds on.
 - **Dimensionality Reduction** — PCA and factor analysis as latent-factor models.

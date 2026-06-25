@@ -113,7 +113,7 @@ A **time series** is data indexed by time: a sequence of observations $y_1, y_2,
 
 ## 22.1 — Time series components and stationarity/differencing
 
-The first move in any time-series analysis is to mentally **decompose** the series into a few interpretable pieces. The classic decomposition splits an observation into four ingredients:
+The first move in any time-series analysis is to mentally **decompose** the series into a few interpretable pieces. Think of a song: there's the slow swell of the whole track (trend), a chorus that comes back every so many bars (seasonality), longer mood shifts that don't keep a strict beat (cycles), and random crackle (noise). Pulling these apart is what makes the rest of the chapter possible. The classic decomposition splits an observation into four ingredients:
 
 - **Trend** ($T_t$) — the slow, long-run direction (sales rising year over year).
 - **Seasonality** ($S_t$) — a *fixed-period* repeating pattern (ice-cream sales peak every summer; traffic peaks every weekday morning).
@@ -121,6 +121,9 @@ The first move in any time-series analysis is to mentally **decompose** the seri
 - **Noise / residual** ($\varepsilon_t$) — the irregular leftover.
 
 Two combination rules dominate. An **additive** model assumes the pieces add up, $y_t = T_t + S_t + \varepsilon_t$, appropriate when the seasonal swing is roughly constant in size. A **multiplicative** model, $y_t = T_t \times S_t \times \varepsilon_t$, fits when the swing grows with the level (a 10% holiday bump, not a fixed +500 units). Taking logs turns multiplicative into additive: $\log y_t = \log T_t + \log S_t + \log \varepsilon_t$.
+
+**In words:** an observation is the trend at that moment, plus (or times) the season's push, plus the irregular wobble.
+**Also written:** in expectation-free residual form, $\varepsilon_t = y_t - T_t - S_t$ (additive) or $\varepsilon_t = y_t / (T_t S_t)$ (multiplicative).
 
 A quick worked feel for the difference: suppose the underlying level climbs $100 \to 200$ and the seasonal effect is "December is high." In an additive world December always adds $+20$, so the peaks read $120$ then $220$ — same absolute bump. In a multiplicative world December multiplies by $1.2$, so the peaks read $120$ then $240$ — the bump *grows with the level*. Seeing seasonal swings fan out like that is your cue to log-transform first.
 
@@ -148,9 +151,28 @@ Here is a small additive series and its decomposition drawn out:
     points="20,330 60,322 100,335 140,326 180,332 220,338 260,320 300,334 340,329 380,324 420,336 460,330 500,322 540,335 580,328 620,331"/>
 </svg>
 
-**Stationarity** is the property that makes a series predictable in a stable way. A series is (weakly) **stationary** if its mean, variance, and autocorrelation do not change over time — the statistical "rules" stay put. A series with a trend is non-stationary (mean drifts); one with growing volatility is non-stationary (variance drifts). Most classical models *assume* stationarity, so the workflow is: transform the series until it looks stationary, model the stationary version, then invert the transform for the final forecast.
+In practice you rarely peel these apart by hand. The standard tool is **STL** (Seasonal-Trend decomposition using Loess), which robustly estimates the three components even when the seasonal shape drifts slowly over time:
+
+```python
+import numpy as np, pandas as pd
+from statsmodels.tsa.seasonal import STL
+
+idx = pd.date_range("2021-01-01", periods=48, freq="MS")
+y = pd.Series(np.arange(48) * 0.5                       # trend
+              + 5 * np.sin(2 * np.pi * idx.month / 12)  # yearly season
+              + np.random.default_rng(0).normal(0, 1, 48), index=idx)
+
+res = STL(y, period=12, robust=True).fit()
+# res.trend, res.seasonal, res.resid are aligned Series you can plot or subtract
+print(res.seasonal.head(3).round(2))
+```
+
+**Stationarity** is the property that makes a series predictable in a stable way. Plain version: a stationary series is one whose "personality" never changes — its typical level, how much it bounces around, and how today relates to yesterday all stay the same no matter which stretch of time you look at. Formally, a series is (weakly) **stationary** if its mean, variance, and autocorrelation do not change over time — the statistical "rules" stay put. A series with a trend is non-stationary (mean drifts); one with growing volatility is non-stationary (variance drifts). Most classical models *assume* stationarity, so the workflow is: transform the series until it looks stationary, model the stationary version, then invert the transform for the final forecast.
 
 The workhorse transform is **differencing**: replace each value by its change, $\nabla y_t = y_t - y_{t-1}$. Differencing kills a linear trend the way a derivative flattens a line. For seasonality of period $m$, use **seasonal differencing** $\nabla_m y_t = y_t - y_{t-m}$. Variance that grows with level is tamed by a log first.
+
+**In words:** instead of modeling the value, model how much it *changed* since last step — a straight-line trend becomes a flat constant once you look at the changes.
+**Also written:** with the lag (backshift) operator $B$ where $B y_t = y_{t-1}$, a first difference is $\nabla y_t = (1-B)y_t$, and $d$ differences is $(1-B)^d y_t$; seasonal differencing is $(1-B^m)y_t$.
 
 ```python
 import numpy as np
@@ -164,7 +186,16 @@ seasonal = ys[4:] - ys[:-4]           # yₜ - yₜ₋₄
 print("seasonal diff:", seasonal)     # [2 2 2 2] -> season removed, flat
 ```
 
-The **Augmented Dickey-Fuller (ADF) test** formalizes the eyeball check: its null hypothesis is "the series has a unit root (is non-stationary)," so a small p-value (say < 0.05) lets you reject non-stationarity and proceed.
+The **Augmented Dickey-Fuller (ADF) test** formalizes the eyeball check: its null hypothesis is "the series has a unit root (is non-stationary)," so a small p-value (say < 0.05) lets you reject non-stationarity and proceed. A useful companion is the **KPSS test**, whose null is the *opposite* ("the series is stationary"); running both guards against being fooled — if ADF says non-stationary *and* KPSS says non-stationary, you almost certainly need to difference.
+
+```python
+from statsmodels.tsa.stattools import adfuller, kpss
+import numpy as np
+rng = np.random.default_rng(0)
+trend = np.cumsum(rng.normal(0.3, 1, 200))         # random walk + drift (non-stationary)
+print("ADF p =", round(adfuller(trend)[1], 3))     # large p -> can't reject unit root
+print("ADF p (differenced) =", round(adfuller(np.diff(trend))[1], 3))  # small p -> stationary
+```
 
 ::: {.callout-tip}
 **Rule of thumb:** difference *once* and re-check before differencing again. One regular difference removes a linear trend; one seasonal difference removes a season. Over-differencing injects artificial negative autocorrelation and inflates variance — more is not better.
@@ -172,13 +203,16 @@ The **Augmented Dickey-Fuller (ADF) test** formalizes the eyeball check: its nul
 
 ## 22.2 — Autocorrelation (ACF / PACF)
 
-Because time-series observations are correlated with their own past, the central diagnostic is the **autocorrelation function (ACF)**: the correlation between the series and a lagged copy of itself. At lag $k$,
+Because time-series observations are correlated with their own past, the central diagnostic is the **autocorrelation function (ACF)**: the correlation between the series and a lagged copy of itself. Intuition: slide a tracing-paper copy of the series sideways by $k$ steps and ask "how well does the shifted copy still line up with the original?" At lag $k$,
 
 $$\rho_k = \frac{\sum_{t=k+1}^{T}(y_t-\bar y)(y_{t-k}-\bar y)}{\sum_{t=1}^{T}(y_t-\bar y)^2}.$$
 
+**In words:** the fraction of the series' total wiggle that today's value shares with the value $k$ steps ago.
+**Also written:** as a ratio of covariance to variance, $\rho_k = \gamma_k / \gamma_0$, where $\gamma_k = \tfrac{1}{T}\sum (y_t-\bar y)(y_{t-k}-\bar y)$ is the lag-$k$ autocovariance.
+
 $\rho_0 = 1$ always (a series correlates perfectly with itself). A slow, gradual decay of $\rho_k$ signals a trend; a spike at lag $m$ and its multiples signals seasonality of period $m$.
 
-The **partial autocorrelation function (PACF)** at lag $k$ measures the correlation between $y_t$ and $y_{t-k}$ *after removing* the influence of the intermediate lags $y_{t-1},\dots,y_{t-k+1}$. The intuition: lag-2 correlation might exist only because lag-1 carries it forward; PACF strips out that pass-through and shows the *direct* link.
+The **partial autocorrelation function (PACF)** at lag $k$ measures the correlation between $y_t$ and $y_{t-k}$ *after removing* the influence of the intermediate lags $y_{t-1},\dots,y_{t-k+1}$. The intuition: lag-2 correlation might exist only because lag-1 carries it forward; PACF strips out that pass-through and shows the *direct* link. (Everyday version: your grandfather influences you mostly *through* your parent — PACF asks how much grandpa matters once you already know the parent.)
 
 Why two functions? Together they fingerprint the model order. The textbook rule:
 
@@ -199,6 +233,19 @@ def acf(y, k):
 for k in range(1, 4):
     print(f"lag {k}: rho = {acf(y, k):.3f}")
 # lag 1: 0.486   lag 2: 0.150   lag 3: -0.131  -> positive lag-1, fading: trend-ish
+```
+
+In real work you call a library and read the plot rather than the numbers:
+
+```python
+import numpy as np
+from statsmodels.graphics.tsaplots import plot_acf, plot_pacf
+from statsmodels.tsa.stattools import acf, pacf
+
+y = np.sin(np.arange(120) * 2 * np.pi / 12) + np.random.default_rng(0).normal(0, 0.3, 120)
+print("ACF lags 0-4:", np.round(acf(y, nlags=4), 3))
+print("PACF lags 0-4:", np.round(pacf(y, nlags=4), 3))
+# plot_acf(y); plot_pacf(y)  # adds the ±1.96/√T significance bands automatically
 ```
 
 Significance is judged against confidence bands at roughly $\pm 1.96/\sqrt{T}$; spikes poking outside the band are "real." With $T=8$ above, the band sits near $\pm 0.69$, so even the lag-1 value of $0.49$ is *inside* it — a healthy reminder that short series rarely give statistically firm autocorrelations, and you should not over-read a wiggly ACF on a handful of points.
@@ -237,6 +284,9 @@ ACF and PACF assume a roughly stationary series. Run them on a trending series a
 
 The simplest forecast is a **simple moving average (SMA)**: predict the next value as the mean of the last $w$ observations, $\hat y_{t+1} = \frac{1}{w}\sum_{i=0}^{w-1} y_{t-i}$. It is a low-pass filter — it smooths noise but lags behind trends and treats a point from $w$ steps ago exactly like yesterday's.
 
+**In words:** guess that tomorrow looks like the average of the last few days.
+**Also written:** as a rolling update, $\hat y_{t+1} = \hat y_t + \tfrac{1}{w}(y_t - y_{t-w})$ — drop the oldest point, add the newest.
+
 ```python
 import numpy as np
 y = np.array([10, 12, 11, 13, 15, 14, 16], dtype=float)
@@ -247,13 +297,19 @@ print(sma_next)                       # (15+14+16)/3 = 15.0
 
 ### Exponential smoothing and Holt-Winters
 
-**Exponential smoothing** fixes the SMA's flat memory by weighting recent points more, with weights that decay geometrically into the past. **Simple exponential smoothing (SES)** maintains a level $\ell_t$:
+**Exponential smoothing** fixes the SMA's flat memory by weighting recent points more, with weights that decay geometrically into the past. Think of it as a running impression that you nudge toward each new data point — recent surprises move it a lot, ancient history barely at all. **Simple exponential smoothing (SES)** maintains a level $\ell_t$:
 
 $$\ell_t = \alpha\, y_t + (1-\alpha)\,\ell_{t-1}, \qquad \hat y_{t+1} = \ell_t,$$
+
+**In words:** new level = a slice $\alpha$ of today's actual blended with the rest $(1-\alpha)$ of yesterday's belief.
+**Also written:** as an error-correction step, $\ell_t = \ell_{t-1} + \alpha\,(y_t - \ell_{t-1})$ — move the old level a fraction $\alpha$ of the way toward the new observation.
 
 where the **smoothing parameter** $\alpha \in (0,1)$ tunes reactivity — high $\alpha$ chases recent data, low $\alpha$ is sluggish and stable. Unrolling the recursion shows *why* it is called exponential: $\ell_t = \alpha y_t + \alpha(1-\alpha)y_{t-1} + \alpha(1-\alpha)^2 y_{t-2} + \dots$ — every past point contributes, but its weight decays by a factor $(1-\alpha)$ each step back. SES has no notion of trend, so its forecast is a flat line.
 
 **Holt's linear method** adds a trend component $b_t$ (a second smoothing equation with parameter $\beta$). **Holt-Winters** adds the third piece — a seasonal component $s_t$ with parameter $\gamma$ — giving the full **triple exponential smoothing** that handles level, trend, and season at once. The additive-seasonal forecast $h$ steps ahead is $\hat y_{t+h} = \ell_t + h\,b_t + s_{t+h-m}$.
+
+**In words:** project the current level, push it $h$ steps along the current trend, then add back the seasonal bump for that point in the cycle.
+**Also written:** for the multiplicative-seasonal variant the season *scales* rather than adds, $\hat y_{t+h} = (\ell_t + h\,b_t)\, s_{t+h-m}$.
 
 ```python
 # Simple exponential smoothing from scratch
@@ -266,6 +322,19 @@ for t in range(1, len(y)):
 print("forecast t+1:", round(level, 2))   # ~14.0, weighted toward recent points
 ```
 
+The same Holt-Winters model in `statsmodels`, fit and forecast in a few lines:
+
+```python
+import numpy as np, pandas as pd
+from statsmodels.tsa.holtwinters import ExponentialSmoothing
+
+idx = pd.date_range("2021-01-01", periods=48, freq="MS")
+y = pd.Series(np.arange(48) * 0.4 + 5 * np.sin(2 * np.pi * idx.month / 12) + 10, index=idx)
+
+model = ExponentialSmoothing(y, trend="add", seasonal="add", seasonal_periods=12).fit()
+print(model.forecast(6).round(2))   # 6-month-ahead forecast, level+trend+season
+```
+
 ### ARIMA / SARIMA
 
 **ARIMA(p, d, q)** is the cornerstone of classical forecasting. It glues three ideas:
@@ -273,6 +342,9 @@ print("forecast t+1:", round(level, 2))   # ~14.0, weighted toward recent points
 - **AR(p)** — *AutoRegressive*: regress $y_t$ on its own $p$ past values. $y_t = c + \phi_1 y_{t-1} + \dots + \phi_p y_{t-p} + \varepsilon_t$.
 - **I(d)** — *Integrated*: difference the series $d$ times to make it stationary (Section 22.1).
 - **MA(q)** — *Moving Average*: regress on the $q$ past forecast *errors*. $y_t = c + \varepsilon_t + \theta_1\varepsilon_{t-1} + \dots + \theta_q\varepsilon_{t-q}$.
+
+**In words:** predict today from a recipe of recent values (AR) and recent surprises (MA), after differencing enough times (I) that the series stops drifting.
+**Also written:** compactly with the backshift operator, $\phi(B)\,(1-B)^d y_t = c + \theta(B)\,\varepsilon_t$, where $\phi(B)=1-\phi_1 B-\dots-\phi_p B^p$ and $\theta(B)=1+\theta_1 B+\dots+\theta_q B^q$.
 
 So ARIMA(1,1,0) means: difference once, then model the differenced series with one autoregressive term. You read the candidate $p$ and $q$ straight off the PACF and ACF (Section 22.2). **SARIMA(p,d,q)(P,D,Q)$_m$** bolts on a *seasonal* copy of the same machinery at lag $m$ — seasonal AR, seasonal differencing, and seasonal MA — to capture yearly or weekly cycles.
 
@@ -287,6 +359,22 @@ flowchart LR
   D --> E["Fit ARIMA p,d,q"]
   E --> F["Seasonal?<br/>add P,D,Q,m → SARIMA"]
   F --> G[Forecast + invert differencing]
+```
+
+Rather than hand-picking $(p,d,q)$, practitioners often let a search routine grade candidates by **information criteria** (AIC/BIC, which reward fit but penalize extra parameters):
+
+```python
+import numpy as np, pandas as pd
+from statsmodels.tsa.statespace.sarimax import SARIMAX
+
+idx = pd.date_range("2021-01-01", periods=60, freq="MS")
+y = pd.Series(np.arange(60) * 0.3 + 4 * np.sin(2 * np.pi * idx.month / 12) + 20, index=idx)
+
+# SARIMA(1,1,1)(1,1,0)_12 — non-seasonal + seasonal differencing and terms
+model = SARIMAX(y, order=(1, 1, 1), seasonal_order=(1, 1, 0, 12)).fit(disp=False)
+print("AIC:", round(model.aic, 1))
+print(model.forecast(6).round(2))   # 6-step forecast (differencing inverted internally)
+# pmdarima.auto_arima(y, seasonal=True, m=12) automates the (p,d,q)(P,D,Q) search by AIC
 ```
 
 | Model | Captures | Misses | Use when |
@@ -305,7 +393,7 @@ Holt-Winters versus SARIMA: both nail level/trend/season. Reach for Holt-Winters
 
 A different philosophy: stop using a special time-series model and instead *reshape* the forecasting problem into ordinary tabular supervised learning, then throw a strong regressor — usually **gradient-boosted trees** (XGBoost, LightGBM; see *Ensemble Methods*) — at it. This is often the pragmatic winner on real business data with calendars, promotions, and many related series.
 
-The trick is **feature engineering** the temporal structure into columns:
+The trick is **feature engineering** the temporal structure into columns. The mental model: each row of a spreadsheet is "a moment in time," and you fill its columns with everything you'd have known *just before* that moment — what the value was yesterday, last week, its recent average, whether it's a holiday — then let an ordinary regressor learn the mapping.
 
 - **Lag features** — past values as predictors: $y_{t-1}, y_{t-7}, y_{t-365}$ (yesterday, last week, last year).
 - **Window / rolling features** — summaries over a trailing window: rolling mean, std, min, max over the last 7 days.
@@ -328,6 +416,27 @@ print(df.dropna().head())
 
 The single most important detail is in that `.shift(1)` before `.rolling()`: every feature for time $t$ must use only data available *before* $t$. A rolling mean that includes $y_t$ itself leaks the answer.
 
+Once the table is built, fitting the regressor is the easy part:
+
+```python
+import numpy as np, pandas as pd
+from lightgbm import LGBMRegressor   # or: from xgboost import XGBRegressor
+
+rng = np.random.default_rng(0)
+y = pd.Series(np.arange(300) * 0.1 + 5 * np.sin(np.arange(300) * 2*np.pi/7) + rng.normal(0,1,300))
+df = pd.DataFrame({"y": y})
+for L in (1, 7, 14):
+    df[f"lag{L}"] = df["y"].shift(L)
+df["roll7"] = df["y"].shift(1).rolling(7).mean()
+df = df.dropna()
+
+X, target = df.drop(columns="y"), df["y"]
+cut = int(len(df) * 0.8)                       # time-ordered split, NEVER random
+model = LGBMRegressor(n_estimators=200).fit(X.iloc[:cut], target.iloc[:cut])
+pred = model.predict(X.iloc[cut:])
+print("MAE:", round(np.mean(np.abs(pred - target.iloc[cut:])), 3))
+```
+
 ```{mermaid}
 flowchart LR
   A["Series yₜ"] --> B["Build lag cols<br/>yₜ₋₁, yₜ₋₇ ..."]
@@ -342,13 +451,30 @@ flowchart LR
 
 The cost of this convenience: trees **cannot extrapolate**. A boosted model predicting from lag features will never forecast a value higher than anything it saw in training, because a tree leaf outputs a constant. If your series trends upward forever, either model the *differenced* series (predict the change, not the level) or detrend first.
 
+<svg viewBox="0 0 680 200" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif" font-size="11">
+  <text x="10" y="16" font-weight="bold">Trees can't extrapolate — leaf output is capped at the training max</text>
+  <line x1="40" y1="160" x2="660" y2="160" stroke="#333"/>
+  <line x1="40" y1="20" x2="40" y2="160" stroke="#333"/>
+  <!-- training region -->
+  <rect x="40" y="20" width="320" height="140" fill="#22c55e" fill-opacity="0.08"/>
+  <text x="150" y="40" fill="#16a34a">training range</text>
+  <!-- true upward trend -->
+  <line x1="40" y1="150" x2="660" y2="40" stroke="#6366f1" stroke-width="2"/>
+  <text x="560" y="35" fill="#6366f1">true trend</text>
+  <!-- tree prediction: rises then flattens -->
+  <polyline fill="none" stroke="#ec4899" stroke-width="2.5" stroke-dasharray="6 4"
+    points="40,150 120,118 200,92 280,74 360,66 440,66 520,66 640,66"/>
+  <text x="470" y="84" fill="#ec4899">tree forecast (flat past max)</text>
+  <line x1="360" y1="20" x2="360" y2="160" stroke="#999" stroke-dasharray="3 3"/>
+</svg>
+
 ::: {.callout-warning}
 The number-one bug in feature-based forecasting is **lookahead leakage**: a rolling mean, a target-encoded category, or a `fillna` computed over the whole series quietly mixes future into past. Compute every feature causally, and validate with time-ordered splits (Section 22.7).
 :::
 
 ## 22.5 — Deep forecasting (RNN/LSTM, temporal CNNs, Transformers, Prophet, DeepAR)
 
-When you have *many* related series and lots of history, deep models can learn shared patterns no single classical fit would find. The major families:
+When you have *many* related series and lots of history, deep models can learn shared patterns no single classical fit would find. The intuition for "global" models: instead of fitting one curve per product, you train a single network on *thousands* of products at once, so the rare product with three months of history borrows the seasonal shape learned from its better-observed cousins. The major families:
 
 **RNNs / LSTMs** process the sequence step by step, carrying a hidden state that summarizes the past (see *Recurrent & Sequence Models*). The **LSTM** gating mechanism lets it remember long-range structure — useful for long seasonal lags — at the cost of slow sequential training.
 
@@ -376,6 +502,52 @@ When you have *many* related series and lots of history, deep models can learn s
 
 **DeepAR** (from Amazon) trains a single autoregressive RNN *globally* across thousands of related series and outputs a **probability distribution** for each future step, not a point — naturally giving prediction intervals (Section 22.6).
 
+A minimal LSTM forecaster in PyTorch — the windowing into (input, next-step) pairs is the part unique to forecasting:
+
+```python
+import torch, torch.nn as nn, numpy as np
+
+series = np.sin(np.arange(400) * 2 * np.pi / 20).astype("float32")
+W = 20                                            # look-back window length
+X = np.stack([series[i:i+W] for i in range(len(series)-W)])      # (N, W)
+ynext = series[W:]                                                # (N,)
+X = torch.tensor(X).unsqueeze(-1)                 # (N, W, 1) -> features per step
+ynext = torch.tensor(ynext).unsqueeze(-1)
+
+class LSTMForecaster(nn.Module):
+    def __init__(self, hidden=32):
+        super().__init__()
+        self.lstm = nn.LSTM(1, hidden, batch_first=True)
+        self.head = nn.Linear(hidden, 1)
+    def forward(self, x):
+        out, _ = self.lstm(x)                     # out: (N, W, hidden)
+        return self.head(out[:, -1])              # use last step's state -> (N, 1)
+
+model = LSTMForecaster()
+opt = torch.optim.Adam(model.parameters(), lr=1e-2)
+loss_fn = nn.MSELoss()
+for epoch in range(50):                           # tiny demo loop
+    opt.zero_grad()
+    loss = loss_fn(model(X), ynext)
+    loss.backward(); opt.step()
+print("final train MSE:", round(loss.item(), 5))
+```
+
+And Prophet for the "fast, calendar-aware, interpretable" case:
+
+```python
+import pandas as pd, numpy as np
+from prophet import Prophet
+
+idx = pd.date_range("2021-01-01", periods=730, freq="D")
+df = pd.DataFrame({"ds": idx,
+                   "y": np.arange(730)*0.02 + 5*np.sin(2*np.pi*idx.dayofyear/365) + 20})
+m = Prophet(yearly_seasonality=True, weekly_seasonality=True).fit(df)
+future = m.make_future_dataframe(periods=30)       # extend 30 days
+fc = m.predict(future)
+print(fc[["ds", "yhat", "yhat_lower", "yhat_upper"]].tail(3))  # point + interval
+```
+
 ```{mermaid}
 flowchart TD
   Q{What do you have?} --> S1[Few series,<br/>clear seasonality]
@@ -396,13 +568,40 @@ So far each forecast was a single number for a single series. Two extensions mat
 
 **Multivariate forecasting** uses more than one time-varying input. Distinguish two cases. With **exogenous regressors** ($X$ known into the future — price, weather forecast, promotion calendar), you predict one target *aided* by side inputs: this is the "X" in **SARIMAX** or extra feature columns for a boosted model. With **multiple targets** that influence each other (a vector $\mathbf{y}_t$ of related series), a **Vector Autoregression (VAR)** regresses the whole vector on its own lagged vectors, $\mathbf{y}_t = \mathbf{c} + A_1\mathbf{y}_{t-1} + \dots + A_p\mathbf{y}_{t-p} + \boldsymbol{\varepsilon}_t$, capturing cross-series dependencies (electricity demand and temperature feeding each other).
 
+**In words:** a VAR is "every series predicted from every series' recent past at once," so a bump in one can ripple into the forecasts of the others.
+**Also written:** stacking the lags into one big regressor, $\mathbf{y}_t = \mathbf{c} + \sum_{i=1}^{p} A_i\,\mathbf{y}_{t-i} + \boldsymbol{\varepsilon}_t$, where each $A_i$ is a $k\times k$ matrix of cross-series coefficients.
+
 **Probabilistic forecasting** outputs a *distribution* — or at least an interval — instead of a point. This is what decisions actually need: a warehouse stocks to the 95th percentile of demand, not the mean. Three common routes:
 
 - **Parametric** — predict the parameters of a distribution (DeepAR predicts a Gaussian's $\mu_t, \sigma_t$ per step).
 - **Quantile regression** — directly predict chosen quantiles (10th, 50th, 90th) by minimizing the **pinball loss**, which penalizes over- and under-prediction asymmetrically per quantile.
 - **Conformal / sampling** — wrap any model with calibrated intervals, or Monte-Carlo sample many future paths.
 
+The **pinball (quantile) loss** for a target quantile $\tau$ is
+
+$$L_\tau(y, \hat q) = \begin{cases} \tau\,(y - \hat q) & \text{if } y \ge \hat q \\ (1-\tau)\,(\hat q - y) & \text{if } y < \hat q \end{cases}$$
+
+**In words:** charge $\tau$ per unit when you fell short, and $(1-\tau)$ per unit when you overshot — for a high quantile like $\tau=0.9$, being too low hurts nine times as much as being too high.
+**Also written:** as a single branch-free expression, $L_\tau(y,\hat q) = \max\big(\tau(y-\hat q),\ (\tau-1)(y-\hat q)\big)$.
+
 A worked pinball-loss feel: suppose you predict the 90th-percentile demand as $\hat q = 100$ and the actual turns out to be $y=130$. The pinball loss for quantile $\tau=0.9$ charges $\tau\,(y-\hat q) = 0.9\times 30 = 27$ for under-prediction. Had you instead over-predicted with $\hat q = 160$, the penalty would be $(1-\tau)(\hat q - y) = 0.1\times 30 = 3$. The asymmetry ($27$ versus $3$) is deliberate: for a high quantile, missing *below* the truth is punished far harder, which is exactly what pushes the predicted $q$ up to where only ~10% of outcomes exceed it.
+
+Gradient boosting can emit quantiles directly, giving cheap intervals from the same feature table as Section 22.4:
+
+```python
+import numpy as np
+from sklearn.ensemble import GradientBoostingRegressor
+
+rng = np.random.default_rng(0)
+X = rng.normal(size=(400, 3))
+y = X[:, 0] * 2 + rng.normal(0, 1, 400)
+
+# one model per quantile; together they form a predictive interval
+models = {q: GradientBoostingRegressor(loss="quantile", alpha=q).fit(X, y)
+          for q in (0.1, 0.5, 0.9)}
+lo, mid, hi = (models[q].predict(X[:1]) for q in (0.1, 0.5, 0.9))
+print(f"80% interval: [{lo[0]:.2f}, {hi[0]:.2f}]  median {mid[0]:.2f}")
+```
 
 A point forecast with an interval, drawn out:
 
@@ -431,7 +630,7 @@ Even when you only report a point forecast, fit a probabilistic model and report
 
 ## 22.7 — Proper time-series cross-validation (no shuffling)
 
-Here is the cardinal rule, and the one most often broken: **you may never shuffle a time series for validation.** Standard k-fold cross-validation randomly assigns rows to folds, which means training on data from *after* the test point — the model peeks at the future. The resulting score is fantastically optimistic and collapses in production. In forecasting, validation must always train on the past and test on the future.
+Here is the cardinal rule, and the one most often broken: **you may never shuffle a time series for validation.** Picture studying for tomorrow's exam by peeking at tomorrow's answer key — that is exactly what random shuffling does when it lets a fold train on data from *after* the test point. Standard k-fold cross-validation randomly assigns rows to folds, so the model peeks at the future. The resulting score is fantastically optimistic and collapses in production. In forecasting, validation must always train on the past and test on the future.
 
 The correct scheme is **rolling-origin** (also called **walk-forward** or **time-series split**) cross-validation: pick an origin, train on everything up to it, test on the next block, then roll the origin forward and repeat. Two flavors: **expanding window** (training set grows each fold, keeping all history) and **sliding window** (training set is a fixed-width window that moves, useful when old data goes stale after a regime change).
 
@@ -473,6 +672,19 @@ for i in range(n_splits):
 # train [0 1 2 3 4 5]   test [6 7]   <- origin rolls forward, no overlap into past
 ```
 
+scikit-learn ships this exact scheme as `TimeSeriesSplit`, with an optional `gap` to purge leaky window features:
+
+```python
+import numpy as np
+from sklearn.model_selection import TimeSeriesSplit
+
+y = np.arange(12)
+tscv = TimeSeriesSplit(n_splits=4, test_size=2, gap=1)   # gap=1 purges the boundary
+for tr, te in tscv.split(y):
+    print("train", y[tr], "test", y[te])
+# train always precedes test; the gap drops the point straddling the split
+```
+
 Two extra precautions: insert a **gap** (purge) between train and test if features use long windows, so a rolling feature can't straddle the boundary; and when tuning hyperparameters, keep a **final hold-out** at the very end that you touch only once.
 
 ::: {.callout-warning}
@@ -484,6 +696,9 @@ Two extra precautions: insert a **gap** (purge) between train and test if featur
 A forecast is only as trustworthy as the metric you grade it with. All compare predicted $\hat y_t$ to actual $y_t$ over a test horizon, but they reward different behaviors.
 
 $$\text{MAE} = \frac{1}{n}\sum_t |y_t - \hat y_t|, \qquad \text{RMSE} = \sqrt{\frac{1}{n}\sum_t (y_t - \hat y_t)^2}, \qquad \text{MAPE} = \frac{100\%}{n}\sum_t \left|\frac{y_t - \hat y_t}{y_t}\right|.$$
+
+**In words:** MAE is the typical miss in raw units; RMSE is a miss-size that counts big errors extra; MAPE is the typical miss as a percent of the truth.
+**Also written:** with the error $e_t = y_t - \hat y_t$, these are $\text{MAE}=\operatorname{mean}|e_t|$, $\text{RMSE}=\sqrt{\operatorname{mean}(e_t^2)}$ (the $\ell_2$ norm of $e$ over $\sqrt n$), and $\text{MAPE}=100\%\cdot\operatorname{mean}|e_t/y_t|$.
 
 - **MAE** (Mean Absolute Error) — average size of the error, in the data's own units. Robust to outliers; easy to explain ("off by 12 units on average").
 - **RMSE** (Root Mean Squared Error) — squares errors before averaging, so it **punishes large misses** disproportionately. Same units as the data. Use it when one big error is much worse than several small ones.
@@ -505,6 +720,23 @@ print(f"MAE={mae:.2f}  RMSE={rmse:.2f}  MAPE={mape:.1f}%")
 # the 4-unit miss on y=10 contributes 40% MAPE alone -> small denominators dominate MAPE
 ```
 
+The same metrics come straight from scikit-learn, plus MASE — the one that bakes in the naive-baseline comparison:
+
+```python
+import numpy as np
+from sklearn.metrics import mean_absolute_error, root_mean_squared_error
+
+y    = np.array([100, 50, 200, 10, 150], dtype=float)
+yhat = np.array([110, 45, 170, 14, 150], dtype=float)
+print("MAE :", round(mean_absolute_error(y, yhat), 2))
+print("RMSE:", round(root_mean_squared_error(y, yhat), 2))
+
+# MASE = your MAE / the MAE of a one-step naive forecast (ŷ_t = y_{t-1})
+naive_mae = np.mean(np.abs(np.diff(y)))           # error of "tomorrow = today"
+mase = mean_absolute_error(y, yhat) / naive_mae
+print("MASE:", round(mase, 2), "(<1 beats naive)")
+```
+
 | Metric | Units | Outlier sensitivity | Scale-free? | Watch out for |
 |---|---|---|---|---|
 | MAE | data units | low | no | — |
@@ -516,18 +748,107 @@ print(f"MAE={mae:.2f}  RMSE={rmse:.2f}  MAPE={mape:.1f}%")
 Always report a **naive baseline** alongside your metric: last value ($\hat y_{t+1}=y_t$) or seasonal naive ($\hat y_{t+1}=y_{t+1-m}$). If your fancy model can't beat "tomorrow equals today," it is not adding value — and MASE bakes exactly this comparison into a single number.
 :::
 
-## 22.9 — Key takeaways
+## 22.9 — Hierarchical forecasting and reconciliation
 
-- Decompose every series into **trend, seasonality, cyclic, noise**; most classical models need **stationarity**, achieved by **differencing** (and logs for growing variance).
+Real forecasting problems are rarely one lonely series — they come in **hierarchies**. Total company sales = sum of regions = sum of stores = sum of products. The catch: if you forecast each level independently, the numbers won't add up. The store forecasts might sum to something different from the region forecast, which embarrasses everyone in the planning meeting. **Coherence** — children summing to their parent — is the property you want, and **reconciliation** is how you enforce it.
+
+The intuition is a courtroom with conflicting witnesses: the top-level forecast and the bottom-level forecasts each have a story, and reconciliation finds the single set of numbers that respects the sum constraints while staying as close as possible to everyone's testimony. The classic approaches:
+
+- **Bottom-up** — forecast the leaves, sum upward. Simple and coherent, but noisy leaves make a noisy total.
+- **Top-down** — forecast the total, split down by historical proportions. Stable at the top, but loses leaf-level signal.
+- **Optimal (MinT) reconciliation** — forecast *every* level independently, then adjust all of them jointly to be coherent while minimizing the variance of the reconciliation error. This is the modern default because it borrows strength across the whole tree.
+
+```{mermaid}
+flowchart TD
+  T["Total"] --> R1["Region A"]
+  T --> R2["Region B"]
+  R1 --> S1["Store 1"]
+  R1 --> S2["Store 2"]
+  R2 --> S3["Store 3"]
+  R2 --> S4["Store 4"]
+```
+
+Formally, let $\hat{\mathbf{y}}$ stack the base forecasts for *all* nodes and let the **summing matrix** $S$ encode "which leaves add into which node." A reconciled forecast is $\tilde{\mathbf{y}} = S G \hat{\mathbf{y}}$, where $G$ maps base forecasts to a coherent set.
+
+**In words:** take everybody's independent forecast, run it through a correction $G$, then re-sum with $S$ so every parent exactly equals its children.
+**Also written:** bottom-up is the special case $G = [\,0 \mid I\,]$ (keep only the leaf forecasts, discard the rest), so $\tilde{\mathbf{y}} = S\,\hat{\mathbf{y}}_{\text{leaves}}$.
+
+A tiny coherence check makes the point. Suppose two stores forecast $\hat y_1 = 30$ and $\hat y_2 = 50$, while the region (forecast independently) says $\hat y_{\text{region}} = 70$. They disagree — leaves sum to $80$, parent says $70$. Bottom-up declares the region to be $80$; top-down keeps $70$ and rescales the stores to $26.25$ and $43.75$; MinT splits the difference using each forecast's reliability. All three return a coherent set; they differ in *whom they trust*.
+
+```python
+import numpy as np
+# bottom-up reconciliation: 2 stores -> region, by an explicit summing matrix S
+S = np.array([[1, 1],    # region = store1 + store2
+              [1, 0],    # store1
+              [0, 1]])   # store2
+base_leaves = np.array([30.0, 50.0])     # the two leaf forecasts
+coherent = S @ base_leaves               # [region, store1, store2]
+print(coherent)                          # [80. 30. 50.] -> parent now equals its children
+assert coherent[0] == coherent[1] + coherent[2]
+```
+
+::: {.callout-tip}
+Libraries like `hierarchicalforecast` (Nixtla) and R's `fable` implement bottom-up, top-down, and MinT out of the box. Reach for reconciliation whenever forecasts at different aggregation levels are reported together and must agree — retail demand by store/region/national, energy load by feeder/substation/grid.
+:::
+
+## 22.10 — Anomalies, missing data, and intermittent demand
+
+Textbook series are clean and evenly spaced; real ones have gaps, spikes, and stretches of pure zero. A model is only as good as the preprocessing in front of it, so three messy realities deserve their own playbook.
+
+**Missing values and irregular spacing.** A skipped sensor reading or a holiday closure leaves a hole. Naively forward-filling can fabricate trends; the safer defaults are **time-aware interpolation** (respecting the actual timestamps, not row positions) for short gaps, and an explicit *missing* indicator column for models that can use it. For genuinely irregular timestamps, resample to a fixed grid first.
+
+```python
+import pandas as pd, numpy as np
+idx = pd.date_range("2024-01-01", periods=8, freq="D")
+y = pd.Series([10, np.nan, np.nan, 16, 18, np.nan, 22, 25], index=idx)
+filled = y.interpolate(method="time")        # respects timestamp spacing, not row index
+print(filled.round(1).tolist())              # [10.0, 12.0, 14.0, 16.0, 18.0, 20.0, 22.0, 25.0]
+```
+
+**Anomalies and outliers.** A one-off spike (a data-entry error, a flash sale) can wreck a fitted trend or seasonal estimate. The intuition: fit a quick model, look at the residuals, and flag points whose residual is implausibly large (say beyond 3 robust standard deviations). Decide deliberately whether each is *signal* to keep (a real promotion you'll see again) or *noise* to clip before fitting. Anomaly detection in temporal data gets its own treatment in *Anomaly & Fraud Detection*.
+
+```python
+import numpy as np
+y = np.array([10, 11, 12, 95, 13, 14, 12, 11], dtype=float)   # 95 is the spike
+med = np.median(y)
+mad = np.median(np.abs(y - med)) + 1e-9       # robust spread, ignores the outlier itself
+z = 0.6745 * (y - med) / mad                  # modified z-score
+print("flagged indices:", np.where(np.abs(z) > 3.5)[0])   # [3] -> the 95
+```
+
+**Intermittent / count demand.** Many real series — spare parts, rare SKUs — are mostly zeros with occasional small counts. Squared-error models and percentage metrics both break here (MAPE divides by zero; a smoother predicts a meaningless fractional demand). The classic specialist is **Croston's method**, which forecasts two things separately — the *size* of nonzero demands and the *gap between* them — then combines them.
+
+<svg viewBox="0 0 680 150" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif" font-size="11">
+  <text x="10" y="16" font-weight="bold">Intermittent demand — mostly zero, sparse spikes (Croston territory)</text>
+  <line x1="40" y1="120" x2="660" y2="120" stroke="#333"/>
+  <g stroke="#f59e0b" stroke-width="9">
+    <line x1="120" y1="120" x2="120" y2="70"/>
+    <line x1="260" y1="120" x2="260" y2="55"/>
+    <line x1="300" y1="120" x2="300" y2="95"/>
+    <line x1="470" y1="120" x2="470" y2="40"/>
+    <line x1="560" y1="120" x2="560" y2="85"/>
+  </g>
+  <text x="60" y="140" fill="#333">mostly zeros between sparse, bursty demands → forecast size &amp; interval separately</text>
+</svg>
+
+::: {.callout-warning}
+For intermittent series, never grade with MAPE (division by zero) and be wary of MAE rewarding the all-zero forecast. Use **MASE** against a naive baseline, and report demand-over-a-lead-time rather than per-period point forecasts.
+:::
+
+## 22.11 — Key takeaways
+
+- Decompose every series into **trend, seasonality, cyclic, noise** (STL in practice); most classical models need **stationarity**, achieved by **differencing** (and logs for growing variance), checked with **ADF/KPSS**.
 - **ACF and PACF** are your model-order fingerprint: ACF cuts off → MA order $q$; PACF cuts off → AR order $p$.
 - Classical baselines climb from **moving average → exponential smoothing → Holt-Winters → ARIMA → SARIMA**; each adds a component (level, trend, season, autocorrelation).
 - **Feature-based ML** reshapes forecasting into tabular regression with **lag/window/calendar features** and gradient boosting — pragmatic and strong, but trees **cannot extrapolate** and leak easily.
 - **Deep forecasting** (LSTM, TCN, Transformers, Prophet, DeepAR) shines with **many related series**; on one short series, simpler usually wins.
-- **Multivariate** adds exogenous regressors (SARIMAX) or cross-series VAR; **probabilistic** forecasting outputs intervals/distributions, judged by **calibration** and CRPS.
-- **Never shuffle**: validate with **walk-forward (rolling-origin) CV**, train-past / test-future, with a gap to prevent leakage.
+- **Multivariate** adds exogenous regressors (SARIMAX) or cross-series VAR; **probabilistic** forecasting outputs intervals/distributions (pinball loss, quantiles), judged by **calibration** and CRPS.
+- **Hierarchical** forecasts must be **reconciled** (bottom-up, top-down, MinT) so levels add up coherently.
+- Handle real-world mess: **interpolate** gaps time-aware, flag **anomalies** by robust residuals, use **Croston/MASE** for intermittent demand.
+- **Never shuffle**: validate with **walk-forward (rolling-origin) CV** (`TimeSeriesSplit`), train-past / test-future, with a gap to prevent leakage.
 - Grade with **MAE / RMSE / MAPE** chosen for the use case, always against a **naive baseline** (MASE).
 
-## 22.10 — See also
+## 22.12 — See also
 
 - **[Probability & Statistics]** — distributions, hypothesis tests (ADF), and the foundations of stationarity and uncertainty.
 - **[Recurrent & Sequence Models]** — RNN/LSTM/GRU internals that power deep forecasters.

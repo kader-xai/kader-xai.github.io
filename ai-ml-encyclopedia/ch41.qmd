@@ -134,16 +134,68 @@ Each stage maps to later sections: perception leans on Chapters 16–18 (compute
 The single most useful robotics question is "what rate does this loop close at, and what is its latency?" A perfect plan delivered 200 ms late can be worse than a rough plan delivered now. Autonomy is a real-time discipline before it is an AI discipline.
 :::
 
+### Sensors and coordinate frames: the substrate everything sits on
+
+Before any algorithm runs, the robot must answer two physical questions: *what can I measure*, and *measured relative to what*. Think of frames like the way you give directions — "two meters to my left" only means something once you know where "I" am facing. Robots make this explicit.
+
+Each sensor has strengths and blind spots, and good autonomy *fuses* complementary ones rather than trusting any single sensor:
+
+| Sensor | Measures | Strength | Weakness |
+|---|---|---|---|
+| Camera | light / color | rich, cheap, dense | no native depth, fails in dark/glare |
+| LiDAR | range via laser ToF | precise 3-D geometry | expensive, sparse, struggles in rain/fog |
+| Radar | range + velocity (Doppler) | works in weather, direct speed | low resolution |
+| IMU | acceleration + angular rate | fast (kHz), no external dependence | drifts badly when integrated |
+| Wheel encoder | wheel rotation | simple odometry | slips, drifts (§41.2) |
+| GPS/GNSS | global position | absolute, no drift | ~meters, blocked indoors/urban canyons |
+
+A **coordinate frame** is a local set of axes attached to something — the world, the robot body, the camera, a gripper. A pose is always *of one frame, expressed in another*: "the camera frame in the world frame." The bookkeeping that relates them is a rigid transform — a rotation $R$ plus a translation $t$ — composed as you hop from frame to frame. A point $p$ known in the camera frame becomes, in the world frame,
+
+$$p^{\text{world}} = R^{\text{world}}_{\text{cam}}\, p^{\text{cam}} + t^{\text{world}}_{\text{cam}}.$$
+
+**In words:** to move a point from the camera's viewpoint into world coordinates, rotate it to align the axes, then shift it by where the camera sits.
+**Also written:** in homogeneous form one $4\times4$ matrix does both, $\tilde p^{\text{world}} = T^{\text{world}}_{\text{cam}}\, \tilde p^{\text{cam}}$ where $T = \begin{bmatrix} R & t \\ 0 & 1 \end{bmatrix}$ and $\tilde p = (x,y,z,1)$.
+
+That homogeneous form is why robotics code lives in $4\times4$ matrices: chaining frames (world ← base ← arm ← camera) becomes plain matrix multiplication, $T^{\text{world}}_{\text{cam}} = T^{\text{world}}_{\text{base}} T^{\text{base}}_{\text{arm}} T^{\text{arm}}_{\text{cam}}$, and inverting a transform flips the direction. ROS systems track this whole tree of frames continuously (the `tf` system); getting one transform wrong is the single most common robotics bug (§41.10).
+
 ## 41.2 Configuration space and kinematics
 
 To plan motion you need coordinates for "what the robot is doing." The **configuration** $q$ is the minimal set of numbers that pins down every part of the robot. A point robot in a plane has $q=(x,y)$; a planar mobile robot adds heading, $q=(x,y,\theta)$; a 7-joint arm has $q=(\theta_1,\dots,\theta_7)$. The set of all legal configurations is the **configuration space** (C-space), and its dimension is the robot's number of *degrees of freedom* (DOF).
 
 The key mental shift: **plan in C-space, not in the world.** A fat L-shaped robot squeezing through a doorway is hard to reason about as a shape sliding among shapes. But map each obstacle into C-space — inflating it by the robot's footprint — and the robot becomes a single *point* navigating among "configuration-space obstacles." Planning a point through free space is far easier (this is exactly what §41.7 exploits).
 
+The doodle below shows that trick: a disk robot near a wall (left) becomes a point near a *thickened* wall (right), grown by the robot's radius.
+
+<svg viewBox="0 0 440 170" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif" font-size="12">
+  <text x="10" y="18" fill="currentColor">Workspace: robot is a disk</text>
+  <rect x="30" y="40" width="30" height="100" fill="#a55" opacity="0.5" stroke="#a55"/>
+  <text x="20" y="155" fill="#a55">wall</text>
+  <circle cx="110" cy="90" r="22" fill="#6366f1" opacity="0.45" stroke="#6366f1"/>
+  <circle cx="110" cy="90" r="2.5" fill="currentColor"/>
+  <text x="95" y="155" fill="#6366f1">robot</text>
+  <text x="240" y="18" fill="currentColor">C-space: robot is a point</text>
+  <rect x="248" y="40" width="52" height="100" fill="#a55" opacity="0.25" stroke="#a55" stroke-dasharray="4 3"/>
+  <rect x="270" y="40" width="30" height="100" fill="#a55" opacity="0.5" stroke="#a55"/>
+  <text x="252" y="32" fill="#a55">inflated by radius</text>
+  <circle cx="350" cy="90" r="3.5" fill="#6366f1"/>
+  <text x="332" y="155" fill="#6366f1">point</text>
+</svg>
+
 **Kinematics** relates joint/wheel coordinates to where things end up in the world, ignoring forces and mass (that's *dynamics*). Two directions:
 
 - **Forward kinematics (FK):** given $q$, where is the end-effector / robot? Always a well-defined function, $x = f(q)$.
 - **Inverse kinematics (IK):** given a desired end-effector pose $x$, what $q$ achieves it? Often nonlinear, with zero, one, many, or infinitely many solutions.
+
+### The Jacobian: from joint speeds to tip speeds
+
+There is a layer between FK and full dynamics that does the day-to-day work of controlling an arm: the **Jacobian**. Intuition first — FK tells you *where* the hand is for a given pose; the Jacobian tells you *which way the hand drifts* when you nudge each joint a little. It is the dictionary that translates joint-space velocities into workspace velocities.
+
+$$\dot{x} = J(q)\,\dot{q}, \qquad J(q) = \frac{\partial f}{\partial q}.$$
+
+**In words:** the end-effector's velocity equals the Jacobian matrix times the joint velocities — each column of $J$ is the tip motion caused by spinning one joint at unit speed.
+**Also written:** componentwise, $\dot{x}_i = \sum_j \dfrac{\partial f_i}{\partial q_j}\,\dot{q}_j$.
+
+Running it backwards gives a practical, iterative way to *do* inverse kinematics: to move the tip by a small desired step $\Delta x$, solve $\Delta q = J^{+}\Delta x$ (using the pseudo-inverse $J^{+}$ for redundant arms), step, recompute $J$, repeat. When $J$ loses rank the arm is at a **singularity** — a stretched-straight elbow, say — where some tip directions need infinite joint speed; controllers must damp these or steer around them.
 
 ### The differential-drive / unicycle model
 
@@ -151,9 +203,15 @@ Most wheeled robots (and, abstracted, most cars) are modeled as a **unicycle**: 
 
 $$\dot{x} = v\cos\theta, \qquad \dot{y} = v\sin\theta, \qquad \dot{\theta} = \omega.$$
 
+**In words:** the robot always moves in the direction it is facing at speed $v$, and its heading turns at rate $\omega$ — it can drive and spin, but never slide sideways.
+**Also written:** in vector form $\dot{q} = \begin{bmatrix}\cos\theta & 0\\ \sin\theta & 0\\ 0 & 1\end{bmatrix}\begin{bmatrix}v\\ \omega\end{bmatrix}$, exposing the two control columns of this $3\times2$ map.
+
 A real **differential-drive** robot has two wheels of radius $r$ a distance $L$ apart, spinning at $\omega_L, \omega_R$. Convert wheel speeds to body commands:
 
 $$v = \frac{r(\omega_R + \omega_L)}{2}, \qquad \omega = \frac{r(\omega_R - \omega_L)}{L}.$$
+
+**In words:** average the two wheel surface speeds to get forward speed; their difference, divided by the track width, gives turn rate — equal wheels drive straight, opposite wheels spin in place.
+**Also written:** $\begin{bmatrix} v \\ \omega \end{bmatrix} = \dfrac{r}{2}\begin{bmatrix} 1 & 1 \\ 2/L & -2/L \end{bmatrix}\begin{bmatrix}\omega_R\\ \omega_L\end{bmatrix}$.
 
 <svg viewBox="0 0 420 200" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif" font-size="12">
   <rect x="150" y="70" width="80" height="50" rx="6" fill="#2a4a6a" stroke="#4a90d9"/>
@@ -190,9 +248,24 @@ PID forms a command from three views of the error $e(t) = \text{target} - \text{
 
 $$u(t) = K_p\, e(t) + K_i \int_0^t e(\tau)\,d\tau + K_d\, \frac{de(t)}{dt}.$$
 
+**In words:** push in proportion to how far off you are now, plus a correction for error that has piled up over time, plus a brake that responds to how fast the error is changing.
+**Also written:** in discrete time, $u_k = K_p e_k + K_i \sum_{j\le k} e_j\,\Delta t + K_d\,(e_k - e_{k-1})/\Delta t$ — exactly the code below.
+
 - **Proportional** ($K_p$): push harder the farther off you are. Alone, it leaves a steady-state offset and can oscillate.
 - **Integral** ($K_i$): accumulate past error to erase steady offset (e.g., gravity sag on an arm). Too much causes *windup* and overshoot.
 - **Derivative** ($K_d$): react to how fast error is changing — damping that anticipates and reduces overshoot. Sensitive to noisy measurements.
+
+A picture of the three roles: $P$ is a spring pulling toward target, $D$ is a shock absorber damping the swing, $I$ slowly removes any leftover gap.
+
+<svg viewBox="0 0 440 150" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif" font-size="12">
+  <line x1="30" y1="120" x2="420" y2="120" stroke="currentColor" opacity="0.4"/>
+  <line x1="30" y1="40" x2="420" y2="40" stroke="#22c55e" stroke-dasharray="5 4"/>
+  <text x="360" y="35" fill="#22c55e">target</text>
+  <path d="M30 120 C 90 120 110 25 150 25 C 185 25 195 55 230 50 C 265 46 270 42 320 42 C 370 42 400 41 420 41" fill="none" stroke="#6366f1" stroke-width="2"/>
+  <text x="120" y="18" fill="#6366f1">well-tuned: rises, slight overshoot, settles</text>
+  <path d="M30 120 C 80 120 95 10 130 12 C 170 14 175 110 215 108 C 255 106 260 30 300 34 C 345 38 350 70 420 55" fill="none" stroke="#ec4899" stroke-width="1.5" opacity="0.8"/>
+  <text x="250" y="128" fill="#ec4899">too much gain: oscillates</text>
+</svg>
 
 ```python
 # from-scratch PID controller, one step
@@ -219,15 +292,62 @@ for _ in range(3):                               # drive position toward 1.0
 Integral windup is the classic PID failure: while the robot is saturated (motor maxed, arm blocked), the integral term keeps growing, then overshoots wildly when the obstruction clears. Always clamp the integral term, and consider disabling it during saturation.
 :::
 
+A production controller adds the guards the from-scratch loop omits — output saturation, anti-windup clamping, and derivative-on-measurement to avoid kicks when the target jumps:
+
+```python
+# idiomatic discrete PID with the guards real controllers need
+import numpy as np
+
+class PIDController:
+    def __init__(self, kp, ki, kd, dt, u_min=-1.0, u_max=1.0):
+        self.kp, self.ki, self.kd, self.dt = kp, ki, kd, dt
+        self.u_min, self.u_max = u_min, u_max
+        self.integral = 0.0
+        self.prev_meas = None
+
+    def step(self, target, measured):
+        e = target - measured
+        # derivative on measurement (not error) -> no spike on setpoint change
+        d = 0.0 if self.prev_meas is None else -(measured - self.prev_meas) / self.dt
+        self.prev_meas = measured
+
+        u_unsat = self.kp * e + self.ki * self.integral + self.kd * d
+        u = float(np.clip(u_unsat, self.u_min, self.u_max))
+        # anti-windup: only integrate when not saturated (back-calculation lite)
+        if u == u_unsat:
+            self.integral += e * self.dt
+        return u
+
+ctrl = PIDController(kp=2.0, ki=0.5, kd=0.1, dt=0.1)
+print(round(ctrl.step(1.0, 0.0), 3))   # first command toward target
+```
+
 ### When PID isn't enough: feedback linearization and flatness
 
 PID treats the system as roughly linear near the setpoint. Real robots are **nonlinear** — the unicycle's $\cos\theta$, an arm's coupled inertias. Two ideas tame this:
 
 **Feedback linearization** cancels the nonlinearity with the control law itself. If the dynamics are $\dot{x} = f(x) + g(x)u$, choose $u = g(x)^{-1}(-f(x) + v)$, leaving the clean linear system $\dot{x} = v$, which you then control with PID or LQR. It is exact only if your model $f, g$ is exact — model error leaks straight through.
 
+**In words:** measure the messy nonlinear part of the dynamics and deliberately push back exactly enough to erase it, so what's left behaves like a simple straight-line system you already know how to control.
+**Also written:** substituting the chosen $u$ into $\dot x = f(x)+g(x)u$ gives $\dot x = f(x) - f(x) + v = v$.
+
 **Differential flatness** is a structural gift some systems have: all states and inputs can be written as functions of a few *flat outputs* and their derivatives. A quadrotor is flat in $(x,y,z,\text{yaw})$ — pick a smooth trajectory for those four and *every* motor command is determined algebraically, no integration of dynamics needed. This is why aggressive drone-trajectory planners work: plan a smooth curve in flat space, recover controls in closed form.
 
 For the optimal-control treatment of the linearized system — **LQR**, which picks the feedback gains that minimize a quadratic cost on error and effort — see Chapter 25 (RL & control). PID is the hand-tuned cousin; LQR is its principled, model-based sibling.
+
+### Model-predictive control (MPC): planning a few steps ahead
+
+PID reacts to the present; **MPC** looks ahead. The everyday analogy is driving: you don't steer based only on where the car is *now*, you glance down the road, imagine the next few seconds, and pick the steering that keeps that whole imagined path on track — then you do it again a moment later with a fresh glance.
+
+Formally, every control cycle MPC solves a short-horizon optimization, applies only the first command, then re-solves at the next step (*receding horizon*):
+
+$$\min_{u_0,\dots,u_{N-1}} \;\sum_{k=0}^{N-1}\Big[ (x_k - x_k^{\text{ref}})^\top Q (x_k - x_k^{\text{ref}}) + u_k^\top R\, u_k \Big]
+\quad \text{s.t. } x_{k+1}=f(x_k,u_k),\; u_k\in\mathcal{U}.$$
+
+**In words:** over the next $N$ steps, pick the commands that keep the predicted state close to the reference while spending little control effort, respecting the physics and the actuator limits — then commit only to the first command and repeat.
+**Also written:** the per-step penalty $\|x_k-x_k^{\text{ref}}\|_Q^2 + \|u_k\|_R^2$ uses the weighted-norm shorthand $\|z\|_M^2 = z^\top M z$.
+
+MPC's selling point is that it handles **constraints** natively — speed caps, lane boundaries, joint limits, obstacle clearance go straight into the optimization, which PID cannot do. Its cost is computational: an optimization problem solved every cycle. It is the workhorse of modern self-driving steering, legged-robot balance, and process control. It is also the fast **replanning** loop referenced in §41.7.
 
 ## 41.4 State estimation and the recursive Bayes filter
 
@@ -239,9 +359,15 @@ The **recursive Bayes filter** is the master algorithm behind Kalman and particl
 
 $$\overline{bel}(x_t) = \int p(x_t \mid u_t, x_{t-1})\, bel(x_{t-1})\, dx_{t-1}$$
 
+**In words:** to predict where you are now, take every place you might have been, ask where each would land given the action you just took, and add up those possibilities weighted by how likely each starting place was.
+**Also written:** as an expectation, $\overline{bel}(x_t) = \mathbb{E}_{x_{t-1}\sim bel}\!\left[\,p(x_t \mid u_t, x_{t-1})\,\right]$.
+
 **Update** (measurement correction): multiply by the likelihood of the observation, then renormalize. A measurement arrived, so uncertainty shrinks.
 
 $$bel(x_t) = \eta\, p(z_t \mid x_t)\, \overline{bel}(x_t)$$
+
+**In words:** reweight each candidate state by how well it explains the measurement you just got, then rescale so the weights sum to one.
+**Also written:** $bel(x_t) \propto p(z_t \mid x_t)\,\overline{bel}(x_t)$, with $\eta = 1/\!\int p(z_t\mid x_t)\,\overline{bel}(x_t)\,dx_t$.
 
 ```{mermaid}
 flowchart LR
@@ -259,6 +385,11 @@ Everything downstream is this loop with a specific representation of the belief:
 When motion and measurement are **linear** and noise is **Gaussian**, the Bayes filter has a closed form: the belief stays Gaussian forever, summarized by a mean $\hat{x}$ and covariance $P$. The Kalman filter is the optimal estimator in that setting, and it is just the two Bayes steps written for Gaussians.
 
 The magic number is the **Kalman gain** $K$ — how much to trust the new measurement versus the prediction. High measurement noise → small $K$ → mostly believe the prediction. High process noise → large $K$ → mostly believe the sensor.
+
+$$K = \frac{P}{P+R}, \qquad \hat{x} \leftarrow \hat{x} + K(z - \hat{x}), \qquad P \leftarrow (1-K)P.$$
+
+**In words:** the gain is the prediction's share of the total uncertainty; nudge the estimate toward the measurement by that fraction of the surprise, and shrink the uncertainty accordingly.
+**Also written:** in full matrix form $K = P H^\top (H P H^\top + R)^{-1}$, with $\hat{x} \leftarrow \hat{x} + K(z - H\hat{x})$ and $P \leftarrow (I - KH)P$; the scalar case above is $H=1$.
 
 **Worked 1-D example.** Estimate a robot's position. We believe $\hat{x}=0$ m with variance $P=4$ (std 2 m). The robot does not move ($\hat{x}$ prediction stays 0), but motion adds process noise $Q=1$, so after predict $P = 4+1 = 5$. A GPS reads $z=3$ m with measurement variance $R=2$.
 
@@ -282,6 +413,27 @@ assert abs(x - 2.142) < 1e-2 and abs(P - 1.428) < 1e-2   # check
 print(round(x, 2), round(P, 2))     # 2.14 1.43
 ```
 
+The multivariate filter is the same two steps in matrix form. In practice you reach for a library rather than re-deriving the algebra:
+
+```python
+# multivariate Kalman filter with FilterPy: constant-velocity tracker
+import numpy as np
+from filterpy.kalman import KalmanFilter
+
+kf = KalmanFilter(dim_x=2, dim_z=1)        # state = [position, velocity]
+dt = 1.0
+kf.F = np.array([[1, dt], [0, 1]])         # motion: x += v*dt
+kf.H = np.array([[1.0, 0.0]])              # we measure position only
+kf.P *= 4.0                                # initial covariance
+kf.R = np.array([[2.0]])                   # measurement noise
+kf.Q = np.array([[1.0, 0.0], [0.0, 1.0]])  # process noise
+
+for z in [3.0, 3.9, 5.2, 6.1]:             # noisy position stream
+    kf.predict()
+    kf.update(z)
+    print(np.round(kf.x.ravel(), 2))       # fused position + inferred velocity
+```
+
 ### EKF and UKF — coping with nonlinearity
 
 Real motion ($\cos\theta$) and sensors (range = $\sqrt{\Delta x^2+\Delta y^2}$) are nonlinear, so the belief is no longer exactly Gaussian. Two pragmatic fixes keep the Kalman machinery:
@@ -302,6 +454,30 @@ flowchart LR
 ```
 
 This is **Monte Carlo localization**, the standard way a robot finds itself on a known map from a uniform prior. It handles arbitrary distributions and nonlinearity, at the cost of needing many particles in high dimensions (the curse of dimensionality).
+
+A minimal NumPy particle filter makes the three steps concrete:
+
+```python
+# 1-D particle filter: localize from a noisy distance-to-landmark sensor
+import numpy as np
+rng = np.random.default_rng(0)
+
+N, landmark = 2000, 10.0
+px = rng.uniform(0, 20, N)                 # particles: spread over the corridor
+w  = np.ones(N) / N
+
+def step(px, w, move, z, mn=0.3, sn=1.0):
+    px = px + move + rng.normal(0, mn, len(px))   # predict (move + noise)
+    pred = np.abs(landmark - px)                  # expected measurement
+    w = w * np.exp(-0.5 * ((z - pred) / sn) ** 2) # weight by likelihood
+    w += 1e-300; w /= w.sum()                     # normalize
+    idx = rng.choice(len(px), len(px), p=w)       # resample
+    return px[idx], np.ones(len(px)) / len(px)
+
+for z in [6.0, 5.1, 4.0, 3.2]:             # robot approaching the landmark
+    px, w = step(px, w, move=1.0, z=z)
+print(round(px.mean(), 2))                 # converges near true position ~6
+```
 
 | Filter | Belief shape | Nonlinear? | Cost | Use when |
 |---|---|---|---|---|
@@ -329,6 +505,13 @@ The intuition is **loop closure.** A robot drives a long loop; odometry drift me
 
 Modern SLAM is posed as a **graph optimization** (pose-graph / factor-graph): nodes are robot poses and landmarks, edges are noisy constraints (odometry between consecutive poses, observations of landmarks, loop closures). Solving means finding the configuration of all nodes that best satisfies all constraints — a big nonlinear least-squares problem, optimized with the techniques of Chapter 06. Front-ends differ by sensor (visual SLAM from cameras, LiDAR SLAM from point clouds), but the back-end is this same graph squeezed to consistency.
 
+The objective the back-end minimizes makes "best satisfies all constraints" precise:
+
+$$\hat{X} = \arg\min_{X} \sum_{(i,j)\in\mathcal{E}} \big\lVert z_{ij} - h(x_i, x_j) \big\rVert^2_{\Omega_{ij}}$$
+
+**In words:** choose the poses and landmarks $X$ that make every predicted measurement match its observed value as closely as possible, weighting each constraint by how trustworthy that sensor reading is.
+**Also written:** with $e_{ij} = z_{ij} - h(x_i,x_j)$, the weighted norm expands to $\sum_{ij} e_{ij}^\top\,\Omega_{ij}\,e_{ij}$, where $\Omega_{ij}$ is the information (inverse-covariance) matrix of edge $(i,j)$.
+
 ::: {.callout-tip}
 The reason loop closure matters so much: without it, error grows roughly with distance traveled. *With* a single good loop closure, error is bounded by the loop — one recognized landmark can correct hundreds of meters of drift. Recognizing places (place recognition) is therefore as critical to SLAM as the geometry.
 :::
@@ -340,6 +523,11 @@ Given a map and a goal, **planning** finds a collision-free path through C-space
 ### Search on a graph: Dijkstra and A*
 
 Discretize C-space into a grid (or roadmap) and search it. **Dijkstra** expands outward from the start by cheapest-cost-so-far $g(n)$, guaranteeing the shortest path but exploring blindly in all directions. **A\*** adds a *heuristic* $h(n)$ — an optimistic estimate of remaining cost (e.g., straight-line distance to goal) — and expands by $f(n) = g(n) + h(n)$, steering the search toward the goal.
+
+$$f(n) = g(n) + h(n).$$
+
+**In words:** rank each candidate node by the cost already paid to reach it plus an optimistic guess of the cost still to go, and always expand the most promising one next.
+**Also written:** Dijkstra is the special case $h(n)=0$ (no guess, expand by cost-so-far alone).
 
 A* returns the optimal path whenever $h$ is **admissible** (never overestimates true remaining cost). The straight-line (Euclidean) distance is the canonical admissible heuristic for spatial grids: a real path can only be longer than the crow-flies line. A better (larger but still admissible) heuristic explores fewer nodes.
 
@@ -404,6 +592,37 @@ The SVG shows an RRT tree exploring from the start (green), reaching toward the 
 
 A planned geometric path is rarely the final word. Two refinements usually follow. **Trajectory optimization** (e.g., CHOMP, TrajOpt) takes a rough path and bends it into a smooth, dynamically feasible trajectory by minimizing a cost that trades off smoothness against obstacle clearance — useful when the sampled path is jagged. And because the world moves, planning is wrapped in a fast **replanning** loop: a local planner (or a model-predictive controller, §41.3's cousin) re-solves a short-horizon plan every control cycle as new obstacles appear, while the global plan updates less often. Plan globally, react locally.
 
+Here is A* end-to-end on a small grid, the algorithm behind the worked example:
+
+```python
+# A* on a 4-connected grid; returns the optimal path or None
+import heapq
+
+def astar(grid, start, goal):                 # grid: set of blocked (r,c) cells
+    def h(n): return abs(n[0]-goal[0]) + abs(n[1]-goal[1])   # Manhattan, admissible
+    open_pq = [(h(start), 0, start, None)]    # (f, g, node, parent)
+    came, g_best = {}, {start: 0}
+    while open_pq:
+        f, g, n, parent = heapq.heappop(open_pq)
+        if n in came: continue
+        came[n] = parent
+        if n == goal:
+            path = [n]
+            while came[path[-1]] is not None: path.append(came[path[-1]])
+            return path[::-1]
+        for dr, dc in [(1,0),(-1,0),(0,1),(0,-1)]:
+            m = (n[0]+dr, n[1]+dc)
+            if m in grid: continue            # blocked
+            ng = g + 1
+            if ng < g_best.get(m, 1e9):
+                g_best[m] = ng
+                heapq.heappush(open_pq, (ng + h(m), ng, m, n))
+    return None
+
+blocked = {(1,1),(2,1),(0,3)}                  # matches the worked-example walls
+print(astar(blocked, (0,0), (2,3)))            # optimal path around the wall
+```
+
 ## 41.8 Grasping, manipulation, and the contact problem
 
 Mobile robots avoid contact; manipulators *depend* on it. Grasping is where geometry meets physics: the question is not just "can the fingers touch the object" but "will the object stay put when I lift, twist, and the world pushes back."
@@ -422,7 +641,16 @@ The central concept is **force closure**: a grasp achieves force closure if the 
   <text x="110" y="160" fill="#aaa">friction cones (shaded) must span all directions of disturbance</text>
 </svg>
 
+The friction-cone condition that each contact must obey is worth stating crisply:
+
+$$\lVert f_t \rVert \le \mu\, f_n, \qquad f_n \ge 0.$$
+
+**In words:** a contact can only push (never pull), and the sideways friction it provides can be at most $\mu$ times how hard it presses — exceed that and the finger slips.
+**Also written:** equivalently the contact force vector must lie inside the cone $\arctan(\lVert f_t\rVert / f_n) \le \arctan\mu$, i.e. within angle $\arctan\mu$ of the surface normal.
+
 A second axis is **prehensile vs. non-prehensile** manipulation. *Prehensile* means grasping — the hand fully constrains the object (a pick-and-place gripper). *Non-prehensile* means controlling an object *without* caging it: pushing, sliding, throwing, tilting, toppling. Sliding a heavy box across the floor, or a hockey-style flick, are non-prehensile — cheaper and sometimes the only option for objects too big or oddly shaped to grasp, but harder to control because the object can slip away. Much modern manipulation research blends the two: nudge an object to a graspable pose (non-prehensile), then pick it up (prehensile).
+
+**Worked example — will it slip?** A two-finger gripper holds a $0.5$ kg part ($mg \approx 4.9$ N) by pinching it, each finger pressing with normal force $f_n = 8$ N against a rubber-on-plastic contact, $\mu = 0.4$. Each finger can supply up to $\mu f_n = 0.4 \times 8 = 3.2$ N of vertical friction, and two fingers give $6.4$ N — comfortably above the $4.9$ N weight, so the part holds with a safety factor of about $1.3$. Drop $\mu$ to $0.25$ (a greasy part) and the budget falls to $2 \times 0.25 \times 8 = 4.0$ N $< 4.9$ N: the part slides. This is why grasp planners squeeze harder than theory demands and prefer high-friction contacts.
 
 ::: {.callout-warning}
 Force closure is a *geometric* guarantee that assumes your friction coefficient, contact locations, and object model are correct. Real grasps fail because $\mu$ is lower than assumed (a greasy part), the object is heavier or its mass off-center, or the fingers land a millimeter off. Plan grasps with margin, and prefer grasps that are robust to small pose errors over grasps that are theoretically optimal but brittle.
@@ -433,6 +661,27 @@ Force closure is a *geometric* guarantee that assumes your friction coefficient,
 Hand-engineering every behavior does not scale to dexterous, contact-rich, or visually complex tasks. Learning fills the gap, in three complementary modes.
 
 **Imitation learning (IL)** teaches from demonstrations. The simplest form, *behavioral cloning*, is plain supervised learning: record an expert's (observation → action) pairs and fit a policy. Its notorious failure is **covariate shift / compounding error** — the policy makes a small mistake, drifts to states the expert never visited, and has no idea what to do, so errors snowball. Fixes include DAgger (query the expert on the policy's own visited states) and richer demonstration coverage. The deeper RL/IL treatment lives in Chapter 25; here the point is that demonstrations are often the cheapest way to specify a hard-to-reward behavior.
+
+A behavioral-cloning policy is just a supervised regressor from observations to actions — a few lines in PyTorch:
+
+```python
+# behavioral cloning: fit a policy net to (observation -> action) demos
+import torch, torch.nn as nn
+
+policy = nn.Sequential(                    # obs_dim=8 (e.g. joint state), act_dim=2
+    nn.Linear(8, 64), nn.ReLU(),
+    nn.Linear(64, 64), nn.ReLU(),
+    nn.Linear(64, 2))
+opt = torch.optim.Adam(policy.parameters(), lr=1e-3)
+loss_fn = nn.MSELoss()                     # regress continuous actions
+
+# obs, act: tensors of expert demonstrations
+for epoch in range(100):
+    opt.zero_grad()
+    loss = loss_fn(policy(obs), act)       # match expert action at each state
+    loss.backward(); opt.step()
+# at deploy time: action = policy(current_obs) -- but beware covariate shift
+```
 
 **Reinforcement learning for control** learns a policy by trial and error against a reward (Chapter 25's algorithms). In robotics, raw RL on hardware is usually impractical — millions of trials would destroy the robot — so it is run in **simulation**, which is fast, safe, and resettable.
 
@@ -466,17 +715,65 @@ A robot exerts force in a world containing people. Three practical realities sep
 The most common "the algorithm is broken" bug in real robotics is actually a calibration or units error — a transform with the wrong sign, degrees fed where radians were expected, a frame mounted upside-down, or a sensor timestamp that is 50 ms stale. Before blaming the filter or planner, verify frames, units, signs, and time synchronization. Leave a calibration knob exposed for every physical constant; the real world will need it tuned.
 :::
 
+## 41.11 The ROS ecosystem and middleware
+
+Almost no real robot is one monolithic program. The everyday analogy is a newsroom: many specialists (a camera reporter, a planning editor, a motor desk) work in parallel, and a wire service routes each story to whoever subscribes to that topic. Robotics middleware — overwhelmingly **ROS 2** (Robot Operating System) — is that wire service.
+
+The core abstraction is a graph of independent **nodes** that communicate without knowing about each other:
+
+- **Topics** — anonymous publish/subscribe streams for continuous data (a camera node *publishes* images on `/camera/image`; a perception node *subscribes*). Many-to-many, fire-and-forget.
+- **Services** — request/response for occasional queries ("what is the current map?").
+- **Actions** — long-running goals with feedback and the ability to cancel ("navigate to the kitchen," streaming progress).
+- **Transforms (`tf2`)** — the live tree of coordinate frames from §41.1, so any node can ask "where is the gripper in the map frame, right now?"
+
+```{mermaid}
+flowchart LR
+    CAM[camera node] -->|/image| PER[perception node]
+    LID[lidar node] -->|/scan| SLAM[slam node]
+    PER -->|/obstacles| NAV[planner node]
+    SLAM -->|/map + tf| NAV
+    NAV -->|/cmd_vel| BASE[motor driver node]
+    style NAV fill:#6366f1,stroke:#6366f1,color:#fff
+```
+
+This decoupling is why robotics is composable: swap the LiDAR SLAM node for a visual one without touching the planner, record every topic to a log (`rosbag`) and replay it to debug offline, or run nodes across several machines. ROS 2 rides on **DDS** for real-time-capable, configurable-reliability transport. A minimal publisher shows the shape of node code:
+
+```python
+# ROS 2 node publishing a velocity command (rclpy)
+import rclpy
+from rclpy.node import Node
+from geometry_msgs.msg import Twist
+
+class Driver(Node):
+    def __init__(self):
+        super().__init__("driver")
+        self.pub = self.create_publisher(Twist, "/cmd_vel", 10)
+        self.create_timer(0.1, self.tick)        # 10 Hz control loop
+
+    def tick(self):
+        msg = Twist()
+        msg.linear.x = 0.2                       # v = 0.2 m/s forward
+        msg.angular.z = 0.5                      # omega = 0.5 rad/s turn
+        self.pub.publish(msg)
+
+rclpy.init(); rclpy.spin(Driver())
+```
+
+The takeaway: the algorithms in this chapter rarely ship as standalone scripts — they ship as nodes wired into a graph, and "which node publishes what, at what rate, in which frame" is the architecture you actually debug.
+
 ## 41.1 — Key takeaways
 
 - Autonomy is a **closed loop** — perceive → estimate → plan → act — run continuously and in *nested* loops at different rates; latency and loop-closure rate matter as much as algorithmic quality.
-- Plan in **configuration space**, where the robot is a point and obstacles are inflated by its footprint. Wheeled robots are **nonholonomic**: fewer controls than DOF, so not every path is achievable.
-- **Kinematics** maps commands to motion; **control** (PID, feedback linearization, flatness, and LQR from Ch 25) drives tracking error to zero despite disturbances. Watch for integral windup.
+- Sensors are **complementary** (camera, LiDAR, radar, IMU, GPS), and everything is expressed in **coordinate frames** chained by rigid transforms; a wrong transform is the classic robotics bug.
+- Plan in **configuration space**, where the robot is a point and obstacles are inflated by its footprint. Wheeled robots are **nonholonomic**: fewer controls than DOF, so not every path is achievable. The **Jacobian** links joint speeds to tip speeds and drives iterative IK.
+- **Kinematics** maps commands to motion; **control** (PID, feedback linearization, flatness, MPC, and LQR from Ch 25) drives tracking error to zero despite disturbances. Watch for integral windup; MPC adds look-ahead and native constraints.
 - State estimation maintains a **belief**, not a guess, via the **recursive Bayes filter** (predict widens, update narrows). The Kalman filter is its linear-Gaussian closed form; EKF/UKF handle nonlinearity; particle filters handle arbitrary, multi-modal beliefs.
-- **SLAM** estimates trajectory and map together; **loop closure** bounds otherwise-unbounded odometry drift, and the back-end is a graph optimization.
+- **SLAM** estimates trajectory and map together; **loop closure** bounds otherwise-unbounded odometry drift, and the back-end is a weighted nonlinear least-squares graph optimization.
 - **Search planners** (Dijkstra, A* with an admissible heuristic) suit low-dimensional grids; **sampling planners** (PRM, RRT, RRT*) scale to high-DOF arms, with RRT* asymptotically optimal; trajectory optimization smooths the result and a fast replanning loop reacts to a changing world.
-- **Grasping** hinges on **force closure** within friction cones; manipulation spans **prehensile** (grasping) and **non-prehensile** (pushing, sliding) contact.
+- **Grasping** hinges on **force closure** within friction cones (a contact can only push, with friction $\le \mu f_n$); manipulation spans **prehensile** (grasping) and **non-prehensile** (pushing, sliding) contact.
 - **Learning** (imitation, RL in sim, sim-to-real with domain randomization, and emerging end-to-end vision-language-action policies) trades behavior-coding for objective-and-data specification, inheriting distribution-shift risks — now with hardware that can break.
 - **Safety** is a simple verifiable layer under the smart stack; **HRI** demands legible, predictable motion; and **calibration/units/frames/time-sync** errors masquerade as algorithm bugs more often than not.
+- Real systems are built as a graph of **ROS 2 nodes** communicating over topics, services, and actions — the algorithms ship as composable nodes, not standalone scripts.
 
 ## 41.2 — See also
 

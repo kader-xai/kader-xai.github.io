@@ -117,7 +117,36 @@ A **multilayer perceptron (MLP)**, also called a **feedforward network**, is the
 
 Each **layer** is a set of **neurons** (units). A neuron computes a **weighted sum** of its inputs plus a **bias**, then passes that through a nonlinear **activation function**. The reason we need many layers is *representation*: early layers learn simple features (edges, word fragments), later layers combine them into abstract concepts (faces, sentiment). One layer alone is just a linear model; stacking with nonlinearity is what gives the network its expressive power. The **universal approximation theorem** makes this precise: a single hidden layer with enough units can approximate any continuous function to arbitrary accuracy — but "enough" can mean astronomically many units, which is why in practice depth is far more efficient than width. Deep networks reuse features across layers; a shallow one would have to enumerate every combination.
 
+A single neuron, opened up, is just a dot product followed by a squashing function — the same shape as logistic regression. Picture it as a little voting machine: each input arrives weighted, the votes are summed, a bias tips the scale, and the activation decides how loudly the neuron fires.
+
+<svg viewBox="0 0 360 150" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif" font-size="11">
+  <g stroke="currentColor" stroke-width="0.8" opacity="0.6">
+    <line x1="40" y1="35" x2="170" y2="75"/><line x1="40" y1="75" x2="170" y2="75"/><line x1="40" y1="115" x2="170" y2="75"/>
+  </g>
+  <g fill="#38bdf8"><circle cx="30" cy="35" r="11"/><circle cx="30" cy="75" r="11"/><circle cx="30" cy="115" r="11"/></g>
+  <text x="30" y="39" text-anchor="middle" fill="currentColor">x₁</text>
+  <text x="30" y="79" text-anchor="middle" fill="currentColor">x₂</text>
+  <text x="30" y="119" text-anchor="middle" fill="currentColor">x₃</text>
+  <text x="95" y="46" text-anchor="middle" fill="currentColor" font-size="9">w₁</text>
+  <text x="100" y="68" text-anchor="middle" fill="currentColor" font-size="9">w₂</text>
+  <text x="95" y="110" text-anchor="middle" fill="currentColor" font-size="9">w₃</text>
+  <circle cx="185" cy="75" r="18" fill="#6366f1" opacity="0.85"/>
+  <text x="185" y="79" text-anchor="middle" fill="currentColor" font-size="13">Σ</text>
+  <text x="185" y="115" text-anchor="middle" fill="currentColor" font-size="9">+ b</text>
+  <line x1="203" y1="75" x2="245" y2="75" stroke="currentColor" stroke-width="0.8"/>
+  <rect x="245" y="58" width="46" height="34" rx="5" fill="#22c55e" opacity="0.5" stroke="currentColor" stroke-width="0.7"/>
+  <text x="268" y="79" text-anchor="middle" fill="currentColor" font-size="10">g(·)</text>
+  <line x1="291" y1="75" x2="330" y2="75" stroke="currentColor" stroke-width="0.8"/>
+  <text x="325" y="68" text-anchor="middle" fill="currentColor">a</text>
+  <text x="268" y="110" text-anchor="middle" fill="currentColor" font-size="9">activation</text>
+</svg>
+
 A layer is fully described by a weight matrix $W$ and bias vector $b$. If layer $\ell$ has $n_\ell$ neurons and the previous layer has $n_{\ell-1}$ outputs, then $W^{[\ell]}$ has shape $n_\ell \times n_{\ell-1}$ and $b^{[\ell]}$ has length $n_\ell$.
+
+A single neuron computes $a = g\!\left(\sum_{j} w_j x_j + b\right)$.
+
+**In words:** multiply each input by its own weight, add them all up, nudge by a bias, then squash the result through the activation.
+**Also written:** $a = g(\mathbf{w}^\top \mathbf{x} + b)$ — the sum is a dot product of the weight vector and the input vector.
 
 Here is a tiny MLP with 3 inputs, one hidden layer of 4 units, and 2 outputs:
 
@@ -157,11 +186,26 @@ flowchart LR
 Count parameters as you design: a layer mapping $m\to n$ has $n\times m$ weights plus $n$ biases. The MLP above has $(4\cdot3+4) + (2\cdot4+2) = 16 + 10 = 26$ trainable numbers. Knowing this keeps your model from silently exploding in size.
 :::
 
+In a real framework you rarely wire neurons by hand; you declare layers and let the library size the matrices for you:
+
+```python
+import torch.nn as nn
+mlp = nn.Sequential(
+    nn.Linear(3, 4),   # input 3 → hidden 4  (12 weights + 4 biases)
+    nn.ReLU(),
+    nn.Linear(4, 2),   # hidden 4 → output 2 (8 weights + 2 biases)
+)
+print(sum(p.numel() for p in mlp.parameters()))   # -> 26, matches the count above
+```
+
 ## 14.2 — Forward propagation
 
 **Forward propagation** (the *forward pass*) is the act of feeding an input through the network to produce an output. For each layer you do two things: a linear step and a nonlinear step.
 
 The linear **pre-activation** is $z^{[\ell]} = W^{[\ell]} a^{[\ell-1]} + b^{[\ell]}$, and the **activation** is $a^{[\ell]} = g(z^{[\ell]})$, where $g$ is the activation function and $a^{[0]} = x$ is the input. You repeat this layer by layer until you reach the output. That's the whole forward pass — a chain of matrix multiplies interleaved with elementwise nonlinearities.
+
+**In words:** to get a layer's pre-activation, multiply the previous layer's outputs by this layer's weights and add the bias; then squash elementwise to get the activation.
+**Also written:** $a^{[\ell]} = g\!\big(W^{[\ell]} a^{[\ell-1]} + b^{[\ell]}\big)$ — substituting $z$ back in so the whole layer is one composed function.
 
 **Worked example.** Take one input $x = [1, 2]$, a hidden layer with
 
@@ -192,11 +236,25 @@ flowchart LR
 In code, run a whole **batch** at once by stacking examples as rows of a matrix $X$ and computing $Z = XW^\top + b$. The same math vectorizes; you just gain a batch dimension. This is why GPUs, which excel at big matrix multiplies, make neural nets fast.
 :::
 
+The same forward pass in PyTorch is a single call — the framework runs it on CPU or GPU identically:
+
+```python
+import torch
+x = torch.tensor([[1., 2.]])      # shape (batch=1, features=2)
+yhat = mlp[:2](x)                 # Linear(3,4)? — re-declare a 2→… net to match shapes
+# In practice: model.eval(); with torch.no_grad(): yhat = model(x)
+```
+
 ## 14.3 — Backpropagation
 
 Training means adjusting the weights to reduce the loss. To do that we need the **gradient** of the loss with respect to every weight. **Backpropagation** is the algorithm that computes those gradients efficiently by applying the **chain rule** of calculus, working *backward* from the output to the input. The intuition: each weight's influence on the loss flows through the layers above it, so we compute the error at the output, then pass it back layer by layer, multiplying by local derivatives.
 
+A useful mental picture: think of blame flowing backward. The output made an error; each layer asks "how much of that error is *my* fault?" and answers by multiplying the blame coming from above by its own local sensitivity. Backprop is just bookkeeping that reuses the blame already computed at higher layers instead of recomputing it for every weight from scratch.
+
 Define the error signal $\delta^{[\ell]} = \partial L / \partial z^{[\ell]}$. The recipe has three rules. At the output, $\delta^{[L]} = \partial L/\partial a^{[L]} \odot g'(z^{[L]})$. To propagate backward, $\delta^{[\ell]} = (W^{[\ell+1]\top}\delta^{[\ell+1]}) \odot g'(z^{[\ell]})$. And the gradients you actually use are $\partial L/\partial W^{[\ell]} = \delta^{[\ell]} a^{[\ell-1]\top}$ and $\partial L/\partial b^{[\ell]} = \delta^{[\ell]}$.
+
+**In words:** the error at a layer is the error from the layer above, pulled back through that layer's weights and then scaled by how steep this layer's activation was; a weight's gradient is its incoming error times the input that fed it.
+**Also written:** $\delta^{[\ell]} = \big(W^{[\ell+1]\top}\delta^{[\ell+1]}\big)\odot g'\!\big(z^{[\ell]}\big)$ and $\nabla_{W^{[\ell]}} L = \delta^{[\ell]}\,(a^{[\ell-1]})^\top$ (outer product form).
 
 **Tiny worked example.** A 1-input, 1-hidden, 1-output network, all scalars, identity activations: $z_1 = w_1 x$, $a_1 = z_1$, $\hat y = w_2 a_1$, loss $L = \tfrac12(\hat y - y)^2$. Let $x=2,\ w_1=0.5,\ w_2=1.5,\ y=3$. Forward: $a_1 = 1.0$, $\hat y = 1.5$. The error is $\hat y - y = -1.5$.
 
@@ -221,6 +279,19 @@ flowchart RL
   L["∂L/∂ŷ = ŷ - y"] --> D2["δ² → ∂L/∂W²"]
   D2 --> D1["δ¹ = Wᵀδ² ⊙ g'(z¹)"]
   D1 --> DW1["∂L/∂W¹"]
+```
+
+In a framework you never write these rules out; **automatic differentiation** records the forward operations and replays them backward. The same tiny example, computed by PyTorch's autograd:
+
+```python
+import torch
+x = torch.tensor(2.)
+w1 = torch.tensor(.5, requires_grad=True)
+w2 = torch.tensor(1.5, requires_grad=True)
+y  = torch.tensor(3.)
+loss = .5 * (w2 * (w1 * x) - y)**2
+loss.backward()                 # autograd runs backprop for you
+print(w1.grad.item(), w2.grad.item())   # -> -4.5 -1.5
 ```
 
 ::: {.callout-warning}
@@ -283,13 +354,38 @@ gelu    = lambda z: 0.5*z*(1+np.tanh(np.sqrt(2/np.pi)*(z+0.044715*z**3)))
 Default to ReLU for hidden layers in plain MLPs and CNNs; reach for GELU in Transformers. Save sigmoid for a single output that must be a probability, not for hidden layers.
 :::
 
+### 14.4.1 — Why ReLU "dies," and the modern menu
+
+The everyday way to picture a **dead ReLU**: a light switch stuck in the off position. If a unit's weighted sum lands in the negative zone for *every* training example, ReLU outputs 0 and — crucially — its gradient is also 0, so no update can ever push it back on. A bad batch or too-aggressive a learning rate can flip a chunk of units off permanently, and they contribute nothing for the rest of training.
+
+The cures are exactly the soft-bottom variants. **Leaky ReLU** lets a trickle of gradient through on the negative side ($\alpha z$ with $\alpha\approx0.01$). **PReLU** learns that slope per channel instead of fixing it. **ELU** and **SiLU/Swish** ($z\cdot\sigma(z)$) curve smoothly through zero, and **GELU** — the de-facto choice in Transformers — weights the input by the probability a standard normal is below it. The practical menu:
+
+| Activation | One-line intuition | Use it when |
+|------------|--------------------|-------------|
+| ReLU | hard hinge, gradient 0 or 1 | default for MLP/CNN hidden layers |
+| Leaky / PReLU | ReLU with a leaky bottom | many units are dying |
+| GELU | "soft, probabilistic ReLU" | Transformers, modern NLP |
+| SiLU / Swish | $z\cdot\sigma(z)$, smooth self-gate | EfficientNet, some vision nets |
+| Sigmoid / Tanh | squash to (0,1)/(−1,1) | output gates, final probability |
+
+```python
+import torch.nn.functional as F
+# framework activations — fused, numerically careful implementations
+F.relu(z); F.leaky_relu(z, 0.01); F.gelu(z); F.silu(z)   # pick per the table
+```
+
 ## 14.5 — Softmax
 
 When the output is a choice among $K$ classes, the network produces $K$ raw scores called **logits**. **Softmax** turns those logits into a probability distribution — all positive, summing to 1 — so the largest logit becomes the most likely class while keeping the others in proportion.
 
+Think of softmax as a "soft" version of just picking the maximum: instead of awarding all the probability to the single biggest logit, it hands out probability in proportion to how big each logit is *after* exponentiating, so a close runner-up still gets a meaningful share.
+
 The formula for class $i$ is
 
 $$\text{softmax}(z)_i = \frac{e^{z_i}}{\sum_{j=1}^{K} e^{z_j}}.$$
+
+**In words:** exponentiate every logit to make it positive, then divide each by the total so they sum to 1.
+**Also written:** $\text{softmax}(z)_i = \dfrac{\exp(z_i)}{\mathbf{1}^\top \exp(z)}$ — the denominator is the sum of the elementwise-exponentiated vector.
 
 **Worked example.** Logits $z = [2.0,\ 1.0,\ 0.1]$. Exponentiate: $[7.39,\ 2.72,\ 1.11]$, sum $= 11.22$. Divide: $[0.659,\ 0.242,\ 0.099]$ — a valid distribution, peaked on class 0.
 
@@ -313,6 +409,9 @@ But "small random" needs the right scale. Too large and activations blow up; too
 
 $$W \sim \mathcal{N}\!\left(0,\ \frac{2}{n_{in}}\right) \quad \text{(He, for ReLU)}$$
 
+**In words:** draw each weight from a bell curve centered at zero whose spread shrinks as the layer gets wider, so the total signal entering a neuron stays a steady size.
+**Also written:** $W_{ij} \sim \mathcal{N}(0,\sigma^2)$ with $\sigma = \sqrt{2/n_{in}}$ — the standard-deviation form of the same rule.
+
 **Worked example.** Push a random signal through 50 layers and watch the activation scale. With He init the standard deviation stays near 1; halve the recommended scale and it decays toward zero (vanishing), double it and it explodes:
 
 ```python
@@ -330,13 +429,28 @@ for scale in [1.0, 0.5, 2.0]:               # multiplier on the He std
 Rule of thumb: ReLU networks → He, tanh/sigmoid → Xavier. Biases start at zero (no symmetry issue there). Modern frameworks pick a sensible default, but a wrong init can stall training entirely.
 :::
 
+In PyTorch you set the scheme explicitly when the default doesn't match your activation:
+
+```python
+import torch.nn as nn
+layer = nn.Linear(256, 256)
+nn.init.kaiming_normal_(layer.weight, nonlinearity="relu")  # He init
+nn.init.zeros_(layer.bias)                                  # biases at 0
+```
+
 ## 14.7 — Loss / cost functions
 
 The **loss function** measures how wrong a single prediction is; the **cost function** is the loss averaged over the dataset. Training minimizes it. The right loss depends on the task.
 
 For **regression** (predicting a number), use **mean squared error (MSE)**: $L = \tfrac1N\sum (\hat y - y)^2$. It penalizes large errors quadratically and pairs naturally with a linear output.
 
+**In words:** average the squared gap between prediction and truth, so being off by 2 hurts four times as much as being off by 1.
+**Also written:** $L = \tfrac1N\,\lVert \hat{\mathbf y} - \mathbf y \rVert_2^2$ — the squared Euclidean distance between the prediction and target vectors, divided by $N$.
+
 For **classification**, use **cross-entropy**, which measures the distance between the predicted probability distribution and the true one. For $K$ classes with one-hot target $y$: $L = -\sum_{i} y_i \log \hat y_i$. Because the truth is one-hot, this reduces to $-\log \hat y_{\text{correct}}$ — the loss is just the negative log-probability the model assigned to the right answer.
+
+**In words:** the loss is how surprised the model is by the true label — the lower the probability it gave the correct class, the bigger the penalty.
+**Also written:** $L = -\log \hat y_{c}$ where $c$ is the true class index — the sum collapses because only the correct class has $y_i = 1$.
 
 **Worked example.** True class is 0, model predicts $\hat y = [0.659, 0.242, 0.099]$ (from §14.5). Cross-entropy $= -\log(0.659) = 0.417$. If the model had been confident-and-correct ($\hat y_0 = 0.99$), loss $= 0.01$; confident-and-wrong ($\hat y_0 = 0.01$) gives $4.6$ — cross-entropy punishes confident mistakes hard.
 
@@ -358,6 +472,15 @@ For **classification**, use **cross-entropy**, which measures the distance betwe
 | Binary classification | sigmoid | binary cross-entropy |
 | Multi-class | softmax | categorical cross-entropy |
 
+```python
+import torch.nn as nn
+mse  = nn.MSELoss()                 # regression
+bce  = nn.BCEWithLogitsLoss()       # binary: fuses sigmoid + cross-entropy
+ce   = nn.CrossEntropyLoss()        # multi-class: fuses softmax + cross-entropy
+# Note: pass RAW logits to CrossEntropyLoss / BCEWithLogitsLoss — they apply
+# softmax/sigmoid internally for numerical stability. Don't softmax twice.
+```
+
 ::: {.callout-warning}
 Don't pair MSE with softmax for classification — the gradients are weak when the model is badly wrong. Softmax + cross-entropy gives a clean gradient of $\hat y - y$, which is why it's the universal default for classifiers.
 :::
@@ -367,6 +490,9 @@ Don't pair MSE with softmax for classification — the gradients are weak when t
 As training proceeds, the distribution of inputs to a layer keeps shifting (its previous layer's weights are changing). This **internal covariate shift** slows learning. **Normalization** layers fix it by re-centering and re-scaling activations to a stable distribution, then letting the network learn its own preferred scale and shift via two trainable parameters $\gamma$ (scale) and $\beta$ (shift).
 
 The mechanism: compute mean $\mu$ and variance $\sigma^2$ of the activations, normalize to $\hat x = (x-\mu)/\sqrt{\sigma^2+\epsilon}$, then output $\gamma \hat x + \beta$. The difference between the two main variants is *what set* you average over.
+
+**In words:** subtract the average and divide by the spread so the numbers sit at zero-mean, unit-scale; then let the network rescale and re-shift them however it likes.
+**Also written:** $y = \gamma\,\dfrac{x-\mu}{\sqrt{\sigma^2+\epsilon}} + \beta$ — one elementwise affine map applied to the standardized activations.
 
 - **Batch normalization** computes $\mu,\sigma^2$ across the **batch dimension** (per feature, over all examples in the mini-batch). Great for CNNs, but it depends on batch size and behaves differently at train vs. test time (it uses running averages at inference).
 - **Layer normalization** computes $\mu,\sigma^2$ across the **feature dimension** (per example, over its own activations). It's independent of batch size and identical at train and test time, which is why Transformers and RNNs use it.
@@ -401,11 +527,22 @@ def layernorm(x, gamma=1.0, beta=0.0, eps=1e-5):
 print(layernorm(np.array([1.,2,3,4])))    # ~[-1.34 -0.45 0.45 1.34]
 ```
 
+The framework versions are drop-in layers — note BatchNorm needs `.eval()` at test time to switch to its running statistics, while LayerNorm behaves the same in both modes:
+
+```python
+import torch.nn as nn
+bn = nn.BatchNorm1d(64)   # CNNs/MLPs: normalizes each of 64 features over the batch
+ln = nn.LayerNorm(64)     # Transformers/RNNs: normalizes each example's 64 features
+# model.eval() makes bn use running mean/var; ln is unaffected by train/eval mode
+```
+
 Beyond fixing covariate shift, normalization smooths the loss landscape, which lets you use higher learning rates and makes training far more robust.
 
 ## 14.9 — Vanishing / exploding gradients
 
 In a deep network, backprop multiplies many derivatives together as it travels back through layers. If those factors are consistently **less than 1**, the product shrinks toward zero — the **vanishing gradient** problem, where early layers learn agonizingly slowly. If they're consistently **greater than 1**, the product blows up — the **exploding gradient** problem, where updates overshoot and the loss diverges to NaN.
+
+Intuition by analogy: it's like a rumor passed down a long line of people. If each person softens it a little (factor < 1), by the end nothing of the original is left — the early layers never hear the correction. If each person exaggerates it (factor > 1), the message snowballs into nonsense — the loss explodes to NaN.
 
 The classic cause of vanishing gradients is **saturating activations**: sigmoid's derivative maxes out at $0.25$, so a 10-layer sigmoid network multiplies ten factors each $\le 0.25$, giving a gradient near $0.25^{10}\approx10^{-6}$. The signal simply doesn't reach the early layers.
 
@@ -425,11 +562,55 @@ flowchart TD
 
 **Gradient clipping** caps the gradient's norm at a threshold (e.g. rescale so $\|g\| \le 5$) — the standard cure for exploding gradients, especially in RNNs. **Residual connections** (covered with CNNs and Transformers) add a shortcut $x + f(x)$ so gradients have an unobstructed path back, which is what makes 100-layer networks trainable at all.
 
+In practice, gradient clipping is one line, inserted between the backward pass and the optimizer step:
+
+```python
+loss.backward()
+torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=5.0)  # cap ‖g‖
+optimizer.step()
+```
+
 ::: {.callout-tip}
 First diagnostic when a deep net won't learn: print the gradient norm per layer. Near-zero norms at early layers → vanishing (switch to ReLU/He/norm). NaN loss → exploding (clip gradients, drop the learning rate).
 :::
 
-## 14.10 — Epochs, batches & the training loop
+## 14.10 — Regularization: dropout & weight decay
+
+A network with thousands of free weights can simply *memorize* the training set — nailing those examples while flopping on new ones. That gap is **overfitting**, and **regularization** is any technique that fights it by discouraging the model from leaning too hard on any one detail. Two are so common they belong here next to the core training machinery.
+
+**Dropout** is the "don't rely on any single teammate" trick. During training, each neuron is randomly switched off with probability $p$ (a fresh random mask every forward pass). The network can no longer depend on one specific unit always being present, so it spreads its bets and learns redundant, robust features. At test time dropout is turned off and activations are scaled so the expected output matches training. Intuitively, it trains a huge ensemble of thinned sub-networks that share weights.
+
+$$a_i^{\text{train}} = \frac{m_i}{1-p}\,a_i, \qquad m_i \sim \text{Bernoulli}(1-p)$$
+
+**In words:** with probability $p$ zero out each unit; keep the survivors but scale them up by $1/(1-p)$ so the layer's average strength is unchanged.
+**Also written:** $\mathbf a^{\text{train}} = \dfrac{1}{1-p}\,(\mathbf m \odot \mathbf a)$ with $\mathbf m$ a random 0/1 mask — the "inverted dropout" form used in practice.
+
+**Weight decay** (equivalent to **L2 regularization**) is the "keep weights small unless the data insists" trick. It adds a penalty $\tfrac{\lambda}{2}\lVert W\rVert_2^2$ to the loss, which on each step nudges every weight a little toward zero. Small weights mean a smoother, simpler function that generalizes better.
+
+$$L_{\text{total}} = L_{\text{data}} + \frac{\lambda}{2}\sum_w w^2$$
+
+**In words:** add a tax proportional to the squared size of the weights, so the optimizer only grows a weight when the data-fit improvement outweighs the tax.
+**Also written:** the gradient picks up a term $\lambda w$, so the update becomes $w \leftarrow (1-\eta\lambda)\,w - \eta\,\nabla_w L_{\text{data}}$ — every step shrinks $w$ by a factor before the data gradient is applied.
+
+**Worked example.** A layer with weight $w=4.0$, learning rate $\eta=0.1$, decay $\lambda=0.01$, and zero data gradient for the moment. The decay term alone updates $w \leftarrow (1 - 0.1\cdot0.01)\cdot4.0 = 0.999\cdot4.0 = 3.996$ — a tiny, steady pull toward zero on every step that only large, useful weights can resist.
+
+```python
+import torch.nn as nn
+net = nn.Sequential(
+    nn.Linear(128, 64), nn.ReLU(),
+    nn.Dropout(p=0.5),                 # drop half the units each forward pass
+    nn.Linear(64, 10),
+)
+# weight decay is an optimizer argument, not a layer:
+opt = torch.optim.AdamW(net.parameters(), lr=1e-3, weight_decay=0.01)
+# net.train() enables dropout; net.eval() disables it for inference
+```
+
+::: {.callout-tip}
+Dropout and weight decay stack with the other generalization tools — early stopping (§14.11), data augmentation, and smaller models. Turn dropout *off* at inference (`model.eval()`), or your predictions will be needlessly noisy.
+:::
+
+## 14.11 — Epochs, batches & the training loop
 
 Training repeats one core cycle: forward pass → compute loss → backward pass → update weights. The vocabulary describes how we slice the data through this cycle. A **batch** (or **mini-batch**) is a small group of examples processed together before one weight update. An **iteration** is one such update. An **epoch** is one full pass over the entire training set.
 
@@ -455,24 +636,71 @@ for epoch in range(n_epochs):
     # validate, log loss, maybe early-stop
 ```
 
+The same loop in idiomatic PyTorch — the five lines inside the batch loop are the canonical training step every practitioner has memorized:
+
+```python
+import torch
+model.train()
+for epoch in range(n_epochs):
+    for xb, yb in train_loader:              # DataLoader shuffles & batches
+        optimizer.zero_grad()                # 1. clear old gradients
+        preds = model(xb)                    # 2. forward
+        loss = criterion(preds, yb)          # 3. loss (raw logits → CrossEntropyLoss)
+        loss.backward()                      # 4. backprop (autograd)
+        optimizer.step()                     # 5. update weights
+    # model.eval(); validate; early-stop on validation loss
+```
+
 The **learning rate** scales each update; it's the single most important hyperparameter (see the Optimization chapter for SGD, momentum, and Adam). Shuffling each epoch prevents the model from memorizing batch order. You typically track validation loss to decide when to stop.
+
+**Early stopping** is the standard way to *decide* when to stop: watch the validation loss each epoch, and once it stops improving for a set number of epochs (the "patience"), halt and keep the best checkpoint. It's a cheap, effective regularizer — it stops training right before the model starts memorizing.
 
 ::: {.callout-warning}
 A batch too large can hurt generalization (the gradient gets so smooth it heads straight for a sharp minimum) and a learning rate too high makes loss diverge. When in doubt, lower the learning rate first — it fixes more training failures than any other single knob.
 :::
 
-## 14.11 — Key takeaways
+## 14.12 — A complete worked network (Keras)
+
+Pulling the whole chapter together, here is an end-to-end classifier — layers, activations, softmax output, cross-entropy loss, an optimizer, and the training loop — in a few lines of Keras. Every piece maps to a section above.
+
+```python
+import tensorflow as tf
+from tensorflow import keras
+
+model = keras.Sequential([
+    keras.layers.Dense(128, activation="relu"),   # §14.1 layer + §14.4 ReLU
+    keras.layers.BatchNormalization(),            # §14.8 normalization
+    keras.layers.Dropout(0.3),                    # §14.10 regularization
+    keras.layers.Dense(10, activation="softmax"), # §14.5 softmax output
+])
+model.compile(
+    optimizer=keras.optimizers.Adam(1e-3),        # §14.11 update rule
+    loss="sparse_categorical_crossentropy",       # §14.7 loss
+    metrics=["accuracy"],
+)
+model.fit(                                        # §14.11 epochs/batches loop
+    X_train, y_train, epochs=10, batch_size=64,
+    validation_split=0.1,
+    callbacks=[keras.callbacks.EarlyStopping(patience=3,    # §14.11 early stop
+                                             restore_best_weights=True)],
+)
+```
+
+That single `fit` call runs forward propagation (§14.2), backpropagation (§14.3), and mini-batch gradient descent (§14.11) under the hood — the entire chapter, executed on every batch.
+
+## 14.13 — Key takeaways
 
 - An **MLP** stacks layers of (weighted sum + bias + nonlinear activation); depth + nonlinearity is what gives expressive power.
 - **Forward propagation** is repeated $z=Wa+b$, $a=g(z)$; **backpropagation** reuses the chain rule to get all gradients in one backward pass.
-- **Activations** must be nonlinear — ReLU by default, GELU in Transformers, sigmoid only for probability outputs.
+- **Activations** must be nonlinear — ReLU by default, GELU in Transformers, sigmoid only for probability outputs; soft-bottom variants cure dead units.
 - **Softmax** turns logits into probabilities; pair it with **cross-entropy** loss (and use **MSE** for regression).
 - **Initialize** weights small and random (never zero) with **He** (ReLU) or **Xavier** (tanh) scaling.
 - **Normalization** (batch vs. layer) stabilizes activations and speeds training; layer norm dominates in Transformers.
+- **Regularize** with dropout and weight decay (and early stopping) to close the train–test gap.
 - **Vanishing/exploding gradients** come from multiplying many derivatives; fix with non-saturating activations, good init, normalization, residuals, and gradient clipping.
 - Train in **mini-batches** over multiple **epochs**; the **learning rate** is the knob that most often makes or breaks training.
 
-## 14.12 — See also
+## 14.14 — See also
 
 - **Calculus & Differentiation** — the chain rule that backpropagation is built on.
 - **Optimization** — SGD, momentum, Adam, and learning-rate schedules that drive the update step.

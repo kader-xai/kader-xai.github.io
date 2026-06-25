@@ -126,6 +126,13 @@ A **search problem** is defined by these pieces:
 
 A **solution** is a path (a sequence of actions) from the initial state to a goal state; an **optimal solution** is one of least path cost.
 
+The path cost of a solution is just the running total of step costs along it:
+
+$$g(\text{path}) = \sum_{i=1}^{k} c(s_{i-1}, a_i, s_i)$$
+
+**In words:** the total cost of a path is the sum of the costs of each individual action taken along it, from the first step to the last.
+**Also written:** $g = c_1 + c_2 + \dots + c_k$ — add up the per-step costs one after another (a cumulative sum).
+
 **Worked example — the 8-puzzle.** A 3×3 grid holds tiles 1–8 and one blank. A state is an arrangement of tiles; the blank can slide Up/Down/Left/Right (swapping with a neighbor). The goal test checks for the sorted arrangement. Each move costs 1, so the path cost equals the number of moves.
 
 ```
@@ -149,6 +156,29 @@ flowchart LR
 ```
 
 A small but important idea is **abstraction**: the state you write down should keep only what matters. For route-finding you record the current city, not the weather or the color of the car. A good abstraction is one where every abstract solution can still be carried out in the real world, and the abstraction is as coarse as you can get away with — fewer details mean a smaller graph to search.
+
+### 32.1.1 — The search tree vs. the state graph
+
+Here is a distinction that trips up almost everyone the first time: the **state space** and the **search tree** are *not* the same object. The state space is the underlying map — each distinct configuration appears once, and roads (transitions) may loop back on themselves. The search tree is the record of *paths the algorithm has explored* — and the same state can show up many times in that tree if there are several routes to reach it.
+
+Intuition: think of a city map (the state graph) versus all the different walking routes you could trace through it (the tree). The city has one "Main Square," but a list of routes might mention Main Square a dozen times because a dozen different walks pass through it. A search algorithm builds **nodes** — bookkeeping objects, each holding a state, its parent, the action that produced it, and the path cost $g$ — and a single state can hide behind many nodes.
+
+```{mermaid}
+flowchart TB
+  subgraph graph["State graph (the map)"]
+    a((A)) --- b((B))
+    b --- c((C))
+    a --- c
+  end
+  subgraph tree["Search tree from A (the routes)"]
+    A2((A)) --> B2((B))
+    A2 --> C2((C))
+    B2 --> C2b((C))
+    C2 --> B2b((B))
+  end
+```
+
+This is exactly why **graph search** keeps a `seen`/`explored` set: without it, the same state gets re-expanded through every path that reaches it, and on a cyclic map the tree is infinite. **Tree search** omits that set (cheaper memory, risk of loops); **graph search** pays for a visited set to guarantee each state is expanded at most once. Every code skeleton in this chapter that tracks `seen` is doing graph search.
 
 ::: {.callout-tip}
 The hardest part of search is usually the *formulation*, not the algorithm. Choosing a compact state representation and the right action granularity (abstracting away irrelevant detail) can shrink a hopeless space to a tractable one before any code runs.
@@ -191,6 +221,28 @@ flowchart TB
 ```
 
 For this tree, **BFS** visits Start, A, B, C, D, E, Goal — finding Goal at depth 2 only after exploring the whole level above it. **DFS** visits Start, A, C, D, B, E, Goal — diving all the way into A's subtree before it ever looks at B.
+
+This "where does the next node come from?" choice is the whole story, and a single picture captures it — the *only* difference between BFS, DFS, and UCS is which end of the frontier you remove from:
+
+<svg viewBox="0 0 440 180" xmlns="http://www.w3.org/2000/svg" font-size="11" fill="currentColor">
+  <rect x="150" y="60" width="40" height="36" rx="4" fill="#6366f1" fill-opacity="0.35" stroke="currentColor"/>
+  <rect x="190" y="60" width="40" height="36" rx="4" fill="#6366f1" fill-opacity="0.25" stroke="currentColor"/>
+  <rect x="230" y="60" width="40" height="36" rx="4" fill="#6366f1" fill-opacity="0.18" stroke="currentColor"/>
+  <rect x="270" y="60" width="40" height="36" rx="4" fill="#6366f1" fill-opacity="0.12" stroke="currentColor"/>
+  <text x="195" y="50" text-anchor="middle">the frontier (a line of waiting nodes)</text>
+  <text x="120" y="82" text-anchor="end" fill="#22c55e">front</text>
+  <text x="320" y="82" text-anchor="start" fill="#f59e0b">back</text>
+  <path d="M148,78 L128,78" stroke="#22c55e" stroke-width="2" marker-end="url(#ar)"/>
+  <path d="M312,78 L332,78" stroke="#f59e0b" stroke-width="2" marker-end="url(#ar)"/>
+  <text x="20" y="130" fill="#22c55e">BFS: take from front, add to back (FIFO)</text>
+  <text x="20" y="148" fill="#f59e0b">DFS: take from back, add to back (LIFO)</text>
+  <text x="20" y="166" fill="#ec4899">UCS / A*: take the lowest-priority one (heap)</text>
+  <defs>
+    <marker id="ar" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto">
+      <path d="M0,0 L6,3 L0,6 Z" fill="currentColor"/>
+    </marker>
+  </defs>
+</svg>
 
 The shared skeleton in code is short; only the data structure you pull from changes:
 
@@ -237,6 +289,31 @@ The four blind strategies compared on the properties that matter:
 
 Here $C^*$ is the optimal cost and $\varepsilon$ the smallest step cost.
 
+### 32.2.1 — Using a real library (networkx)
+
+In practice you rarely hand-roll BFS or Dijkstra on a real graph — a battle-tested library has the edge cases (cycles, disconnected components, ties) already handled. `networkx` gives you the same algorithms in one call, which is the lazy and correct choice for anything beyond a teaching example:
+
+```python
+import networkx as nx
+
+# Romania-style weighted road map
+G = nx.Graph()
+G.add_weighted_edges_from([
+    ("S", "A", 4), ("A", "Z", 3),    # S->A->Z costs 7
+    ("S", "B", 2), ("B", "G", 6), ("G", "Z", 3),   # S->B->G->Z costs 11
+])
+
+print(nx.shortest_path(G, "S", "Z"))                       # BFS (unweighted): ['S', 'A', 'Z']
+print(nx.shortest_path(G, "S", "Z", weight="weight"))      # Dijkstra/UCS: ['S', 'A', 'Z']
+print(nx.shortest_path_length(G, "S", "Z", weight="weight"))  # 7
+
+# A* with a heuristic: networkx takes h(u, v) as a function
+h = {"S": 7, "A": 3, "B": 6, "G": 3, "Z": 0}     # straight-line estimate to Z
+print(nx.astar_path(G, "S", "Z", heuristic=lambda u, v: h[u], weight="weight"))
+```
+
+The from-scratch versions above are for *understanding* the mechanism; `networkx` (or `scipy.sparse.csgraph` for big numeric graphs) is what you ship.
+
 ::: {.callout-warning}
 Plain DFS on a graph with cycles can loop forever. Always track visited states (graph search) or impose a depth limit. And don't reach for BFS on deep problems — its $O(b^d)$ memory exhausts RAM long before time runs out; use iterative deepening instead.
 :::
@@ -251,7 +328,28 @@ Blind search treats every frontier node as equally promising. **Informed search*
 
 $$f(n) = g(n) + h(n)$$
 
+**In words:** the estimated total cost of the best path through node $n$ equals what you have *already* spent getting to $n$ plus a guess of what it will *still* cost to reach the goal from $n$.
+**Also written:** $f(n) = \underbrace{g(n)}_{\text{cost behind you}} + \underbrace{h(n)}_{\text{estimated cost ahead}}$ — split the total into "past" and "future" halves.
+
 where $g(n)$ is the actual cost from the start to $n$, and $h(n)$ is the estimated cost from $n$ to the goal. So $f(n)$ estimates the total cost of the cheapest path *through* $n$. A\* always expands the lowest-$f$ frontier node. Intuitively it balances "how far I've come" against "how far I think I still have to go." UCS is the special case $h=0$, greedy is the special case $g=0$, and A\* is the principled middle between them.
+
+The three informed strategies are really one knob — *how much do you trust the past versus the future?*
+
+<svg viewBox="0 0 440 110" xmlns="http://www.w3.org/2000/svg" font-size="11" fill="currentColor">
+  <line x1="40" y1="55" x2="400" y2="55" stroke="currentColor" stroke-width="1.5"/>
+  <circle cx="40" cy="55" r="6" fill="#38bdf8"/>
+  <text x="40" y="38" text-anchor="middle">UCS</text>
+  <text x="40" y="80" text-anchor="middle" fill="#38bdf8">f = g</text>
+  <text x="40" y="95" text-anchor="middle">(only the past)</text>
+  <circle cx="220" cy="55" r="6" fill="#22c55e"/>
+  <text x="220" y="38" text-anchor="middle">A*</text>
+  <text x="220" y="80" text-anchor="middle" fill="#22c55e">f = g + h</text>
+  <text x="220" y="95" text-anchor="middle">(balanced)</text>
+  <circle cx="400" cy="55" r="6" fill="#f59e0b"/>
+  <text x="400" y="38" text-anchor="middle">Greedy</text>
+  <text x="400" y="80" text-anchor="middle" fill="#f59e0b">f = h</text>
+  <text x="400" y="95" text-anchor="middle">(only the future)</text>
+</svg>
 
 **Worked example — A\* on a road map.** Cities connected by roads with travel costs, plus a straight-line heuristic $h$ to the goal **Z**:
 
@@ -309,9 +407,15 @@ A\*'s optimality is not automatic — it depends on the heuristic obeying one of
 
 A heuristic is **admissible** if it *never overestimates* the true remaining cost: $h(n) \le h^*(n)$ for every node, where $h^*(n)$ is the real cost from $n$ to the goal. An admissible heuristic is **optimistic** — it may guess too low but never too high. Straight-line distance is admissible for road travel because no road is ever shorter than the straight line between two points.
 
+**In words:** the heuristic's guess at any node is allowed to be too cheap, but never too expensive — it must stay at or below the genuine cost-to-go.
+**Also written:** $\forall n:\ 0 \le h(n) \le h^*(n)$ — the estimate is pinned between zero and the true remaining distance.
+
 A heuristic is **consistent** (or **monotone**) if it obeys a triangle inequality: for every node $n$ and successor $n'$ reached by action $a$,
 
 $$h(n) \le c(n, a, n') + h(n')$$
+
+**In words:** moving one step toward the goal can shrink your remaining estimate by at most what that step actually cost — the heuristic can never "drop too fast."
+**Also written:** $h(n) - h(n') \le c(n, a, n')$ — the *decrease* in the estimate across an edge is bounded by that edge's cost.
 
 Consistency means the estimate never drops by more than the step actually costs. It is the stronger condition: **every consistent heuristic is admissible**, but not every admissible one is consistent.
 
@@ -330,6 +434,26 @@ assert not is_consistent([("A", 1, "Z")], lambda x: {"A":3,"Z":0}[x]) # 3 <= 1+0
 ```
 
 **Dominance.** Between two admissible heuristics, the one that is *always larger* (closer to $h^*$ without exceeding it) is better — it expands fewer nodes because its estimates prune more aggressively. So we want heuristics as high as possible while staying admissible. A common way to invent one is **relaxation**: drop a constraint of the real problem and solve the easier version exactly. For the 8-puzzle, allowing a tile to teleport to its target gives the **misplaced-tiles** heuristic (count the tiles out of place); allowing a tile to slide through others gives the stronger **Manhattan-distance** heuristic (sum each tile's grid distance to its target). Both are admissible, and Manhattan distance dominates, so it explores far fewer nodes.
+
+**Worked example — the two 8-puzzle heuristics, numerically.** Take a state where tiles 1, 2, and 5 are out of place: tile 1 is one row above its target, tile 2 is two columns away, tile 5 is one step away. The misplaced-tiles heuristic just counts them: $h_1 = 3$. The Manhattan heuristic sums each tile's grid distance: $h_2 = 1 + 2 + 1 = 4$. Both are $\le$ the true number of moves, so both are admissible — but $h_2 = 4 \ge h_1 = 3$ at this state (and at every state), so A\* with $h_2$ prunes harder and expands fewer nodes. That single point of dominance can mean exploring thousands fewer nodes on a hard puzzle.
+
+```python
+def manhattan(state, goal):
+    """8-puzzle Manhattan-distance heuristic. state/goal: tuples of 9 ints, 0=blank."""
+    dist = 0
+    for tile in range(1, 9):
+        i, j = divmod(state.index(tile), 3)
+        gi, gj = divmod(goal.index(tile), 3)
+        dist += abs(i - gi) + abs(j - gj)
+    return dist
+
+def misplaced(state, goal):
+    return sum(1 for k in range(9) if state[k] and state[k] != goal[k])
+
+GOAL = (1, 2, 3, 4, 5, 6, 7, 8, 0)
+s = (1, 2, 3, 4, 0, 6, 7, 5, 8)      # tiles 5 and 8 swapped-ish
+assert manhattan(s, GOAL) >= misplaced(s, GOAL)   # Manhattan dominates
+```
 
 ```{mermaid}
 flowchart TB
@@ -355,7 +479,12 @@ Everything so far returns a *path*. But for many problems — scheduling, layout
 
 $$P(\text{accept a worse move}) = e^{-\Delta / T}$$
 
+**In words:** when a candidate move makes things worse by $\Delta$, accept it anyway with a chance that shrinks fast for big setbacks and shrinks as the system cools.
+**Also written:** $\ln P = -\Delta / T$, i.e. $P = \exp(-\Delta/T)$ — the log-probability of accepting a bad move is just the negative penalty scaled by temperature (the Boltzmann factor).
+
 The temperature controls how reckless the search is. When $T$ is large, $e^{-\Delta/T}$ is close to 1, so even bad moves get through; as $T \to 0$, the same probability collapses toward 0 and the search hardens into plain hill climbing.
+
+A small numeric feel: with $\Delta = 2$, at a hot $T = 10$ the accept probability is $e^{-0.2} \approx 0.82$ (very willing to backtrack), but at a cold $T = 0.5$ it is $e^{-4} \approx 0.018$ (almost never). Same bad move, opposite behavior — that is the cooling schedule doing its job.
 
 **Beam search** (the local version) is the parallel compromise: instead of one current state, keep the $k$ best states (the **beam width**). At each step, generate all successors of all $k$ states and keep the best $k$ overall. With $k=1$ it is hill climbing; with $k=\infty$ it approaches breadth-first behavior. The danger is that all $k$ beams crowd into the same promising region and lose diversity; **stochastic beam search** keeps successors with probability rising in their quality, which spreads the beams out and avoids that collapse.
 
@@ -371,6 +500,20 @@ def simulated_annealing(start, neighbors, energy, schedule):
         d = energy(nxt) - cur_e           # >0 means worse (we minimize energy)
         if d < 0 or random.random() < math.exp(-d / T):
             cur, cur_e = nxt, energy(nxt) # accept improving OR (probabilistically) worse
+```
+
+In real projects you usually reach for a library rather than tuning a cooling schedule by hand. `scipy.optimize` ships a global optimizer (**dual annealing**, a modern descendant of simulated annealing) that handles the schedule, restarts, and a local-refinement step for you:
+
+```python
+import numpy as np
+from scipy.optimize import dual_annealing
+
+# minimize a bumpy 2-D function full of local minima
+def f(x):
+    return np.sum(x**2 - 10 * np.cos(2 * np.pi * x) + 10)   # Rastrigin
+
+result = dual_annealing(f, bounds=[(-5.12, 5.12)] * 2, seed=0)
+print(result.x, result.fun)     # lands near the global minimum at (0, 0), f≈0
 ```
 
 The landscape below is exactly what local search navigates — and why naive hill climbing fails. A climber starting on the left slope walks *up* to the small bump and stops, never seeing that a far higher peak lies beyond a valley it would have to descend into first:
@@ -390,7 +533,73 @@ The landscape below is exactly what local search navigates — and why naive hil
 Rule of thumb: if you want the *path*, use A\*; if you only want a *good final state* in a vast space, use local search. And when hill climbing keeps stalling, reach for random restarts before anything fancier — it is one line of code and often beats elaborate methods.
 :::
 
-## 32.6 — Memory / time tradeoffs
+## 32.6 — Genetic algorithms (population-based search)
+
+Local search keeps one state (or $k$ states) and nudges it. A **genetic algorithm (GA)** keeps a whole **population** of states and lets them *breed*. The everyday picture is animal breeding: keep a herd, let the fittest individuals reproduce, mix their traits, sprinkle in the occasional random mutation, and over many generations the herd drifts toward whatever "fit" rewards. It is local search with sex — recombination lets two decent partial solutions combine into a better whole, which plain hill climbing can never do.
+
+The loop has four moves, repeated each generation:
+
+- **Fitness** — score every individual with the objective function (higher is better).
+- **Selection** — pick parents with probability rising in fitness (good states breed more).
+- **Crossover** — splice two parents into a child, taking part of the state string from each.
+- **Mutation** — flip a small random piece of the child, to keep injecting fresh diversity.
+
+The probability of selecting an individual is just its share of the total fitness:
+
+$$P(\text{select } i) = \frac{\text{fit}(i)}{\sum_{j} \text{fit}(j)}$$
+
+**In words:** an individual's chance of becoming a parent is its own fitness divided by the fitness of the entire population — fitter individuals get a proportionally bigger slice.
+**Also written:** $P(i) = \text{fit}(i) / Z$ where $Z = \sum_j \text{fit}(j)$ is the normalizing total (a softmax-free, fitness-proportional weighting, a.k.a. "roulette-wheel" selection).
+
+**Worked example — 8-queens as a string.** Encode a board as 8 digits, one per column, giving each queen's row (e.g. `24748552`). Fitness = number of *non-attacking* pairs (max 28). Two parent strings cross over at a random cut point — `2474|8552` and `3275|1641` produce child `2474|1641` — and a mutation might bump one digit. Run a few hundred generations and a population reliably finds a 28-fitness (zero-conflict) board, even though the space has $8^8 \approx 16.7$ million arrangements.
+
+```{mermaid}
+flowchart LR
+  P["Population<br/>(many states)"] --> F["Score fitness"]
+  F --> S["Select parents<br/>(fitter = likelier)"]
+  S --> C["Crossover<br/>(splice two parents)"]
+  C --> M["Mutate<br/>(random tweak)"]
+  M --> P
+```
+
+A compact GA in NumPy, solving 8-queens:
+
+```python
+import numpy as np
+rng = np.random.default_rng(0)
+
+def fitness(ind):                       # non-attacking pairs, max 28
+    clashes = 0
+    for i in range(8):
+        for j in range(i + 1, 8):
+            if ind[i] == ind[j] or abs(ind[i] - ind[j]) == j - i:
+                clashes += 1
+    return 28 - clashes
+
+pop = rng.integers(0, 8, size=(100, 8))
+for _ in range(500):
+    scores = np.array([fitness(ind) for ind in pop])
+    if scores.max() == 28:
+        break
+    probs = scores / scores.sum()                       # roulette-wheel selection
+    parents = pop[rng.choice(len(pop), size=(100, 2), p=probs)]
+    cut = rng.integers(1, 8, size=100)
+    kids = np.array([np.concatenate([a[:c], b[c:]])     # crossover
+                     for (a, b), c in zip(parents, cut)])
+    m = rng.random((100, 8)) < 0.1                       # 10% mutation rate
+    kids[m] = rng.integers(0, 8, size=m.sum())
+    pop = kids
+
+assert max(fitness(ind) for ind in pop) == 28
+```
+
+GAs are one corner of a larger family — **evolutionary computation and metaheuristics** (genetic programming, evolution strategies, particle swarms, ant colonies) — all of which generalize the population-based idea. They shine when the landscape is rugged and you have no usable gradient or heuristic, at the cost of many fitness evaluations and a fistful of hyperparameters (population size, mutation rate, selection pressure) to tune.
+
+::: {.callout-tip}
+Reach for a GA only after simpler local search (with random restarts) has visibly failed. The crossover operator is what justifies the extra machinery — if your problem's partial solutions don't *combine* meaningfully, a GA buys you little over annealing.
+:::
+
+## 32.7 — Memory / time tradeoffs
 
 Search algorithms live on a spectrum between two scarce resources: **time** (nodes generated) and **memory** (nodes stored). The exponential frontiers of BFS and A\* are usually limited by *memory* first — you run out of RAM long before you run out of patience. The whole art of practical search is buying back memory by spending a little extra time.
 
@@ -401,6 +610,13 @@ Search algorithms live on a spectrum between two scarce resources: **time** (nod
 Other memory-bounded variants — **recursive best-first search (RBFS)** and **SMA\*** (simplified memory-bounded A\*) — use whatever memory you give them and, when that fills up, forget the least-promising nodes (remembering their best $f$ so they can be regenerated if the search comes back). They trade time (re-expansion) for a hard memory ceiling you set in advance.
 
 A small numeric feel for why iterative deepening's re-work is cheap: with branching factor $b=10$, a tree of depth $d=5$ has about $10^5 = 100{,}000$ nodes at the bottom level but only $11{,}111$ in all the levels above combined. Re-generating those upper levels a handful of times adds only single-digit percentage overhead — a bargain for cutting memory from exponential to linear.
+
+The total nodes generated by iterative deepening, counting the re-work, is dominated by the last round:
+
+$$N_{\text{IDS}} = \sum_{i=0}^{d} (d - i + 1)\, b^i = (d{+}1)b^0 + d\, b^1 + \dots + 1\cdot b^d \approx \frac{b}{b-1}\, b^d$$
+
+**In words:** shallow levels get re-expanded once per remaining round, but because each deeper level is $b$ times bigger, the bottom level swamps all the repeats — the total is only a constant factor more than a single BFS sweep.
+**Also written:** $N_{\text{IDS}} = O(b^d)$, the *same* big-O as BFS — for $b=10$ the overhead factor $b/(b-1)$ is about $1.11$, i.e. roughly 11% extra work.
 
 ```{mermaid}
 flowchart LR
@@ -424,7 +640,7 @@ flowchart LR
 "Just use A\*" fails silently on large problems: it doesn't crash with a clear error, it thrashes and exhausts memory mid-search. If your state space is big, budget for a memory-bounded variant (IDA\*) from the start rather than discovering the ceiling at runtime.
 :::
 
-## 32.7 — How search underlies planning and games
+## 32.8 — How search underlies planning and games
 
 Search is not an island — it is the substrate beneath two large branches of AI, and recognizing the same machinery under different names is one of the most useful unifications in the field.
 
@@ -446,17 +662,18 @@ The takeaway is that once you can describe states, actions, a goal, and costs, a
 When facing a new AI problem, first ask the four formulation questions — *What is a state? What are the actions? When am I done? What does a step cost?* If you can answer them, you can almost certainly attack the problem with the machinery in this chapter.
 :::
 
-## 32.8 — Key takeaways
+## 32.9 — Key takeaways
 
-- **Formulate first:** every search problem reduces to states, an initial state, actions, a transition model, a goal test, and a path cost — get these right (and abstract away irrelevant detail) and the algorithm is the easy part.
+- **Formulate first:** every search problem reduces to states, an initial state, actions, a transition model, a goal test, and a path cost — get these right (and abstract away irrelevant detail) and the algorithm is the easy part. Keep the **state graph** (the map) distinct from the **search tree** (the routes through it); graph search adds a visited set so each state is expanded once.
 - **Uninformed search** explores blindly: BFS is complete and optimal (equal costs) but memory-hungry; DFS is memory-light but neither optimal nor (on cyclic graphs) complete; UCS handles varying costs optimally; **iterative deepening** is the practical default — BFS's guarantees at DFS's memory.
 - **Informed search** adds a heuristic $h(n)$: greedy is fast but myopic; **A\*** uses $f = g + h$ to balance cost-so-far against estimated cost-to-go.
 - **A\* is optimal** exactly when $h$ is **admissible** (never overestimates); **consistency** additionally guarantees no node is ever re-expanded. Higher (dominant) admissible heuristics expand fewer nodes; derive them by **relaxing** the problem.
 - **Local search** (hill climbing, simulated annealing, beam search) keeps only the current state(s) and optimizes a final configuration with minimal memory — great when you don't need the path, but watch for local optima, plateaus, and ridges.
+- **Genetic algorithms** carry a whole population and use crossover + mutation to combine partial solutions — population-based global search for rugged, gradient-free landscapes.
 - **Time vs memory** is the central tradeoff: IDA\* and SMA\* buy back A\*'s exponential memory by re-expanding nodes.
 - Search is the **engine under planning, game playing, and combinatorial optimization** — different costumes, same graph exploration.
 
-## 32.9 — See also
+## 32.10 — See also
 
 - **Optimization** — gradient-based and continuous optimization, the numerical cousin of local search.
 - **Planning, Constraint Satisfaction & Game Playing** — adversarial search (minimax, alpha–beta), planning systems, and CSPs built directly on this chapter.

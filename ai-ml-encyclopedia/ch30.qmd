@@ -117,6 +117,14 @@ Imagine you need to add a million pairs of numbers. A **CPU** (central processin
 
 The core operation is the **matrix multiply** (matmul, or in neural nets a *GEMM* — general matrix-multiply). Multiplying an $m\times k$ matrix by a $k\times n$ matrix is $m\cdot k\cdot n$ multiply-adds, all independent. GPUs add dedicated **tensor cores** that do a small matmul (e.g. a $4\times4$ block) in one instruction, giving tens to hundreds of TFLOPs.
 
+**The matmul cost formula.** For a single GEMM the number of arithmetic operations is
+
+$$\text{FLOPs} = 2 \cdot m \cdot k \cdot n$$
+
+**In words:** multiplying an $m\times k$ matrix by a $k\times n$ matrix costs about two operations (one multiply, one add) for every one of the $m\cdot k\cdot n$ inner products that fill the output.
+
+**Also written:** $\text{FLOPs} = 2\,mkn = 2\sum_{i=1}^{m}\sum_{j=1}^{n}\sum_{l=1}^{k} 1$ — the triple sum just counts every multiply-add that builds the $m\times n$ result.
+
 A **TPU** (tensor processing unit, Google's custom chip) pushes this further with a **systolic array**: a grid of multiply-accumulate cells where data flows through and partial sums accumulate as they pass, so one matmul streams through the whole grid without re-reading operands from memory. TPUs are less flexible than GPUs but extremely efficient for the matmul-heavy workloads of training and inference.
 
 ```{mermaid}
@@ -128,6 +136,14 @@ graph TD
 ```
 
 **Why memory matters more than FLOPs.** Here is the part that surprises people. A modern GPU can do, say, 1000 TFLOP/s of compute but only read ~3 TB/s from its **HBM** (high-bandwidth memory). The ratio — FLOPs per byte the chip *can* sustain — is called the **arithmetic intensity** break-even. If your operation does few FLOPs per byte loaded, the cores sit idle waiting for data: you are **memory-bound**. If it does many FLOPs per byte, you are **compute-bound**. This is the **roofline model**.
+
+The roofline says the achievable speed is whichever ceiling you hit first — the memory wall or the compute roof:
+
+$$\text{achievable FLOP/s} = \min\big(\,\text{peak FLOP/s},\ \ \text{intensity}\times\text{bandwidth}\,\big)$$
+
+**In words:** you can never go faster than the chip's raw compute peak, and you also can never go faster than the rate at which bytes arrive times how much math you do per byte — the lower of the two ceilings wins.
+
+**Also written:** with intensity $I$ (FLOP/byte), bandwidth $B$ (byte/s), peak $P$ (FLOP/s): $\text{rate} = \min(P,\ I\cdot B)$; you are memory-bound when $I\cdot B < P$, i.e. when $I < P/B$ (the break-even intensity).
 
 ::: {.callout-note appearance="simple"}
 A small worked check. Suppose a GPU has 312 TFLOP/s (fp16) and 2 TB/s bandwidth. Break-even intensity $= (312\times10^{12}) / (2\times10^{12}) = 156$ FLOPs per byte. A big matmul reuses each loaded value many times → intensity in the hundreds → compute-bound (good, cores busy). But generating one token at a time in an LLM loads gigabytes of weights to do *one* vector-matrix product (intensity ≈ 1–2) → wildly memory-bound. That single fact explains why LLM *decoding* is slow and why nearly every inference trick targets bytes moved, not math done.
@@ -154,6 +170,24 @@ The sketch above is a *cartoon* of the roofline: the real plot is conventionally
 
 ::: {.callout-tip}
 Rule of thumb: training and prompt *prefill* are usually compute-bound (lots of reuse); single-token *decode* is memory-bound. Optimize the right phase — speeding up math does nothing for a memory-bound step.
+:::
+
+### 30.1a — The memory hierarchy and why kernel fusion / FlashAttention win
+
+Think of memory like a desk: the GPU has a vast warehouse (HBM, slow to walk to) and a tiny on-chip notepad (**SRAM**, instant but holds almost nothing). Every time a computation writes a result back to the warehouse and then walks back to fetch it for the next step, that round-trip *is* the cost — not the math. A GPU's **SRAM** is ~100× faster than HBM but ~1000× smaller, so the single biggest software win for a memory-bound workload is to keep intermediate values on the notepad and never round-trip them to the warehouse.
+
+This is the whole idea behind **kernel fusion**: instead of running, say, a matmul, then a separate bias-add, then a separate activation — each one re-reading the data from HBM — you *fuse* them into one kernel that loads once, does all three on-chip, and writes once. **FlashAttention** is the famous example for transformers: classic attention materializes the full $n\times n$ attention-score matrix in HBM (huge for long sequences), but FlashAttention computes attention in tiles that fit in SRAM, never writing the giant matrix out. The result is the same numbers, far fewer bytes moved, and it is now standard in every serious inference stack.
+
+```{mermaid}
+graph TD
+    A[Registers / SRAM: tiny, ~100x faster] --> B[L2 cache]
+    B --> C[HBM: gigabytes, the bottleneck]
+    C --> D[CPU RAM / NVMe: huge, very slow]
+    A -.kernel fusion keeps work up here.-> A
+```
+
+::: {.callout-tip}
+Whenever you see "we made attention/an op faster *without* changing the result," it is almost always a memory-traffic trick: fuse operations, tile to fit SRAM, and avoid writing big intermediates back to HBM.
 :::
 
 ## 30.2 — Distributed training: data, model, tensor, and pipeline parallelism; ZeRO/FSDP
@@ -187,18 +221,86 @@ graph LR
 
 A quick memory illustration of why this matters: training in mixed precision, the **optimizer states** (Adam's two moments plus an fp32 master copy) dominate. A common accounting is **~16 bytes per parameter** of training state (2 fp16 weight + 2 fp16 grad + 4+4+4 fp32 master/momentum/variance ≈ 16). For a 7B model that is **~112 GB** — already past a single 80 GB GPU. Shard it across 8 GPUs with ZeRO and each holds ~14 GB. That is the whole game.
 
+ZeRO comes in **three stages**, each sharding one more thing and saving more memory at the cost of a little more communication. The intuition: stage 1 splits up the bulkiest part (optimizer states), stage 2 also splits gradients, and stage 3 splits the parameters themselves (this is what FSDP does).
+
+$$\text{mem per GPU} \approx \underbrace{2\Psi}_{\text{fp16 weights}} + \underbrace{2\Psi}_{\text{fp16 grads}} + \frac{\overbrace{K\Psi}^{\text{optimizer states}}}{N_{\text{shard}}}\quad\text{(ZeRO-1, }K\approx 12\text{)}$$
+
+**In words:** every GPU still keeps a full copy of the 16-bit weights and gradients, but the heavy optimizer states (the fp32 master copy plus Adam's two moments, about 12 bytes/param) get divided by the number of GPUs you shard across.
+
+**Also written:** for $\Psi$ parameters across $N$ GPUs, ZeRO-1 ≈ $4\Psi + 12\Psi/N$ bytes/GPU; ZeRO-2 also shards gradients → $2\Psi + (2\Psi+12\Psi)/N$; ZeRO-3 (FSDP) shards everything → $\approx 16\Psi/N$ bytes/GPU.
+
 | Strategy | What it splits | Each GPU stores | Main cost | Use when |
 |---|---|---|---|---|
 | Data (DP) | the batch | full model | all-reduce grads | model fits on 1 GPU |
 | Tensor (TP) | one layer's matmul | a slice of each layer | high-bw all-gather | layer too big; fast NVLink |
 | Pipeline (PP) | groups of layers | some layers | pipeline bubble | many layers, slower links OK |
-| ZeRO/FSDP | optimizer+grad+param states | $1/N$ of states | gather params JIT | DP but states don't fit |
+| ZeRO-1 | optimizer states | full params+grads, $1/N$ opt | light extra comm | DP but opt states don't fit |
+| ZeRO-2 | + gradients | full params, $1/N$ grad+opt | moderate comm | need more savings |
+| ZeRO-3 / FSDP | + parameters | $1/N$ of everything | gather params JIT | model itself doesn't fit |
+
+### 30.2a — Doing it in PyTorch (FSDP)
+
+In practice you almost never hand-roll sharding; the framework wraps your model. PyTorch FSDP is one wrapper call:
+
+```python
+import torch
+from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
+from torch.distributed.fsdp import MixedPrecision
+
+# launched with torchrun --nproc_per_node=4 train.py
+torch.distributed.init_process_group("nccl")
+model = MyTransformer().cuda()
+
+# shard params, grads, and optimizer state across all GPUs (ZeRO-3 style)
+model = FSDP(
+    model,
+    mixed_precision=MixedPrecision(
+        param_dtype=torch.bfloat16,      # compute in bf16
+        reduce_dtype=torch.bfloat16,     # all-reduce grads in bf16
+    ),
+    device_id=torch.cuda.current_device(),
+)
+opt = torch.optim.AdamW(model.parameters(), lr=2e-4)
+
+for batch in loader:                     # each GPU gets a different slice
+    opt.zero_grad()
+    loss = model(batch).loss
+    loss.backward()                      # FSDP gathers/frees shards just-in-time
+    opt.step()
+```
+
+The Hugging Face `accelerate` library wraps the same machinery behind a config file, and DeepSpeed exposes the three ZeRO stages directly via a JSON config — pick whichever your stack already uses.
 
 ## 30.3 — Mixed precision
 
 By default, numbers in a network are 32-bit floats (**fp32**). But most of training tolerates far less precision. **Mixed-precision training** runs the heavy matmuls in 16-bit — either **fp16** (5 exponent, 10 mantissa bits) or **bf16** (8 exponent, 7 mantissa bits) — while keeping a few sensitive pieces in fp32. The payoff: half the memory for activations and weights, and 2–8× faster matmuls on tensor cores, with essentially no loss in final accuracy.
 
-The two 16-bit formats trade range vs precision. **bf16** keeps fp32's full exponent range (so it almost never overflows) but has coarse mantissa; **fp16** has finer mantissa but a tiny range that easily overflows to infinity or underflows gradients to zero. Because of that, fp16 training needs **loss scaling**: multiply the loss by a big constant $S$ before backprop so small gradients land in fp16's representable range, then divide by $S$ before the optimizer step. bf16 usually needs no scaling — which is why it has become the default on hardware that supports it.
+The two 16-bit formats trade range vs precision. Picture a number as a ruler: **bf16** keeps the *long* ruler (fp32's full exponent range, so it almost never runs off the end into overflow) but marks it coarsely; **fp16** marks a *short* ruler finely, so it reads small differences well but falls off the end (overflow to infinity, or underflow of tiny gradients to zero) easily. Because of that, fp16 training needs **loss scaling**: multiply the loss by a big constant $S$ before backprop so small gradients land in fp16's representable range, then divide by $S$ before the optimizer step. bf16 usually needs no scaling — which is why it has become the default on hardware that supports it.
+
+The three formats laid side by side — same total story, different split between range and precision:
+
+<svg viewBox="0 0 470 180" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif" font-size="11">
+  <text x="10" y="16" font-weight="bold">Where the bits go (sign · exponent=range · mantissa=precision)</text>
+  <!-- fp32 -->
+  <text x="10" y="48">fp32</text>
+  <rect x="60" y="36" width="14" height="18" fill="#ec4899"/>
+  <rect x="74" y="36" width="64" height="18" fill="#f59e0b"/>
+  <rect x="138" y="36" width="184" height="18" fill="#22c55e"/>
+  <text x="330" y="49" fill="#555" font-size="10">8 exp · 23 mant</text>
+  <!-- bf16 -->
+  <text x="10" y="88">bf16</text>
+  <rect x="60" y="76" width="14" height="18" fill="#ec4899"/>
+  <rect x="74" y="76" width="64" height="18" fill="#f59e0b"/>
+  <rect x="138" y="76" width="56" height="18" fill="#22c55e"/>
+  <text x="330" y="89" fill="#555" font-size="10">8 exp (full range) · 7 mant</text>
+  <!-- fp16 -->
+  <text x="10" y="128">fp16</text>
+  <rect x="60" y="116" width="14" height="18" fill="#ec4899"/>
+  <rect x="74" y="116" width="40" height="18" fill="#f59e0b"/>
+  <rect x="114" y="116" width="80" height="18" fill="#22c55e"/>
+  <text x="330" y="129" fill="#555" font-size="10">5 exp (small range) · 10 mant</text>
+  <text x="60" y="160" font-size="10" fill="#555">pink=sign · orange=exponent (range) · green=mantissa (precision)</text>
+</svg>
 
 ```{mermaid}
 graph TD
@@ -211,8 +313,28 @@ graph TD
 
 Concretely: keep an **fp32 master copy** of the weights (so tiny updates aren't lost to rounding), cast to 16-bit for the forward/backward, accumulate matmul results in fp32 inside the tensor core, and apply the optimizer step to the fp32 master. For inference, you often skip the master copy entirely and just run bf16 or fp16 weights.
 
+In PyTorch this is two context managers, not a rewrite:
+
+```python
+import torch
+scaler = torch.cuda.amp.GradScaler()              # loss scaling (fp16 only)
+
+for x, y in loader:
+    opt.zero_grad()
+    with torch.autocast("cuda", dtype=torch.bfloat16):   # or float16
+        loss = loss_fn(model(x), y)               # matmuls run in 16-bit
+    scaler.scale(loss).backward()                 # scale → backprop → unscale
+    scaler.step(opt)
+    scaler.update()
+# with bf16 you can usually drop the GradScaler entirely
+```
+
 ::: {.callout-warning}
 Don't reach for fp16 on hardware that supports bf16 unless you have a reason. fp16 without loss scaling silently NaNs out partway through training; bf16 sidesteps the whole class of overflow/underflow bugs. The convenience is worth the slightly coarser mantissa.
+:::
+
+::: {.callout-note appearance="simple"}
+🆕 **The newest rung: fp8.** The latest accelerators (NVIDIA Hopper/Blackwell) add **fp8** training and inference — 8-bit floats in two flavours, **e4m3** (more precision) for forward activations/weights and **e5m2** (more range) for gradients. It roughly halves memory and bandwidth again versus bf16, but needs per-tensor scaling factors to keep values in range. Treat it as bf16's successor for the very largest runs, not a default yet.
 :::
 
 ## 30.4 — Inference optimization: quantization, pruning, distillation, KV cache, batching, speculative decoding
@@ -222,6 +344,14 @@ Serving a trained model has its own bottlenecks, distinct from training: the **m
 ### 30.4a — Quantization (int8 / nf4 / GPTQ / AWQ)
 
 **Quantization** stores weights in fewer bits than fp16. The simplest is **int8**: map each weight to an 8-bit integer with a per-channel scale, $w \approx s\cdot q$ where $q\in[-127,127]$. That halves memory versus fp16 and, since decode is memory-bound, roughly doubles decode speed. Going further, **4-bit** formats cut memory by 4×. **nf4** (NormalFloat-4, from QLoRA) is a 4-bit type whose 16 levels are placed to match a normal distribution — weights are roughly Gaussian, so the levels land where the mass is.
+
+The quantize/dequantize pair is just a scale-and-round, then a scale-back:
+
+$$q = \operatorname{round}\!\Big(\frac{w}{s}\Big),\qquad \hat w = s\cdot q,\qquad s = \frac{\max|w|}{2^{b-1}-1}$$
+
+**In words:** divide each weight by a shared step size $s$ and round to the nearest integer code; to read the weight back, multiply the code by $s$ again. The step size is chosen so the biggest weight maps to the largest code an $b$-bit integer can hold.
+
+**Also written:** with $b=8$ the denominator is $2^7-1=127$, so $q=\operatorname{round}(127\,w/\max|w|)$ and $\hat w = q\cdot\max|w|/127$ — a symmetric per-tensor (or per-channel) linear map.
 
 The naive way to round every weight independently loses accuracy at 4-bit. **GPTQ** and **AWQ** are smarter *post-training* quantizers: **GPTQ** rounds weights one column at a time while adjusting the rest to compensate for the error (using second-order/Hessian information from a small calibration set); **AWQ** (Activation-aware Weight Quantization) notices that a few weight channels carry most of the activation magnitude and protects those by scaling, quantizing the rest aggressively. Both recover near-fp16 quality at 4-bit.
 
@@ -263,6 +393,25 @@ A visual of where the bits go — the same weight at three precisions, and the r
 | AWQ | 4 | 0.25× | near-baseline | protects salient channels, fast kernels |
 | nf4 | 4 | 0.25× | near-baseline | Gaussian-optimal, used in QLoRA |
 
+In practice you rarely implement a quantizer; you load a pre-quantized checkpoint or apply one with a library. With Hugging Face, loading a 4-bit model is a flag:
+
+```python
+from transformers import AutoModelForCausalLM, BitsAndBytesConfig
+import torch
+
+cfg = BitsAndBytesConfig(
+    load_in_4bit=True,
+    bnb_4bit_quant_type="nf4",            # Gaussian-optimal 4-bit
+    bnb_4bit_compute_dtype=torch.bfloat16,
+)
+model = AutoModelForCausalLM.from_pretrained(
+    "meta-llama/Llama-2-13b-hf", quantization_config=cfg, device_map="auto",
+)
+# a 26 GB fp16 model now occupies ~6.5 GB — fits a single consumer GPU
+```
+
+**QLoRA** combines this with low-rank adapters: freeze the nf4-quantized base, train only small LoRA matrices on top, and you can *fine-tune* a 13B model on one consumer GPU — the quantized base never needs gradients.
+
 ### 30.4b — Pruning
 
 **Pruning** deletes weights judged unimportant (e.g. those nearest zero), turning a dense network sparse. **Unstructured pruning** zeros individual weights anywhere in the matrix — high compression, but the resulting irregular sparsity pattern rarely speeds up real hardware, which wants dense, regular blocks. **Structured pruning** removes whole units (channels, attention heads, even entire layers) — it achieves less compression for the same accuracy, but it actually runs faster because the matrices genuinely shrink and stay dense. A middle ground, **2:4 sparsity**, forces exactly 2 of every contiguous 4 weights to zero, a regular pattern that modern NVIDIA tensor cores accelerate directly (~2× on those matmuls).
@@ -300,7 +449,15 @@ structured:    drop the whole column/head this row feeds → matrix shrinks 8→
 
 $$\mathcal{L} = \alpha\,\underbrace{\text{CE}(y,\ p_{\text{student}})}_{\text{true labels}} + (1-\alpha)\,T^2\,\underbrace{\text{KL}\!\big(p^T_{\text{teacher}}\,\|\,p^T_{\text{student}}\big)}_{\text{match soft targets}}$$
 
+**In words:** the student's loss is a blend of two goals — get the real answer right (the cross-entropy on true labels) and imitate the teacher's softened opinion about every class (the KL term) — with $\alpha$ setting how much you weight each and $T^2$ keeping the soft-target gradients comparable in size.
+
+**Also written:** $\mathcal{L} = \alpha\,\mathrm{CE}(y,p_s) + (1-\alpha)\,T^2\sum_i p^T_{t,i}\,\log\!\frac{p^T_{t,i}}{p^T_{s,i}}$, where $p^T$ denotes a softmax taken at temperature $T$.
+
 The temperature is the heart of it. A **softmax with temperature** $T$ computes $p_i = \dfrac{e^{z_i/T}}{\sum_j e^{z_j/T}}$. At $T=1$ it is the ordinary softmax; raising $T$ *flattens* the distribution, exposing the small probabilities ("dark knowledge") that tell the student how the teacher relates the wrong classes to each other. The $T^2$ factor on the KL term rescales its gradient back to the same magnitude as the hard-label term.
+
+**In words:** dividing the logits by $T$ before the exponential squashes the gaps between them, so a confident "87% cat" relaxes into "70% cat, 26% dog" — revealing which wrong answers the teacher thought were close calls.
+
+**Also written:** $p_i = \operatorname{softmax}(z/T)_i$; as $T\to\infty$ it approaches the uniform distribution $1/K$, and as $T\to 0$ it approaches a one-hot at $\arg\max_i z_i$.
 
 A tiny number-in/number-out example. Suppose for one image the teacher's logits over three classes {cat, dog, car} are $z = [3.0,\ 1.0,\ -1.0]$.
 
@@ -321,6 +478,10 @@ At $T=1$ the teacher says "cat, 87%" and the dog/car signal is nearly invisible.
 In a transformer, generating each new token attends to *all previous* tokens via their **keys** and **values**. Recomputing those for the whole history at every step would be quadratic and wasteful. The **KV cache** stores the K and V vectors of every past token so each new step only computes K/V for the *one* new token and reuses the rest. This is what makes autoregressive decoding linear instead of quadratic — but the cache grows with sequence length and batch size and can dwarf the weights in memory.
 
 $$\text{KV bytes} = 2 \times L \times n_{\text{layers}} \times d_{\text{model}} \times \text{batch} \times \text{bytes}$$
+
+**In words:** the cache holds two vectors (a key and a value) for every token position, in every layer, across every dimension of the model, for every request in the batch — multiply all those counts together, times the bytes per number.
+
+**Also written:** $\text{KV bytes} = 2\,b\,L\,n_{\text{layers}}\,d_{\text{model}}\,B$ with $b$ = bytes per element (2 for fp16), $L$ = sequence length, $B$ = batch size; it grows *linearly* in both $L$ and $B$.
 
 (the leading 2 is for K and V). For a 7B model (32 layers, $d=4096$), one sequence of 2048 tokens in fp16 is $2\times2048\times32\times4096\times2 \approx 1.0$ GB — *per request*. The weights are fixed, but the KV cache grows linearly with context length, so at long context (or large batch) it overtakes the weights and becomes the thing that fills the GPU:
 
@@ -343,6 +504,11 @@ $$\text{KV bytes} = 2 \times L \times n_{\text{layers}} \times d_{\text{model}} 
 
 The picture is the whole lesson: weights are a flat red line, but the blue KV bars climb with context until, at long context or high batch, the cache is the dominant consumer of GPU memory. That is why the next two techniques — paging the cache and batching around it — exist.
 
+**Shrinking the cache directly.** Two architectural tricks attack the KV cache at the source, and both are now standard in production LLMs:
+
+- **Grouped-query attention (GQA) / multi-query attention (MQA):** instead of every attention head having its own K and V, several query heads *share* one K/V head. If 32 query heads share 8 K/V groups, the KV cache shrinks 4× — which is why models like Llama-2-70B and Mistral use GQA.
+- **KV-cache quantization:** store the cached K and V in int8 or 4-bit instead of fp16, halving or quartering the cache with little quality loss.
+
 ### 30.4e — Batching and continuous batching (vLLM / PagedAttention)
 
 Because decode is memory-bound, processing **one** request wastes the GPU — you load all the weights to serve a single token. **Batching** runs many requests together so each weight load serves many tokens, multiplying throughput nearly for free. Static batching is clumsy, though: requests finish at different times, and a batch that waits for its slowest member leaves GPUs idle.
@@ -363,11 +529,33 @@ graph TD
     end
 ```
 
+Standing this up is a few lines — vLLM does continuous batching and PagedAttention for you:
+
+```python
+from vllm import LLM, SamplingParams
+
+llm = LLM(model="meta-llama/Llama-2-7b-chat-hf", quantization="awq")
+params = SamplingParams(temperature=0.7, max_tokens=128)
+
+# pass MANY prompts at once; vLLM batches them continuously under the hood
+prompts = ["Explain the KV cache.", "What is PagedAttention?", "Define TTFT."]
+for out in llm.generate(prompts, params):
+    print(out.outputs[0].text)
+```
+
 ### 30.4f — Speculative decoding
 
 Decoding is serial: one token at a time, each needing a full pass over the big model. **Speculative decoding** breaks the serialism. A small, cheap **draft model** proposes the next $k$ tokens quickly; the big **target model** then verifies all $k$ in a *single* parallel forward pass (it can score many positions at once). Tokens the target agrees with are accepted; at the first disagreement it falls back to the target's own token.
 
 The key property is correctness: speculative decoding is **distribution-preserving**. With greedy decoding the output is exactly what the target alone would have produced; with sampling, a rejection-sampling correction step makes the accepted tokens follow the target's distribution in expectation. Either way there is **no quality change** — the draft model only proposes, never overrules. The speedup comes entirely from doing fewer *serial* big-model passes, and how big it is depends on the **acceptance rate**: a draft that matches the target often (easy, predictable text) yields a larger speedup than one that rarely agrees. In practice this lands around 2–3× for typical workloads, but it is acceptance-rate-dependent, not a fixed constant.
+
+The expected speedup has a clean closed form. If the draft proposes $k$ tokens and each is accepted independently with probability $\alpha$, the expected number of tokens accepted per verification round is
+
+$$\mathbb{E}[\text{accepted}] = \frac{1 - \alpha^{k+1}}{1 - \alpha}$$
+
+**In words:** with acceptance rate $\alpha$, you usually clear several tokens per expensive target pass instead of one; the higher the draft agrees, the more tokens each verification round advances.
+
+**Also written:** $\sum_{i=0}^{k}\alpha^{i} = 1+\alpha+\alpha^2+\dots+\alpha^k$ — a geometric series; e.g. $\alpha=0.8,\,k=4$ gives $\approx 3.36$ tokens per round versus 1 without speculation.
 
 ```{mermaid}
 graph LR
@@ -396,6 +584,10 @@ For LLMs, latency splits into two phases:
 
 Total time for a response $\approx \text{TTFT} + (\text{output tokens}-1)\times\text{TPOT}$.
 
+**In words:** the user waits once for the prompt to be digested (TTFT), then waits one short gap (TPOT) for every additional word that streams out — add them up for the whole response.
+
+**Also written:** $T_{\text{total}} \approx \text{TTFT} + (N_{\text{out}}-1)\cdot\text{TPOT}$, and the perceived streaming speed is $\text{tokens/sec} = 1/\text{TPOT}$.
+
 ```{mermaid}
 graph LR
     A[Prompt arrives] -->|prefill: process whole prompt| B[First token · TTFT]
@@ -406,6 +598,14 @@ graph LR
 
 **Cost math.** Inference cost ties almost directly to GPU-hours and tokens. Suppose a GPU costs **\$2/hour** and your server sustains **2500 output tokens/sec** (with batching). That's $2500\times3600 = 9{,}000{,}000$ tokens/hour, so cost $= \$2 / 9\text{M} \approx \$0.22$ per million output tokens. Now halve the weights with int8: decode speed roughly doubles to 5000 tok/s, dropping cost to **~\$0.11 per million tokens**. This is the lever — throughput per dollar — that quantization and batching pull. (Prefill/input tokens are usually cheaper per token because prefill is compute-efficient, which is why providers price input and output tokens differently.)
 
+The cost-per-token formula behind that arithmetic:
+
+$$\text{cost per token} = \frac{\text{GPU \$/hour}}{3600 \times \text{tokens/sec}}$$
+
+**In words:** divide what the hardware costs each second by how many tokens it produces each second — faster decode or cheaper GPUs both push the price down, in direct proportion.
+
+**Also written:** \$/token $= C_{\text{hr}} / (3600\,R)$ where $C_{\text{hr}}$ is GPU \$/hour and $R$ is tokens/sec; per *million* tokens, multiply by $10^6$.
+
 ::: {.callout-warning}
 Don't optimize throughput blindly. Cranking batch size to maximize tokens/sec can push TTFT and inter-token latency past what feels responsive (people notice chat slower than ~20–30 tokens/sec). Set a latency SLA *first*, then maximize throughput within it.
 :::
@@ -415,6 +615,8 @@ Don't optimize throughput blindly. Cranking batch size to maximize tokens/sec ca
 Where the model runs is its own design axis. **Cloud serving** puts the model on rented datacenter GPUs behind an API: you get near-unlimited scale, the biggest models, easy updates, and pay-per-use economics — at the price of network round-trips, ongoing cost, and sending user data off-device. **Edge serving** runs the model *on the device itself* — phone, laptop, car, camera, sensor hub — giving low latency (no network), offline operation, and privacy (data never leaves), but constrained by the device's tiny memory, compute, and battery.
 
 The constraints flip which techniques matter. On the edge, aggressive 4-bit (or lower) quantization, distillation to a small student, and pruning are not optional niceties but the price of fitting at all; a 70B cloud model becomes a distilled, quantized 3B model on a phone. In the cloud, you instead lean on batching, PagedAttention, and multi-GPU parallelism to maximize throughput per dollar.
+
+A concrete edge stack worth knowing: **llama.cpp** (with the **GGUF** quantized format) runs LLMs in 4-bit on a laptop CPU or a phone with no GPU at all; **ONNX Runtime** and **Core ML** (Apple) / **TensorFlow Lite** (Android) compile a small model down to the device's native accelerator. The common thread is that the heavy compression of §30.4 is what makes the model small enough to ship inside an app.
 
 ```{mermaid}
 graph TD
@@ -445,6 +647,10 @@ Let's put the chapter's numbers together and answer a concrete question every pr
 
 $$13\times10^{9} \times 16\text{ bytes} \approx 208\text{ GB of state}$$
 
+**In words:** every parameter drags along about 16 bytes of training bookkeeping, so a 13-billion-parameter model needs over 200 GB just for its state — far more than any single card holds.
+
+**Also written:** $M_{\text{train}} \approx 16\,\Psi$ bytes for $\Psi$ parameters; sharded over $N$ GPUs with ZeRO-3 it becomes $\approx 16\,\Psi / N$ per GPU.
+
 Add activations (which scale with batch size and sequence length and can be tens of GB more). 208 GB does not fit one 80 GB GPU. With **ZeRO/FSDP across 4 GPUs**, each holds $\approx 52\text{ GB}$ of state plus its activation share — now it fits, which is exactly why sharded data-parallel training is standard.
 
 ```python
@@ -465,11 +671,11 @@ Back-of-envelope rules: **inference fp16 ≈ 2 bytes/param**, **int8 ≈ 1**, **
 
 ## 30.8 — Key takeaways
 
-- Modern AI is **memory-bound**, not compute-bound: GPUs/TPUs have far more FLOPs than memory bandwidth, so most inference tricks move fewer bytes (the roofline model). LLM decode is the canonical memory-bound step.
-- Four parallelism axes — **data, tensor, pipeline, and ZeRO/FSDP sharding** — combine to train models too big for one GPU; ZeRO/FSDP removes data-parallel's redundant copies of optimizer state.
-- **Mixed precision** (bf16/fp16 with an fp32 master copy) halves memory and speeds matmuls; prefer bf16 to dodge fp16's overflow/loss-scaling headaches.
-- **Quantization** (int8, 4-bit nf4/GPTQ/AWQ), **pruning** (unstructured / structured / 2:4), and **distillation** (soft targets at temperature $T$) shrink models for cheaper, faster serving — 4-bit cuts weight memory 4× at near-baseline quality.
-- The **KV cache** makes decoding linear but grows with context until it can exceed the weights in size; **PagedAttention + continuous batching** (vLLM) reclaim wasted KV memory and keep batches full; **speculative decoding** is distribution-preserving and adds an acceptance-rate-dependent ~2–3× speedup.
+- Modern AI is **memory-bound**, not compute-bound: GPUs/TPUs have far more FLOPs than memory bandwidth, so most inference tricks move fewer bytes (the roofline model). LLM decode is the canonical memory-bound step; the memory hierarchy (SRAM vs HBM) is why **kernel fusion / FlashAttention** win.
+- Four parallelism axes — **data, tensor, pipeline, and ZeRO/FSDP sharding** — combine to train models too big for one GPU; ZeRO's three stages progressively shard optimizer states, gradients, then parameters.
+- **Mixed precision** (bf16/fp16 with an fp32 master copy) halves memory and speeds matmuls; prefer bf16 to dodge fp16's overflow/loss-scaling headaches, with fp8 emerging on the newest hardware.
+- **Quantization** (int8, 4-bit nf4/GPTQ/AWQ), **pruning** (unstructured / structured / 2:4), and **distillation** (soft targets at temperature $T$) shrink models for cheaper, faster serving — 4-bit cuts weight memory 4× at near-baseline quality; QLoRA fine-tunes on top of a frozen 4-bit base.
+- The **KV cache** makes decoding linear but grows with context until it can exceed the weights in size; **GQA/MQA and KV quantization** shrink it at the source, while **PagedAttention + continuous batching** (vLLM) reclaim wasted KV memory and keep batches full; **speculative decoding** is distribution-preserving and adds an acceptance-rate-dependent ~2–3× speedup.
 - Serving is a **throughput–latency tradeoff** measured by TTFT and tokens/sec; cost per million tokens falls directly out of tokens/sec per GPU-dollar.
 - **Edge vs cloud** flips which techniques matter; a memory estimate (≈2 B/param inference, ≈16 B/param Adam training) tells you precision and GPU count before you spend a cent.
 

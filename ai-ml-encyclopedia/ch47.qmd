@@ -113,6 +113,8 @@ A trained model sitting in a notebook is a science experiment; a model answering
 
 ## 47.1 — From notebook to production: the deployment gap
 
+**Intuition first:** think of a trained model as a brilliant recipe written by a chef who cooked it once, alone, in a quiet test kitchen. Production is a restaurant on a Friday night: hundreds of orders at once, a fixed time before food gets cold (the SLA), ingredients that quietly change suppliers (dependency drift), and customers whose tastes shift over the seasons (the world moving on). The recipe being good is necessary but nowhere near sufficient — running the restaurant is a different job.
+
 The hard truth of applied ML is that training is maybe 10% of the lifecycle. The other 90% — packaging, serving, scaling, monitoring, retraining — is software and systems engineering wearing an ML hat. The "deployment gap" is the distance between *a model that scores well offline* and *a service that delivers value online*: it has an SLA, it fails in ways a notebook never does (cold starts, OOM under load, dependency drift), and its accuracy quietly rots as the world moves on.
 
 The first design decision is the **serving modality**, because it dictates everything downstream:
@@ -144,7 +146,11 @@ flowchart LR
 
 That loop — **package → serve → orchestrate → monitor → (retrain)** — is the spine of the rest of the chapter. See Ch 29 for the MLOps principles behind it and Ch 30 for what happens inside the "serve" box on a GPU.
 
+**Worked example — when to buy vs build.** Suppose a support-chat product expects 200,000 LLM calls/day, averaging 800 input + 200 output tokens. A hosted API at, say, \$0.50/M input + \$1.50/M output tokens costs roughly $200{,}000 \times (0.0008 \times 0.50 + 0.0002 \times 1.50) = 200{,}000 \times 0.0007 = \$140/\text{day} \approx \$4.2\text{k/mo}$. Self-hosting an 8B model on a single \$2/hr GPU that comfortably serves this load is $\$2 \times 24 \times 30 = \$1.44\text{k/mo}$ — cheaper, but only after you add the engineering time to package, autoscale, and monitor it. The rule of thumb falls out of the arithmetic: buy until the recurring bill clearly exceeds the fully-loaded cost of building *and operating*, then build.
+
 ## 47.2 — Experiment tracking & the model registry with MLflow
+
+**Intuition first:** a model registry is a git for models. Just as you'd never deploy code you can't trace back to a commit, you should never run a model in production you can't trace back to the exact data, code, and metrics that produced it. "Roll back to the previous good model" should be as boring as `git revert`, not a forensic dig.
 
 Before you can deploy a model reliably, you have to be able to *answer questions about it*: which data and code produced it, what its metrics were, and which exact artifact is live in production right now. Without that, "roll back to the previous good model" becomes an archaeology project. **MLflow** is the de-facto open-source backbone for this, and it has four components that map cleanly onto the lifecycle.
 
@@ -200,6 +206,8 @@ The payoff: serving code references `models:/churn-classifier@champion`, never a
 
 ## 47.3 — Packaging & containerizing models
 
+**Intuition first:** a container is a shipping container for software. Before standardized steel boxes, loading a ship meant hand-stacking mismatched crates and praying. A Docker image freezes your code, libraries, CUDA, and OS into one sealed box that loads identically onto a laptop, a CI runner, or a cluster node — "works on my machine" becomes "works on every machine, because it's the *same* machine."
+
 "Works on my machine" is the oldest bug in deployment, and for ML it's worse: a model depends not just on your code but on exact versions of CUDA, the framework, tokenizers, and a dozen numerical libraries where a minor bump silently changes outputs. **Packaging** is the discipline of freezing all of that into one immovable artifact.
 
 Two layers freeze independently. First the **model format** — how the weights and compute graph are serialized:
@@ -234,6 +242,28 @@ CMD ["python", "serve.py"]
 
 The container is now the unit of deployment: the same image runs identically on a laptop, in CI, and in the cluster. See Ch 31 for the broader framework/tooling ecosystem this slots into.
 
+**Exporting to a graph format — a concrete PyTorch → ONNX example.** Converting a trained PyTorch model to ONNX is what decouples your serving runtime from your training code; here is the whole move:
+
+```python
+import torch
+
+model.eval()
+dummy = torch.randn(1, 3, 224, 224)            # one example input shape
+torch.onnx.export(
+    model, dummy, "model.onnx",
+    input_names=["input"], output_names=["logits"],
+    dynamic_axes={"input": {0: "batch"}, "logits": {0: "batch"}},  # variable batch
+    opset_version=17,
+)
+
+# serve it with ONNX Runtime — no PyTorch needed in the container
+import onnxruntime as ort, numpy as np
+sess = ort.InferenceSession("model.onnx", providers=["CUDAExecutionProvider"])
+out = sess.run(["logits"], {"input": np.random.randn(8, 3, 224, 224).astype("f4")})
+```
+
+The `dynamic_axes` line is the load-bearing detail: without it the graph is frozen to batch size 1 and dynamic batching (47.4) can't help you.
+
 ::: {.callout-warning}
 Don't bake large model weights into the image if they change often — a multi-GB image is slow to build, push, and pull, and you rebuild on every weight update. Pull weights at startup from the registry/object store (referenced by MLflow URI or an S3/GCS path) and keep the image to code + runtime. Tiny models are the exception; bake those in for a simpler, fully-immutable artifact.
 :::
@@ -241,6 +271,8 @@ Don't bake large model weights into the image if they change often — a multi-G
 ## 47.4 — Model serving frameworks
 
 You *could* wrap a model in a Flask route and call it a server — and for a low-traffic internal tool, do exactly that. But a purpose-built serving framework hands you the things a naive wrapper lacks: **dynamic batching** (coalescing concurrent requests into one GPU call for throughput), **multi-model serving** on shared hardware, model versioning, health/metrics endpoints, and efficient zero-copy I/O.
+
+**Intuition for dynamic batching:** it's a hotel elevator. Sending the car up for each guest the instant they press the button is responsive but wastes trips. Waiting a couple of seconds to gather everyone heading up does one efficient trip — slightly slower for the first person, far more throughput overall. A serving framework opens a tiny time window (a few milliseconds), gathers whatever requests arrive, and runs them as one GPU call.
 
 The protocol choice is **REST vs gRPC**. REST/JSON is human-readable, trivially debuggable with `curl`, and fine for most traffic. gRPC uses HTTP/2 + protobuf — lower latency and far less serialization overhead for big tensors or high QPS, at the cost of debuggability. Many servers expose both; default to REST and reach for gRPC when the wire becomes the bottleneck.
 
@@ -254,6 +286,25 @@ The protocol choice is **REST vs gRPC**. REST/JSON is human-readable, trivially 
 | **Seldon Core** | K8s inference graphs / enterprise MLOps | Inference pipelines (transform→model→explain), A/B & multi-armed routing |
 
 Rough guidance: **Triton** when you want maximum GPU throughput across mixed frameworks; **BentoML** or **Ray Serve** when you want to stay in Python and compose logic; **KServe/Seldon** when Kubernetes is already your platform and you want serving as declarative infrastructure. For autoregressive LLMs specifically, none of these is the first choice — that's the next section.
+
+**Framework code — a real BentoML service with adaptive batching.** This is the whole step from "a model" to "a batched HTTP endpoint":
+
+```python
+import bentoml, numpy as np
+
+@bentoml.service(resources={"gpu": 1})
+class Classifier:
+    def __init__(self):
+        self.model = bentoml.sklearn.load_model("churn-classifier:latest")
+
+    # max_batch_size / max_latency_ms = the elevator-door window
+    @bentoml.api(batchable=True, max_batch_size=64, max_latency_ms=10)
+    def predict(self, feats: np.ndarray) -> np.ndarray:
+        return self.model.predict_proba(feats)[:, 1]
+# bentoml serve  → POST /predict, requests auto-coalesced into one model call
+```
+
+The `batchable=True` decorator is the entire difference between one-request-per-forward-pass and the elevator: BentoML gathers concurrent calls into a single array and splits the results back out, transparently to the client.
 
 ## 47.5 — Serving LLMs with vLLM
 
@@ -305,7 +356,28 @@ vllm serve meta-llama/Llama-3.1-8B-Instruct \
 # → POST http://localhost:8000/v1/chat/completions
 ```
 
+The client side really is unchanged — the OpenAI SDK just gets a new `base_url`:
+
+```python
+from openai import OpenAI
+client = OpenAI(base_url="http://localhost:8000/v1", api_key="EMPTY")
+resp = client.chat.completions.create(
+    model="meta-llama/Llama-3.1-8B-Instruct",
+    messages=[{"role": "user", "content": "Summarize PagedAttention in one line."}],
+)
+print(resp.choices[0].message.content)
+```
+
 The core **throughput-vs-latency knob** is batch size / `gpu-memory-utilization`: bigger batches amortize the GPU and raise tokens/sec (throughput) but each individual request waits longer (latency). Tune toward throughput for offline/bulk jobs, toward latency for interactive chat.
+
+**The two latency numbers that matter for LLMs.** Interactive LLM latency isn't one number — it splits into **TTFT** (time to first token, dominated by the prompt-processing "prefill") and **TPOT** (time per output token, the steady-state decode rate). The total wall-clock for a response is:
+
+$$\text{latency} = \text{TTFT} + (N_{\text{out}} - 1)\times \text{TPOT}$$
+
+**In words:** the user waits one prefill to see the first token, then one decode step for each remaining token they read.
+**Also written:** $\text{latency} = T_{\text{prefill}} + \sum_{i=2}^{N_{\text{out}}} t_{\text{decode},i}$ (the per-token sum, before assuming each decode step costs the same TPOT).
+
+*Worked example:* with TTFT = 200 ms and TPOT = 20 ms, a 100-token answer takes $200 + 99\times 20 = 2180$ ms. Doubling batch size might cut your per-GPU cost in half but push TPOT to 30 ms, making the same answer $200 + 99\times 30 = 3170$ ms — which is why chat UIs stream tokens (the user starts reading after TTFT) while bulk jobs maximize batch size and ignore TPOT-felt latency entirely.
 
 | Engine | Niche |
 |---|---|
@@ -327,6 +399,15 @@ The OpenAI-compatible API is the quiet superpower: you can prototype against the
 One container is a demo; production needs many replicas that come and go with traffic, land on the right hardware, and share scarce GPUs without trampling each other. **Kubernetes** is the near-universal substrate for this — it schedules pods onto nodes, restarts failures, and rolls out new versions. ML adds two twists: **GPU scheduling** (GPUs are requested as a countable resource via the NVIDIA device plugin, `nvidia.com/gpu: 1`, and aren't oversubscribed by default) and **GPU sharing** (MIG partitions or time-slicing to pack several small models onto one card).
 
 Scaling has two axes. **Vertical** = give the pod a bigger box (more VRAM/CPU); simple but bounded by the largest node and requires a restart. **Horizontal** = add more replicas behind a load balancer; the default for stateless serving. The classic Horizontal Pod Autoscaler scales on CPU/memory, but for GPU serving those are poor signals — you want to scale on **request concurrency or queue depth**, which is where **KEDA** comes in (event/metric-driven scaling, including **scale-to-zero**). Scale-to-zero matters enormously for GPUs: an idle A100 still bills, so spiky or low-traffic workloads should drop to zero replicas and cold-start on demand.
+
+**How many replicas? Little's Law gives the floor.** The number of replicas you need isn't a guess — queueing theory pins the minimum. Little's Law says the average number of requests being served concurrently is arrival rate times service time:
+
+$$L = \lambda \times W$$
+
+**In words:** how many requests are in flight at once equals how fast they arrive multiplied by how long each one takes.
+**Also written:** $\lambda = L / W$ (rearranged: throughput equals concurrency divided by per-request latency).
+
+*Worked example:* at $\lambda = 50$ requests/sec with $W = 0.4$ s service time, you have $L = 50 \times 0.4 = 20$ requests in flight on average. If one replica handles a concurrency of 4 comfortably, you need at least $\lceil 20/4 \rceil = 5$ replicas just to keep up with the *average*, plus headroom for spikes — which is exactly the cushion the autoscaler's `maxReplicas` and target value below are there to provide.
 
 ```yaml
 apiVersion: apps/v1
@@ -377,6 +458,8 @@ The autoscaling curve you're aiming for: replicas **lag** the load — scale-up 
 </svg>
 
 ## 47.7 — Deployment strategies
+
+**Intuition first:** you don't taste-test a new soup recipe by serving it to the entire dinner party at once. You give one trusted guest a spoonful (canary), or you cook the new pot beside the old one and only swap the ladle when it's ready (blue-green), or you quietly cook the new recipe and throw it away just to time it (shadow). Progressive delivery is exactly this caution applied to traffic.
 
 Shipping a new model version is risky precisely because offline metrics don't guarantee online behavior — a model with better validation AUC can still tank a business metric or blow a latency budget. Progressive delivery de-risks the rollout by *never flipping 100% of traffic at once*. The strategies form a ladder of caution:
 
@@ -449,6 +532,22 @@ flowchart LR
 
 This maps onto **MLOps maturity levels** (Google's framing): **Level 0** is fully manual — notebooks, hand-built models, manual deploys (fine for a first model). **Level 1** automates the *training pipeline* so retraining on new data is one orchestrated run. **Level 2** adds full CI/CD so the *pipeline itself* is built, tested, and deployed automatically, enabling true CT. Don't skip levels for vanity — most teams should be solidly at Level 1 before reaching for Level 2. See Ch 29 for the organizational and cultural side.
 
+**A model-validation gate, in code.** The gate that protects automated training is just a comparison that *refuses to register* a worse model. With scikit-learn metrics it is a few lines:
+
+```python
+from sklearn.metrics import roc_auc_score
+
+champion_auc = roc_auc_score(y_holdout, champion.predict_proba(X_holdout)[:, 1])
+challenger_auc = roc_auc_score(y_holdout, challenger.predict_proba(X_holdout)[:, 1])
+
+MIN_LIFT = 0.005  # require a real, not noise-level, improvement
+if challenger_auc < champion_auc + MIN_LIFT:
+    raise SystemExit(f"BLOCKED: {challenger_auc:.4f} !> {champion_auc:.4f}+{MIN_LIFT}")
+mlflow.register_model(challenger_uri, "churn-classifier")  # only reached if it wins
+```
+
+The `MIN_LIFT` margin is what stops the pipeline from promoting a model that's merely different rather than genuinely better.
+
 ::: {.callout-warning}
 Automated continuous training without strong **model-validation gates** is a footgun: an unattended pipeline will happily train on poisoned or broken data and ship a worse model to production. CT is only safe when the eval-vs-champion gate and data tests are trustworthy enough to block a bad model automatically.
 :::
@@ -458,6 +557,8 @@ Automated continuous training without strong **model-validation gates** is a foo
 Once the model is live, the question shifts from "is it accurate?" to "is it *still* working?" — and that splits into two monitoring planes that need different tools and different on-call instincts. Conflating them is a classic mistake: green dashboards on the ops plane can coexist with a model quietly going senile on the ML plane.
 
 **Operational metrics** are standard service health: latency percentiles (**p50/p95/p99** — always watch the tails, the mean lies), throughput (QPS, tokens/sec), error rate, and for ML specifically GPU utilization, VRAM, and **cost**. These are Prometheus-scrape-and-Grafana-graph territory.
+
+**Why the mean lies — a tiny worked example.** Suppose 100 requests: 99 take 50 ms and one takes 5000 ms (a GC pause or a cold replica). The mean is $(99\times 50 + 5000)/100 = 99.5$ ms — innocuous. But the p99 is 5000 ms: one in a hundred users waits five seconds. The mean *averages the outlier away*; the percentile *surfaces it*. This is why SLAs are written on p95/p99, not the mean — the tail is what users actually feel and what pages you at 3am.
 
 **ML metrics** are what makes ML monitoring special — the model can be perfectly *up* and perfectly *wrong*:
 
@@ -469,7 +570,27 @@ Once the model is live, the question shifts from "is it accurate?" to "is it *st
 | **Performance decay** | Accuracy/AUC falls vs. baseline | Backfilled metrics after labels land |
 | **Label delay** | Ground truth arrives late/never | Proxy metrics; delayed eval jobs |
 
-The hard part is **label delay**: you often don't learn the true outcome (did the user churn? was it fraud?) for days or weeks, so you can't measure accuracy in real time. That's *why* drift detection matters — input/prediction drift is an early proxy you can compute *now*, before labels arrive. Tools: **Evidently** (open-source drift reports/tests) and **WhyLabs** for the ML plane.
+The hard part is **label delay**: you often don't learn the true outcome (did the user churn? was it fraud?) for days or weeks, so you can't measure accuracy in real time. That's *why* drift detection matters — input/prediction drift is an early proxy you can compute *now*, before labels arrive.
+
+**The drift workhorse: Population Stability Index (PSI).** PSI measures how far a feature's *current* distribution has slid from a *reference* (training) distribution, by binning both and summing the difference:
+
+$$\text{PSI} = \sum_{i} (a_i - e_i)\,\ln\!\frac{a_i}{e_i}$$
+
+**In words:** for each bin, take how much the actual share moved from the expected share, weight it by the log-ratio of the two shares, and add them all up — bigger total means a bigger shift.
+**Also written:** $\text{PSI} = \sum_i \left(p^{\text{cur}}_i - p^{\text{ref}}_i\right)\ln\!\big(p^{\text{cur}}_i / p^{\text{ref}}_i\big)$ — a symmetric sum of two KL divergences between the current ($p^{\text{cur}}$) and reference ($p^{\text{ref}}$) bin proportions.
+
+*Rule of thumb:* PSI < 0.1 = stable, 0.1–0.25 = moderate shift (investigate), > 0.25 = significant drift (the 0.31 amber tile below). In one line of NumPy:
+
+```python
+import numpy as np
+def psi(ref, cur, bins=10):
+    edges = np.quantile(ref, np.linspace(0, 1, bins + 1))
+    e = np.histogram(ref, edges)[0] / len(ref) + 1e-6   # expected shares
+    a = np.histogram(cur, edges)[0] / len(cur) + 1e-6   # actual shares
+    return float(np.sum((a - e) * np.log(a / e)))
+```
+
+Tools: **Evidently** (open-source drift reports/tests) and **WhyLabs** for the ML plane.
 
 <div style="font-family:sans-serif;border:1px solid currentColor;border-radius:8px;padding:12px;margin:8px 0">
   <div style="font-weight:bold;margin-bottom:10px">Serving health — at a glance</div>
@@ -506,7 +627,151 @@ flowchart TD
 
 Tools: **Feast** is the popular open-source feature store (define features in code, materialize to offline + online); **Tecton** is the enterprise managed offering with streaming feature pipelines. The point isn't the tool — it's the *single source of truth* for feature logic. A feature store is overkill for a single model with simple features (just share a Python function and a test that pins both paths to it); reach for one when many models share features or you have real-time features that must match between train and serve.
 
-## 47.11 — Scaling & cost optimization
+## 47.11 — Edge & on-device deployment
+
+**Intuition first:** everything so far assumed the model lives in a data center and the user reaches it over the network. Sometimes the right move is the opposite — ship the model *to* the user: into a phone, a browser tab, a camera, a car, a factory sensor. The deciding questions are about the round trip, not the model: can you tolerate the network latency, the privacy of sending raw data off-device, the cloud bill per call, and offline outages? When any of those is a hard "no," the model has to run where the data is.
+
+The trade is stark. Edge inference wins on **latency** (no network hop — a keyboard's next-word model must answer in single-digit milliseconds), **privacy** (raw audio/photos never leave the device — the basis of on-device dictation and face unlock), **offline operation**, and **per-call cost** (the user's silicon is free to you). It loses on **compute** (a phone NPU is a rounding error next to an A100), **memory** (you fight for a few hundred MB, not 80 GB of VRAM), and **fleet management** (you can't `kubectl rollout` a model that's already on a million phones — updates ship like app updates, slowly and unevenly).
+
+That compute gap is why the packaging is different. Edge runtimes are stripped-down and hardware-specialized, and the weights are almost always **quantized** (Ch 30) — int8 or 4-bit — to fit memory and hit the latency budget:
+
+| Runtime | Target | Notes |
+|---|---|---|
+| **ONNX Runtime** | Cross-platform (mobile, desktop, web) | Same ONNX graph from 47.3; execution providers for CoreML/NNAPI/CPU |
+| **TensorFlow Lite / LiteRT** | Android, iOS, microcontrollers | The mobile default; delegates to NNAPI / GPU / Hexagon DSP |
+| **Core ML** | Apple devices | Runs on the Neural Engine; what on-device iOS models compile to |
+| **ONNX Runtime Web / TF.js / WebGPU** | Browser tab | No install; model runs in JS/WASM/WebGPU on the visitor's machine |
+| **llama.cpp / GGUF** | CPU / Apple Silicon / edge LLMs | Quantized LLM weights (47.3) for laptops, phones, single-board computers |
+
+The export move is the one you already saw in 47.3 — train in PyTorch, export to ONNX, then convert once more to the target runtime:
+
+```python
+# PyTorch → ONNX (from 47.3) → TFLite int8 for a phone
+import tf2onnx, onnx
+from onnx_tf.backend import prepare
+import tensorflow as tf
+
+tf_rep = prepare(onnx.load("model.onnx"))          # ONNX → TF SavedModel
+tf_rep.export_graph("saved_model")
+conv = tf.lite.TFLiteConverter.from_saved_model("saved_model")
+conv.optimizations = [tf.lite.Optimize.DEFAULT]    # post-training int8 quant
+open("model.tflite", "wb").write(conv.convert())   # ship this file in the app
+```
+
+**Worked example — when edge beats cloud.** A wake-word detector ("Hey…") must run continuously on a phone. Round-tripping every 20 ms audio frame to a server is impossible: the network alone is 30–100 ms, you'd stream the user's microphone to the cloud 24/7 (a privacy non-starter), and it would die the moment they hit an elevator. A 50 KB int8 model on the device's DSP answers in under a millisecond, never sends audio anywhere, and costs you nothing per inference. None of the cloud machinery in this chapter applies — but the export-and-quantize discipline of 47.3 and 47.13 is exactly what makes it fit.
+
+::: {.callout-tip}
+A common hybrid — **model cascades across the edge/cloud boundary** — is the routing idea of 47.13 applied spatially: a tiny on-device model handles the easy, latency-critical, privacy-sensitive cases locally, and only escalates the hard ones to the big cloud model. Phone keyboards, voice assistants, and smart cameras almost all work this way.
+:::
+
+## 47.12 — Resilient serving: timeouts, retries & fallbacks
+
+**Intuition first:** a production endpoint is a tightrope walker — and resilience patterns are the safety net, not the act itself. Everything downstream *will* eventually be slow, full, or down: the GPU OOMs under a traffic spike, a dependency hangs, a replica cold-starts. A naive server passes that failure straight through to the user as a hung request or a 500. A resilient one fails *fast, bounded, and gracefully*. This is the section most "it worked in the demo" services skip and then learn at 3am.
+
+Four patterns do almost all the work, and they compose:
+
+- **Timeouts** — never wait forever. Every downstream call gets a deadline; past it, you abandon and return. Without timeouts, one hung dependency exhausts your worker pool and the *whole* service stalls (a "thread/connection pileup").
+- **Retries with backoff + jitter** — retry transient failures, but with exponentially growing, randomized delays so a thousand clients don't retry in lockstep and create a self-inflicted **thundering herd**. Only retry *idempotent* calls.
+- **Circuit breaker** — after N consecutive failures, *stop calling* the sick dependency for a cooldown window and fail immediately. This lets the dependency recover instead of being hammered while down, and keeps your latency bounded.
+- **Fallback / graceful degradation** — when the model is unavailable, return a sane default: a cached prediction, a cheaper backup model, a rules-based heuristic, or an honest "try again." A degraded answer beats a spinner.
+
+```{mermaid}
+flowchart TD
+    REQ[Request] --> CB{Circuit<br/>open?}
+    CB -->|open| FB[Fallback:<br/>cache / heuristic]
+    CB -->|closed| CALL[Call model<br/>with timeout]
+    CALL -->|ok| OK[Return prediction]
+    CALL -->|timeout / error| RT{Retries<br/>left?}
+    RT -->|yes| CALL
+    RT -->|no| TRIP[Record failure<br/>maybe trip breaker] --> FB
+```
+
+The retry backoff schedule is worth pinning down, because getting it wrong *causes* outages. The delay before attempt $n$ is:
+
+$$d_n = \min\!\big(\text{cap},\; \text{base}\times 2^{\,n}\big) + \text{rand}(0, \text{jitter})$$
+
+**In words:** wait a base delay that doubles every attempt, capped so it can't grow without bound, plus a small random nudge so retries from many clients spread out instead of stacking.
+**Also written:** $d_n = \min(\text{cap}, \text{base}\cdot 2^{n}) + U(0,\text{jitter})$, where $U$ is a uniform random draw (the "full jitter" variant).
+
+A small, framework-free implementation captures all four patterns:
+
+```python
+import time, random, functools
+
+class CircuitBreaker:
+    def __init__(self, fail_max=5, cooldown=30):
+        self.fail_max, self.cooldown = fail_max, cooldown
+        self.fails, self.open_until = 0, 0.0
+    def is_open(self):  # short-circuit while tripped
+        return time.monotonic() < self.open_until
+    def record(self, ok):
+        if ok:
+            self.fails = 0
+        else:
+            self.fails += 1
+            if self.fails >= self.fail_max:
+                self.open_until = time.monotonic() + self.cooldown
+
+def call_with_resilience(fn, breaker, fallback, retries=3, base=0.1, cap=2.0):
+    if breaker.is_open():
+        return fallback()                       # fail fast, don't touch sick dep
+    for n in range(retries):
+        try:
+            out = fn()                          # fn itself enforces a timeout
+            breaker.record(ok=True)
+            return out
+        except Exception:
+            breaker.record(ok=False)
+            if n == retries - 1:
+                return fallback()               # exhausted → degrade gracefully
+            delay = min(cap, base * 2 ** n) + random.uniform(0, base)
+            time.sleep(delay)                    # backoff + jitter
+```
+
+In practice you rarely hand-roll this — service meshes (Istio, Linkerd) and gateways (Envoy) provide timeouts, retries, and circuit breaking as *configuration*, so the resilience lives in infrastructure rather than every service's code. But knowing the four patterns is what lets you configure them correctly.
+
+::: {.callout-warning}
+Retries without a circuit breaker are dangerous: when a dependency is genuinely down, blind retries *multiply* load on it exactly when it's least able to recover, turning a partial outage into a total one (a **retry storm**). The breaker is what makes retries safe — always pair them.
+:::
+
+## 47.13 — Securing the inference endpoint
+
+**Intuition first:** an exposed model endpoint is a door to expensive compute and, often, to sensitive data. Treat it like any other production API door — locked (auth), with a bouncer counting entries (rate limits), checking IDs at the threshold (input validation), and a guest log (audit). ML adds a few locks specific to models, but the building code is ordinary application security.
+
+The non-negotiable boundary controls, from outside in:
+
+- **Authentication & authorization** — no unauthenticated inference endpoint, ever. API keys for service-to-service, OAuth/JWT for user-facing; authorize *what* each caller may do (which models, which data scopes), not just *whether* they're known.
+- **Rate limiting & quotas** — cap requests-per-key and tokens-per-key. This bounds cost (an LLM endpoint is a literal money tap), blunts abuse, and protects the autoscaler from a single noisy client. Enforce at the gateway, before traffic reaches a GPU.
+- **Input validation & size limits** — reject oversized payloads, cap `max_tokens`, validate shapes/types. Unbounded inputs are both a DoS vector and a cost blowout.
+- **Transport & secrets** — TLS everywhere; model weights and keys come from a secrets manager / object store, never the image or the repo.
+
+ML-specific threats sit on top of the generic ones:
+
+| Threat | What it is | Mitigation |
+|---|---|---|
+| **Model/data exfiltration** | Stealing weights or training data via the API | AuthN/Z, rate limits, output filtering, don't echo internals |
+| **Model extraction** | Cloning a model by querying it en masse | Rate limits, anomaly detection on query patterns |
+| **Prompt injection** (LLMs) | Malicious input hijacks the model's instructions | Input/output guardrails, separate system vs. user context, tool-use allowlists |
+| **Adversarial inputs** | Crafted inputs to force a wrong/unsafe output | Robustness checks, input sanitization, output validation |
+| **PII leakage** | Sensitive data in prompts/logs/responses | Redaction at ingest, scrub traces, retention limits |
+
+```{mermaid}
+flowchart LR
+    C[Client] -->|TLS| GW[API gateway<br/>authN/Z · rate limit · validate]
+    GW -->|allowed| GR[Guardrails<br/>input filter / PII redact]
+    GR --> M[Model server]
+    M --> OG[Output guardrails<br/>filter · validate · redact]
+    OG --> C
+    GW -. reject / 401 / 429 .-> C
+```
+
+The pragmatic ordering: put authentication, rate limiting, and TLS at the **gateway** layer (the same controls as any API — reuse them), then add ML-specific **guardrails** (input/output filtering, PII redaction, prompt-injection defenses for LLMs) as a thin layer around the model server. The generic controls stop 90% of trouble; the ML-specific ones cover the rest. See Ch 44 for LLM guardrail patterns in depth.
+
+::: {.callout-note appearance="simple"}
+**The cost-as-attack-surface angle is unique to ML serving.** A SQL endpoint that's hammered gets slow; an unmetered LLM endpoint that's hammered generates a *bill*. Rate limits and per-key token quotas aren't just abuse controls — they're the primary defense on your cloud invoice. Always set them before going public.
+:::
+
+## 47.14 — Scaling & cost optimization
 
 LLM serving bills add up fast, and the levers to cut them trade against latency and quality in predictable ways — so the game is pulling the ones that are nearly free for your workload before the ones that cost quality. Most of these were introduced mechanically in earlier chapters; here they're framed as *cost levers*.
 
@@ -523,6 +788,15 @@ LLM serving bills add up fast, and the levers to cut them trade against latency 
 
 A few deserve emphasis. **Caching** is the highest-leverage move when traffic repeats: an exact-match or *semantic* cache (embed the query, return a stored answer on a near-hit) can erase a large fraction of calls for FAQ-style workloads — free latency and free money on every hit. **Model routing/cascades** exploit that most queries are easy: a cheap small model (or a classifier) handles the bulk and only escalates hard cases to the expensive model, so you pay big-model prices only when you must. **Speculative decoding** is the rare free lunch on quality — a small draft model proposes tokens the big model verifies in parallel, cutting latency with *mathematically identical* output (Ch 30). **Spot GPUs** are the biggest raw discount (often 60–90% off) but can be reclaimed with seconds' notice, so they fit batch and fault-tolerant serving with checkpointing, not a single-replica low-latency endpoint.
 
+**Worked example — what caching and routing actually save.** Take 1M requests/day where an LLM call costs \$0.002 each → \$2,000/day baseline. Suppose 40% of queries are near-duplicates a semantic cache catches (free on a hit), and of the remaining 60%, a router sends 70% to a small model costing \$0.0003. Then:
+
+$$\text{cost} = \underbrace{0.40 \times \$0}_{\text{cache hits}} + \underbrace{0.60 \times 0.70 \times \$0.0003}_{\text{routed to small}} + \underbrace{0.60 \times 0.30 \times \$0.002}_{\text{big model}}$$
+
+**In words:** free on cache hits, cheap on the easy-routed majority, full price only on the hard residual.
+**Also written:** per-request expected cost $= \sum_k p_k\,c_k$ over the routing tiers $k$ (hit/small/big) with probabilities $p_k$ and unit costs $c_k$.
+
+Per request that's $0 + 0.000126 + 0.00036 = \$0.000486$, or about \$486/day — a **76% cut** from \$2,000, with zero quality loss on the cached and big-model paths. The arithmetic is why caching + routing are pulled first.
+
 ::: {.callout-tip}
 Sequence the levers by effort-to-savings: turn on **continuous batching** and **caching** first (large savings, no quality cost), then **right-size** the model/GPU to the SLA, then **quantize** and add **routing** if you still need headroom. Speculative decoding and spot capacity are later optimizations once the easy wins are banked. Measure cost-per-1k-requests before and after each — intuition about LLM cost is usually wrong.
 :::
@@ -532,12 +806,15 @@ Sequence the levers by effort-to-savings: turn on **continuous batching** and **
 - **The model is 10%; the system is 90%.** Production serving is package → serve → orchestrate → monitor → (retrain). Pick the modality first — **batch** if you can tolerate staleness (cheapest), **online** for interactive SLAs, **streaming** for event-driven — and **buy** a hosted API until cost/latency/customization forces you to build.
 - **Tracking + registry is the backbone.** MLflow's Tracking, Models (pyfunc flavors), and Registry (versions + **aliases** + lineage) let serving reference `models:/name@champion` so promote/rollback is one line. W&B is the common tracking alternative.
 - **Containers freeze the runtime; graph formats freeze the model.** Pin every dependency and the CUDA contract; prefer ONNX/TorchScript over pickle and safetensors over `.bin`; pull large weights at startup rather than baking them in.
-- **Generic servers (Triton, BentoML, Ray Serve, KServe) for most models; vLLM for LLMs.** PagedAttention + continuous batching are why LLM-specific servers crush naive batching. The OpenAI-compatible API makes buy↔build a one-line `base_url` switch.
-- **Scale horizontally on the right signal.** GPUs scale on concurrency/queue depth (KEDA), not CPU; **scale-to-zero** is essential for idle GPU cost.
+- **Generic servers (Triton, BentoML, Ray Serve, KServe) for most models; vLLM for LLMs.** PagedAttention + continuous batching are why LLM-specific servers crush naive batching. The OpenAI-compatible API makes buy↔build a one-line `base_url` switch. Watch **TTFT and TPOT** separately — they trade against batch size differently.
+- **Scale horizontally on the right signal.** GPUs scale on concurrency/queue depth (KEDA), not CPU; **scale-to-zero** is essential for idle GPU cost. **Little's Law** ($L=\lambda W$) gives the replica floor.
 - **Roll out progressively:** shadow → canary → blue-green / A/B, always gated on metrics with a fast rollback path.
 - **CI/CD/CT adds Continuous Training**, triggered by data/drift/schedule and protected by the data→model→infra test pyramid and a hard champion-comparison gate.
-- **Monitor two planes:** operational (p50/p95/**p99**, throughput, GPU, cost) *and* ML (data/concept/prediction drift, decay, label delay). Drift is your early-warning proxy while labels are delayed. For LLMs add tracing + token/cost accounting (Langfuse/LangSmith/Helicone).
+- **Monitor two planes:** operational (p50/p95/**p99**, throughput, GPU, cost) *and* ML (data/concept/prediction drift via PSI/KS, decay, label delay). The mean lies — watch the tail. Drift is your early-warning proxy while labels are delayed. For LLMs add tracing + token/cost accounting (Langfuse/LangSmith/Helicone).
+- **Push to the edge when the round trip is the problem.** On-device/browser inference wins on latency, privacy, offline operation, and per-call cost, at the price of compute, memory, and fleet updates; ship quantized weights via TFLite/Core ML/ONNX Runtime/llama.cpp, often as an edge↔cloud cascade.
 - **Kill training-serving skew** with one feature definition feeding both an offline (point-in-time-correct) and online store (Feast/Tecton).
+- **Make serving resilient:** timeouts, retries with backoff+jitter, circuit breakers, and graceful fallbacks — retries without a breaker cause retry storms. Mesh/gateway config gives these for free.
+- **Secure the endpoint:** authN/Z, rate limits + token quotas (your cloud-bill defense), input validation, TLS, plus ML-specific guardrails (prompt injection, PII redaction, extraction).
 - **Cut cost in order of effort:** batching + caching first (free), then right-size, then quantize/route; speculative decoding and spot GPUs last.
 
 ## 47.y — See also
@@ -545,7 +822,7 @@ Sequence the levers by effort-to-savings: turn on **continuous batching** and **
 - **Ch 29 — MLOps & Deployment:** the principles, culture, and lifecycle behind this chapter's tooling; CI/CD/CT and monitoring as organizational practice.
 - **Ch 30 — AI Infrastructure & Efficient Inference:** GPU internals, KV cache, quantization, and speculative decoding — the theory under vLLM, packaging, and the cost levers.
 - **Ch 31 — Tools & Frameworks:** the broader ecosystem that the registry, containers, and serving frameworks plug into.
-- **Ch 44 — LLM Systems:** end-to-end LLM application architecture that consumes the serving endpoints built here.
+- **Ch 44 — LLM Systems:** end-to-end LLM application architecture that consumes the serving endpoints built here, including guardrail patterns.
 - **Ch 46 — Post-Training Evaluation:** the eval methods that power the champion-comparison gates and the quality signals on the monitoring dashboards.
 
 ------------------------------------------------------------------------

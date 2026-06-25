@@ -123,6 +123,26 @@ Finance was an early adopter of ML because it is drowning in structured, timesta
 
 **Risk modeling** estimates potential losses to size positions and hold capital. A standard measure is **Value-at-Risk (VaR)**: the loss your portfolio will not exceed on, say, 99% of days. If a one-day 99% VaR is $1M, you expect to lose more than that on only about 1 trading day in 100.
 
+Formally, VaR is a quantile of the loss distribution:
+
+$$
+\text{VaR}_{\alpha} = \inf\{\ell : P(L > \ell) \le 1-\alpha\}
+$$
+
+**In words:** the smallest loss amount such that the chance of losing *more* than it is at most $1-\alpha$ (e.g. 1%). It is the cutoff where the bad tail begins.
+**Also written:** $\text{VaR}_{\alpha} = F_L^{-1}(\alpha)$ — the $\alpha$-quantile (inverse CDF) of the loss $L$; e.g. the 99th percentile loss for $\alpha=0.99$.
+
+VaR has a famous blind spot: it says where the tail *starts* but nothing about how bad it gets beyond. **Expected Shortfall (ES)**, also called Conditional VaR, fixes that by averaging the losses past the VaR cutoff:
+
+$$
+\text{ES}_{\alpha} = \mathbb{E}\!\left[L \mid L \ge \text{VaR}_{\alpha}\right]
+$$
+
+**In words:** given that we are already in the worst $1-\alpha$ of days, how much do we lose on average? It is the average size of the disaster, not just its doorstep.
+**Also written:** $\text{ES}_{\alpha} = \frac{1}{1-\alpha}\int_{\alpha}^{1} \text{VaR}_{u}\,du$ — the average of all VaRs deeper in the tail.
+
+Post-2008 regulation (Basel) shifted capital rules toward ES precisely because two portfolios can share a VaR while one hides far uglier tail losses.
+
 Here is the core difficulty made concrete. **Non-stationarity** means the statistical relationship between features and target changes over time. Suppose a credit model learns that a debt-to-income ratio above 0.4 signals high default risk, calibrated in a low-interest-rate era. Rates spike, and now 0.4 is normal and 0.55 is the new danger line. The model is silently wrong — its inputs still look familiar, but the rule it learned no longer holds.
 
 ```python
@@ -147,6 +167,24 @@ print(round(realized, 3))                # ~ -0.9: the past was no guide
 
 The lesson: in finance you **must** evaluate with a time-ordered, **walk-forward split** — train only on data from before the test period, then roll forward. A shuffled split tells you a comforting lie because it lets the model peek at the future.
 
+Think of walk-forward validation like grading a weather forecaster: you only ever judge tomorrow's forecast against tomorrow's weather, never let them peek at the actual outcome first. **scikit-learn** ships exactly this as `TimeSeriesSplit`, so you rarely need to hand-roll the index bookkeeping:
+
+```python
+from sklearn.model_selection import TimeSeriesSplit
+from sklearn.linear_model import LogisticRegression
+import numpy as np
+
+X = np.random.randn(1000, 5)
+y = (X[:, 0] + np.random.randn(1000) > 0).astype(int)
+
+tscv = TimeSeriesSplit(n_splits=5)        # 5 expanding train windows, each tested on the next block
+for fold, (tr, te) in enumerate(tscv.split(X)):
+    # tr is always entirely BEFORE te in time — no future leaks backward
+    model = LogisticRegression().fit(X[tr], y[tr])
+    acc = model.score(X[te], y[te])
+    print(f"fold {fold}: train={len(tr):4d}  test={len(te):3d}  acc={acc:.3f}")
+```
+
 ```{mermaid}
 flowchart LR
   A[Raw market & account data] --> B[Feature engineering<br/>lags, ratios, rolling stats]
@@ -168,6 +206,28 @@ The deadliest bug in financial ML is **lookahead bias** — letting information 
 Rule of thumb: if your finance model's backtested **Sharpe ratio** (return divided by its volatility — reward per unit of risk) looks too good to be true, you have a data leak, not an edge. Hunt the leak before celebrating.
 :::
 
+### 28.1.1 — A worked Sharpe-ratio sanity check
+
+The Sharpe ratio is the most quoted number in quantitative finance, so it pays to read its formula directly. Picture two strategies that both earn 10% a year: one drifts up smoothly, the other lurches violently to get there. The smooth one is "better" risk-adjusted, and Sharpe is how we put a number on that.
+
+$$
+\text{Sharpe} = \frac{\mathbb{E}[R_p - R_f]}{\sigma_p} \;\times\; \sqrt{T}
+$$
+
+**In words:** average excess return (your return minus the risk-free rate) divided by how bumpy that return is, scaled up to an annual figure by $\sqrt{T}$ (e.g. $\sqrt{252}$ trading days).
+**Also written:** $\text{Sharpe} = \dfrac{\bar{r} - r_f}{\text{std}(r)}\sqrt{252}$ — the same ratio with the sample mean and standard deviation of daily returns.
+
+```python
+import numpy as np
+daily = np.random.randn(252) * 0.01 + 0.0005   # toy daily returns, slight positive drift
+rf = 0.0                                        # assume ~0 daily risk-free for the demo
+sharpe = (daily.mean() - rf) / daily.std() * np.sqrt(252)
+print("annualized Sharpe:", round(sharpe, 2))
+# Reality check: live equity strategies rarely sustain Sharpe > 2.
+# A backtest showing 6+ almost always means lookahead bias or overfitting.
+assert daily.std() > 0                          # Sharpe is undefined for zero-volatility returns
+```
+
 ## 28.2 — Healthcare & Bioinformatics
 
 Healthcare is the mirror image of finance: data is scarcer, messier, and far less standardized, but the stakes are measured in lives, and a single confident mistake is catastrophic in a way a bad trade never is. The four flagship applications show ML at its most promising and most perilous.
@@ -182,6 +242,15 @@ Let a tiny worked example expose why **accuracy is a trap** in healthcare. Imagi
 | Model says "healthy" | 10 (false negative) | 9,405 (true negative) |
 
 This model catches 90% of sick patients (**sensitivity** = true positives ÷ all truly sick = 0.90) — clinically decent. Yet of everyone it flags as sick, only $90/(90+495) \approx 15\%$ actually are; the rest get needless anxiety and follow-up tests. Meanwhile a useless model that says "healthy" to *everyone* scores $9{,}910/10{,}000 = 99.1\%$ accuracy while catching zero patients. Accuracy rewards the lazy model; the metrics that matter are **sensitivity** (of the truly sick, what fraction did we catch?), **specificity** (of the truly healthy, what fraction did we correctly clear?), and **positive predictive value** (of those we flagged, what fraction are truly sick?). Which to optimize depends on the cost of a missed case versus a false alarm.
+
+The relationship that makes this swing so violently is **Bayes' rule for PPV** — it shows precisely how the answer depends on prevalence, not just on how good the test is:
+
+$$
+\text{PPV} = \frac{\text{sens}\cdot p}{\text{sens}\cdot p + (1-\text{spec})\cdot(1-p)}
+$$
+
+**In words:** of everyone the test flags, the share who are truly sick equals the true alarms (sensitivity times how common the disease is) divided by all alarms (true plus false). When the disease is rare ($p$ tiny), the false alarms from the huge healthy pool dominate and PPV crashes.
+**Also written:** $\text{PPV} = \dfrac{\text{TP}}{\text{TP}+\text{FP}}$ — the same quantity counted directly from the confusion-matrix cells.
 
 ```python
 TP, FP, FN, TN = 90, 495, 10, 9405
@@ -223,6 +292,31 @@ The defining healthcare pitfall is **validation that does not generalize**. A mo
 
 **Bias** is the second peril, and it is not abstract. If a dermatology model is trained mostly on light skin, it underperforms on dark skin; if a risk algorithm uses healthcare *spending* as a proxy for *need*, it will under-flag populations that historically received less care, baking the inequity into the model. **Interpretability** is the third: a clinician will not — and ethically should not — act on a black-box "cancer: 0.83" without knowing what drove it (covered in depth in Chapter 36).
 
+### 28.2.1 — Computing the metrics with scikit-learn
+
+In practice nobody divides confusion-matrix cells by hand; **scikit-learn** reports every clinical metric and, crucially, lets you move the decision threshold to trade sensitivity against specificity — the single most important knob in a screening tool.
+
+```python
+import numpy as np
+from sklearn.metrics import confusion_matrix, classification_report, roc_auc_score
+
+y_true  = np.array([0]*9900 + [1]*100)              # 1% prevalence
+# pretend scores: healthy cluster low, sick cluster higher but overlapping
+y_score = np.concatenate([np.random.beta(2, 8, 9900),
+                          np.random.beta(5, 3, 100)])
+
+for thresh in (0.5, 0.3):                            # lower threshold => catch more, flag more
+    y_pred = (y_score >= thresh).astype(int)
+    tn, fp, fn, tp = confusion_matrix(y_true, y_pred).ravel()
+    sens, spec = tp/(tp+fn), tn/(tn+fp)
+    ppv = tp/(tp+fp) if tp+fp else 0
+    print(f"thr={thresh}: sens={sens:.2f} spec={spec:.2f} PPV={ppv:.2f}")
+
+print("AUROC:", round(roc_auc_score(y_true, y_score), 3))  # threshold-free ranking quality
+```
+
+Lowering the threshold from 0.5 to 0.3 catches more disease (higher sensitivity) but floods the clinic with false alarms (lower PPV) — the curve, not a single number, is the real deliverable.
+
 ::: {.callout-warning}
 Reporting accuracy on an imbalanced medical dataset is the single most common way healthcare ML papers mislead. Always demand sensitivity, specificity, PPV, and a confusion matrix, plus the disease prevalence in the test set — as the curve above shows, the same model's PPV swings wildly with prevalence.
 :::
@@ -263,6 +357,22 @@ flagged = np.where(scores > 0.7)[0]                  # -> indices [1, 3]
 print(topk, flagged)        # same ranking machinery, different action on the tail
 ```
 
+The same "learn normal, flag the outliers" idea has a one-liner home in **scikit-learn** — `IsolationForest` is the workhorse anomaly detector for the fraud half of this pattern, no labels required:
+
+```python
+import numpy as np
+from sklearn.ensemble import IsolationForest
+
+# 1000 "normal" transactions, then 5 injected anomalies far from the cloud
+normal   = np.random.randn(1000, 3)
+anomaly  = np.random.randn(5, 3) * 6 + 12
+X = np.vstack([normal, anomaly])
+
+iso = IsolationForest(contamination=0.005, random_state=0).fit(X)
+pred = iso.predict(X)                  # -1 = anomaly, +1 = normal
+print("flagged anomalies:", int((pred == -1).sum()))   # ~5, the injected outliers
+```
+
 ::: {.callout-tip}
 When scoping a new project in any industry, ask two diagnostic questions: "Is there a user being matched to items here?" (a recommender problem) and "Am I hunting rare bad events in a flood of normal ones?" (an anomaly/fraud problem). A surprising fraction of "novel" requests are one of these two in disguise.
 :::
@@ -290,6 +400,15 @@ Strip away the domain vocabulary and the same four lessons explain most of why r
 </svg>
 
 **Distribution shift is the rule, not the exception.** A model is trained on a snapshot of the world; the world then moves. Three flavors degrade a deployed model silently: **covariate shift** (the inputs change — a new customer demographic), **label shift** (the base rates change — fraud rises in a recession), and **concept drift** (the input-output relationship itself changes — what counts as risky is redefined). The fix is not a one-time event but **monitoring**: track input distributions and live performance, and retrain on a schedule or a trigger.
+
+The cheap, industry-standard drift alarm is the **Population Stability Index (PSI)**, which measures how far a live feature distribution has wandered from its training distribution:
+
+$$
+\text{PSI} = \sum_{i} (a_i - e_i)\,\ln\!\frac{a_i}{e_i}
+$$
+
+**In words:** bin the feature, then for each bin add up (live share − training share) times the log-ratio of those shares; the bigger the total, the more the two distributions disagree. Zero means identical.
+**Also written:** it is the *symmetric* sum of two KL-divergence terms, $\sum_i e_i\ln\frac{e_i}{a_i} + \sum_i a_i\ln\frac{a_i}{e_i}$ — i.e. $\text{KL}(e\Vert a) + \text{KL}(a\Vert e)$, the Jeffreys divergence between training ($e$) and live ($a$) histograms.
 
 ```python
 import numpy as np
@@ -336,6 +455,28 @@ The most expensive mistake in applied ML is optimizing the proxy until it diverg
 Before building anything, write down the single business number the project must move and how you will measure it live. If you cannot name that number, you are not ready to train a model — you are ready to talk to a stakeholder.
 :::
 
+### 28.4.1 — Cost-sensitive decisions: where the threshold really comes from
+
+Intuition first: a smoke detector that screams at burnt toast is annoying; one that stays silent during a real fire is deadly. You tune its sensitivity by deciding how much a missed fire costs versus a false alarm. ML thresholds work identically — the "right" cutoff is not 0.5, it is wherever the *expected cost* is lowest.
+
+Given a class probability $p$ and the cost of a false positive $C_{FP}$ versus a false negative $C_{FN}$, the cost-minimizing decision is to flag when:
+
+$$
+p \;>\; \frac{C_{FP}}{C_{FP} + C_{FN}}
+$$
+
+**In words:** act on the positive class only when its probability clears a threshold set by *how much worse* a miss is than a false alarm. If a miss is far costlier, the threshold drops and you flag aggressively.
+**Also written:** flag when the expected cost of acting, $C_{FP}(1-p)$, is below the expected cost of not acting, $C_{FN}\,p$ — the same break-even condition rearranged.
+
+```python
+# Fraud: missing fraud (FN) costs ~$500, a false alarm (FP) costs ~$5 in review time.
+C_FP, C_FN = 5, 500
+threshold = C_FP / (C_FP + C_FN)
+print("flag transactions with fraud-prob >", round(threshold, 4))  # ~0.0099, NOT 0.5
+# A 100:1 cost asymmetry pulls the threshold far below the naive 0.5 default.
+```
+
+This single formula is why the naive `predict()` default of 0.5 is almost always wrong in finance and healthcare: it silently assumes false positives and false negatives cost the same, which they essentially never do.
 
 ## 28.5 — Genomics and Computational Biology: Deep Learning on the Sequence of Life
 
@@ -367,7 +508,19 @@ $$
 \end{bmatrix}^{\!\top}
 $$
 
+**In words:** replace each letter with a 4-slot switch where exactly one slot is on, marking which of A/C/G/T it is; stacking the switches column by column turns a string into a numeric grid a network can convolve over.
+**Also written:** $x_{b,j} = \mathbb{1}[\,\text{seq}_j = b\,]$ for base index $b \in \{A,C,G,T\}$ and position $j$ — a 1 wherever the base at position $j$ equals row $b$, else 0.
+
 A 1-D convolution with a filter of width $w$ then scans this matrix. A single filter is, in effect, a learned **position weight matrix** — the classic way biologists describe a binding motif — and the convolution score is high exactly where the sequence matches the motif.
+
+The convolution score at position $i$ is just the overlap between the filter $W$ and the sequence window sitting under it:
+
+$$
+s_i = \sum_{b=1}^{4}\sum_{k=1}^{w} W_{b,k}\, x_{b,\,i+k-1}
+$$
+
+**In words:** slide the motif filter along the sequence, and at each spot multiply matching cells and add them up; the sum spikes wherever the window looks like the motif.
+**Also written:** $s_i = \langle W, x_{[:,\,i:i+w]}\rangle_F$ — the Frobenius inner product (elementwise multiply-then-sum) of the filter with the aligned sequence patch.
 
 <svg viewBox="0 0 520 180" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif" font-size="13">
   <text x="10" y="20" font-weight="bold">Sequence:</text>
@@ -433,6 +586,30 @@ assert seq[peak:peak+w].startswith("G")
 
 A real CNN learns the PWM from data, stacks many of them, and lets later layers learn that *this motif near that motif* means something a single filter never could. But the unit of meaning is still the motif — that continuity is why interpretability tools (below) can map a trained network back to biology.
 
+### The same scanner as a PyTorch Conv1d
+
+The hand-written sliding sum above is *literally* a 1-D convolution. In **PyTorch** you get it for free — and now the filter weights become learnable, which is the only difference between this toy and DeepBind:
+
+```python
+import torch, torch.nn as nn
+
+# one-hot sequence as (batch=1, channels=4, length=10)
+seq = "TGACGTGACA"
+idx = {b: i for i, b in enumerate("ACGT")}
+x = torch.zeros(1, 4, len(seq))
+for j, b in enumerate(seq): x[0, idx[b], j] = 1.0
+
+conv = nn.Conv1d(in_channels=4, out_channels=1, kernel_size=3, bias=False)
+with torch.no_grad():                              # plant the same "GAC" motif filter
+    conv.weight.copy_(torch.tensor([[[0.9, 0.0, 0.1],   # A across 3 positions
+                                     [0.0, 0.8, 0.1],   # C
+                                     [0.1, 0.0, 0.8],   # G
+                                     [0.0, 0.1, 0.1]]])) # T
+scores = conv(x).squeeze()                         # one score per window
+print("peak window:", int(scores.argmax()))       # where the GAC-like pattern fires
+# In a real model these weights are trained by backprop, not hand-set.
+```
+
 ::: {.callout-tip}
 ## Intuition
 A genomics CNN is a regex engine that learned its own patterns. Early filters are fuzzy keywords (binding motifs); deeper layers are the grammar combining them. When the model says "this region is active," the honest follow-up is *which learned patterns fired here* — and that question has a concrete answer.
@@ -481,6 +658,15 @@ print("MI(pos1,pos2) =", round(mutinfo(col(0), col(1)), 3))  # low
 # high MI => likely in contact in the folded structure
 ```
 
+The mutual information this code computes has a tidy definition worth pinning down, because it is the literal measure of "do these two columns vary together":
+
+$$
+I(X;Y) = \sum_{x}\sum_{y} p(x,y)\,\log\frac{p(x,y)}{p(x)\,p(y)}
+$$
+
+**In words:** compare how often two positions take each pair of values *together* against how often they would by pure chance if independent; the more the joint pattern beats the independent guess, the more they are coupled.
+**Also written:** $I(X;Y) = H(X) + H(Y) - H(X,Y)$ — the entropy of each column minus their joint entropy, i.e. the uncertainty you remove about one position by knowing the other.
+
 Positions 1 and 4 mutate in lockstep (K/A together, R/D together); the model treats that as evidence they sit close in 3-D. AlphaFold replaces this crude mutual-information statistic with learned attention, but the biology it exploits is the same. The practical payoff: a near-complete catalog of predicted human protein structures, each annotated with a **per-residue confidence (pLDDT)** — which matters enormously, because a structure you cannot trust is worse than no structure. Confidence is a first-class output, not an afterthought.
 
 ::: {.callout-warning}
@@ -507,6 +693,15 @@ flowchart LR
 
 For coding variants the analog is a protein language model (ESM-style): score the reference amino-acid sequence and the mutant, and a variant the model finds "surprising" (low probability) is more likely to be deleterious. For non-coding variants — the vast majority, and the ones classical methods handled worst — a regulatory model like Enformer predicts whether the change shifts a gene's expression.
 
+The protein-language-model version of "surprise" has a clean formula — it is just the log-likelihood gap between the mutant and reference amino acid at the changed position:
+
+$$
+\Delta = \log p(x_{\text{mut}} \mid \text{context}) - \log p(x_{\text{ref}} \mid \text{context})
+$$
+
+**In words:** ask the model how natural the new amino acid looks versus the original one in the same surroundings; a strongly negative score means the mutation is one the model rarely sees in real proteins, hinting it is damaging.
+**Also written:** $\Delta = \log\dfrac{p(x_{\text{mut}}\mid \text{context})}{p(x_{\text{ref}}\mid \text{context})}$ — the log-likelihood ratio of mutant to reference under the language model.
+
 A tiny illustration of the difference-of-predictions recipe, with a stand-in scoring function:
 
 ```python
@@ -525,6 +720,30 @@ assert effect < 0          # variant destroys a regulatory motif -> flagged
 
 The variant erases a binding motif, the predicted activity drops, the effect score is non-zero — that is the entire logic, scaled up to real networks and thousands of output tracks.
 
+### A real protein-LM variant score with ESM
+
+The toy above becomes real with three lines of **Hugging Face Transformers**: load a pretrained protein language model (ESM-2), read the per-position amino-acid probabilities, and take the log-likelihood gap for the mutation.
+
+```python
+import torch
+from transformers import AutoTokenizer, AutoModelForMaskedLM
+
+tok = AutoTokenizer.from_pretrained("facebook/esm2_t6_8M_UR50D")
+esm = AutoModelForMaskedLM.from_pretrained("facebook/esm2_t6_8M_UR50D").eval()
+
+seq = "MKTAYIAKQR"          # toy wild-type protein; mutate position 5 (A) -> G
+pos, ref_aa, mut_aa = 5, "A", "G"
+ids = tok(seq, return_tensors="pt")
+with torch.no_grad():
+    logp = torch.log_softmax(esm(**ids).logits, dim=-1)[0]   # (L+specials, vocab)
+tpos = pos + 1                                                # +1 for the leading <cls> token
+score = (logp[tpos, tok.convert_tokens_to_ids(mut_aa)]
+         - logp[tpos, tok.convert_tokens_to_ids(ref_aa)]).item()
+print("variant log-likelihood ratio:", round(score, 3))      # very negative => likely deleterious
+```
+
+This is exactly how ESM-1v and similar zero-shot variant predictors work in practice — no disease labels, just the language model's sense of what a "natural" protein looks like.
+
 What makes this hard is not the recipe but the **evaluation**. A model that scores variants must be checked against ground truth — known pathogenic vs. benign variants, or experimental measurements from a *massively parallel reporter assay* (MPRA) where thousands of variants are tested in the lab at once. And the metric must respect that pathogenic variants are *rare*: accuracy is meaningless when 99.9% of variants are benign.
 
 | Metric | Why it matters for variant prediction |
@@ -539,6 +758,15 @@ What makes this hard is not the recipe but the **evaluation**. A model that scor
 A genomics model that predicts accurately but explains nothing is, in biomedicine, only half-built. The reason is not aesthetic. A biologist wants to know *which sequence features* drive a prediction, because that is the testable hypothesis — the thing you can knock out in the lab to confirm. Interpretability here is not a sanity check bolted on at the end; it is the deliverable.
 
 The workhorse is **attribution**: for each base in the input, how much did it contribute to the output? Methods like in-silico mutagenesis (mutate each base, measure the prediction change) or gradient-based attributions (DeepLIFT, integrated gradients) produce a per-base importance score. Plotting those scores as a letter-height "sequence logo" reveals the motifs the model actually used.
+
+One widely used attribution, **integrated gradients**, has an intuitive reading: walk slowly from a blank baseline up to the real input and add up how sensitive the output was along the way.
+
+$$
+\text{IG}_i = (x_i - x_i')\int_{0}^{1} \frac{\partial f\big(x' + \alpha(x - x')\big)}{\partial x_i}\,d\alpha
+$$
+
+**In words:** start from a neutral baseline sequence, gradually morph it into the real one, and accumulate each base's influence on the prediction over that path; the total is how much that base mattered.
+**Also written:** $\text{IG}_i \approx (x_i - x_i')\cdot\frac{1}{m}\sum_{k=1}^{m}\frac{\partial f(x' + \frac{k}{m}(x-x'))}{\partial x_i}$ — the integral replaced by an average over $m$ small steps along the baseline-to-input line.
 
 <svg viewBox="0 0 540 160" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif" font-size="12">
   <line x1="40" y1="120" x2="500" y2="120" stroke="#333"/>
@@ -591,13 +819,47 @@ Second, **uncalibrated confidence in a clinical setting**. A variant-effect mode
 | Interpretability (attributions, TF-MoDISco) | the explanation is the testable hypothesis |
 | External validation (MPRA, held-out cohorts) | in-silico accuracy must survive contact with the wet lab |
 
+### Measuring calibration in practice
+
+Intuition: a well-calibrated model is like an honest weather forecaster — when it says "70% chance of rain" across many days, it should actually rain on about 70% of them. We quantify the gap with **Expected Calibration Error (ECE)**: bin predictions by confidence, and in each bin compare the average confidence to the actual hit rate.
+
+$$
+\text{ECE} = \sum_{m=1}^{M} \frac{|B_m|}{n}\,\big|\,\text{acc}(B_m) - \text{conf}(B_m)\,\big|
+$$
+
+**In words:** group predictions into confidence buckets, and for each bucket measure how far its claimed confidence sits from its real accuracy; average those gaps, weighted by how many predictions fall in each bucket.
+**Also written:** $\text{ECE} = \mathbb{E}_{\hat p}\big[\,|\,P(\text{correct}\mid \hat p) - \hat p\,|\,\big]$ — the expected absolute gap between predicted confidence and true correctness probability.
+
+```python
+import numpy as np
+def ece(probs, labels, bins=10):
+    edges = np.linspace(0, 1, bins + 1)
+    total = 0.0
+    for lo, hi in zip(edges[:-1], edges[1:]):
+        m = (probs > lo) & (probs <= hi)
+        if m.sum() == 0:
+            continue
+        conf, acc = probs[m].mean(), labels[m].mean()
+        total += (m.sum() / len(probs)) * abs(acc - conf)
+    return total
+
+rng = np.random.default_rng(0)
+probs  = rng.uniform(0, 1, 2000)
+labels = (rng.uniform(0, 1, 2000) < probs).astype(int)   # perfectly calibrated by construction
+print("ECE (well-calibrated):", round(ece(probs, labels), 3))   # near 0
+print("ECE (overconfident):  ", round(ece(probs**0.5, labels), 3))  # inflated -> larger gap
+```
+
+A low ECE is what lets a clinician read a model's "0.9" as a genuine 90% — the difference between a number and a *trustworthy* number.
+
 ## 28.9 — Key takeaways
 
 - The hard part of applied ML is almost never the model — it is data quality, distribution shift, regulation, and aligning evaluation with the real business goal.
-- **Finance** is dominated by **non-stationarity** and **regulation**: use walk-forward (time-ordered) validation, fear lookahead bias, and prefer interpretable models where the law demands explanations.
-- **Healthcare** raises the stakes: accuracy is misleading on rare diseases (use sensitivity/specificity/PPV), models must be **externally validated** on new sites, and bias plus interpretability are non-negotiable.
+- **Finance** is dominated by **non-stationarity** and **regulation**: use walk-forward (time-ordered) validation, fear lookahead bias, prefer interpretable models where the law demands explanations, and size risk with tail-aware measures (VaR and Expected Shortfall).
+- **Healthcare** raises the stakes: accuracy is misleading on rare diseases (use sensitivity/specificity/PPV, and remember PPV follows Bayes' rule on prevalence), models must be **externally validated** on new sites, and bias plus interpretability are non-negotiable.
 - **Recommenders** and **security/fraud** are cross-industry workhorses — ranking-and-scoring over imbalanced event streams with feedback loops — whose patterns transfer across domains.
-- Expect **distribution shift** by default; monitor it (e.g. PSI) and retrain. Use **human-in-the-loop** for high-stakes decisions.
+- Expect **distribution shift** by default; monitor it (e.g. PSI) and retrain. Use **human-in-the-loop** for high-stakes decisions, and set thresholds from the **cost asymmetry**, not the default 0.5.
+- **Genomics & biology** reuse the sequence-model toolkit (one-hot → CNN/attention) but demand chromosome-level splits, calibrated confidence, and attribution-based interpretability — the explanation *is* the deliverable.
 - Always evaluate against the **business metric**, ideally via a live A/B test, and beware **Goodhart's law** when optimizing proxies.
 
 ## 28.10 — See also
@@ -605,7 +867,7 @@ Second, **uncalibrated confidence in a clinical setting**. A variant-effect mode
 - **Anomaly & Fraud Detection** — the mechanics behind the security/fraud workhorse.
 - **Recommender Systems** — the full treatment of the recommendation workhorse.
 - **Time Series & Forecasting** — walk-forward validation and non-stationarity in depth.
-- **Model Evaluation & Tuning** — metrics, confusion matrices, and validation strategy.
+- **Model Evaluation & Tuning** — metrics, confusion matrices, calibration, and validation strategy.
 - **Explainable AI & Interpretability** — the interpretability demanded by finance and healthcare.
 - **AI Ethics, Fairness & Safety** — bias, fairness constraints, and high-stakes accountability.
 - **MLOps & Deployment** — monitoring, drift detection, and retraining in production.

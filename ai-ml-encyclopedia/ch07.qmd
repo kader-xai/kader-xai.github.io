@@ -113,6 +113,31 @@ High-dimensional data is hard to store, slow to train on, noisy, and impossible 
 
 Before any single method, fix the **curse of dimensionality** in your head: as $D$ grows, the volume of space explodes, so any fixed number of points becomes hopelessly sparse, all pairwise distances drift toward equal, and notions like "nearest neighbor" stop meaning much. Reduction fights back by finding the few directions that actually carry the signal.
 
+Here is the curse made concrete. Imagine sprinkling 1,000 points uniformly inside a unit cube. In 1-D (a line segment), the points are 0.001 apart on average — cozy. In 2-D they spread over an area; in 3-D over a volume; by 10-D you would need $10^{30}$ points to keep that same density. The data you have stays fixed at 1,000, so the space around each point grows emptier and emptier. A quick way to feel it: the fraction of a $D$-dimensional cube's volume that sits within a thin outer shell (the outer 10%) is $1-0.9^{D}$. In 2-D that is 19%; by $D=50$ it is 99.5% — almost *all* the volume hugs the boundary, so "typical" points are all out near the edges, far from the center and from each other.
+
+<svg viewBox="0 0 380 150" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif" font-size="10">
+  <text x="10" y="14" fill="currentColor">Same 9 points, sparser as D grows →</text>
+  <rect x="20" y="30" width="90" height="20" fill="none" stroke="currentColor"/>
+  <circle cx="30" cy="40" r="2.5" fill="#6366f1"/><circle cx="48" cy="40" r="2.5" fill="#6366f1"/>
+  <circle cx="66" cy="40" r="2.5" fill="#6366f1"/><circle cx="84" cy="40" r="2.5" fill="#6366f1"/>
+  <circle cx="100" cy="40" r="2.5" fill="#6366f1"/>
+  <text x="20" y="64" fill="currentColor">1-D: packed</text>
+  <rect x="150" y="20" width="80" height="80" fill="none" stroke="currentColor"/>
+  <circle cx="165" cy="35" r="2.5" fill="#22c55e"/><circle cx="210" cy="40" r="2.5" fill="#22c55e"/>
+  <circle cx="180" cy="70" r="2.5" fill="#22c55e"/><circle cx="215" cy="85" r="2.5" fill="#22c55e"/>
+  <text x="150" y="115" fill="currentColor">2-D: spread out</text>
+  <g transform="translate(270,20)">
+    <rect x="0" y="10" width="70" height="70" fill="none" stroke="currentColor"/>
+    <rect x="20" y="0" width="70" height="70" fill="none" stroke="currentColor" opacity="0.5"/>
+    <line x1="0" y1="10" x2="20" y2="0" stroke="currentColor" opacity="0.5"/>
+    <line x1="70" y1="10" x2="90" y2="0" stroke="currentColor" opacity="0.5"/>
+    <line x1="70" y1="80" x2="90" y2="70" stroke="currentColor" opacity="0.5"/>
+    <circle cx="30" cy="30" r="2.5" fill="#f59e0b"/><circle cx="60" cy="55" r="2.5" fill="#f59e0b"/>
+    <circle cx="45" cy="20" r="2.5" fill="#f59e0b"/>
+  </g>
+  <text x="270" y="115" fill="currentColor">3-D: nearly empty</text>
+</svg>
+
 We split reduction into two families. **Linear** methods (PCA, LDA, ICA) find a new set of axes that are weighted sums of the originals — a rotation and projection. **Nonlinear / manifold** methods (Kernel PCA, t-SNE, UMAP) bend space to unfold curved structure a straight projection would flatten wrongly.
 
 ```{mermaid}
@@ -134,9 +159,17 @@ PCA is the workhorse. The intuition: imagine a cloud of points shaped like a fla
 
 $$\Sigma = \frac{1}{n}\sum_{i=1}^{n} x_i x_i^\top, \qquad \max_{\|w\|=1}\; w^\top \Sigma\, w.$$
 
+**In words:** the covariance is the average of each centered point's outer product with itself (how features co-vary); PCA looks for the unit direction along which projected points spread the most.
+**Also written:** $\Sigma = \frac{1}{n} X^\top X$ for the centered data matrix $X$ (rows = samples), and the variance along $w$ is $\operatorname{Var}(Xw) = w^\top \Sigma\, w$.
+
 Throughout this chapter we use the **$1/n$ convention** for the covariance (the maximum-likelihood estimate). Many libraries divide by $1/(n-1)$ (the unbiased estimate) instead; this scales every eigenvalue by the same constant, so it changes the eigenvalues but never the eigenvectors or the explained-variance *ratios* that we actually use.
 
 **Eigenvectors of the covariance.** Solving that constrained problem (Lagrange multipliers) gives the clean result $\Sigma w = \lambda w$ — the best direction is an **eigenvector** of $\Sigma$, and the variance it captures is its **eigenvalue** $\lambda$. So the recipe is: compute $\Sigma$, take its eigenvectors, sort by eigenvalue, keep the top $k$. The first component has the largest $\lambda$, the second the next-largest (and is automatically orthogonal to the first because $\Sigma$ is symmetric), and so on.
+
+$$\Sigma w = \lambda w.$$
+
+**In words:** the principal directions are exactly the eigenvectors of the covariance matrix, and each one's eigenvalue is the amount of variance it carries.
+**Also written:** the full eigendecomposition $\Sigma = W \Lambda W^\top$ with $W$ holding the eigenvectors as columns and $\Lambda = \operatorname{diag}(\lambda_1,\dots,\lambda_D)$.
 
 **Worked example — by hand.** Take five centered 2-D points that already sum to zero in each coordinate:
 
@@ -188,6 +221,9 @@ about **98%** of the variance. The top eigenvector points along roughly $(0.84, 
 
 $$X = U S V^\top.$$
 
+**In words:** any matrix can be written as a rotation, a stretch, and another rotation; for centered data the second rotation's axes ($V$) are exactly the principal directions and the stretches ($S$) measure how much variance each carries.
+**Also written:** $\Sigma = \frac{1}{n} X^\top X = \frac{1}{n} V S^2 V^\top$, so the covariance eigenvectors are the columns of $V$ and $\lambda_j = s_j^2/n$.
+
 The columns of $V$ are exactly the principal components, and the **singular values** $s_j$ relate to the covariance eigenvalues (under our $1/n$ convention) by $\lambda_j = s_j^2 / n$. SVD gives the same answer more stably and works even when $D > n$. The reduced coordinates (the **scores**) are $X V_k = U_k S_k$.
 
 ```python
@@ -205,9 +241,27 @@ print(pc1.round(2), var_explained.round(3), eigvals.round(3))
 # -> pc1 ~ [0.84 0.55], var_explained ~ [0.979 0.021], eigvals ~ [2.74 0.058]
 ```
 
+**With scikit-learn.** In real projects you reach for the library, which centers for you, exposes the explained-variance ratio, and gives an `inverse_transform` to reconstruct. Note it does *not* standardize — put a `StandardScaler` in front when features have different units:
+
+```python
+from sklearn.decomposition import PCA
+from sklearn.pipeline import make_pipeline
+from sklearn.preprocessing import StandardScaler
+
+# keep enough components to retain 95% of the variance
+pipe = make_pipeline(StandardScaler(), PCA(n_components=0.95))
+Z = pipe.fit_transform(X_train)            # reduced coordinates
+pca = pipe.named_steps["pca"]
+print(pca.n_components_, pca.explained_variance_ratio_.round(3))
+X_approx = pipe.inverse_transform(Z)       # back-project to original space
+```
+
 **Choosing the number of components.** Two standard tools. A **scree plot** charts eigenvalue (or explained-variance ratio) against component index; you keep components up to the "elbow" where the curve flattens. Or pick the smallest $k$ whose **cumulative explained variance** crosses a threshold — 90%, 95%, 99% depending on how much loss you tolerate.
 
 $$\text{cumulative}(k) = \frac{\sum_{j=1}^{k}\lambda_j}{\sum_{j=1}^{D}\lambda_j}.$$
+
+**In words:** the fraction of total spread kept by the top $k$ components is their eigenvalues added up, divided by all the eigenvalues added up.
+**Also written:** $\frac{\sum_{j\le k} s_j^2}{\sum_j s_j^2}$ in singular values, or $\frac{\operatorname{tr}(\Lambda_k)}{\operatorname{tr}(\Lambda)}$ since the trace is the total variance.
 
 <svg viewBox="0 0 360 180" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif" font-size="10">
   <line x1="40" y1="140" x2="330" y2="140" stroke="#888"/>
@@ -225,6 +279,8 @@ $$\text{cumulative}(k) = \frac{\sum_{j=1}^{k}\lambda_j}{\sum_{j=1}^{D}\lambda_j}
   <text x="160" y="115" fill="#ef4444">elbow → keep 2</text>
 </svg>
 
+**A real use: eigenfaces.** A classic application makes PCA tangible. Take a few thousand $100\times100$ grayscale face photos — each is a point in $10{,}000$-dimensional pixel space. Run PCA and the top components, reshaped back into images, look like ghostly face templates (the **eigenfaces**): one captures overall lighting, another the nose-vs-cheek contrast, another the smile. Keeping ~150 of them reconstructs any face in the set almost perfectly, so a face that needed $10{,}000$ numbers now needs $150$ — a 98% compression that also feeds faster, less-overfit classifiers downstream. The same move powers PCA-based image compression, gene-expression analysis, and noise reduction in sensor data.
+
 ::: {.callout-warning}
 PCA is **scale-sensitive**: a feature measured in millimetres will dominate one in metres purely because its numbers are bigger. Always **standardize** (z-score each feature) before PCA unless every feature already shares units and meaning. And always center — forgetting the mean subtraction makes the "principal component" point at the data's mean, not its spread.
 :::
@@ -238,6 +294,11 @@ PCA components are **uncorrelated and orthogonal** but not necessarily interpret
 Ordinary PCA can only find flat structure — it draws straight axes. But data often lies on a curved surface. Picture points in two concentric rings: an inner ring and an outer ring around it. No straight line separates inner from outer, so linear PCA is helpless. **Kernel PCA** fixes this with the **kernel trick**: imagine mapping every point into a much higher-dimensional space where the curved structure becomes flat, run PCA there, but never actually compute the mapping — only the dot products, supplied by a **kernel function** $k(x_i, x_j)$.
 
 The mechanics: build the $n\times n$ **kernel matrix** $K_{ij} = k(x_i, x_j)$ (a common choice is the RBF kernel $k(x,y)=\exp(-\gamma\|x-y\|^2)$), center it, and take its top eigenvectors. Those eigenvectors directly give the reduced coordinates — you work entirely with similarities between points, never with explicit high-dimensional vectors.
+
+$$k(x,y)=\exp\!\big(-\gamma\,\|x-y\|^2\big).$$
+
+**In words:** the RBF kernel scores two points as "very similar" (near 1) when they sit close together and "unrelated" (near 0) when they are far apart, with $\gamma$ setting how quickly similarity drops off with distance.
+**Also written:** $k(x,y)=\exp\!\big(-\|x-y\|^2/(2\sigma^2)\big)$ with bandwidth $\sigma$, where $\gamma = 1/(2\sigma^2)$.
 
 **Worked example — two tiny rings.** Take six points, three on an inner ring of radius $1$ and three on an outer ring of radius $4$:
 
@@ -270,6 +331,20 @@ assert gap > spread          # groups separate cleanly on KPCA component 1
 ```
 
 The assertion is the self-check: the between-group gap on the first kernel component exceeds the within-group spread, so one cut splits the rings — something no linear axis could do. Notice the bandwidth $\gamma$ is set from the **median pairwise squared distance** ($\gamma \approx 1/\text{median}$), the standard heuristic; a blind $\gamma=15$ on these coordinates would push every off-diagonal kernel entry to nearly zero ($e^{-15\cdot 16}\approx 0$) and the method would see six isolated points with no structure to find. Bandwidth is everything.
+
+**With scikit-learn.** The library bundles Kernel PCA, Isomap, LLE, and more behind one consistent API, so swapping methods is a one-line change:
+
+```python
+from sklearn.decomposition import KernelPCA
+from sklearn.manifold import Isomap, LocallyLinearEmbedding
+
+kpca  = KernelPCA(n_components=2, kernel="rbf", gamma=0.05)
+iso   = Isomap(n_neighbors=10, n_components=2)
+lle   = LocallyLinearEmbedding(n_neighbors=10, n_components=2)
+
+Z_kpca = kpca.fit_transform(X)   # unfold curved structure in kernel space
+Z_iso  = iso.fit_transform(X)    # preserve geodesic (along-surface) distances
+```
 
 **Manifold learning** is the broader idea: assume the data lies on a low-dimensional **manifold** (a smooth curved surface) embedded in high-D space, and recover the flat sheet. The iconic example is the **Swiss roll** — a 2-D sheet rolled up like a pastry. Two points can be close in 3-D (across the gap between layers) yet far apart *along the sheet*; manifold methods respect the on-sheet distance and "unroll" it:
 
@@ -328,6 +403,9 @@ LDA formalizes this with two scatter matrices. The **between-class scatter** $S_
 
 $$J(w) = \frac{w^\top S_B\, w}{w^\top S_W\, w}, \qquad S_W = \sum_c \sum_{i \in c}(x_i-\mu_c)(x_i-\mu_c)^\top.$$
 
+**In words:** find the direction that makes the class centers spread far apart (big numerator) while keeping each class tightly bunched (small denominator) — far-apart-but-tight wins.
+**Also written:** signal-to-noise form $J(w) = \dfrac{\text{between-class variance of } w^\top x}{\text{within-class variance of } w^\top x}$; the optimum solves the generalized eigenproblem $S_B w = \lambda S_W w$.
+
 Maximizing this leads to the generalized eigenproblem $S_W^{-1} S_B\, w = \lambda w$. The top eigenvectors are the **discriminant directions**. A hard limit worth memorizing: with $C$ classes you get at most $C-1$ useful directions, because $S_B$ has rank at most $C-1$ (it is built from $C$ mean-differences that sum to zero). So 3 classes give you at most a 2-D LDA projection, no matter how many features you started with.
 
 <svg viewBox="0 0 360 200" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif" font-size="10">
@@ -347,6 +425,17 @@ Maximizing this leads to the generalized eigenproblem $S_W^{-1} S_B\, w = \lambd
 
 **Worked example.** Class A means lie at feature-1 $\approx$ low, class B at feature-1 $\approx$ high, but both classes have huge spread along feature-2 (noise). PCA, chasing total variance, would pick feature-2 and smear the classes together. LDA divides by within-class scatter, so it discounts the noisy feature-2 and lines its axis up with feature-1 — projecting onto it leaves the two classes cleanly apart. That division by $S_W$ is the whole trick: it rewards directions where classes are tight, not just far.
 
+**With scikit-learn.** LDA doubles as both a dimensionality reducer (`transform`) and a classifier (`predict`) — the same fitted object does both:
+
+```python
+from sklearn.discriminant_analysis import LinearDiscriminantAnalysis
+
+lda = LinearDiscriminantAnalysis(n_components=2)   # 3+ classes → up to C-1 dims
+Z = lda.fit_transform(X_train, y_train)            # supervised projection
+acc = lda.score(X_test, y_test)                    # it also classifies
+print(Z.shape, round(acc, 3))
+```
+
 | | PCA | LDA |
 |---|---|---|
 | Supervision | unsupervised | supervised (needs labels) |
@@ -364,6 +453,11 @@ PCA and LDA are about *modeling*; **t-SNE** and **UMAP** are about *seeing* — 
 
 **t-SNE** (t-distributed Stochastic Neighbor Embedding) works in two steps. First, in the original space, it converts distances into **probabilities**: for each point, nearby points get high probability of being picked as a "neighbor," far points near zero — a soft notion of who is close, governed by a **perplexity** setting (roughly, the effective number of neighbors, typically 5–50). Second, it lays points out in 2-D and shuffles them until the neighbor-probabilities in the map match those in the original space, measured by **KL divergence**. The "t" comes from using a heavy-tailed Student-t distribution in the map, which gives crowded clusters room to breathe and prevents everything collapsing into a blob.
 
+$$\mathrm{KL}(P\,\|\,Q) = \sum_{i\neq j} p_{ij}\,\log\frac{p_{ij}}{q_{ij}}.$$
+
+**In words:** measure how badly the 2-D map's neighbor-probabilities $q_{ij}$ disagree with the original-space ones $p_{ij}$, and move points to shrink that disagreement.
+**Also written:** the per-pair cost $\sum_{i\neq j} p_{ij}\big(\log p_{ij} - \log q_{ij}\big)$; it is zero only when $Q$ matches $P$ exactly and grows as the map distorts neighborhoods.
+
 ```{mermaid}
 flowchart LR
     A[High-D points] --> B[Pairwise similarities<br/>as probabilities]
@@ -373,6 +467,18 @@ flowchart LR
 ```
 
 **UMAP** (Uniform Manifold Approximation and Projection) reaches a similar 2-D picture through a different door: it builds a **fuzzy nearest-neighbor graph** in high-D, then optimizes a low-D graph to match it. In practice UMAP is much faster, scales to millions of points, and tends to preserve more **global** structure (the relative arrangement of clusters), where t-SNE mostly nails local clusters but scrambles the big picture.
+
+**In practice.** Both ship as drop-in transformers. A typical workflow visualizes a high-dimensional embedding — say the 768-D vectors a language model produces, or 784-pixel MNIST digits — by reducing to 2-D and plotting:
+
+```python
+from sklearn.manifold import TSNE
+import umap                                  # pip install umap-learn
+
+# X: e.g. (n_samples, 50) after a PCA pre-reduction
+Z_tsne = TSNE(n_components=2, perplexity=30, init="pca").fit_transform(X)
+Z_umap = umap.UMAP(n_neighbors=15, min_dist=0.1).fit_transform(X)
+# scatter Z_*[:,0] vs Z_*[:,1], colored by label, to eyeball clusters
+```
 
 | | t-SNE | UMAP |
 |---|---|---|
@@ -396,6 +502,9 @@ PCA finds directions that are **uncorrelated**; ICA finds directions that are **
 The model assumes the observed signals $x$ are linear mixtures of independent **sources** $s$:
 
 $$x = A s, \qquad \text{recover } s = W x \ \text{with}\ W \approx A^{-1}.$$
+
+**In words:** the microphones record unknown blends ($A$) of the hidden voices; ICA hunts for an unmixing matrix $W$ that undoes the blend and hands back the separate voices.
+**Also written:** componentwise $x_i = \sum_j A_{ij}\, s_j$, recovered as $\hat s = W x$ where $W$ is the (approximate) inverse of the mixing matrix $A$.
 
 The deep insight that makes it solvable: a sum of independent signals is **more Gaussian** than the individual signals (Central Limit Theorem). So to *unmix*, ICA searches for directions that make the recovered signal **as non-Gaussian as possible** — maximizing non-Gaussianity (via measures like **kurtosis** or **negentropy**) pulls the mixtures apart back into the original independent sources. This is why ICA **cannot** separate genuinely Gaussian sources: there is no non-Gaussianity to chase.
 
@@ -463,6 +572,16 @@ print("best |corr| per recovered comp:", C.max(1).round(3))
 
 The assertion is the self-check: each recovered component lines up with one true source at correlation above $0.95$, so the unmixing worked despite ICA not knowing $A$.
 
+**With scikit-learn.** In practice you call `FastICA` rather than hand-rolling the fixed-point loop — the same whitening and deflation, battle-tested:
+
+```python
+from sklearn.decomposition import FastICA
+
+ica = FastICA(n_components=2, whiten="unit-variance", random_state=0)
+S_hat = ica.fit_transform(X.T)        # (n_samples, n_sources): recovered signals
+A_hat = ica.mixing_                   # estimated mixing matrix A
+```
+
 | | PCA | ICA |
 |---|---|---|
 | Goal | uncorrelated, max variance | statistically independent |
@@ -474,16 +593,85 @@ The assertion is the self-check: each recovered component lines up with one true
 ICA has two built-in **ambiguities**: it cannot recover the original **scale** of each source (a source and its doubled version mix identically), nor their **order** — so recovered components come out unranked and arbitrarily scaled. That is fine for separation tasks (the unmixed waveform is what matters) but means you cannot read "component 1 is most important" the way you can with PCA.
 :::
 
-## 7.6 — Key takeaways
+## 7.6 — Autoencoders: Learned Nonlinear Reduction
 
-- Dimensionality reduction trades a tolerable bit of information for speed, denoising, less overfitting, and the ability to visualize — fighting the curse of dimensionality.
+Everything so far is a *fixed recipe* — given the data, the answer is computed in one shot. **Autoencoders** instead *learn* the reduction by training a neural network, which lets them capture nonlinear structure that PCA misses and scales to images, audio, and text. The intuition is a funnel: data flows into an **encoder** that squeezes it through a narrow middle layer (the **bottleneck**, or latent code), then a **decoder** tries to rebuild the original from that squeezed code. To rebuild well, the network is forced to pack the essential information into the bottleneck — which is exactly a learned low-dimensional representation.
+
+<svg viewBox="0 0 380 170" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif" font-size="10">
+  <text x="10" y="14" fill="currentColor">encoder → bottleneck → decoder</text>
+  <!-- input layer -->
+  <g fill="#6366f1"><circle cx="40" cy="40" r="6"/><circle cx="40" cy="65" r="6"/><circle cx="40" cy="90" r="6"/><circle cx="40" cy="115" r="6"/></g>
+  <!-- hidden -->
+  <g fill="#38bdf8"><circle cx="120" cy="60" r="6"/><circle cx="120" cy="95" r="6"/></g>
+  <!-- bottleneck -->
+  <circle cx="190" cy="77" r="8" fill="#f59e0b"/>
+  <text x="178" y="105" fill="#f59e0b">code z</text>
+  <!-- hidden -->
+  <g fill="#38bdf8"><circle cx="260" cy="60" r="6"/><circle cx="260" cy="95" r="6"/></g>
+  <!-- output -->
+  <g fill="#22c55e"><circle cx="340" cy="40" r="6"/><circle cx="340" cy="65" r="6"/><circle cx="340" cy="90" r="6"/><circle cx="340" cy="115" r="6"/></g>
+  <!-- edges (sparse, suggestive) -->
+  <g stroke="#94a3b8" stroke-width="0.7" opacity="0.7">
+    <line x1="46" y1="40" x2="114" y2="60"/><line x1="46" y1="90" x2="114" y2="95"/>
+    <line x1="126" y1="60" x2="182" y2="77"/><line x1="126" y1="95" x2="182" y2="77"/>
+    <line x1="198" y1="77" x2="254" y2="60"/><line x1="198" y1="77" x2="254" y2="95"/>
+    <line x1="266" y1="60" x2="334" y2="40"/><line x1="266" y1="95" x2="334" y2="90"/>
+  </g>
+  <text x="20" y="150" fill="currentColor">x (input)</text>
+  <text x="305" y="150" fill="currentColor">x̂ ≈ x (reconstruction)</text>
+</svg>
+
+The training objective is just **reconstruction error**: make the output $\hat x = g(f(x))$ match the input $x$.
+
+$$\mathcal{L} = \frac{1}{n}\sum_{i=1}^{n}\big\|x_i - g\big(f(x_i)\big)\big\|^2.$$
+
+**In words:** push each example through encoder $f$ then decoder $g$, and penalize how far the rebuilt version drifts from the original; minimizing this forces the bottleneck to keep what matters.
+**Also written:** $\mathcal{L} = \mathbb{E}_{x}\big[\|x - g(f(x))\|^2\big]$, the expected squared reconstruction loss over the data distribution.
+
+The deep tie-in: a **linear** autoencoder with one bottleneck layer and squared-error loss recovers exactly the PCA subspace — same span as the top principal components. Autoencoders are therefore PCA's nonlinear generalization. Swap the linear layers for deep nonlinear ones and the bottleneck can bend around curved manifolds (the Swiss roll, handwritten digits) that linear PCA would crush. Two important variants you will meet: the **denoising autoencoder** (feed in corrupted input, ask it to reconstruct the clean original — learns robust features), and the **variational autoencoder (VAE)**, which makes the latent code a probability distribution so you can *sample* new data from it, bridging reduction and generative modeling.
+
+**With PyTorch.** A minimal autoencoder is a few lines — two small MLPs and an MSE loss:
+
+```python
+import torch, torch.nn as nn
+
+class AutoEncoder(nn.Module):
+    def __init__(self, d_in, d_latent=2):
+        super().__init__()
+        self.encoder = nn.Sequential(nn.Linear(d_in, 64), nn.ReLU(),
+                                     nn.Linear(64, d_latent))     # → bottleneck
+        self.decoder = nn.Sequential(nn.Linear(d_latent, 64), nn.ReLU(),
+                                     nn.Linear(64, d_in))         # → reconstruct
+    def forward(self, x):
+        z = self.encoder(x)
+        return self.decoder(z), z
+
+model = AutoEncoder(d_in=784, d_latent=2)        # e.g. MNIST → 2-D code
+opt   = torch.optim.Adam(model.parameters(), lr=1e-3)
+loss_fn = nn.MSELoss()
+
+for xb in loader:                                # xb: (batch, 784)
+    xhat, z = model(xb)
+    loss = loss_fn(xhat, xb)                      # reconstruction error
+    opt.zero_grad(); loss.backward(); opt.step()
+# model.encoder(X) now gives a learned low-D embedding
+```
+
+::: {.callout-tip}
+Autoencoders need enough data to train and can **overfit** — with a wide enough bottleneck they may just memorize, learning the identity function instead of useful structure. Keep the bottleneck genuinely narrow, add noise (denoising) or a regularizer, and prefer PCA when the data is small or the structure is roughly linear. Reach for autoencoders when the manifold is clearly curved and you have the samples to learn it.
+:::
+
+## 7.7 — Key takeaways
+
+- Dimensionality reduction trades a tolerable bit of information for speed, denoising, less overfitting, and the ability to visualize — fighting the curse of dimensionality (in high $D$, almost all of a region's volume hugs its boundary, so points grow sparse and equidistant).
 - **PCA**: unsupervised, finds orthogonal directions of maximum variance via eigenvectors of the covariance (best computed by SVD); standardize and center first; choose $k$ with a scree elbow or cumulative-variance threshold. Real covariance matrices are PSD, so every eigenvalue is non-negative.
 - **Kernel PCA / manifold learning** bend space to unfold curved structure linear PCA can't capture (the Swiss roll is the iconic case); powerful but sensitive to kernel/neighbor settings — set the RBF bandwidth from the median pairwise distance — and hard to invert.
 - **LDA** is supervised — it maximizes between-class over within-class scatter and yields at most $C-1$ directions; use it when class separation, not raw variance, is the goal.
 - **t-SNE & UMAP** are for *visualization only*: they preserve neighborhoods, not distances or cluster sizes; never trust absolute geometry and never feed their coordinates into a model.
 - **ICA** seeks statistical independence (not mere decorrelation) by maximizing non-Gaussianity, solving the cocktail-party unmixing problem; scale and order of components are ambiguous.
+- **Autoencoders** learn the reduction with a neural-network bottleneck; a linear one reproduces PCA, deep ones capture curved manifolds, and the VAE variant turns the latent code into a sampler that bridges into generative modeling.
 
-## 7.7 — See also
+## 7.8 — See also
 
 - **[Mathematical Foundations] Linear Algebra** — eigenvectors, SVD, and projections that underpin PCA, LDA, and ICA.
 - **[Mathematical Foundations] Probability & Statistics** — covariance, variance, KL divergence, non-Gaussianity, and the Central Limit Theorem behind ICA.

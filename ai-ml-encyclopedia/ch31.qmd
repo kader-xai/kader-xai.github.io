@@ -105,15 +105,17 @@ toc-expand: true
 
 ------------------------------------------------------------------------
 
-Every model in this encyclopedia ultimately runs as code on top of a small number of well-worn libraries. This chapter is the practical workshop tour: the Python data stack that almost all ML touches, the two dominant deep learning frameworks and when to reach for each, and the streaming systems that feed models fresh data in real time. The goal is not to make you memorize APIs but to understand the *shape* of each tool — its core abstraction, the idiom you write over and over, and the tradeoff that made it win.
+Every model in this encyclopedia ultimately runs as code on top of a small number of well-worn libraries. This chapter is the practical workshop tour: the Python data stack that almost all ML touches, the two dominant deep learning frameworks and when to reach for each, the model-sharing ecosystem (Hugging Face) that has become the default way to grab a pretrained network, and the streaming systems that feed models fresh data in real time. The goal is not to make you memorize APIs but to understand the *shape* of each tool — its core abstraction, the idiom you write over and over, and the tradeoff that made it win.
 
 ::: {.callout-note appearance="simple"}
-🧭 **In context:** Production, Tooling & Infrastructure · the concrete libraries you write ML in · one key idea — each tool exposes a single core abstraction (the array, the DataFrame, the estimator, the tensor-with-gradient, the event stream) and everything else is convenience around it.
+🧭 **In context:** Production, Tooling & Infrastructure · the concrete libraries you write ML in · one key idea — each tool exposes a single core abstraction (the array, the DataFrame, the estimator, the tensor-with-gradient, the pretrained model, the event stream) and everything else is convenience around it.
 :::
 
 ## 31.1 — The Python ML stack
 
 Python won machine learning not because it is fast — it is not — but because it is a thin, pleasant scripting layer over fast C and Fortran. The trick is that the *hot loops* live in compiled libraries, and Python just orchestrates: you write `model.fit(X, y)` in a high-level language, and underneath the actual matrix multiplies run in optimized native code. Three libraries form the base of almost every ML project: **NumPy** for numerical arrays, **Pandas** for tabular data, and **scikit-learn** for classical models. They stack cleanly: Pandas is built on NumPy, and scikit-learn consumes both.
+
+Think of it like a kitchen. NumPy is the cutting board and knives (raw fast operations on ingredients), Pandas is the labeled pantry with everything in named jars, and scikit-learn is the set of standard recipes that all follow the same steps. You move ingredients up the stack: messy delivery box → labeled pantry → measured bowls → recipe.
 
 ```{mermaid}
 flowchart TD
@@ -150,6 +152,13 @@ print(Xs.mean(axis=0), Xs.std(axis=0))  # ~[0,0]  [1,1]
 
 Notice the loop count in Python: zero. `X - mu` broadcasts the `(2,)` mean across all 3 rows; the division does the same. The whole standardization is three array expressions, and `axis=0` is the key idea — it says "collapse down the rows, one result per column."
 
+The standardization formula itself, written once, applied per feature column $j$:
+
+$$z_{ij} = \frac{x_{ij} - \mu_j}{\sigma_j}, \qquad \mu_j = \frac{1}{n}\sum_{i=1}^{n} x_{ij}, \qquad \sigma_j = \sqrt{\frac{1}{n}\sum_{i=1}^{n}(x_{ij}-\mu_j)^2}$$
+
+**In words:** for each value, subtract that column's average and divide by that column's spread, so every feature ends up centered at 0 with a typical size of 1 — putting "price in riyals" and "age in years" on the same scale.
+**Also written:** in vectorized form, $Z = (X - \mathbf{1}\,\mu^\top) \oslash (\mathbf{1}\,\sigma^\top)$, where $\mathbf{1}$ is a column of ones, $\oslash$ is element-wise division, and the broadcasting in `(X - mu) / sig` does exactly this row-replication for you.
+
 Broadcasting deserves a picture, because shape mismatches are where beginners trip:
 
 <svg viewBox="0 0 460 170" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif" font-size="12">
@@ -175,7 +184,7 @@ Broadcasting deserves a picture, because shape mismatches are where beginners tr
 
 NumPy arrays are anonymous grids. Real data has *named columns* of *mixed types* — a "price" float, a "city" string, a "date" timestamp — plus missing values. **Pandas** wraps NumPy with two labeled objects: the **Series** (one labeled column) and the **DataFrame** (a dict of aligned Series sharing one row **index**). The index is the superpower: operations *align on labels*, so adding two DataFrames matches rows by index, not by position — a quiet correctness win when your tables are sorted differently.
 
-The idiom you write most is **split–apply–combine** via `groupby`: split rows into groups, apply an aggregation to each group, combine the results into one table.
+The idiom you write most is **split–apply–combine** via `groupby`: split rows into groups, apply an aggregation to each group, combine the results into one table. The everyday analogy: hand a stack of receipts to a clerk, say "make one pile per city, then total each pile" — `groupby` is the clerk.
 
 ```python
 import pandas as pd
@@ -200,6 +209,10 @@ flowchart LR
 ```
 
 Pandas is where preprocessing lives — joining tables, parsing dates, encoding categories, filling gaps — before you hand a clean numeric matrix to a model. (Chapter *Data Preprocessing* covers the *what* of these transforms; this is the *with-what*.)
+
+::: {.callout-tip}
+**Rule of thumb:** stay vectorized in Pandas too. A `df.apply(..., axis=1)` row loop is Python speed; the same logic as a column expression (`df["a"] * df["b"]`) or a `groupby` runs in C. Reach for `.apply` only when no vectorized form exists.
+:::
 
 ### scikit-learn: the estimator API
 
@@ -247,11 +260,44 @@ flowchart LR
 **Common mistake:** calling `scaler.fit(X)` on the full dataset, then splitting. The scaler has already seen the test rows — your reported accuracy is optimistically biased. Always `fit` on training data only; a Pipeline makes this automatic.
 :::
 
+### Mixed columns and hyperparameter search
+
+Real tables mix numeric and categorical columns, and each kind needs a different transform. The everyday picture: a sorting station where number-jars go down one chute (scale them) and word-jars down another (one-hot encode them), and both feed the same model. scikit-learn's **`ColumnTransformer`** is that station, and it composes inside a Pipeline so leakage protection still holds. Tuning is the same uniform interface: **`GridSearchCV`** wraps any estimator (a Pipeline included) and re-fits it for every hyperparameter combination, scoring each by cross-validation.
+
+```python
+from sklearn.compose import ColumnTransformer
+from sklearn.preprocessing import StandardScaler, OneHotEncoder
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.pipeline import Pipeline
+from sklearn.model_selection import GridSearchCV
+
+pre = ColumnTransformer([
+    ("num", StandardScaler(),                 ["age", "amount"]),
+    ("cat", OneHotEncoder(handle_unknown="ignore"), ["city"]),
+])
+pipe = Pipeline([("pre", pre), ("clf", RandomForestClassifier())])
+
+grid = GridSearchCV(pipe,
+    {"clf__n_estimators": [100, 300], "clf__max_depth": [4, 8]},
+    cv=5)
+grid.fit(X, y)                 # tries 2*2=4 settings x 5 folds = 20 fits
+print(grid.best_params_, grid.best_score_)
+```
+
+The `clf__n_estimators` double-underscore syntax reaches *into* a named step — `<step>__<param>` — so you tune a deeply nested component from the top level. The whole search, leakage-safe preprocessing included, is one object you can `joblib.dump` and ship.
+
 ## 31.2 — Deep learning frameworks
 
 Classical ML stops where you need to hand-build a network and have its gradients computed for you. That is the job of a deep learning framework. Both major frameworks rest on the same two pillars: **tensors** (NumPy-like arrays that also live on GPUs, so the same array math runs thousands of multiplies in parallel) and **autograd** (automatic differentiation that records every operation and replays it backward to compute gradients — the chain rule, mechanized; see the *Calculus & Differentiation* chapter). They differ mainly in *when* the computation graph is built and *where* they are strongest in production.
 
-The **computation graph** is the central concept: as you compute, the framework builds a directed graph whose nodes are operations and whose edges are tensors. To get gradients, it walks that graph backward. The question that splits the two frameworks is *when* the graph gets built — every step as you run (dynamic), or once up front (static).
+The **computation graph** is the central concept: as you compute, the framework builds a directed graph whose nodes are operations and whose edges are tensors. To get gradients, it walks that graph backward. The question that splits the two frameworks is *when* the graph gets built — every step as you run (dynamic), or once up front (static). The intuition: a dynamic graph is like cooking while reading the recipe line by line (you can improvise mid-dish); a static graph is like printing the whole recipe, locking it, then running it on an assembly line a thousand times (no improvising, but fast and shippable).
+
+The backward pass is the chain rule applied along that graph. For a tiny chain $L = f(g(w))$:
+
+$$\frac{\partial L}{\partial w} = \frac{\partial L}{\partial g}\cdot\frac{\partial g}{\partial w}$$
+
+**In words:** the sensitivity of the loss to a weight is the product of the local sensitivities along the path from that weight to the loss — multiply the per-step "if I nudge this, that moves by…" factors together.
+**Also written:** for a deep stack of layers $L = f_n(f_{n-1}(\cdots f_1(w)))$, this generalizes to the product $\frac{\partial L}{\partial w} = \prod_{k=1}^{n} \frac{\partial f_k}{\partial f_{k-1}}$, which is exactly what `.backward()` (PyTorch) or the gradient tape (TensorFlow) evaluates for every parameter at once.
 
 ### PyTorch: dynamic graphs and the training loop
 
@@ -284,6 +330,13 @@ for epoch in range(100):
     opt.step()                   # 4. param -= lr * param.grad
 ```
 
+The optimizer step that line 4 runs, for plain SGD, is one rule per parameter $\theta$:
+
+$$\theta \leftarrow \theta - \eta\,\nabla_\theta L$$
+
+**In words:** nudge each weight a small step (size set by the learning rate $\eta$) in the direction that most decreases the loss — downhill on the error surface.
+**Also written:** component-wise, $\theta_j \leftarrow \theta_j - \eta\,\frac{\partial L}{\partial \theta_j}$ — exactly the `param -= lr * param.grad` that `opt.step()` performs for every entry of every parameter tensor.
+
 ```{mermaid}
 flowchart LR
   A[zero_grad] --> B[forward: pred = model X]
@@ -293,7 +346,19 @@ flowchart LR
   E --> A
 ```
 
-The explicitness is the appeal: nothing is hidden, so research code — custom losses, odd architectures, novel training schemes — is natural to express. This is why PyTorch dominates research.
+The explicitness is the appeal: nothing is hidden, so research code — custom losses, odd architectures, novel training schemes — is natural to express. This is why PyTorch dominates research. For real datasets you rarely feed `X` whole; you wrap it in a `Dataset`/`DataLoader` that yields shuffled mini-batches, and the same four-line body runs per batch:
+
+```python
+from torch.utils.data import TensorDataset, DataLoader
+
+loader = DataLoader(TensorDataset(X, y), batch_size=32, shuffle=True)
+for epoch in range(100):
+    for xb, yb in loader:                 # mini-batches, reshuffled each epoch
+        opt.zero_grad()
+        loss = lossf(model(xb), yb)
+        loss.backward()
+        opt.step()
+```
 
 ::: {.callout-warning}
 **Common mistake:** forgetting `opt.zero_grad()`. PyTorch *accumulates* gradients into `.grad` by design (which is useful when you deliberately split one batch across several backward passes). Skip the reset and each step silently adds the previous step's gradient too — training diverges with no error message.
@@ -322,32 +387,141 @@ The contrast is the whole story: PyTorch hands you the loop; Keras hands you `fi
 
 Where TensorFlow still leads is the **deployment and edge ecosystem**: **TF Serving** for high-throughput model servers, **TensorFlow Lite** for phones and microcontrollers, and **TensorFlow.js** for running models directly in the browser. That maturity at the edge is the main reason teams still pick it.
 
+### JAX: functional autograd and compilation
+
+Worth knowing as the third framework: **JAX** treats differentiation as a *function transform*. Instead of an object that remembers its history, you write a plain math function and wrap it: `grad(f)` returns a *new function* that computes the derivative, `jit(f)` compiles it to fused GPU/TPU code via XLA, and `vmap(f)` auto-vectorizes it over a batch dimension. The mental shift: PyTorch attaches gradients to tensors; JAX attaches them to *functions*.
+
+```python
+import jax, jax.numpy as jnp
+
+def loss(w, x, y):
+    return jnp.mean((x @ w - y) ** 2)        # mean squared error
+
+grad_fn = jax.jit(jax.grad(loss))            # d loss / d w, compiled
+g = grad_fn(w, X, Y)                          # one fused, batched call
+```
+
+This functional style (pure functions, explicit randomness, no in-place state) is why JAX powers much large-scale research and most TPU training. It is less batteries-included than PyTorch for everyday modeling, but unmatched when you want gradients of gradients or aggressive compilation.
+
 ### When to choose which
 
-| Concern | PyTorch | TensorFlow / Keras |
-|---|---|---|
-| Graph | dynamic (define-by-run) | static-capable (`@tf.function`) |
-| Training loop | you write it (explicit) | `model.fit` (managed) |
-| Debugging | normal Python, easy | easier than old TF, still graph-y |
-| Research mindshare | dominant | minority |
-| Edge / mobile / browser | improving (ExecuTorch) | mature (TFLite, TF.js) |
-| Best fit | research, custom training | locked-down production & edge |
+| Concern | PyTorch | TensorFlow / Keras | JAX |
+|---|---|---|---|
+| Graph | dynamic (define-by-run) | static-capable (`@tf.function`) | functional + `jit` (XLA) |
+| Training loop | you write it (explicit) | `model.fit` (managed) | you write it (functional) |
+| Debugging | normal Python, easy | easier than old TF, still graph-y | pure functions, traces can surprise |
+| Research mindshare | dominant | minority | rising (TPU, large scale) |
+| Edge / mobile / browser | improving (ExecuTorch) | mature (TFLite, TF.js) | limited |
+| Best fit | research, custom training | locked-down production & edge | TPU, high-perf research |
 
 ```{mermaid}
 flowchart TD
   Q{What matters most?} -->|research, novel<br/>architectures| PT[PyTorch]
   Q -->|fast standard model<br/>fit/compile| K[Keras]
   Q -->|phone / browser /<br/>microcontroller| TF[TF Lite / TF.js]
+  Q -->|TPU / heavy<br/>compilation| J[JAX]
   Q -->|just get a<br/>baseline running| K
 ```
 
 ::: {.callout-tip}
-**Rule of thumb:** prototyping or doing research → PyTorch. Need a standard model trained fast, or deployed to a phone or browser → Keras/TensorFlow. In practice the gap keeps shrinking; both export to the shared **ONNX** format, so a model trained in one framework can be served by another.
+**Rule of thumb:** prototyping or doing research → PyTorch. Need a standard model trained fast, or deployed to a phone or browser → Keras/TensorFlow. Squeezing TPUs or doing math-heavy research → JAX. In practice the gap keeps shrinking; all export to the shared **ONNX** format, so a model trained in one framework can be served by another.
 :::
 
-## 31.3 — Streaming & real-time
+### ONNX: the shared interchange format
 
-Everything so far assumed a *batch*: a fixed table sitting on disk, processed once. But many systems must react to data *as it arrives* — fraud scores within milliseconds of a card swipe, recommendations updated mid-session, dashboards that never stop refreshing. **Streaming** treats data as an unbounded sequence of **events** flowing through the system continuously, rather than a finite file processed in one shot.
+A recurring practical need: train in one framework, serve in another (or on specialized hardware). **ONNX** (Open Neural Network Exchange) is the common file format that makes this possible — a framework-agnostic description of the computation graph plus weights. The analogy: ONNX is the PDF of models. You author in Word or Pages (PyTorch, TF), export to PDF (ONNX), and anyone can open and run it without your original editor.
+
+```python
+import torch
+torch.onnx.export(model, X[:1], "model.onnx",   # one sample fixes input shape
+                  input_names=["x"], output_names=["y"])
+
+# then serve anywhere ONNX Runtime runs — CPU, GPU, mobile, browser
+import onnxruntime as ort
+sess = ort.InferenceSession("model.onnx")
+out = sess.run(None, {"x": X[:1].numpy()})
+```
+
+ONNX Runtime applies graph optimizations (operator fusion, constant folding) and runs on many backends, so the same exported file serves a cloud GPU, a laptop CPU, or a phone — decoupling the *training* framework from the *serving* target.
+
+## 31.3 — The Hugging Face ecosystem
+
+For most of the last decade, "use a deep model" meant building and training one yourself. Today it usually means *downloading* one. **Hugging Face** has become the default hub for pretrained models, datasets, and the glue around them — the GitHub of models. The intuition: instead of forging your own engine, you pull a proven engine off the shelf and bolt it into your car; you only build from scratch when nothing on the shelf fits.
+
+Three libraries matter most:
+
+- **`transformers`** — thousands of pretrained models (BERT, GPT-style, ViT, Whisper) behind one uniform API, plus the high-level `pipeline` that bundles tokenizer + model + post-processing into a single callable.
+- **`datasets`** — memory-mapped, streamable datasets so you can load something larger than RAM with one line.
+- **`peft`** — parameter-efficient fine-tuning (LoRA and friends), which adapts a giant model by training a tiny number of extra weights.
+
+The fastest path from zero to a working model is the `pipeline` — three lines to a sentiment classifier, with the model downloaded and cached automatically:
+
+```python
+from transformers import pipeline
+
+clf = pipeline("sentiment-analysis")          # downloads a default model
+print(clf("Hugging Face makes this absurdly easy"))
+# [{'label': 'POSITIVE', 'score': 0.9998}]
+```
+
+When you need control, drop one level to the tokenizer + model pair. The tokenizer turns text into the integer IDs the model expects; the model returns raw scores (**logits**) you convert to probabilities:
+
+```python
+from transformers import AutoTokenizer, AutoModelForSequenceClassification
+import torch
+
+name = "distilbert-base-uncased-finetuned-sst-2-english"
+tok   = AutoTokenizer.from_pretrained(name)
+model = AutoModelForSequenceClassification.from_pretrained(name)
+
+batch  = tok(["great film", "total waste"], padding=True, return_tensors="pt")
+logits = model(**batch).logits                # raw scores, shape (2, 2)
+probs  = torch.softmax(logits, dim=-1)        # -> probabilities per class
+```
+
+### Fine-tuning and LoRA
+
+Fine-tuning a full large model means updating *all* its weights — billions of numbers — which needs heavy GPUs and storage. **LoRA** (Low-Rank Adaptation) is the lazy, effective shortcut: freeze the original weights and inject small trainable matrices alongside them, training only those. The analogy: rather than re-teaching a fluent translator the whole language, you hand them a small phrasebook of your domain's terms.
+
+Formally, LoRA replaces a weight update $\Delta W$ (a big $d \times k$ matrix) with a product of two skinny matrices:
+
+$$W' = W + \Delta W \approx W + B A, \qquad B \in \mathbb{R}^{d\times r},\; A \in \mathbb{R}^{r\times k},\; r \ll \min(d,k)$$
+
+**In words:** instead of learning a full grid of changes, learn two thin strips whose product reconstructs an approximate change — because the rank $r$ is tiny, you train a few thousand numbers instead of millions.
+**Also written:** the effective forward pass is $h = Wx + B(Ax)$, i.e. the frozen layer's output plus a low-rank correction; only $A$ and $B$ receive gradients, so the trainable count drops from $d\cdot k$ to $r(d+k)$.
+
+<svg viewBox="0 0 460 160" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif" font-size="12">
+  <text x="10" y="16" font-weight="bold">Frozen W (d×k, huge)</text>
+  <rect x="10" y="24" width="110" height="110" fill="rgba(99,102,241,0.25)" stroke="#6366f1"/>
+  <text x="30" y="84" fill="currentColor">W (frozen)</text>
+  <text x="135" y="84" font-size="22" fill="currentColor">+</text>
+  <text x="160" y="16" font-weight="bold">Trainable B·A (low rank r)</text>
+  <rect x="160" y="24" width="30" height="110" fill="rgba(34,197,94,0.35)" stroke="#22c55e"/>
+  <text x="166" y="150" font-size="10" fill="currentColor">B (d×r)</text>
+  <text x="196" y="84" font-size="18" fill="currentColor">·</text>
+  <rect x="210" y="24" width="110" height="30" fill="rgba(34,197,94,0.35)" stroke="#22c55e"/>
+  <text x="240" y="70" font-size="10" fill="currentColor">A (r×k)</text>
+  <text x="335" y="84" font-size="10" fill="currentColor">tiny strips → few weights to train</text>
+</svg>
+
+With `peft`, wrapping a model for LoRA is a few lines; you then train only the adapter and save just those small weights:
+
+```python
+from peft import LoraConfig, get_peft_model
+
+cfg = LoraConfig(r=8, lora_alpha=16, target_modules=["q_proj", "v_proj"])
+model = get_peft_model(base_model, cfg)
+model.print_trainable_parameters()
+# trainable: 0.2% of all params  <- the whole point
+```
+
+::: {.callout-tip}
+**Rule of thumb:** before training anything, search the Hub. If a pretrained model is close, fine-tune it (LoRA if it is large); only train from scratch when nothing fits or your data is truly unlike anything public. Downloading beats forging almost every time.
+:::
+
+## 31.4 — Streaming & real-time
+
+Everything so far assumed a *batch*: a fixed table sitting on disk, processed once. But many systems must react to data *as it arrives* — fraud scores within milliseconds of a card swipe, recommendations updated mid-session, dashboards that never stop refreshing. **Streaming** treats data as an unbounded sequence of **events** flowing through the system continuously, rather than a finite file processed in one shot. The mental flip: batch is a photo album you flip through once; streaming is a live video feed you never stop watching.
 
 The central new problem is **feature freshness**: a model's input features (e.g. "number of transactions in the last 5 minutes") must be computed from data that is seconds old, not from last night's batch job. Three tools dominate, and they play different roles — one moves events, two compute over them.
 
@@ -366,6 +540,8 @@ flowchart LR
 ### Kafka: the durable event log
 
 **Apache Kafka** is the pipe everything else plugs into. It is a distributed, append-only **log**: producers write events to named **topics**, and the events are kept *in order* and *retained* for a configurable time. Consumers read at their own pace, each tracking an **offset** — its current position in the log. Because the log is durable and replayable, a consumer that crashes can resume exactly where it left off, and a brand-new consumer can replay history from the beginning to rebuild its state. Kafka itself does no computation; it is the reliable backbone that *decouples* producers from consumers, so a slow or failed consumer never blocks the producers.
+
+The everyday analogy: Kafka is a conveyor belt with numbered slots that never erases. Each worker (consumer) remembers the slot number it last picked up, so a worker who steps away can return and resume from exactly that slot — and a new worker can rewind to slot 0 and replay everything.
 
 ```python
 # producer: emit a transaction event
@@ -412,6 +588,8 @@ Once events are in Kafka, you need an engine to compute over them — windowed a
 - **Spark Structured Streaming** uses **micro-batching**: it slices the stream into tiny batches (say, every second) and runs the ordinary Spark batch engine on each slice. This is simple and reuses all of Spark's mature batch tooling, but latency is bounded below by the batch interval — you cannot react faster than one batch, so think sub-second to seconds.
 - **Apache Flink** is a **true streaming** engine: it processes each event *the moment it arrives*, giving millisecond latency. It also has first-class support for **event time** (ordering events by when they actually happened, not when they were received) and stateful windows, which matters when events arrive late or out of order — a common reality with mobile clients on flaky networks.
 
+The analogy: Spark is a bus that leaves every minute (cheap, predictable, but you wait for the next departure); Flink is a taxi that leaves the instant you arrive (low wait, more moving parts).
+
 <svg viewBox="0 0 460 180" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif" font-size="12">
   <text x="10" y="16" font-weight="bold">Spark: micro-batch</text>
   <line x1="10" y1="60" x2="440" y2="60" stroke="#999"/>
@@ -441,6 +619,15 @@ A concrete feature-freshness task: maintain a 5-minute rolling count of transact
   .sink(feature_store))                     # write fresh feature out
 ```
 
+A worked trace makes the window concrete. Suppose user 42 swipes at event-times 10:01, 10:03, 10:04, and 10:07, and we use tumbling (non-overlapping) 5-minute windows aligned to the clock:
+
+| Window | Events from user 42 | Count feature |
+|---|---|---|
+| 10:00–10:05 | 10:01, 10:03, 10:04 | 3 |
+| 10:05–10:10 | 10:07 | 1 |
+
+The swipe at 10:07 starts a *fresh* count because it falls in the next window — exactly the "transactions in the last few minutes" signal a fraud model wants, recomputed continuously as events land. (If the 10:04 event arrived *late* at 10:06 due to a flaky network, event-time processing still files it under the 10:00–10:05 window; processing-time would wrongly drop it into the later one.)
+
 This is the bridge to **online learning** (a model that updates incrementally as each labeled event arrives) and **online inference** (scoring each event live). The **feature store** sits in the middle: streaming jobs keep it fresh, the model reads from it at score time, and — crucially — the *same* feature definitions are reused for offline training to avoid **train/serve skew** (when the features a model sees in production differ from the ones it was trained on).
 
 | Tool | Role | Model | Latency | Pick when |
@@ -457,20 +644,22 @@ This is the bridge to **online learning** (a model that updates incrementally as
 **Common mistake:** computing a streaming feature differently from its batch (training) version — a slightly different window edge, or different null-handling. The model then sees inputs at serving time that never appeared in training. This **train/serve skew** is the top cause of "great offline, broken online" models; share *one* feature definition across both the batch and stream paths.
 :::
 
-## 31.4 — Key takeaways
+## 31.5 — Key takeaways
 
 - The Python ML stack layers cleanly: **NumPy** (typed n-dimensional arrays, vectorized via broadcasting) → **Pandas** (labeled, index-aligned tabular data, `groupby` split-apply-combine) → **scikit-learn** (the uniform `fit`/`predict`/`transform` estimator API).
-- A scikit-learn **Pipeline** chains transformers and a final estimator into one object; fitting it per cross-validation fold prevents **data leakage** from preprocessing.
+- A scikit-learn **Pipeline** chains transformers and a final estimator into one object; fitting it per cross-validation fold prevents **data leakage** from preprocessing. **`ColumnTransformer`** routes numeric vs categorical columns, and **`GridSearchCV`** tunes the whole thing leakage-safely.
 - Deep learning frameworks share two pillars: **GPU tensors** and **autograd** (the mechanized chain rule, triggered by `.backward()`).
-- **PyTorch** uses a dynamic graph and an explicit four-step loop (`zero_grad → forward → backward → step`) and dominates research. **Keras/TensorFlow** hide the loop behind `compile`/`fit` and lead on edge/mobile/browser deployment (TFLite, TF.js). Both export to **ONNX**.
+- **PyTorch** uses a dynamic graph and an explicit four-step loop (`zero_grad → forward → backward → step`) and dominates research. **Keras/TensorFlow** hide the loop behind `compile`/`fit` and lead on edge/mobile/browser deployment (TFLite, TF.js). **JAX** offers functional autograd (`grad`/`jit`/`vmap`) for TPU and high-performance research. All export to **ONNX**, the framework-agnostic interchange format that decouples training from serving.
+- The **Hugging Face** ecosystem (`transformers`, `datasets`, `peft`) makes downloading a pretrained model the default; **LoRA** adapts a giant model by training tiny low-rank matrices ($W + BA$) instead of all its weights.
 - **Streaming** treats data as unbounded events. **Kafka** is the durable, replayable log (transport); **Spark Streaming** computes in micro-batches (~seconds); **Flink** computes per-event with event-time windows (~milliseconds).
 - The recurring real-time challenge is **feature freshness** and avoiding **train/serve skew** — share one feature definition across batch and stream.
 
-## 31.5 — See also
+## 31.6 — See also
 
 - **Data Preprocessing** — what the Pandas and scikit-learn transformers actually do to features.
 - **Calculus & Differentiation** — the chain rule that autograd mechanizes.
 - **Neural Networks (Core)** — the `nn.Module` layers and training dynamics framed here as code.
+- **Transformers & Attention** — the architecture behind most Hugging Face models, and where LoRA fine-tuning is applied.
 - **MLOps & Deployment** — feature stores, model serving, and the production lifecycle around these tools.
 - **AI Infrastructure & Efficient Inference** — GPUs, ONNX, and serving the tensors these frameworks produce.
 - **Model Evaluation & Tuning** — cross-validation, the setting where Pipelines prevent leakage.

@@ -111,13 +111,38 @@ Classification is the task of assigning a discrete label to an input: spam or no
 🧭 **In context:** Classical Machine Learning · supervised prediction of discrete labels · every classifier is just a different way to carve the feature space into decision regions.
 :::
 
+**The big picture first.** Every classifier in this chapter does the same job — split the feature space into regions, one per class — but each makes a different *bet* about what the boundary should look like. k-NN bets "you look like your neighbors." Naive Bayes bets "features are independent given the class." SVM bets "the widest gap is safest." Trees bet "a stack of yes/no questions is enough." Keep that one sentence per method in mind and the rest is detail.
+
+<svg viewBox="0 0 460 130" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif" font-size="10">
+  <rect x="0" y="0" width="460" height="130" fill="none"/>
+  <g text-anchor="middle">
+    <rect x="10" y="40" width="80" height="50" rx="8" fill="rgba(99,102,241,0.18)" stroke="currentColor"/>
+    <text x="50" y="60" font-weight="bold">k-NN</text><text x="50" y="76">vote by</text><text x="50" y="88">neighbors</text>
+    <rect x="100" y="40" width="80" height="50" rx="8" fill="rgba(34,197,94,0.18)" stroke="currentColor"/>
+    <text x="140" y="60" font-weight="bold">Naive Bayes</text><text x="140" y="76">prob. per</text><text x="140" y="88">class</text>
+    <rect x="190" y="40" width="80" height="50" rx="8" fill="rgba(245,158,11,0.18)" stroke="currentColor"/>
+    <text x="230" y="60" font-weight="bold">Trees</text><text x="230" y="76">yes/no</text><text x="230" y="88">questions</text>
+    <rect x="280" y="40" width="80" height="50" rx="8" fill="rgba(236,72,153,0.18)" stroke="currentColor"/>
+    <text x="320" y="60" font-weight="bold">SVM</text><text x="320" y="76">widest</text><text x="320" y="88">margin</text>
+    <rect x="370" y="40" width="80" height="50" rx="8" fill="rgba(56,189,248,0.18)" stroke="currentColor"/>
+    <text x="410" y="60" font-weight="bold">LDA/Logit</text><text x="410" y="76">linear</text><text x="410" y="88">score</text>
+  </g>
+  <text x="230" y="20" text-anchor="middle" font-weight="bold">same job — carve the space — different bet on the boundary</text>
+  <text x="230" y="115" text-anchor="middle" opacity="0.7">lazy ───────────────────────────────────────── eager</text>
+</svg>
+
 ## 9.1 — k-Nearest Neighbors
 
 The simplest idea in all of classification: to label a new point, look at the points near it and let them vote. **k-Nearest Neighbors (k-NN)** stores the entire training set and, at prediction time, finds the $k$ closest training points to the query and returns their majority class. There is no "training" beyond memorizing the data — which is why k-NN is called a **lazy learner**: it defers all work to query time, in contrast to **eager learners** (trees, SVMs) that build a model up front.
 
+> **Intuition:** it's the "you are who you hang out with" classifier. Drop a new point on the map, find its $k$ closest companions, and let them outvote each other. No formula is learned — the training data *is* the model.
+
 The whole method rests on a **distance metric**. The default is **Euclidean distance**, the straight-line distance:
 
 $$d(\mathbf{x}, \mathbf{x}') = \sqrt{\sum_{i=1}^{n}(x_i - x'_i)^2}$$
+
+**In words:** square the gap on each feature, add them up, take the square root — the ordinary "as the crow flies" distance.
+**Also written:** $d(\mathbf{x},\mathbf{x}') = \|\mathbf{x}-\mathbf{x}'\|_2 = \sqrt{(\mathbf{x}-\mathbf{x}')^\top(\mathbf{x}-\mathbf{x}')}$ (vector/norm form).
 
 Other choices: **Manhattan distance** $\sum_i |x_i - x'_i|$ (movement along a grid), and **Minkowski distance** $\left(\sum_i |x_i - x'_i|^p\right)^{1/p}$, which generalizes both ($p=2$ Euclidean, $p=1$ Manhattan).
 
@@ -140,6 +165,22 @@ def knn_predict(X, y, q, k=3):
 ```
 
 Note the two implicit tie-breaks here: `argsort` orders equal distances by their original index, and `bincount(...).argmax()` returns the lowest label on a vote tie. The prose advice to use *odd* $k$ removes vote ties for two classes, but as the code shows it does not remove *distance* ties — those are settled by index order. Be aware of both.
+
+In practice you never hand-roll this — scikit-learn's `KNeighborsClassifier` builds a spatial index (a KD-tree or ball-tree) so queries don't scan all $N$ points, and bundles scaling into a pipeline:
+
+```python
+from sklearn.neighbors import KNeighborsClassifier
+from sklearn.preprocessing import StandardScaler
+from sklearn.pipeline import make_pipeline
+
+# StandardScaler is essential — k-NN is scale-sensitive (see warning below)
+clf = make_pipeline(StandardScaler(),
+                    KNeighborsClassifier(n_neighbors=3, weights="distance"))
+clf.fit(X_train, y_train)            # "fit" just stores the (scaled) data + builds the index
+print(clf.predict(q.reshape(1, -1)))
+```
+
+`weights="distance"` is a useful upgrade over plain voting: closer neighbors get a louder vote (weight $\propto 1/d$), which softens the tie problem and often beats uniform voting.
 
 **Choosing k** is the central knob. Small $k$ (e.g. 1) gives a jagged boundary that fits noise — high variance. Large $k$ smooths the boundary but can wash out real structure — high bias. A common rule of thumb is $k \approx \sqrt{N}$, tuned by cross-validation. Use odd $k$ for two classes to avoid *vote* ties.
 
@@ -170,13 +211,21 @@ k-NN is acutely sensitive to feature scale: a feature measured in thousands (sal
 
 Naive Bayes flips the question around. Instead of asking "where is the boundary?", it asks "given this input, which class makes it most probable?" — a **generative** view. It builds on **Bayes' rule**:
 
+> **Intuition:** you start with how common each class is (the prior), then let the evidence — the words in the email, the pixels in the image — push your belief up or down. Naive Bayes is just bookkeeping for "which explanation fits the evidence best."
+
 $$P(C \mid \mathbf{x}) = \frac{P(\mathbf{x} \mid C)\, P(C)}{P(\mathbf{x})}$$
+
+**In words:** the belief in a class *after* seeing the data equals how well that class predicts the data, times how common the class was to begin with, rescaled so the probabilities add to one.
+**Also written:** $\text{posterior} \propto \text{likelihood} \times \text{prior}$, i.e. $P(C\mid\mathbf{x}) \propto P(\mathbf{x}\mid C)\,P(C)$ (the denominator $P(\mathbf{x})$ is constant across classes and drops out of the argmax).
 
 where $P(C)$ is the **prior** (how common the class is), $P(\mathbf{x}\mid C)$ is the **likelihood** (how typical the features are for that class), and $P(C\mid\mathbf{x})$ is the **posterior** we want. Since $P(\mathbf{x})$ is the same across classes, we just pick the class maximizing $P(\mathbf{x}\mid C)P(C)$.
 
 The hard part is $P(\mathbf{x}\mid C)$ for many features. The **"naive" conditional independence assumption** says: given the class, every feature is independent of the others. That turns a joint probability into a simple product:
 
 $$P(\mathbf{x}\mid C) = \prod_{i} P(x_i \mid C)$$
+
+**In words:** pretend the features don't talk to each other once you know the class, so the chance of the whole input is just each feature's chance multiplied together.
+**Also written:** in log space, $\log P(\mathbf{x}\mid C) = \sum_i \log P(x_i\mid C)$ — a sum instead of a product (the form actually used in code, to dodge underflow).
 
 This is almost never literally true (in spam, "free" and "money" co-occur), yet it works remarkably well in practice and makes the math trivial.
 
@@ -225,18 +274,88 @@ print("spam" if log_spam > log_ham else "ham")        # -> spam
 
 The log-space difference $-2.12 - (-5.12) = 3.0$ corresponds to a ratio $e^{3.0}\approx20$ — the same 20× margin, now computed by addition instead of multiplication, which is what keeps long documents from underflowing to zero.
 
+The whole text-classification pipeline — counting words, smoothing, log-space scoring — is two lines in scikit-learn:
+
+```python
+from sklearn.feature_extraction.text import CountVectorizer
+from sklearn.naive_bayes import MultinomialNB
+from sklearn.pipeline import make_pipeline
+
+# alpha=1.0 IS Laplace smoothing; class_prior left None -> learned from data
+clf = make_pipeline(CountVectorizer(), MultinomialNB(alpha=1.0))
+clf.fit(["free money now", "lunch at noon"], ["spam", "ham"])
+print(clf.predict(["claim your free money"]))   # -> ['spam']
+print(clf.predict_proba(["claim your free money"]))  # calibrated-ish class probabilities
+```
+
 ::: {.callout-tip}
 Work in **log space** and add **Laplace smoothing** ($+1$ to every count). Without smoothing, a single unseen word gives probability 0, which zeroes out the entire product no matter how strong the other evidence.
 :::
 
-## 9.3 — Decision Trees
+## 9.3 — Logistic Regression as a Classifier
+
+It is impossible to talk about classification without the model that quietly underpins half the chapter: **logistic regression**. Despite the name it is a *classifier*, and it is the binary cousin of the softmax you will meet in §9.8. (The full derivation lives in the Regression chapter; here we use it purely as a workhorse linear classifier and probability source.)
+
+> **Intuition:** take the perceptron's straight-line score $\mathbf{w}\cdot\mathbf{x}+b$, but instead of slamming it to a hard 0/1 with a step function, *squash* it through an S-curve so it becomes a smooth probability between 0 and 1. Now you don't just get a label — you get a confidence.
+
+The squash is the **logistic (sigmoid)** function:
+
+$$P(y=1\mid\mathbf{x}) = \sigma(z) = \frac{1}{1+e^{-z}}, \qquad z = \mathbf{w}\cdot\mathbf{x}+b$$
+
+**In words:** run the linear score $z$ through an S-shaped curve that maps any real number into $(0,1)$ — large positive $z$ → near 1, large negative → near 0, $z=0$ → exactly $0.5$ (the decision boundary).
+**Also written:** equivalently $\log\dfrac{P(y=1)}{P(y=0)} = \mathbf{w}\cdot\mathbf{x}+b$ — the model is *linear in the log-odds* (logit form).
+
+<svg viewBox="0 0 320 150" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif" font-size="10">
+  <line x1="20" y1="120" x2="300" y2="120" stroke="currentColor" opacity="0.5"/>
+  <line x1="160" y1="20" x2="160" y2="130" stroke="currentColor" opacity="0.3" stroke-dasharray="3"/>
+  <path d="M20,118 C100,116 130,110 160,70 C190,30 220,24 300,22" fill="none" stroke="#6366f1" stroke-width="2.5"/>
+  <line x1="20" y1="70" x2="300" y2="70" stroke="currentColor" opacity="0.2" stroke-dasharray="2"/>
+  <text x="305" y="25" fill="#6366f1">1</text>
+  <text x="305" y="123">0</text>
+  <text x="163" y="135">z = 0 → p = 0.5</text>
+  <text x="240" y="60" fill="#6366f1">σ(z) = 1/(1+e⁻ᶻ)</text>
+</svg>
+
+It is trained by minimizing **log loss** (cross-entropy), which rewards confident-correct predictions and punishes confident-wrong ones:
+
+$$\mathcal{L} = -\frac{1}{N}\sum_{i}\big[y_i\log\hat p_i + (1-y_i)\log(1-\hat p_i)\big]$$
+
+**In words:** average penalty across examples — when the true label is 1 you pay $-\log\hat p$ (huge if you said $\hat p\approx 0$), when it's 0 you pay $-\log(1-\hat p)$; being confidently wrong is expensive.
+**Also written:** $\mathcal{L} = \frac{1}{N}\sum_i \log\!\big(1+e^{-y_i' z_i}\big)$ using $\pm1$ labels $y_i'$ — the equivalent *softplus* form.
+
+**Worked example.** Weights $\mathbf{w}=(1.0,\ -2.0)$, $b=0.5$, input $\mathbf{x}=(2,1)$. Then $z = 1.0\cdot2 + (-2.0)\cdot1 + 0.5 = 0.5$, and $\hat p = \sigma(0.5) = 1/(1+e^{-0.5}) = 0.622$. Since $0.622 > 0.5$, predict class **1** with 62% confidence — a soft answer, not a bare label.
+
+```python
+from sklearn.linear_model import LogisticRegression
+clf = LogisticRegression(C=1.0)            # C = inverse regularization, like SVM's C
+clf.fit(X_train, y_train)
+print(clf.predict_proba(X_test)[:3])        # genuine probabilities, not just labels
+print(clf.coef_, clf.intercept_)            # interpretable weights & bias
+```
+
+Logistic regression is the default baseline for almost any classification problem: fast, linear, interpretable (a positive weight pushes toward class 1), and it emits well-behaved probabilities out of the box — which is exactly what the next section is about.
+
+::: {.callout-tip}
+Reach for logistic regression *first* on a new tabular problem. If a linear model already hits your target metric, you've saved yourself the tuning cost of SVMs and trees — and you get interpretable coefficients for free.
+:::
+
+## 9.4 — Decision Trees
 
 A **decision tree** classifies by asking a sequence of yes/no questions about features, splitting the data at each node until it reaches a leaf that votes a class. It mirrors how a human triages: "Is it raining? → Is it cold? → take the bus." The appeal is interpretability — you can read the rules straight off the tree.
+
+> **Intuition:** it's a flowchart the algorithm draws for itself. At every fork it asks the single question that best sorts the remaining examples into "mostly red" and "mostly blue" piles, then repeats inside each pile until the piles are pure enough.
 
 The core question is **which split to make**. A good split makes the resulting groups **purer** (more dominated by one class). Two impurity measures:
 
 - **Entropy** (from information theory): $H = -\sum_c p_c \log_2 p_c$. Zero when a node is pure, maximal when classes are 50/50. **Information gain** = parent entropy minus the weighted child entropy; the tree greedily picks the split with the highest gain.
 - **Gini impurity**: $G = 1 - \sum_c p_c^2$. The probability of mislabeling a random element. Cheaper to compute (no logs), and in practice gives nearly identical trees.
+
+For the **information gain** of a split:
+
+$$\text{Gain} = H(\text{parent}) - \sum_{j}\frac{N_j}{N}\,H(\text{child}_j)$$
+
+**In words:** how much uncertainty the question removes — the parent's messiness minus the size-weighted average messiness of the groups it produces.
+**Also written:** $\text{Gain} = H(\text{parent}) - H(\text{parent}\mid \text{split})$, i.e. the *mutual information* between the split feature and the label.
 
 **Worked example.** A node with 10 samples: 6 🔴, 4 🔵. Gini $= 1 - (0.6^2 + 0.4^2) = 1 - 0.52 = 0.48$. Suppose a split sends all 6 🔴 left (pure, $G=0$) and all 4 🔵 right (pure, $G=0$). Weighted child impurity $= 0$ → this is a perfect split, gain $= 0.48$.
 
@@ -270,17 +389,34 @@ graph TD
   D -->|Weak| H["Play ✅"]
 ```
 
+The from-scratch Gini above is for understanding; in practice CART is one import, and the trained tree is fully readable:
+
+```python
+from sklearn.tree import DecisionTreeClassifier, export_text
+clf = DecisionTreeClassifier(criterion="gini", max_depth=3,   # max_depth = pre-pruning
+                             min_samples_leaf=5)
+clf.fit(X_train, y_train)
+print(export_text(clf, feature_names=list(feature_names)))    # human-readable rules
+# cost-complexity (post-)pruning path: pick ccp_alpha by cross-validation
+print(clf.cost_complexity_pruning_path(X_train, y_train).ccp_alphas)
+```
+
 A fully grown tree memorizes the training set and overfits. **Pruning** cuts it back: **pre-pruning** stops growth early (max depth, min samples per leaf), while **post-pruning** grows the full tree then removes branches that don't improve validation accuracy (cost-complexity pruning trades tree size against error).
 
 ::: {.callout-warning}
 Single trees are **high-variance**: shift a few training points and the whole structure can change. This instability is exactly what ensembles exploit — see Random Forests and boosting in the Ensemble Methods chapter.
 :::
 
-## 9.4 — Support Vector Machines
+## 9.5 — Support Vector Machines
 
 Many lines can separate two classes; which is best? A **Support Vector Machine (SVM)** answers: the one with the widest **margin** — the largest gap between the boundary and the nearest points of either class. The intuition is robustness: a fat margin leaves the most room before a new point gets misclassified.
 
+> **Intuition:** imagine the boundary as the widest possible *road* you can pave between the two classes without driving over any point. The few points touching the curb on each side are the only ones that matter — pin them and the road is fixed.
+
 The boundary is a **hyperplane** $\mathbf{w}\cdot\mathbf{x} + b = 0$. The only training points that matter are the ones sitting on the edge of the margin — the **support vectors**. Move any other point and the boundary doesn't budge; move a support vector and it does. The margin width is $2/\|\mathbf{w}\|$, so maximizing the margin means minimizing $\|\mathbf{w}\|$ subject to every point being on the correct side: $y_i(\mathbf{w}\cdot\mathbf{x}_i + b) \ge 1$.
+
+**In words:** the gap you want to widen shrinks as the weight vector grows, so making the margin big is the same as keeping the weights small — while still parking every point on its correct side of the road with a unit of clearance.
+**Also written:** maximize $\dfrac{2}{\|\mathbf{w}\|}$ $\Longleftrightarrow$ minimize $\dfrac{1}{2}\|\mathbf{w}\|^2$ subject to $y_i(\mathbf{w}\cdot\mathbf{x}_i+b)\ge 1$ for all $i$.
 
 <svg viewBox="0 0 360 200" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif" font-size="11">
   <line x1="60" y1="180" x2="300" y2="40" stroke="#222" stroke-width="2"/>
@@ -298,6 +434,9 @@ Real data is rarely perfectly separable, so a **soft margin** allows violations 
 
 $$\min_{\mathbf{w},b}\ \tfrac{1}{2}\|\mathbf{w}\|^2 + C\sum_i \xi_i$$
 
+**In words:** still keep the weights small (wide road), but now pay a penalty $C$ for every point that strays into or across the margin — so $C$ sets how much you care about violations versus width.
+**Also written:** the unconstrained *hinge-loss* form $\min_{\mathbf{w},b}\ \tfrac{1}{2}\|\mathbf{w}\|^2 + C\sum_i \max\!\big(0,\ 1 - y_i(\mathbf{w}\cdot\mathbf{x}_i+b)\big)$.
+
 **C tunes the bias–variance tradeoff.** Large $C$ punishes violations hard → narrow margin, fits training data tightly (risk: overfit). Small $C$ tolerates violations → wide margin, smoother (risk: underfit).
 
 | C | margin | training errors | behavior |
@@ -305,21 +444,53 @@ $$\min_{\mathbf{w},b}\ \tfrac{1}{2}\|\mathbf{w}\|^2 + C\sum_i \xi_i$$
 | large | narrow | few | low bias, high variance |
 | small | wide | more allowed | high bias, low variance |
 
+```python
+from sklearn.svm import SVC
+from sklearn.preprocessing import StandardScaler
+from sklearn.pipeline import make_pipeline
+
+# scaling matters as much as for k-NN — the margin is a geometric object
+clf = make_pipeline(StandardScaler(), SVC(kernel="rbf", C=1.0, gamma="scale"))
+clf.fit(X_train, y_train)
+print(clf.named_steps["svc"].support_vectors_.shape)  # only the SVs are kept
+# for huge / sparse text data, LinearSVC (liblinear) is far faster than kernel SVC
+```
+
 ::: {.callout-tip}
 SVMs shine in **high-dimensional** spaces (text, genomics) where the number of features exceeds samples, because only the support vectors define the model. Standardize features first — like distances in k-NN, the margin geometry depends on scale.
 :::
 
-## 9.5 — Kernels & the Kernel Trick
+## 9.6 — Kernels & the Kernel Trick
 
 A linear SVM fails when classes aren't linearly separable — think red points in a ring around blue points; no straight line splits them. The fix: map the data into a higher-dimensional space where it *becomes* linearly separable, then separate it there with a hyperplane.
 
+> **Intuition:** if you can't separate the points on a flat table, *lift* them into 3-D — give the inner ring a low height and the outer ring a high one — and now a flat sheet slides cleanly between them. The kernel trick is a way to get the benefit of that lift without ever paying to compute the lifted coordinates.
+
 The genius is the **kernel trick**. The SVM optimization only ever needs **dot products** between points, never the points' coordinates themselves. A **kernel function** $K(\mathbf{x},\mathbf{x}')$ computes the dot product *in the high-dimensional space* directly from the original inputs — without ever constructing the high-dimensional vectors. You get the power of a huge (even infinite) feature space at the cost of the original one.
+
+$$K(\mathbf{x},\mathbf{x}') = \phi(\mathbf{x})\cdot\phi(\mathbf{x}')$$
+
+**In words:** a kernel is a shortcut that returns the dot product of two points *after* they've been lifted by some feature map $\phi$ — computed straight from the raw inputs, skipping the lift entirely.
+**Also written:** $K(\mathbf{x},\mathbf{x}') = \langle \phi(\mathbf{x}),\,\phi(\mathbf{x}')\rangle$ (inner-product notation), for any $\phi$ the kernel implicitly defines.
 
 | kernel | formula | use |
 |--------|---------|-----|
 | **linear** | $\mathbf{x}\cdot\mathbf{x}'$ | already-separable / high-dim text |
 | **polynomial** | $(\mathbf{x}\cdot\mathbf{x}' + c)^d$ | feature interactions up to degree $d$ |
 | **RBF (Gaussian)** | $\exp(-\gamma\|\mathbf{x}-\mathbf{x}'\|^2)$ | smooth, local, very flexible boundaries |
+
+<svg viewBox="0 0 420 170" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif" font-size="10">
+  <text x="80" y="16" text-anchor="middle" font-weight="bold">flat: not separable</text>
+  <circle cx="80" cy="90" r="55" fill="none" stroke="currentColor" opacity="0.3"/>
+  <g fill="#ec4899"><circle cx="55" cy="55" r="4"/><circle cx="110" cy="60" r="4"/><circle cx="115" cy="120" r="4"/><circle cx="50" cy="125" r="4"/><circle cx="35" cy="90" r="4"/></g>
+  <g fill="#38bdf8"><circle cx="80" cy="88" r="4"/><circle cx="92" cy="98" r="4"/><circle cx="70" cy="100" r="4"/></g>
+  <text x="200" y="95" text-anchor="middle" font-size="18">→</text>
+  <text x="200" y="115" text-anchor="middle">lift via φ</text>
+  <text x="330" y="16" text-anchor="middle" font-weight="bold">3-D: a sheet splits them</text>
+  <g fill="#ec4899"><circle cx="285" cy="55" r="4"/><circle cx="375" cy="60" r="4"/><circle cx="300" cy="70" r="4"/><circle cx="370" cy="120" r="4"/></g>
+  <g fill="#38bdf8"><circle cx="330" cy="125" r="4"/><circle cx="345" cy="130" r="4"/><circle cx="318" cy="128" r="4"/></g>
+  <line x1="265" y1="100" x2="395" y2="92" stroke="#22c55e" stroke-width="2" stroke-dasharray="5"/>
+</svg>
 
 **Worked example — why it's "implicit."** Take the 2-D polynomial kernel $K(\mathbf{x},\mathbf{z})=(\mathbf{x}\cdot\mathbf{z})^2$. Expand it:
 
@@ -337,19 +508,36 @@ print(K, phi(x) @ phi(z))                        # 121.0  121.0  — identical
 
 The RBF kernel's $\gamma$ controls reach. It is the inverse of the squared Gaussian width: $\gamma = 1/(2\sigma^2)$, so a *large* $\gamma$ means a *narrow* bump — each point influences only its immediate neighborhood (wiggly boundary, overfit risk) — while a *small* $\gamma$ (wide $\sigma$) gives broad influence and a smoother boundary. It pairs with $C$ as the two main RBF-SVM knobs.
 
+In code, swapping kernels and grid-searching the two knobs is trivial:
+
+```python
+from sklearn.svm import SVC
+from sklearn.model_selection import GridSearchCV
+grid = GridSearchCV(SVC(kernel="rbf"),
+                    {"C": [0.1, 1, 10], "gamma": [0.01, 0.1, 1]}, cv=5)
+grid.fit(X_train, y_train)
+print(grid.best_params_)   # C and gamma tuned together, as the warning below insists
+```
+
 ::: {.callout-warning}
 A high-degree polynomial or large-$\gamma$ RBF can fit any training set perfectly and generalize terribly. Tune $\gamma$ and $C$ together with cross-validation, and prefer the linear kernel when features already vastly outnumber samples.
 :::
 
-## 9.6 — Perceptron
+## 9.7 — Perceptron
 
 The **perceptron** (Rosenblatt, 1958) is the original artificial neuron and the ancestor of every neural network. It computes a weighted sum of inputs, adds a bias, and outputs a class by thresholding the sum. Using the $\{0,1\}$ label convention — which is what the code below uses — the rule is a step at zero:
 
 $$\hat{y} = \begin{cases} 1 & \text{if } \mathbf{w}\cdot\mathbf{x} + b > 0 \\ 0 & \text{otherwise} \end{cases}$$
 
+**In words:** add up the inputs weighted by importance, add a bias offset, and fire a 1 if the total clears zero, otherwise a 0 — a hard yes/no.
+**Also written:** $\hat y = \mathbb{1}[\mathbf{w}\cdot\mathbf{x}+b > 0]$, or with $\pm1$ labels $\hat y = \operatorname{sign}(\mathbf{w}\cdot\mathbf{x}+b)$ (same boundary, different label code).
+
 Learning is a beautifully simple **mistake-driven update**: loop over examples, and whenever the prediction is wrong, nudge the weights *and the bias* toward the correct answer:
 
 $$\mathbf{w} \leftarrow \mathbf{w} + \eta\,(y - \hat{y})\,\mathbf{x}, \qquad b \leftarrow b + \eta\,(y - \hat{y})$$
+
+**In words:** when you guess right, change nothing; when you guess wrong, shove the weights a small step $\eta$ in the direction of the input that would have fixed the answer (and nudge the bias the same way).
+**Also written:** since the update is gated by the error $(y-\hat y)\in\{-1,0,+1\}$, equivalently "for each misclassified point, $\mathbf{w}\leftarrow\mathbf{w}\pm\eta\mathbf{x}$" — plus on false negatives, minus on false positives.
 
 Here $y\in\{0,1\}$ is the true label and $\hat y\in\{0,1\}$ the prediction, so the error term $(y-\hat y)$ is $+1$ on a false negative, $-1$ on a false positive, and $0$ when correct — meaning the weights only move on a mistake. If a point is misclassified, this shifts the boundary toward classifying it correctly. The **perceptron convergence theorem** guarantees that if the data is linearly separable, this finds a separating boundary in finite steps. (An equivalent formulation uses $\pm1$ labels with $\hat y=\text{sign}(\mathbf{w}\cdot\mathbf{x}+b)$; the two conventions give the same geometry, but you must keep labels, prediction, and update in one convention — mixing them is a classic bug.)
 
@@ -366,6 +554,15 @@ for _ in range(10):
 print(w, b)   # a valid AND boundary
 ```
 
+The from-scratch loop is the whole algorithm; scikit-learn wraps it (with averaging and regularization) as `Perceptron`:
+
+```python
+from sklearn.linear_model import Perceptron
+clf = Perceptron(eta0=1.0, max_iter=1000)
+clf.fit(X, y)
+print(clf.coef_, clf.intercept_)   # a separating boundary for AND
+```
+
 **Why it cannot solve XOR.** XOR returns 1 for $(0,1)$ and $(1,0)$ but 0 for $(0,0)$ and $(1,1)$. No straight line separates those two diagonal pairs — the classes are **not linearly separable**. This 1969 observation (Minsky & Papert) stalled neural-net research for a decade. The escape is stacking neurons into hidden layers, which the Neural Networks chapter develops.
 
 <svg viewBox="0 0 200 180" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif" font-size="11">
@@ -379,11 +576,20 @@ print(w, b)   # a valid AND boundary
   <text x="60" y="115">separates 🔴 from 🔵</text>
 </svg>
 
-## 9.7 — Discriminant Analysis
+## 9.8 — Discriminant Analysis
 
 Discriminant analysis is a **generative** classifier in the same family as Naive Bayes, but instead of assuming features are independent, it models each class as a full **multivariate Gaussian** — a bell-shaped cloud with a mean and a covariance (its shape and tilt). To classify a point, it asks which class's Gaussian, weighted by the prior, makes the point most likely.
 
+> **Intuition:** picture each class as a fuzzy blob of probability. A new point gets assigned to whichever blob it falls deepest inside — accounting for how big and how common that blob is. Naive Bayes draws those blobs as axis-aligned; discriminant analysis lets them tilt and stretch.
+
 **Linear Discriminant Analysis (LDA)** makes one simplifying assumption: all classes **share the same covariance matrix** $\Sigma$ (same shape, just different centers). The math then cancels the quadratic terms, leaving a **linear** decision boundary — a straight line or plane. With *equal priors* the boundary sits exactly halfway (in Mahalanobis distance) between the two class means; when the priors differ, the prior term shifts the boundary *toward the rarer class*, so it is no longer the midpoint. The shape stays linear either way.
+
+The score LDA assigns to each class (the **discriminant function**) is:
+
+$$\delta_c(\mathbf{x}) = \mathbf{x}^\top\Sigma^{-1}\boldsymbol\mu_c - \tfrac{1}{2}\boldsymbol\mu_c^\top\Sigma^{-1}\boldsymbol\mu_c + \log P(c)$$
+
+**In words:** reward a point for lining up with class $c$'s center (first term), penalize how far that center is from the origin (second term), and tilt by how common the class is (the prior term); pick the class with the biggest score.
+**Also written:** $\delta_c(\mathbf{x}) = -\tfrac{1}{2}(\mathbf{x}-\boldsymbol\mu_c)^\top\Sigma^{-1}(\mathbf{x}-\boldsymbol\mu_c) + \log P(c) + \text{const}$ — i.e. "negative Mahalanobis distance to the class center, plus log-prior" (the constant is shared, so it drops out of the argmax).
 
 **Quadratic Discriminant Analysis (QDA)** drops that assumption: each class gets its **own** covariance $\Sigma_c$. The quadratic terms survive, so the boundary is a **curve** (parabola, ellipse, hyperbola). More flexible, but it estimates many more parameters and needs more data.
 
@@ -405,11 +611,19 @@ Discriminant analysis is a **generative** classifier in the same family as Naive
   <text x="250" y="165">QDA: curved boundary</text>
 </svg>
 
+```python
+from sklearn.discriminant_analysis import (LinearDiscriminantAnalysis,
+                                           QuadraticDiscriminantAnalysis)
+lda = LinearDiscriminantAnalysis().fit(X_train, y_train)     # straight boundary
+qda = QuadraticDiscriminantAnalysis().fit(X_train, y_train)  # curved boundary
+print(lda.transform(X_train).shape)   # LDA also projects to <=K-1 dims (see tip)
+```
+
 ::: {.callout-tip}
 LDA doubles as a supervised **dimensionality reduction** technique: it projects data onto the axes that best separate the classes. That projection view is covered in the Dimensionality Reduction chapter; here we use it purely as a classifier.
 :::
 
-## 9.8 — Multi-class & Multi-label
+## 9.9 — Multi-class & Multi-label
 
 Many classifiers (SVM, perceptron, logistic regression) are inherently **binary** — they draw one boundary. Real problems have many classes (10 digits) and sometimes many labels at once. Two settings, often confused:
 
@@ -440,30 +654,116 @@ The native multi-class approach is **softmax** (multinomial logistic regression)
 
 $$P(y=c\mid \mathbf{x}) = \frac{e^{z_c}}{\sum_{k} e^{z_k}}, \qquad z_c = \mathbf{w}_c\cdot\mathbf{x}+b_c$$
 
+**In words:** exponentiate every class's raw score to make it positive, then divide by the total so the scores become probabilities that add to 1 — the biggest score becomes the most likely class.
+**Also written:** $\mathrm{softmax}(\mathbf{z})_c = \dfrac{\exp(z_c - \max_k z_k)}{\sum_k \exp(z_k - \max_k z_k)}$ — the numerically stable form (subtract the max before exponentiating to avoid overflow); it is the $K$-class generalization of the sigmoid from §9.3.
+
 **Worked example.** Raw scores $z=(2.0,\ 1.0,\ 0.1)$. Exponentiate: $(7.39,\ 2.72,\ 1.11)$, sum $=11.22$. Softmax $=(0.659,\ 0.242,\ 0.099)$ — a clean probability vector; predict class 0. This is the standard output layer of neural-net classifiers.
 
 For **multi-label**, the trick is **binary relevance**: train one independent binary classifier per label and let each fire independently — replace softmax with a per-label **sigmoid** so labels don't compete. When label *combinations* are correlated, **label powerset** treats each observed combination as its own single class (turning multi-label back into multi-class), capturing co-occurrence at the cost of an explosion in classes.
+
+```python
+from sklearn.multiclass import OneVsRestClassifier, OneVsOneClassifier
+from sklearn.svm import SVC
+# explicit OvR / OvO wrappers around any binary base learner
+ovr = OneVsRestClassifier(SVC()).fit(X_train, y_train)   # K models
+ovo = OneVsOneClassifier(SVC()).fit(X_train, y_train)    # K(K-1)/2 models
+# multi-label: Y is an (n_samples, n_labels) 0/1 matrix; OvR = binary relevance
+ml = OneVsRestClassifier(SVC()).fit(X_train, Y_multilabel)
+```
 
 ::: {.callout-warning}
 Don't use softmax for multi-label problems: softmax forces the outputs to sum to 1, so the classes **compete** — boosting one suppresses the others. For independent labels you want independent **sigmoids**, one per label.
 :::
 
-## 9.9 — Key takeaways
+## 9.10 — Probability Calibration
+
+A classifier can be *accurate* yet *lie about its confidence*. If a weather model says "70% chance of rain" on a hundred days, it had better rain on about seventy of them — that property is **calibration**, and it is separate from getting the label right. It matters enormously when the probability itself drives a decision: a fraud threshold, a medical triage cutoff, an expected-value bet.
+
+> **Intuition:** accuracy asks "did you pick the right class?"; calibration asks "when you said 80%, were you right 80% of the time?" A model can ace the first and flunk the second — and a miscalibrated 0.9 that's really a 0.6 will quietly wreck any threshold you set on it.
+
+Some models are naturally well-calibrated (**logistic regression**, because it is trained on log loss). Others are notoriously *not*: an **SVM**'s decision-function output is a margin distance, not a probability; **Naive Bayes** is overconfident because its independence assumption double-counts correlated features, pushing scores toward 0 or 1.
+
+You diagnose calibration with a **reliability diagram** — bin predictions by confidence, then plot predicted vs. actual frequency. A perfectly calibrated model lies on the diagonal.
+
+<svg viewBox="0 0 200 180" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif" font-size="10">
+  <line x1="30" y1="150" x2="180" y2="150" stroke="currentColor" opacity="0.5"/>
+  <line x1="30" y1="20" x2="30" y2="150" stroke="currentColor" opacity="0.5"/>
+  <line x1="30" y1="150" x2="180" y2="20" stroke="#22c55e" stroke-width="2" stroke-dasharray="4"/>
+  <path d="M30,150 C70,148 90,135 105,110 C120,85 150,40 180,30" fill="none" stroke="#ec4899" stroke-width="2"/>
+  <text x="35" y="15" fill="currentColor">actual</text>
+  <text x="120" y="165" fill="currentColor">predicted prob.</text>
+  <text x="95" y="55" fill="#22c55e" font-size="9">perfect</text>
+  <text x="60" y="125" fill="#ec4899" font-size="9">overconfident</text>
+</svg>
+
+The two standard fixes wrap a *post-hoc* calibrator around any trained model, fit on a held-out set:
+
+- **Platt scaling** — fit a 1-D logistic regression on the model's scores ($p=\sigma(a\cdot s + b)$). Cheap, assumes a sigmoid-shaped distortion; great for SVMs.
+- **Isotonic regression** — fit any monotonic step function. More flexible, needs more data, can overfit small sets.
+
+```python
+from sklearn.calibration import CalibratedClassifierCV
+from sklearn.svm import SVC
+# wrap an SVM (margins, not probabilities) -> calibrated probabilities
+cal = CalibratedClassifierCV(SVC(), method="sigmoid", cv=5)  # "isotonic" for the flexible fit
+cal.fit(X_train, y_train)
+print(cal.predict_proba(X_test)[:3])   # now trustworthy as probabilities
+```
+
+::: {.callout-warning}
+Never calibrate on the training data — the model already fits it, so the curve will look perfect and mean nothing. Use a held-out split (which `CalibratedClassifierCV` does internally via `cv`). And remember: calibration changes the *probabilities*, not the *ranking*, so it leaves AUC unchanged while fixing log loss and threshold-based decisions.
+:::
+
+## 9.11 — Choosing a Classifier
+
+With seven methods on the table, the practical question is *which one first?* There is no universal winner (the "no free lunch" theorem makes that formal), but there are strong defaults. The cheat-sheet below maps common situations to a sensible starting point — start simple, and only climb in complexity if the metric demands it.
+
+| situation | reach for | why |
+|-----------|-----------|-----|
+| tabular baseline, want interpretability + probabilities | **logistic regression** | fast, linear, calibrated, readable weights |
+| text / bag-of-words, spam | **multinomial NB** or **linear SVM** | sparse, high-dim, NB is instant |
+| few features, nonlinear boundary, medium data | **RBF SVM** | flexible margin, robust |
+| need human-readable rules | **decision tree** | reads off as if-then logic |
+| many features ≫ samples (genomics) | **linear SVM / logistic** | margin needs few SVs; regularizes well |
+| tiny dataset, Gaussian-ish classes | **LDA** | few parameters, stable |
+| lots of data, accuracy over everything | **ensemble** (see Ensemble ch.) | trees + boosting usually win |
+
+```{mermaid}
+graph TD
+  S["new classification task"] --> T{"text / sparse?"}
+  T -->|yes| NB["Multinomial NB / Linear SVM"]
+  T -->|no| I{"need interpretability?"}
+  I -->|yes| TR["Logistic Regression / Tree"]
+  I -->|no| D{"features ≫ samples?"}
+  D -->|yes| L["Linear SVM / Logistic"]
+  D -->|no| R["RBF SVM, then ensembles"]
+```
+
+> **Lazy rule of thumb:** start with logistic regression. It trains in milliseconds, gives you probabilities and interpretable weights, and sets the bar every fancier model must beat. Only when it plateaus below your target do SVMs, trees, and ensembles earn their tuning cost.
+
+::: {.callout-tip}
+Whatever you pick, judge it with the *right* metric, not raw accuracy — on a 99%-negative fraud set, "always negative" scores 99%. Use precision/recall, F1, ROC-AUC, or log loss as the problem demands. The Model Evaluation chapter develops these.
+:::
+
+## 9.12 — Key takeaways
 
 - **k-NN** is a lazy learner — no training, just memorize and vote among nearest neighbors; sensitive to feature scale, the choice of $k$, and even to distance-tie-breaks at small $k$.
 - **Naive Bayes** uses Bayes' rule with a (false but useful) conditional-independence assumption; fast, strong for text/spam; smooth and work in log space.
+- **Logistic regression** squashes a linear score through a sigmoid to emit a *probability*; the interpretable, well-calibrated default baseline and the binary cousin of softmax.
 - **Decision trees** split on impurity (entropy/Gini); interpretable but high-variance — prune to control overfitting.
 - **SVMs** maximize the margin; only support vectors matter; $C$ trades margin width against training errors.
 - **Kernels** let SVMs draw nonlinear boundaries by computing high-dimensional dot products implicitly — RBF and polynomial are the workhorses.
 - **Perceptron** is the original neuron with a mistake-driven update (weights *and* bias move only on errors); converges if data is linearly separable, but cannot solve XOR.
 - **LDA/QDA** are generative Gaussian classifiers — LDA (shared covariance) is linear, QDA (per-class covariance) is curved; unequal priors shift the LDA boundary off the midpoint.
 - **Multi-class** via OvR/OvO/softmax; **multi-label** via independent sigmoids or label powerset — never softmax for multi-label.
+- **Calibration** is confidence honesty, separate from accuracy; SVMs and NB are miscalibrated — fix with Platt scaling or isotonic regression on held-out data.
+- **Choosing** a classifier: start with logistic regression as a baseline, climb only when the metric demands it — and judge with the right metric, not raw accuracy.
 
-## 9.10 — See also
+## 9.13 — See also
 
 - **Regression** — logistic regression and the linear models that underpin softmax classification.
 - **Ensemble Methods** — Random Forests and gradient boosting that fix the high variance of single decision trees.
-- **Model Evaluation & Tuning** — cross-validation for choosing $k$, $C$, $\gamma$, and tree depth.
+- **Model Evaluation & Tuning** — cross-validation for choosing $k$, $C$, $\gamma$, and tree depth; precision/recall, ROC-AUC, log loss, and reliability diagrams.
 - **Neural Networks (Core)** — how stacking perceptrons into hidden layers escapes the XOR limitation.
 - **Dimensionality Reduction** — LDA as a projection method, and PCA for preprocessing distance-based classifiers.
 - **Probability & Statistics** — Bayes' rule, priors, and the Gaussian distributions behind Naive Bayes and discriminant analysis.
