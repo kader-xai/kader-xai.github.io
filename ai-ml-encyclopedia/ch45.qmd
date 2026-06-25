@@ -1,0 +1,488 @@
+---
+title: "Chapter 45 — 🎚️ Post-Training I — Transfer, Fine-Tuning & PEFT"
+page-layout: full
+toc: true
+toc-location: left
+toc-title: "In this chapter"
+toc-depth: 2
+toc-expand: true
+---
+
+[📖 All chapters](../ai-ml-encyclopedia.html)  &nbsp;|&nbsp;  [← 44 · 🏗️ LLM Systems: Building LLMs from Scratch](ch44.html)  &nbsp;|&nbsp;  [46 · 🏅 Post-Training II →](ch46.html)
+
+<details class="ig-jump">
+<summary>📚 Jump to any chapter</summary>
+<p class="ig-era">🧮 Mathematical Foundations</p>
+<ul>
+<li><a href="ch01.html">01 &middot; 🧮 Linear Algebra</a></li>
+<li><a href="ch02.html">02 &middot; ∂ Calculus & Differentiation</a></li>
+<li><a href="ch03.html">03 &middot; 📉 Optimization</a></li>
+<li><a href="ch04.html">04 &middot; 🎲 Probability & Statistics</a></li>
+</ul>
+<p class="ig-era">🧭 The ML Workflow</p>
+<ul>
+<li><a href="ch05.html">05 &middot; 🌐 AI, ML & the Learning Process</a></li>
+<li><a href="ch06.html">06 &middot; 🧹 Data Preprocessing</a></li>
+<li><a href="ch07.html">07 &middot; 🗜️ Dimensionality Reduction</a></li>
+</ul>
+<p class="ig-era">🧩 Classical Machine Learning</p>
+<ul>
+<li><a href="ch08.html">08 &middot; 📈 Regression</a></li>
+<li><a href="ch09.html">09 &middot; 📐 Classification Algorithms</a></li>
+<li><a href="ch10.html">10 &middot; 🌳 Ensemble Methods</a></li>
+<li><a href="ch11.html">11 &middot; 🔮 Clustering & Unsupervised Learning</a></li>
+<li><a href="ch12.html">12 &middot; 🎯 Model Evaluation & Tuning</a></li>
+</ul>
+<p class="ig-era">🎲 Probabilistic Models</p>
+<ul>
+<li><a href="ch13.html">13 &middot; 🕸️ Probabilistic Graphical Models</a></li>
+</ul>
+<p class="ig-era">🧠 Deep Learning</p>
+<ul>
+<li><a href="ch14.html">14 &middot; 🧠 Neural Networks (Core)</a></li>
+<li><a href="ch15.html">15 &middot; 🖼️ Convolutional Neural Networks</a></li>
+<li><a href="ch16.html">16 &middot; 🔁 Recurrent & Sequence Models</a></li>
+<li><a href="ch17.html">17 &middot; ⚡ Attention & Transformers</a></li>
+<li><a href="ch18.html">18 &middot; 🎨 Generative Models</a></li>
+</ul>
+<p class="ig-era">🗣️ Applied AI: Vision, Language, Audio & Time</p>
+<ul>
+<li><a href="ch19.html">19 &middot; 👁️ Computer Vision</a></li>
+<li><a href="ch20.html">20 &middot; 💬 Natural Language Processing</a></li>
+<li><a href="ch21.html">21 &middot; 🔊 Speech & Audio Processing</a></li>
+<li><a href="ch22.html">22 &middot; ⏳ Time Series & Forecasting</a></li>
+<li><a href="ch23.html">23 &middot; 📚 Large Language Models</a></li>
+<li><a href="ch24.html">24 &middot; 🌈 Multimodal AI</a></li>
+</ul>
+<p class="ig-era">🕹️ Reinforcement Learning</p>
+<ul>
+<li><a href="ch25.html">25 &middot; 🕹️ Reinforcement Learning</a></li>
+</ul>
+<p class="ig-era">🛠️ Applied ML Systems & Industries</p>
+<ul>
+<li><a href="ch26.html">26 &middot; 🛒 Recommender Systems</a></li>
+<li><a href="ch27.html">27 &middot; 🚨 Anomaly & Fraud Detection</a></li>
+<li><a href="ch28.html">28 &middot; 🏦 ML Across Industries</a></li>
+</ul>
+<p class="ig-era">🚀 Production, Tooling & Infrastructure</p>
+<ul>
+<li><a href="ch29.html">29 &middot; 🔧 MLOps & Deployment</a></li>
+<li><a href="ch30.html">30 &middot; 🚀 AI Infrastructure & Efficient Inference</a></li>
+<li><a href="ch31.html">31 &middot; 🧰 Tools & Frameworks</a></li>
+</ul>
+<p class="ig-era">📚 Classical & Symbolic AI</p>
+<ul>
+<li><a href="ch32.html">32 &middot; 🧭 Search & Problem Solving</a></li>
+<li><a href="ch33.html">33 &middot; 📖 Knowledge Representation & Reasoning</a></li>
+<li><a href="ch34.html">34 &middot; 🗺️ Planning, Constraint Satisfaction & Game Playing</a></li>
+<li><a href="ch35.html">35 &middot; 🧬 Evolutionary Computation & Metaheuristics</a></li>
+</ul>
+<p class="ig-era">⚖️ Responsible AI & Frontier</p>
+<ul>
+<li><a href="ch36.html">36 &middot; 🔍 Explainable AI & Interpretability</a></li>
+<li><a href="ch37.html">37 &middot; 🧷 Causal Inference</a></li>
+<li><a href="ch38.html">38 &middot; ⚖️ AI Ethics, Fairness & Safety</a></li>
+<li><a href="ch39.html">39 &middot; 🌠 Frontier & Emerging Directions</a></li>
+</ul>
+<p class="ig-era">🎓 Advanced & Specialized Topics</p>
+<ul>
+<li><a href="ch40.html">40 &middot; 🔗 Graph Machine Learning</a></li>
+<li><a href="ch41.html">41 &middot; 🤖 Robotics & Autonomy</a></li>
+<li><a href="ch42.html">42 &middot; 📐 Learning Theory</a></li>
+<li><a href="ch43.html">43 &middot; 🔎 Information Retrieval & Data Mining</a></li>
+<li><a href="ch44.html">44 &middot; 🏗️ LLM Systems: Building LLMs from Scratch</a></li>
+</ul>
+<p class="ig-era">🎚️ Post-Training & Fine-Tuning</p>
+<ul>
+<li><a href="ch45.html">45 &middot; 🎚️ Post-Training I — Transfer, Fine-Tuning & PEFT</a></li>
+<li><a href="ch46.html">46 &middot; 🏅 Post-Training II — Alignment & Evaluation</a></li>
+</ul>
+</details>
+
+------------------------------------------------------------------------
+
+A pretrained base model knows a staggering amount about language but has no idea it is supposed to be *helpful*. Post-training is the phase that bridges that gap: a sequence of techniques — supervised fine-tuning, preference optimization, distillation, and the parameter-efficient methods that make all of it affordable — that take a raw next-token predictor and turn it into a useful, steerable, specialized assistant. This chapter covers the *transfer and fine-tuning* half of that story; Chapter 46 covers alignment and evaluation.
+
+::: {.callout-note appearance="simple"}
+🧭 **In context:** Model adaptation / post-training · turning a base LLM into a task-specific or instruction-following model without retraining from scratch · reuse learned representations, then nudge them cheaply with small trainable deltas.
+:::
+
+## 45.1 — From pretraining to post-training
+
+Pretraining is brute-force pattern absorption. A transformer (Ch 23) is shown trillions of tokens of web text, code, and books, and trained on a single objective: predict the next token. Formally it minimizes the cross-entropy
+
+$$\mathcal{L}_{\text{pre}} = -\sum_t \log p_\theta(x_t \mid x_{<t})$$
+
+over the corpus. The result — the *base model* — is an extraordinary autocomplete engine. Ask it "What is the capital of France?" and it might continue with "What is the capital of Germany? What is the capital of Spain?" because a list of quiz questions is a perfectly plausible continuation of web text. It has knowledge but no *intent*.
+
+Post-training installs intent. It is a much smaller, much more curated phase that reshapes behavior rather than adding raw knowledge. The canonical recipe has three stages: **supervised fine-tuning (SFT)** teaches the model the format of being an assistant by imitating high-quality demonstrations; **preference optimization** (RLHF, DPO — Ch 46) sharpens *which* of two valid answers humans prefer; and **distillation** can compress a large aligned teacher into a smaller deployable student. The intuition: pretraining gives the model a vocabulary of skills; post-training selects and arranges them into helpful behavior.
+
+```{mermaid}
+flowchart LR
+    A[Web-scale corpus] -->|next-token<br/>pretraining| B[Base model<br/>raw autocomplete]
+    B -->|SFT on<br/>demonstrations| C[Instruct model<br/>follows format]
+    C -->|preference opt<br/>RLHF / DPO| D[Aligned assistant<br/>helpful + safe]
+    B -.->|distillation| E[Smaller student]
+    C -.->|distillation| E
+    style B fill:#6366f1,color:#fff
+    style C fill:#f59e0b,color:#fff
+    style D fill:#22c55e,color:#fff
+```
+
+The key mental model for the rest of this chapter: post-training changes a *small fraction* of what the model is, and the techniques below are mostly about doing that change cheaply and without breaking what pretraining gave you.
+
+## 45.2 — Transfer learning
+
+The foundational idea behind all of post-training is **transfer learning**: representations learned on a big, general task are reusable for a smaller, specific one. A model that learned to predict the next token had to internalize syntax, world facts, and reasoning patterns. Those internal features are a far better starting point for *your* task than random weights — you are standing on a billion-dollar pretraining run for free.
+
+There are two ways to transfer. **Feature extraction** freezes the pretrained *backbone* and trains only a new task-specific *head* on top — you treat the frozen network as a fixed feature encoder. It is cheap and nearly impossible to overfit, but limited: the features are stuck at whatever the original task produced. **Full fine-tuning** unfreezes everything and continues training all weights on the new task. It is more powerful and adapts the features themselves, but costs far more memory and risks **catastrophic forgetting** — as gradients overwrite weights for the new task, the model loses general capabilities it had before (it gets great at your support tickets and forgets how to write a poem).
+
+<svg viewBox="0 0 640 230" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif" font-size="13" fill="currentColor">
+  <text x="20" y="20" font-weight="bold">Frozen backbone + new trainable head</text>
+  <rect x="20" y="45" width="120" height="150" rx="6" fill="#6366f1" fill-opacity="0.25" stroke="#6366f1"/>
+  <text x="80" y="120" text-anchor="middle" fill="currentColor">Pretrained</text>
+  <text x="80" y="138" text-anchor="middle" fill="currentColor">backbone</text>
+  <text x="80" y="170" text-anchor="middle" font-size="11">🔒 frozen</text>
+  <line x1="140" y1="120" x2="200" y2="120" stroke="currentColor" stroke-width="1.5" marker-end="url(#ar)"/>
+  <rect x="200" y="80" width="100" height="80" rx="6" fill="#22c55e" fill-opacity="0.3" stroke="#22c55e"/>
+  <text x="250" y="115" text-anchor="middle">New head</text>
+  <text x="250" y="133" text-anchor="middle" font-size="11">🔥 trained</text>
+  <line x1="300" y1="120" x2="360" y2="120" stroke="currentColor" stroke-width="1.5" marker-end="url(#ar)"/>
+  <text x="370" y="124">task output</text>
+  <text x="450" y="60" font-weight="bold">vs full fine-tune</text>
+  <rect x="450" y="75" width="120" height="120" rx="6" fill="#f59e0b" fill-opacity="0.3" stroke="#f59e0b"/>
+  <text x="510" y="130" text-anchor="middle">all weights</text>
+  <text x="510" y="148" text-anchor="middle" font-size="11">🔥 trained</text>
+  <text x="510" y="212" text-anchor="middle" font-size="11" fill="#f59e0b">risk: forgetting</text>
+  <defs><marker id="ar" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6 Z" fill="currentColor"/></marker></defs>
+</svg>
+
+Why does transfer work at all? Because the lower layers of a deep network learn *general* features (in vision: edges then textures; in language: morphology then syntax then semantics) that are useful across many tasks, while only the top layers are task-specific. PEFT methods (45.5 onward) are essentially a third path: keep the backbone frozen *and* adapt the features, by injecting tiny trainable modules instead of either a head-only or a full unfreeze.
+
+## 45.3 — Fine-tune vs RAG vs prompt
+
+Before spending a single GPU-hour, ask the cheapest question first: do you even need to change the weights? Three tools sit on a ladder of increasing cost and commitment. **Prompting** (including few-shot examples) steers an off-the-shelf model with words alone — zero training, instant iteration. **RAG** (retrieval-augmented generation, Ch 23) injects fresh or private *knowledge* at inference time by retrieving documents into the context. **Fine-tuning** changes the weights to bake in *behavior, format, or style* that prompting can't reliably hold.
+
+The decisive question is *what kind of gap* you are closing. A knowledge gap ("the model doesn't know our 2026 product catalog") is a RAG problem — fine-tuning is a terrible way to store facts, since they go stale and updating means retraining. A behavior gap ("we need every answer as valid JSON in our house tone") is a fine-tuning problem — no amount of retrieved context reliably enforces format. And many gaps are just a prompting problem you haven't solved yet.
+
+<div style="display:flex;flex-direction:column;gap:10px;border:1px solid currentColor;border-radius:10px;padding:14px;">
+  <div style="font-weight:bold;">Decision: which tool closes the gap?</div>
+  <div style="display:flex;align-items:center;gap:10px;">
+    <div style="min-width:230px;padding:8px 10px;border-radius:8px;background:rgba(99,102,241,0.2);border:1px solid #6366f1;">Need fresh / private <b>knowledge</b>?</div>
+    <div style="color:#6366f1;font-weight:bold;">→ RAG</div>
+    <div style="font-size:12px;opacity:0.85;">updates without retraining, cites sources, grows context cost</div>
+  </div>
+  <div style="display:flex;align-items:center;gap:10px;">
+    <div style="min-width:230px;padding:8px 10px;border-radius:8px;background:rgba(245,158,11,0.2);border:1px solid #f59e0b;">Need consistent <b>behavior / format / style</b>?</div>
+    <div style="color:#f59e0b;font-weight:bold;">→ Fine-tune</div>
+    <div style="font-size:12px;opacity:0.85;">shapes output reliably, shrinks prompts, costs train + maintenance</div>
+  </div>
+  <div style="display:flex;align-items:center;gap:10px;">
+    <div style="min-width:230px;padding:8px 10px;border-radius:8px;background:rgba(34,197,94,0.2);border:1px solid #22c55e;">Just need quick <b>steering</b>?</div>
+    <div style="color:#22c55e;font-weight:bold;">→ Prompt</div>
+    <div style="font-size:12px;opacity:0.85;">zero training, instant iteration, weakest guarantees</div>
+  </div>
+  <div style="font-size:12px;opacity:0.8;margin-top:4px;">These compose: fine-tune the behavior, RAG in the knowledge, prompt the edge cases.</div>
+</div>
+
+| Dimension | Prompt | RAG | Fine-tune |
+|---|---|---|---|
+| Closes | reasoning/steering gap | knowledge gap | behavior/format/style gap |
+| Upfront cost | none | index + retriever | training run + data curation |
+| Latency | low | higher (retrieval hop) | low (prompt shrinks) |
+| Update knowledge | edit prompt | re-index | retrain |
+| Best at | flexibility | freshness, citations | consistency, compression |
+
+The pragmatic order is *prompt → RAG → fine-tune*, and you stop at the first rung that works. They are not exclusive: the strongest systems fine-tune for behavior, retrieve for knowledge, and prompt for the long tail.
+
+## 45.4 — Supervised Fine-Tuning (SFT) & instruction tuning
+
+SFT is the first and most important post-training step. The mechanism is simple: take the base model and continue next-token training, but now on curated *(instruction, response)* pairs instead of raw web text. By imitating thousands of high-quality demonstrations of an assistant answering well, the model learns the *format* of being helpful — that a question expects a direct answer, not another question. When the demonstrations span many task types, this is called **instruction tuning**, and it produces the striking ability to follow instructions on tasks never seen during fine-tuning.
+
+Two details make SFT work in practice. First, **chat templates**: the raw text is wrapped in role markers so the model learns turn structure, e.g. `<|user|> ... <|assistant|> ...`. Second — and this is the subtle one — **loss masking**. You do not want to train the model to *generate the user's question*; you only want it to learn the assistant's *response*. So the loss is computed on completion tokens only; prompt tokens are masked out (their loss is multiplied by zero and contributes no gradient).
+
+Here is the worked example — which tokens get a gradient:
+
+<div style="border:1px solid currentColor;border-radius:8px;padding:12px;font-family:monospace;font-size:13px;">
+  <div style="margin-bottom:8px;"><b>Sequence (after chat template):</b></div>
+  <div style="display:flex;flex-wrap:wrap;gap:4px;">
+    <span style="padding:3px 6px;border-radius:4px;background:rgba(99,102,241,0.25);">&lt;user&gt;</span>
+    <span style="padding:3px 6px;border-radius:4px;background:rgba(99,102,241,0.25);">What</span>
+    <span style="padding:3px 6px;border-radius:4px;background:rgba(99,102,241,0.25);">is</span>
+    <span style="padding:3px 6px;border-radius:4px;background:rgba(99,102,241,0.25);">2+2?</span>
+    <span style="padding:3px 6px;border-radius:4px;background:rgba(34,197,94,0.3);">&lt;asst&gt;</span>
+    <span style="padding:3px 6px;border-radius:4px;background:rgba(34,197,94,0.3);">It</span>
+    <span style="padding:3px 6px;border-radius:4px;background:rgba(34,197,94,0.3);">is</span>
+    <span style="padding:3px 6px;border-radius:4px;background:rgba(34,197,94,0.3);">4.</span>
+  </div>
+  <div style="margin-top:10px;display:flex;gap:18px;">
+    <span><span style="display:inline-block;width:12px;height:12px;background:rgba(99,102,241,0.25);border-radius:2px;"></span> loss masked (label = -100)</span>
+    <span><span style="display:inline-block;width:12px;height:12px;background:rgba(34,197,94,0.3);border-radius:2px;"></span> loss computed → gradient</span>
+  </div>
+</div>
+
+The convention `-100` is the ignore-index in most frameworks: any token labeled `-100` is skipped by the cross-entropy loss. So the model is trained to produce "It is 4." *given* the question, but never trained to invent the question. Instruction datasets (e.g. open collections of diverse task demonstrations) provide tens of thousands to millions of such pairs; quality and diversity matter far more than raw count — a few thousand excellent examples often beat a noisy million.
+
+## 45.5 — Parameter-Efficient Fine-Tuning (PEFT)
+
+Full fine-tuning has a brutal memory bill, and it is not the weights that hurt — it is the optimizer. Train with Adam in mixed precision and for every parameter you must store, beyond the working fp16 weights: a gradient, an fp32 master copy of the weights, and *two* fp32 optimizer moments (Adam's first moment $m$ and second moment $v$). Do the arithmetic.
+
+> **Worked memory math (7B params, Adam, mixed precision).** Per the standard mixed-precision accounting (2 bytes for fp16 tensors, 4 bytes for fp32):
+> | Tensor | Precision | Bytes/param | Size (7B) |
+> |---|---|---|---|
+> | working weights | fp16 | 2 | 14 GB |
+> | gradients | fp16 | 2 | 14 GB |
+> | fp32 master weights | fp32 | 4 | 28 GB |
+> | Adam $m$ + $v$ | fp32 | 4 + 4 | 56 GB |
+> | **Total (states + working)** | | **18** | **≈ 112 GB** |
+>
+> The fp32 master copy (28 GB) and the two fp32 Adam moments (56 GB) dominate — the **optimizer-related state alone is ~84 GB**, and adding the fp16 working weights and gradients brings the resident total to **~112 GB** before activations. (Some setups fold the master copy into the fp16 weights or keep moments in bf16, trimming this toward ~70–80 GB.) Either way it blows past a single 80 GB GPU.
+
+The PEFT idea: **freeze the entire pretrained model and train only a tiny set of new parameters.** If you train 0.1% of the parameters, the gradient and optimizer state shrink by ~1000×, the giant frozen base needs no optimizer state at all (only the fp16/4-bit weights, no master copy, no moments), and you can fine-tune a model that full fine-tuning could never fit. You also get a tiny, portable artifact — a few megabytes of adapter you can swap per task instead of cloning the whole model.
+
+| Method | What it adds / trains | Where it injects | Trainable params |
+|---|---|---|---|
+| Adapters | small bottleneck MLP blocks | between transformer sub-layers | ~0.5–5% |
+| Prefix / prompt tuning | learned virtual tokens | prepended to keys/values or input | <0.1% |
+| (IA)³ | learned rescaling vectors | multiply K, V, FFN activations | ~0.01% |
+| BitFit | nothing new — unfreezes biases | existing bias terms only | ~0.1% |
+| LoRA | low-rank matrices $B,A$ | parallel to weight matrices | ~0.1–1% |
+
+These differ in *where* they intervene — adding modules (adapters), prepending soft tokens (prefix/prompt), rescaling activations ((IA)³), or unfreezing a sliver of existing params (BitFit). LoRA, the next section, won the popularity contest because it adds *zero* inference latency once merged.
+
+## 45.6 — LoRA
+
+LoRA (Low-Rank Adaptation) starts from an empirical observation: the *update* a model needs during fine-tuning has low intrinsic rank. You do not need a full $d \times d$ matrix of changes; a thin, low-rank one captures most of it. So instead of learning a dense weight update $\Delta W$, LoRA factors it into two skinny matrices.
+
+Freeze the pretrained weight $W \in \mathbb{R}^{d\times k}$. Represent the update as $\Delta W = BA$ where $B \in \mathbb{R}^{d\times r}$ and $A \in \mathbb{R}^{r\times k}$, with rank $r \ll \min(d,k)$. The forward pass becomes:
+
+$$h = Wx + \frac{\alpha}{r}\,B A x$$
+
+Here $r$ is the **rank** (typically 8–64), $\alpha$ is a scaling constant, and $A,B$ are the only trainable tensors — initialized so $BA=0$ at the start (A random, B zero) so training begins exactly at the pretrained model. The parameter saving is dramatic: a $4096\times4096$ matrix has ~16.8M params, but at rank 8 the pair $B,A$ has $4096\cdot8 + 8\cdot4096 = 65{,}536$ — a ~256× reduction.
+
+<svg viewBox="0 0 640 220" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif" font-size="13" fill="currentColor">
+  <text x="20" y="20" font-weight="bold">Full ΔW (d×k, dense)</text>
+  <rect x="20" y="35" width="130" height="130" fill="#f59e0b" fill-opacity="0.3" stroke="#f59e0b"/>
+  <text x="85" y="105" text-anchor="middle">d × k</text>
+  <text x="85" y="185" text-anchor="middle" font-size="11">16.8M params</text>
+  <text x="200" y="105" font-size="28">≈</text>
+  <text x="255" y="20" font-weight="bold">B (d×r)</text>
+  <rect x="255" y="35" width="34" height="130" fill="#6366f1" fill-opacity="0.4" stroke="#6366f1"/>
+  <text x="272" y="105" text-anchor="middle" font-size="11" transform="rotate(-90 272 105)">d × r</text>
+  <text x="305" y="105" font-size="22">×</text>
+  <text x="335" y="20" font-weight="bold">A (r×k)</text>
+  <rect x="335" y="35" width="130" height="34" fill="#22c55e" fill-opacity="0.4" stroke="#22c55e"/>
+  <text x="400" y="57" text-anchor="middle" font-size="11">r × k</text>
+  <text x="335" y="120" font-size="11">r ≪ d,k → only 65K params at r=8</text>
+  <text x="335" y="142" font-size="11">trained; W stays frozen, merged at deploy</text>
+  <line x1="500" y1="50" x2="500" y2="150" stroke="currentColor" stroke-dasharray="3"/>
+  <text x="515" y="95" font-size="11">skinny</text>
+  <text x="515" y="110" font-size="11">→ tiny</text>
+</svg>
+
+```python
+# LoRA forward pass, from scratch (numpy-style)
+def lora_forward(x, W, A, B, alpha, r):
+    base = x @ W.T              # frozen pretrained path (no grad)
+    delta = (x @ A.T) @ B.T     # low-rank path: x->r dims->d dims
+    return base + (alpha / r) * delta   # scaled sum
+# A: (r,k) random init, B: (d,r) zero init  -> BA=0 at step 0
+# only A,B receive gradients; W is frozen
+```
+
+Practical knobs: **rank $r$** trades capacity for size (start at 8–16, raise if underfitting); **$\alpha$** sets the scaling — the *actual* multiplier on the update is $\alpha/r$, so the original practice was to fix $\alpha$ and tune $r$, though many recipes now just pin $\alpha = 2r$ (giving an effective scale of 2); and **target modules** decide which weight matrices get adapters — attention projections (`q_proj`, `v_proj`) are the usual minimum, and adapting the MLP layers too tends to help. At deploy time you can fold $\frac{\alpha}{r}BA$ back into $W$, so LoRA adds **zero inference latency**.
+
+## 45.7 — QLoRA
+
+LoRA shrinks the *trainable* params, but you still hold the full frozen base in memory. For a 70B model that is ~140 GB in fp16 — still too big for one GPU. **QLoRA** closes the gap by quantizing the frozen base to 4 bits while keeping the LoRA adapters in higher precision. The base is read-only anyway, so a lossy compression of it costs little; gradients only ever flow through the small high-precision adapters.
+
+Three ingredients make it work. **NF4 (4-bit NormalFloat)** is a quantization datatype whose levels are spaced to match a normal distribution — exactly how neural-net weights are distributed — so it loses less than naive uniform 4-bit. **Double quantization** also quantizes the per-block scaling constants themselves, shaving another ~0.4 bits/param. **Paged optimizers** spill optimizer state to CPU RAM when a memory spike (a long sequence) would otherwise OOM the GPU, like OS virtual memory for the optimizer.
+
+<svg viewBox="0 0 640 210" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif" font-size="13" fill="currentColor">
+  <text x="20" y="20" font-weight="bold">70B base model — memory to hold weights only</text>
+  <text x="20" y="55">fp32 (32-bit)</text>
+  <rect x="160" y="42" width="440" height="20" fill="#f59e0b" fill-opacity="0.5" stroke="#f59e0b"/>
+  <text x="610" y="57">280 GB</text>
+  <text x="20" y="90">fp16 (16-bit)</text>
+  <rect x="160" y="77" width="220" height="20" fill="#f59e0b" fill-opacity="0.4" stroke="#f59e0b"/>
+  <text x="390" y="92">140 GB</text>
+  <text x="20" y="125">int8 (8-bit)</text>
+  <rect x="160" y="112" width="110" height="20" fill="#6366f1" fill-opacity="0.5" stroke="#6366f1"/>
+  <text x="280" y="127">70 GB</text>
+  <text x="20" y="160">NF4 (4-bit, QLoRA)</text>
+  <rect x="160" y="147" width="55" height="20" fill="#22c55e" fill-opacity="0.6" stroke="#22c55e"/>
+  <text x="225" y="162">~35 GB (weights only)</text>
+  <text x="20" y="195" font-size="11" fill-opacity="0.8">+ LoRA adapters in bf16, gradients, activations on top → real footprint higher; fits a 48GB GPU</text>
+</svg>
+
+The headline: a 65–70B model whose weights need ~140 GB in fp16 drops to **~35 GB in NF4** — but note that 35 GB is *weights only*. On top of it you still pay for the bf16 LoRA adapters and their optimizer state, plus activations, so the live training footprint is meaningfully higher (roughly ~46 GB for a 65B run in the QLoRA paper). The win is still decisive: a model that needed multiple 80 GB GPUs in fp16 now fine-tunes on a single 48 GB card, with quality close to full 16-bit fine-tuning. QLoRA is what put large-model fine-tuning within reach of a single workstation. For the broader quantization theory (calibration, GPTQ/AWQ, inference-time quant), see Ch 30.
+
+## 45.8 — The fine-tuning toolkit
+
+You rarely implement any of the above by hand. A small stack of libraries covers the whole workflow, and the skill is knowing which to reach for.
+
+```{mermaid}
+flowchart TD
+    HF[🤗 PEFT<br/>LoRA/QLoRA adapters] --> TRL[TRL<br/>SFTTrainer · DPOTrainer]
+    TRL --> AX[Axolotl<br/>YAML-config orchestration]
+    TRL --> UN[Unsloth<br/>fused kernels: 2× faster, less VRAM]
+    style HF fill:#6366f1,color:#fff
+    style TRL fill:#f59e0b,color:#fff
+    style AX fill:#22c55e,color:#fff
+    style UN fill:#22c55e,color:#fff
+```
+
+**Hugging Face PEFT** is the base layer: it implements LoRA/QLoRA/(IA)³ and wraps any model with adapters in a few lines. **TRL** sits on top with high-level trainers — `SFTTrainer` for supervised fine-tuning (handles chat templates and loss masking for you) and `DPOTrainer` for preference optimization (Ch 46). **Axolotl** wraps the whole thing in a single YAML config so a fine-tune is a declarative file, not a script — great for reproducibility and sweeps. **Unsloth** provides hand-fused Triton kernels that make LoRA/QLoRA training roughly 2× faster with lower memory, a drop-in speedup when you are GPU-bound.
+
+```yaml
+# Axolotl: a full QLoRA fine-tune as config
+base_model: meta-llama/Llama-3-8B
+load_in_4bit: true          # QLoRA: NF4 quantized base
+adapter: qlora
+lora_r: 16                  # rank
+lora_alpha: 32              # = 2r heuristic (effective scale alpha/r = 2)
+lora_target_modules: [q_proj, k_proj, v_proj, o_proj]
+datasets:
+  - path: my/instruct-data
+    type: chat_template      # handles masking
+```
+
+Reach for PEFT+TRL when you want code-level control, Axolotl when you want reproducible config-driven runs, and Unsloth when training speed or VRAM is the bottleneck.
+
+## 45.9 — Knowledge distillation
+
+Distillation transfers the behavior of a big, capable **teacher** into a smaller **student**. The insight is that a teacher's full probability distribution carries far more information than the single correct label. Told an image is a "dog", a hard label says nothing else; the teacher's *soft* distribution might say 85% dog, 12% wolf, 3% cat — encoding that wolves look more dog-like than cats do. These relative probabilities ("dark knowledge") are a much richer training signal.
+
+To expose that structure you soften the distributions with a **temperature** $T$ in the softmax: $p_i = \frac{\exp(z_i/T)}{\sum_j \exp(z_j/T)}$. Higher $T$ flattens the distribution, amplifying the small probabilities that carry the inter-class similarity. The student is trained to match the teacher's soft targets via KL divergence (often blended with the ordinary hard-label loss):
+
+$$\mathcal{L} = (1-\lambda)\,\mathcal{L}_{\text{CE}}(y,\,p_s) + \lambda\,T^2\,\mathrm{KL}\!\left(p_t^{T}\,\|\,p_s^{T}\right)$$
+
+The $T^2$ factor rescales the soft-loss gradients back to the same magnitude as the hard-loss gradients.
+
+<svg viewBox="0 0 640 200" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif" font-size="13" fill="currentColor">
+  <rect x="20" y="60" width="150" height="80" rx="8" fill="#6366f1" fill-opacity="0.3" stroke="#6366f1"/>
+  <text x="95" y="95" text-anchor="middle" font-weight="bold">Teacher</text>
+  <text x="95" y="115" text-anchor="middle" font-size="11">large, frozen</text>
+  <text x="200" y="55" font-size="11">soft targets (T&gt;1)</text>
+  <line x1="170" y1="85" x2="300" y2="85" stroke="currentColor" stroke-width="1.5" marker-end="url(#a2)"/>
+  <text x="200" y="155" font-size="11">+ hard labels</text>
+  <rect x="300" y="65" width="140" height="70" rx="8" fill="#22c55e" fill-opacity="0.3" stroke="#22c55e"/>
+  <text x="370" y="98" text-anchor="middle" font-weight="bold">Student</text>
+  <text x="370" y="118" text-anchor="middle" font-size="11">small, trained</text>
+  <text x="470" y="90" font-size="11">minimize KL(teacher ‖ student)</text>
+  <text x="470" y="110" font-size="11">+ CE(label, student)</text>
+  <defs><marker id="a2" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6 Z" fill="currentColor"/></marker></defs>
+</svg>
+
+For LLMs, the modern variants matter. **Sequence-level distillation** trains the student on text *generated by* the teacher (the teacher writes the answers, the student imitates them). **On-policy distillation** goes further: the student generates, and the teacher scores or corrects the student's *own* outputs — closing the train/inference mismatch that hurts naive imitation. Distillation is how a frontier-quality teacher becomes a deployable 8B student.
+
+## 45.10 — Model pruning
+
+Pruning makes a model smaller by *removing* weights rather than compressing their precision (that was quantization). The premise: trained networks are massively over-parameterized, and many weights contribute almost nothing. **Magnitude pruning** is the simplest rule — rank weights by absolute value and zero out the smallest, on the theory that near-zero weights barely affect the output.
+
+The crucial distinction is structured vs unstructured. **Unstructured pruning** zeros individual weights anywhere; it reaches very high sparsity with little accuracy loss but produces a scattered sparse matrix that ordinary GPUs can't run faster (you saved memory, not necessarily time). **Structured pruning** removes whole units — entire neurons, attention heads, or channels — yielding a genuinely smaller dense model that runs faster on standard hardware, at the cost of more accuracy per weight removed.
+
+<svg viewBox="0 0 640 180" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif" font-size="13" fill="currentColor">
+  <text x="20" y="20" font-weight="bold">Dense</text>
+  <g>
+    <rect x="20" y="35" width="120" height="120" fill="none" stroke="currentColor" stroke-opacity="0.4"/>
+    <g fill="#6366f1">
+      <circle cx="40" cy="55" r="6"/><circle cx="70" cy="55" r="6"/><circle cx="100" cy="55" r="6"/><circle cx="130" cy="55" r="6"/>
+      <circle cx="40" cy="85" r="6"/><circle cx="70" cy="85" r="6"/><circle cx="100" cy="85" r="6"/><circle cx="130" cy="85" r="6"/>
+      <circle cx="40" cy="115" r="6"/><circle cx="70" cy="115" r="6"/><circle cx="100" cy="115" r="6"/><circle cx="130" cy="115" r="6"/>
+      <circle cx="40" cy="145" r="6"/><circle cx="70" cy="145" r="6"/><circle cx="100" cy="145" r="6"/><circle cx="130" cy="145" r="6"/>
+    </g>
+  </g>
+  <text x="220" y="20" font-weight="bold">Unstructured (scattered)</text>
+  <g>
+    <rect x="220" y="35" width="120" height="120" fill="none" stroke="currentColor" stroke-opacity="0.4"/>
+    <g fill="#6366f1"><circle cx="240" cy="55" r="6"/><circle cx="300" cy="55" r="6"/><circle cx="270" cy="85" r="6"/><circle cx="330" cy="85" r="6"/><circle cx="240" cy="115" r="6"/><circle cx="330" cy="115" r="6"/><circle cx="270" cy="145" r="6"/><circle cx="300" cy="145" r="6"/></g>
+    <g fill="currentColor" fill-opacity="0.15"><circle cx="270" cy="55" r="6"/><circle cx="330" cy="55" r="6"/><circle cx="240" cy="85" r="6"/><circle cx="300" cy="85" r="6"/><circle cx="270" cy="115" r="6"/><circle cx="300" cy="115" r="6"/><circle cx="240" cy="145" r="6"/><circle cx="330" cy="145" r="6"/></g>
+  </g>
+  <text x="420" y="20" font-weight="bold">Structured (whole columns)</text>
+  <g>
+    <rect x="420" y="35" width="120" height="120" fill="none" stroke="currentColor" stroke-opacity="0.4"/>
+    <text x="455" y="172" font-size="10" text-anchor="middle" fill="#22c55e">kept</text>
+    <text x="515" y="172" font-size="10" text-anchor="middle" fill-opacity="0.5">removed</text>
+    <g fill="#22c55e"><circle cx="440" cy="55" r="6"/><circle cx="470" cy="55" r="6"/><circle cx="440" cy="85" r="6"/><circle cx="470" cy="85" r="6"/><circle cx="440" cy="115" r="6"/><circle cx="470" cy="115" r="6"/><circle cx="440" cy="145" r="6"/><circle cx="470" cy="145" r="6"/></g>
+    <g fill="currentColor" fill-opacity="0.15"><circle cx="500" cy="55" r="6"/><circle cx="530" cy="55" r="6"/><circle cx="500" cy="85" r="6"/><circle cx="530" cy="85" r="6"/><circle cx="500" cy="115" r="6"/><circle cx="530" cy="115" r="6"/><circle cx="500" cy="145" r="6"/><circle cx="530" cy="145" r="6"/></g>
+  </g>
+</svg>
+
+The **lottery-ticket hypothesis** adds a striking twist: inside a big trained network there exists a small sub-network (a "winning ticket") that, if you had trained it *from its original initialization* in isolation, would reach the same accuracy. Pruning isn't just trimming fat — it can reveal that a much smaller architecture was sufficient all along. In practice pruning is usually followed by fine-tuning to recover the accuracy lost when weights are cut.
+
+## 45.11 — Model merging
+
+Merging is the almost-too-good-to-be-true trick: combine several fine-tuned models into one — *without any training or data* — by arithmetic on their weights. It works because checkpoints fine-tuned from the *same base* live in a connected region of weight space, so their parameters can be sensibly averaged.
+
+The simplest version, **model soups / weight averaging**, just takes the elementwise mean of two checkpoints' weights and often gets a model better than either. **SLERP** (spherical linear interpolation) interpolates along the arc between two weight vectors rather than the straight chord, respecting their geometry. The most powerful idea is **task arithmetic** built on **task vectors**: define $\tau = \theta_{\text{finetuned}} - \theta_{\text{base}}$, the direction fine-tuning moved the weights. You can then *add* task vectors to combine skills ($\theta_{\text{base}} + \tau_{\text{code}} + \tau_{\text{math}}$) or *subtract* one to remove a behavior.
+
+<svg viewBox="0 0 640 200" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif" font-size="13" fill="currentColor">
+  <line x1="80" y1="170" x2="560" y2="170" stroke="currentColor" stroke-opacity="0.3"/>
+  <line x1="100" y1="180" x2="100" y2="40" stroke="currentColor" stroke-opacity="0.3"/>
+  <circle cx="100" cy="170" r="6" fill="currentColor"/>
+  <text x="80" y="190">base θ</text>
+  <line x1="100" y1="170" x2="300" y2="90" stroke="#6366f1" stroke-width="2" marker-end="url(#a3)"/>
+  <text x="200" y="115" fill="#6366f1">τ_code</text>
+  <line x1="100" y1="170" x2="260" y2="150" stroke="#f59e0b" stroke-width="2" marker-end="url(#a3)"/>
+  <text x="180" y="168" fill="#f59e0b">τ_math</text>
+  <line x1="300" y1="90" x2="460" y2="70" stroke="#f59e0b" stroke-width="2" stroke-dasharray="4" marker-end="url(#a3)"/>
+  <circle cx="460" cy="70" r="7" fill="#22c55e"/>
+  <text x="470" y="68" fill="#22c55e">θ + τ_code + τ_math</text>
+  <text x="470" y="86" font-size="11">merged: both skills</text>
+  <defs><marker id="a3" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6 Z" fill="currentColor"/></marker></defs>
+</svg>
+
+Naive addition causes interference when task vectors disagree on a parameter's sign. **TIES** resolves this by trimming tiny changes, electing a dominant sign per parameter, and merging only the agreeing entries. **DARE** randomly drops a large fraction of the delta entries and rescales the rest, exploiting the redundancy in task vectors so multiple can be stacked with less collision. Merging shines when you have several single-task fine-tunes and want one multi-skill model for free — but it only works across checkpoints sharing a common ancestor.
+
+## 45.12 — Retrieval-Augmented Fine-Tuning (RAFT)
+
+Plain RAG (Ch 23) bolts retrieval onto a model that was never *trained* to use retrieved context — so it can be distracted by irrelevant passages or ignore the documents and answer from parametric memory. Plain SFT teaches behavior but bakes knowledge into weights that go stale. **RAFT** combines the two: fine-tune the model specifically to *read retrieved context well*, so it excels at RAG at inference time.
+
+The trick is in the training data. Each example pairs a question with a set of retrieved documents that deliberately mixes **"oracle" documents** (which actually contain the answer) and **"distractor" documents** (relevant-looking but unhelpful). The target answer is a chain-of-thought that *quotes the relevant passage* before answering. By training on distractors, the model learns to ignore noise and ground its answer in the right source — and crucially, some training examples include *only* distractors, teaching it to fall back gracefully when retrieval fails.
+
+<div style="display:flex;gap:12px;flex-wrap:wrap;">
+  <div style="flex:1;min-width:170px;border:1px solid #6366f1;border-radius:8px;padding:10px;background:rgba(99,102,241,0.12);">
+    <b>Plain RAG</b><br/><span style="font-size:12px;">retrieve + prompt; model never trained on context → distractible</span>
+  </div>
+  <div style="flex:1;min-width:170px;border:1px solid #f59e0b;border-radius:8px;padding:10px;background:rgba(245,158,11,0.12);">
+    <b>Plain SFT</b><br/><span style="font-size:12px;">knowledge in weights → stale, no sources</span>
+  </div>
+  <div style="flex:1;min-width:170px;border:1px solid #22c55e;border-radius:8px;padding:10px;background:rgba(34,197,94,0.15);">
+    <b>RAFT</b><br/><span style="font-size:12px;">train on oracle + distractor docs, cite-then-answer → robust RAG reader</span>
+  </div>
+</div>
+
+Think of it as "open-book exam training": plain RAG hands the student a textbook they were never taught to use; RAFT drills them on practice exams *with* the book, including some where the right page is missing. The result is a model that uses retrieval more reliably and is more robust to imperfect retrievers.
+
+::: {.callout-tip}
+Climb the cost ladder, don't leap it: try prompting, then RAG, then a LoRA/QLoRA fine-tune before ever reaching for full fine-tuning. Most "we need to fine-tune" problems are solved one or two rungs down, and a 4 MB LoRA adapter is far cheaper to train, store, and swap than a cloned 70B model.
+:::
+
+::: {.callout-warning}
+Fine-tuning is for *behavior*, not *facts*. Baking knowledge into weights makes it stale the moment it changes and gives you no citations — use RAG for knowledge that updates. And watch for catastrophic forgetting: a model fine-tuned narrowly on one task can quietly lose general capability, so always evaluate on a broad held-out set, not just your target task.
+:::
+
+## 45.x — Key takeaways
+
+- **Pretraining gives knowledge; post-training gives intent.** A base model is autocomplete; SFT, preference optimization (Ch 46), and distillation turn it into an assistant by reshaping behavior, not adding raw facts.
+- **Transfer learning is the foundation** — reuse pretrained representations via feature extraction (freeze + head), full fine-tuning (powerful, risks catastrophic forgetting), or PEFT (frozen base + tiny trainable delta).
+- **Pick the cheapest tool that closes the gap:** prompt for steering, RAG for fresh/private knowledge, fine-tune for consistent behavior/format/style — and compose them.
+- **SFT** continues next-token training on instruction–response pairs, with the loss **masked to completion tokens only** so the model learns to answer, not to ask.
+- **Full fine-tuning's cost is the optimizer state**, not the weights: a 7B model with Adam in mixed precision needs ~112 GB resident (fp16 weights 14 + grads 14 + fp32 master 28 + Adam $m$+$v$ 56), of which ~84 GB is optimizer-related — far past one 80 GB GPU. **PEFT** trains ~0.1% of params; **LoRA** learns $\frac{\alpha}{r}BA$ in parallel to frozen $W$ (effective scale $\alpha/r$) with zero added inference latency; **QLoRA** 4-bit-quantizes the base (NF4 + double quant + paged optimizers) so a ~65–70B model fits one 48 GB GPU.
+- **The toolkit:** HF PEFT (adapters) → TRL (SFTTrainer/DPOTrainer) → Axolotl (YAML config) / Unsloth (fast kernels).
+- **Compression & combination:** distillation transfers a teacher's soft targets to a student; pruning removes weights (structured = faster, unstructured = sparser); merging combines same-base checkpoints by weight arithmetic (soups, SLERP, task vectors, TIES, DARE) with no retraining.
+- **RAFT** fine-tunes the model to read retrieved context with distractors so it does RAG robustly at inference.
+
+## 45.y — See also
+
+- **Chapter 23 — Large Language Models** — transformer architecture, the base-model pretraining objective, and RAG at inference.
+- **Chapter 46 — Post-Training II: Alignment & Evaluation** — RLHF, the reward model → PPO loop, DPO and the preference-optimization family, plus evals.
+- **Chapter 18 — Generative Models** — the generative modeling backdrop for distillation and sampling.
+- **Chapter 30 — AI Infrastructure & Efficient Inference** — quantization theory, serving quantized/merged models, and the hardware behind the memory math.
+- **Chapter 12 — Model Evaluation** — held-out evaluation to detect catastrophic forgetting and measure fine-tuning gains.
+- **Chapter 44 — LLM Systems** — wiring fine-tuned models, adapters, and retrievers into production pipelines.
+
+------------------------------------------------------------------------
+
+[📖 All chapters](../ai-ml-encyclopedia.html)  &nbsp;|&nbsp;  [← 44 · 🏗️ LLM Systems: Building LLMs from Scratch](ch44.html)  &nbsp;|&nbsp;  [46 · 🏅 Post-Training II →](ch46.html)
