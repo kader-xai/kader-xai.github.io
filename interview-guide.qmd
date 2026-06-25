@@ -9,7 +9,7 @@ toc-depth: 2
 toc-expand: false
 ---
 
-A complete interview-prep handbook for **ML Engineer**, **MLOps Engineer**, and **AI Engineer** roles — rebuilt to be *understandable*, not just dense. It is ordered the way the field was actually invented: we **start with the mathematics** that everything rests on, walk forward through classical machine learning and deep learning, reach the **transformer** and the modern LLM, and end at today's frontier — **RAG, agents, and the loops** that wrap models into products. A final **practical-toolkit** set covers the specific libraries you get grilled on by name.
+A complete interview-prep handbook for **ML Engineer**, **MLOps Engineer**, and **AI Engineer** roles — rebuilt to be *understandable*, not just dense. It is ordered the way the field was actually invented: we **start with the mathematics** that everything rests on, walk forward through classical machine learning and deep learning, reach the **transformer** and the modern LLM, and end at today's frontier — **RAG, agents, and the loops** that wrap models into products. A final **practical-toolkit** set covers the specific libraries you get grilled on by name, closing with **deploying to the cloud** — AWS Bedrock, Google Vertex AI, and AI Studio.
 
 Every topic follows the same shape: a short **plain-language explainer** (intuition first), then **simple question-and-answer drills** — the actual questions an interviewer asks — with simplified answers, and a diagram, formula, snippet of code, or small visual wherever it makes the idea click.
 
@@ -68,6 +68,10 @@ Every topic follows the same shape: a short **plain-language explainer** (intuit
 - [**25.** 🛠️ Practical Toolkit I — Modeling & Vision Libraries](#ch-25)
 - [**26.** 🧰 Practical Toolkit II — LLM Frameworks, Orchestration & Vector Stores](#ch-26)
 - [**27.** ⚙️ Practical Toolkit III — Serving, Apps & MLOps Tooling](#ch-27)
+
+**☁️ Cloud AI Platforms** — *deploying foundation models on AWS, Google, and Azure*
+
+- [**28.** ☁️ Cloud AI Platforms — deploying foundation models on the hyperscalers](#ch-28)
 
 
 ------------------------------------------------------------------------
@@ -7733,3 +7737,205 @@ Don't bake secrets (API keys, credentials) into an image — anyone who pulls it
 - **MLflow** — reach for it when you need to track experiments, compare runs, and version/promote models through a registry.
 - **GitHub** — reach for it when you need version control, code review via PRs, and automated CI/CD (and CT for ML).
 - **Docker** — reach for it when you need a reproducible, portable runtime so the same environment trains and deploys everywhere.
+
+------------------------------------------------------------------------
+
+# Chapter 28 — ☁️ Cloud AI Platforms — deploying foundation models on the hyperscalers {#ch-28}
+
+This chapter covers the managed cloud AI platforms — AWS Bedrock, Google Vertex AI, Google AI Studio, and Azure OpenAI Service — that let you call top foundation models through an API instead of running GPUs yourself. These platforms sit on the "buy" side of the build-vs-buy decision: you give up some control and pay per token (or rent dedicated capacity) in exchange for skipping all GPU operations and getting instant, governed access to the best models. Everything here builds on the concept chapters — RAG, inference and serving, agents, fine-tuning, MLOps — so we reference those rather than re-explaining them.
+
+::: {.callout-note appearance="simple"}
+🧰 **Where in the stack:** the hosted serving layer — your app calls a managed API, the provider owns the GPUs, scaling, and model weights.
+:::
+
+## 28.1 — ☁️ The managed-platform landscape (overview)
+
+A managed cloud AI platform hosts the model for you: no GPU provisioning, no inference server to tune (contrast the **Inference & Serving chapter**), and instant access to frontier models behind one API. You trade that convenience for **vendor lock-in**, less control over the runtime, higher per-token cost at very large scale, and the need to reason carefully about where your data goes. The core question is **build-vs-buy**: self-host when you need full control or have steady high volume; buy a managed platform when you want speed-to-market and elastic demand.
+
+| Dimension | Buy (managed API) | Build (self-host, see Inference chapter) |
+|---|---|---|
+| GPU ops | None — provider owns it | You provision, patch, scale |
+| Model access | Instant, frontier models | Open-weights you can run |
+| Cost shape | Pay-per-token or provisioned | Fixed GPU rental + ops staff |
+| Control | Limited | Full (quantization, batching) |
+| Best when | Fast launch, spiky load | High steady volume, data must stay in-house |
+
+**Q: Why use a managed platform instead of self-hosting a model?**
+You skip all **GPU operations** — no provisioning, scaling, patching, or inference tuning — and get instant access to frontier models behind one autoscaling, compliant API. The trade is less control and higher unit cost at scale. It is the fastest path from idea to production.
+
+**Q: What is the build-vs-buy decision here?**
+**Buy** a managed API when you value speed-to-market, elastic/spiky demand, and want the best closed models without ops overhead. **Build** (self-host) when you have steady high volume where fixed GPU cost wins, need deep runtime control, or have data that legally cannot leave your environment.
+
+**Q: What is the difference between pay-per-token and provisioned throughput?**
+**Pay-per-token** (serverless) bills per input/output token with no commitment — ideal for variable or low traffic. **Provisioned throughput** reserves dedicated capacity for a fixed hourly/monthly fee, giving guaranteed latency and rate limits — cheaper and more predictable once volume is high and steady.
+
+**Q: Why do region and data residency matter?**
+Your prompts and outputs are sent to the provider's servers, so the **region** you pick determines which country's laws and privacy rules apply and where data is processed. Regulated workloads (healthcare, finance, government) often require data to stay in a specific geography, so you choose the matching region and confirm the provider does not train its base models on your data.
+
+::: {.callout-warning}
+"Managed" does not mean "free of governance." You still own data classification, access control, and audit. Always confirm in writing that your inputs are not used to train the vendor's base models.
+:::
+
+## 28.2 — 🟧 AWS Bedrock
+
+**AWS Bedrock** is a serverless, single-API gateway to foundation models from many providers — Anthropic Claude, Meta Llama, Mistral, Amazon Nova/Titan, Cohere, and more — with no infrastructure to manage. You call models two ways via `boto3`: the older provider-specific **InvokeModel** and the newer **Converse API**, which gives one unified message format across every model. On top of the raw models, Bedrock adds managed building blocks so you do not have to wire them yourself.
+
+```python
+import boto3
+
+client = boto3.client("bedrock-runtime", region_name="us-east-1")
+
+resp = client.converse(
+    modelId="anthropic.claude-sonnet-4-20250514-v1:0",
+    messages=[{"role": "user", "content": [{"text": "Explain RAG in one sentence."}]}],
+    inferenceConfig={"maxTokens": 200, "temperature": 0.2},
+)
+print(resp["output"]["message"]["content"][0]["text"])
+```
+
+**Q: What is the Converse API and why use it over InvokeModel?**
+The **Converse API** is a single, unified chat interface that works the same across every Bedrock model, so switching from Claude to Llama is a one-line `modelId` change. **InvokeModel** is the older call where the request/response JSON is specific to each provider, so it requires per-model formatting. Reach for Converse for new multi-turn or tool-use work.
+
+**Q: What are Bedrock Knowledge Bases?**
+**Knowledge Bases** are Bedrock's managed RAG: you point it at documents in S3, it handles chunking, embeddings, and a vector store, then answers queries with citations. It saves you from building the retrieval pipeline by hand — see the **RAG chapter** for what is happening underneath.
+
+**Q: What do Agents for Bedrock and Guardrails add?**
+**Agents for Bedrock** orchestrate multi-step tasks — calling APIs (action groups) and Knowledge Bases to fulfil a request (see the **Agents chapter**). **Guardrails** apply configurable safety and topic/PII filters across any model, so you enforce one policy regardless of which model serves the request.
+
+**Q: What is Provisioned Throughput in Bedrock?**
+**Provisioned Throughput** reserves dedicated model capacity for a committed term, giving guaranteed token rates and stable latency instead of shared on-demand limits. You use it for high, steady production traffic, and it is typically required to serve models you fine-tune in Bedrock (on-demand inference covers only a subset of models).
+
+**Q: How does Bedrock keep my data secure?**
+Access is controlled through **IAM**, and you can reach Bedrock privately over **VPC / PrivateLink** so traffic never crosses the public internet. AWS states your prompts and completions are not used to train the base foundation models and stay within your selected region.
+
+## 28.3 — 🔵 Google Vertex AI
+
+**Vertex AI** is Google Cloud's end-to-end ML platform, not just a model API. It spans **Model Garden** (Gemini plus open and third-party models, including Anthropic Claude), managed training, **Pipelines**, online and batch **Endpoints**, a **Model Registry**, **Feature Store**, and the **Vertex AI RAG Engine** for grounding — all under Google Cloud IAM and networking. It is the enterprise, governed way to run Gemini in production and to deploy your own models with full MLOps.
+
+You use the same unified `google-genai` SDK as AI Studio, just pointed at your GCP project — that is what makes the prototype-to-production migration a near drop-in change.
+
+```python
+from google import genai
+
+client = genai.Client(vertexai=True, project="my-gcp-project", location="us-central1")
+resp = client.models.generate_content(
+    model="gemini-2.5-pro",
+    contents="Explain vector embeddings in one sentence.",
+)
+print(resp.text)
+```
+
+**Q: How is Vertex AI different from just an LLM API?**
+Vertex is a full **ML platform**: beyond calling Gemini it covers training, pipelines, a model registry, feature store, and managed endpoints for your own models. The model API is one feature; the rest supports the entire lifecycle described in the **MLOps & LLMOps chapter**.
+
+**Q: When would you choose Vertex over Bedrock?**
+Choose **Vertex** when you are already on Google Cloud, want **Gemini** as a first-class model, or need an integrated platform for training and deploying your own models alongside hosted ones. Choose **Bedrock** when you are on AWS and want the widest menu of third-party models behind one serverless API. Both offer strong governance; the deciding factor is usually your existing cloud and model preference.
+
+**Q: What is Model Garden?**
+**Model Garden** is Vertex's catalog of usable models — Google's Gemini and embeddings, open models like Llama and Gemma, and third-party models including Claude — that you can test and deploy from one place. It is how Vertex offers multi-provider choice similar to Bedrock.
+
+**Q: How does Vertex handle enterprise governance?**
+Through Google Cloud **IAM** for fine-grained access, **VPC Service Controls (VPC-SC)** to build a data-exfiltration perimeter, regional data residency, audit logging, and customer-managed encryption keys. This is why regulated enterprises pick Vertex over the lighter AI Studio.
+
+## 28.4 — 🟢 Google AI Studio
+
+**Google AI Studio** is the fast, free front door to Gemini: a browser playground where you test prompts, tune temperature and safety settings, and grab an **API key** in minutes. The same key drives the lightweight **Gemini API** through the `google-genai` SDK — ideal for prototyping and small apps. It is the consumer-facing path, deliberately distinct from production Vertex AI.
+
+```python
+from google import genai
+
+client = genai.Client(api_key="YOUR_API_KEY")
+resp = client.models.generate_content(
+    model="gemini-2.5-flash",
+    contents="Explain prompt engineering in one sentence.",
+)
+print(resp.text)
+```
+
+**Q: How is AI Studio different from Vertex AI?**
+**AI Studio** is for individuals and prototyping — a quick API key, a playground, and the consumer **Gemini API**, with no cloud project setup. **Vertex AI** is the production/enterprise path with IAM, VPC controls, SLAs, data residency, and full MLOps. Same Gemini models underneath, very different governance and scale.
+
+**Q: Is AI Studio free, and what is the catch?**
+AI Studio has a generous **free tier** for experimentation, which makes it great for learning and demos. The catch is that the free tier may use your data to improve products and lacks enterprise guarantees — so do not put regulated or production traffic through it; move to Vertex (or the paid Gemini API) for that.
+
+**Q: What is the migration path from AI Studio to Vertex?**
+You prototype with the `google-genai` SDK and an AI Studio key, then **switch to Vertex** by re-pointing the same client — `genai.Client(vertexai=True, project=..., location=...)` instead of `api_key=...` — so you inherit IAM, governance, and SLAs with minimal code change. The prompts and model choices carry over; the surrounding platform hardens.
+
+**Q: When should I reach for AI Studio?**
+Use it for **prototyping**, hackathons, learning, and quick personal tools where speed matters and the data is non-sensitive. The moment you need governance, compliance, or production scale, graduate to Vertex AI.
+
+## 28.5 — 🟦 Azure OpenAI Service
+
+**Azure OpenAI Service** is Microsoft's governed wrapper around OpenAI's models (GPT-4o, the o-series reasoning models, embeddings, and more), run inside your Azure tenant with enterprise auth, networking, and compliance. You deploy a model under a *deployment name* and call it through the OpenAI-compatible SDK, pointed at your Azure endpoint. It is the natural choice for organizations standardized on Azure and Microsoft Entra ID.
+
+```python
+from openai import AzureOpenAI
+
+client = AzureOpenAI(
+    azure_endpoint="https://my-resource.openai.azure.com",
+    api_version="2024-10-21",
+    api_key="YOUR_API_KEY",  # or use Entra ID token auth in production
+)
+resp = client.chat.completions.create(
+    model="my-gpt4o-deployment",  # your deployment name, not the raw model id
+    messages=[{"role": "user", "content": "Explain fine-tuning in one sentence."}],
+)
+print(resp.choices[0].message.content)
+```
+
+**Q: How is Azure OpenAI different from calling OpenAI directly?**
+It serves the **same OpenAI models** but inside **your Azure tenant**, with Entra ID auth, VNet/private endpoints, regional data residency, and Azure's compliance certifications. The trade-off is that new models and features often land on OpenAI's own API first, so Azure can lag by weeks.
+
+**Q: What is the "deployment name" gotcha?**
+On Azure you do not call a raw model id; you first create a **deployment** of a model and then pass that **deployment name** as the `model` parameter. This trips people up when porting OpenAI code — the SDK call looks identical but the `model` value is your deployment, not `gpt-4o`.
+
+**Q: What are PTUs?**
+**Provisioned Throughput Units (PTUs)** are Azure's reserved-capacity model: you buy dedicated throughput for predictable latency and rate limits, the Azure equivalent of Bedrock Provisioned Throughput. Use pay-as-you-go tokens for spiky or early traffic and PTUs once volume is high and steady.
+
+**Q: What is "On Your Data"?**
+**Azure OpenAI On Your Data** is the managed-RAG feature: connect a data source (such as Azure AI Search) and the service grounds answers in your documents — Azure's analog to Bedrock Knowledge Bases. For multi-step agents, Microsoft now points to the newer **Azure AI Foundry Agent Service** rather than the older Assistants API.
+
+::: {.callout-warning}
+The most common Entra ID gotcha: in production you authenticate with a **token credential** (managed identity / `DefaultAzureCredential`), not the static API key — and the identity needs the *Cognitive Services OpenAI User* role, or calls fail with 401/403 even though the deployment exists.
+:::
+
+## 28.6 — ⚖️ Choosing & deploying
+
+Once you know the platforms, the choice comes down to which cloud you are on, which models you need, and your governance requirements. The table below compares the four options; after it we cover the deployment patterns that apply across all of them.
+
+| Feature | AWS Bedrock | Google Vertex AI | Azure OpenAI Service | Google AI Studio |
+|---|---|---|---|---|
+| Model choice | Many providers (Claude, Llama, Mistral, Nova, Cohere) | Gemini + Model Garden (Llama, Gemma, Claude) | OpenAI models (GPT-4o, o-series) | Gemini only |
+| Governance | IAM, VPC, PrivateLink | IAM, VPC-SC, CMEK | Entra ID, VNet, Azure policy | API key, light |
+| Pricing model | Pay-per-token + Provisioned Throughput | Pay-per-token + provisioned | Pay-per-token + PTU | Free tier + pay-per-token |
+| Managed RAG | Knowledge Bases | Vertex AI RAG Engine | On Your Data | Minimal |
+| Managed agents | Agents for Bedrock | Vertex AI Agent Builder | Azure AI Foundry Agent Service | Minimal |
+| Guardrails | Bedrock Guardrails | Safety filters / Model Armor | Content filters | Basic safety settings |
+| Lock-in | AWS ecosystem | GCP ecosystem | Azure + OpenAI | Low (easy to start) |
+
+**Q: What are the main deployment patterns?**
+**Serverless / pay-per-token** APIs scale automatically and need zero capacity planning — the default for most apps. **Dedicated / provisioned endpoints** (Bedrock Provisioned Throughput, Vertex endpoints, Azure PTUs) reserve capacity for guaranteed latency and rate limits at high steady volume. Choose serverless for spiky or early traffic, provisioned once usage is large and predictable.
+
+**Q: How do I control cost on these platforms?**
+Use **prompt caching** to avoid re-paying for repeated context, **model routing** to send easy requests to cheap small models and only hard ones to frontier models, and cap `maxTokens` (see the **Inference & Serving chapter** for both). Provisioned throughput can also be cheaper than per-token once volume is high and steady.
+
+**Q: How do these platforms handle compliance and privacy?**
+The enterprise services carry certifications like **SOC 2** and **HIPAA** eligibility, support **data residency** by region, and offer **customer-managed encryption keys** plus private networking. They contractually state your data is not used to train base models — confirm the specific certifications and the region for your regulated workload.
+
+**Q: How does this connect to MLOps and LLMOps?**
+You typically front these APIs with an **LLM gateway** for unified auth, routing, rate limiting, and cost tracking, and add **observability** (traces, token/cost metrics, evals) — exactly the operational layer in the **MLOps & LLMOps chapter**. The managed platform serves the model; your LLMOps stack governs how you use it.
+
+::: {.callout-tip}
+Default to serverless pay-per-token while traffic is small or spiky, and only commit to provisioned capacity once you have steady, measured volume — it is the cheapest way to avoid paying for idle GPUs.
+:::
+
+## 28.7 — Key takeaways
+
+- **Managed cloud AI platforms** trade control and per-token cost for zero GPU ops, instant frontier-model access, autoscaling, and compliance — the "buy" side of build-vs-buy.
+- **Pay-per-token** (serverless) suits spiky or early traffic; **provisioned throughput** wins on cost and latency once volume is high and steady.
+- **Region/data residency** decides which laws apply and where data is processed; always confirm your data is not used to train base models.
+- Reach for **AWS Bedrock** when you are on AWS and want the widest menu of providers behind one serverless API, with managed Knowledge Bases, Agents, and Guardrails.
+- Reach for **Google Vertex AI** when you are on GCP, want Gemini first-class, or need an end-to-end governed ML platform for training and deploying your own models.
+- Reach for **Google AI Studio** when you are prototyping, learning, or building quick non-sensitive tools and want a free API key in minutes — then graduate to Vertex (same `google-genai` SDK) for production.
+- Reach for **Azure OpenAI Service** when you are on Azure and want governed access to OpenAI's GPT and o-series models with Entra ID auth and PTU capacity — remembering the deployment-name and token-credential gotchas.
+- Front any of them with an **LLM gateway** and **observability** for routing, cost tracking, and evals — the operational layer from the MLOps & LLMOps chapter.
