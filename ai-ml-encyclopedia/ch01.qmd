@@ -131,6 +131,31 @@ print(round(cos, 3))      # 0.832   -> ~33.7 degrees apart
 A neuron computes $\mathbf{w}\cdot\mathbf{x} + b$ — one dot product. If you understand the dot product as "how much of $\mathbf{x}$ points along $\mathbf{w}$", you already understand the core arithmetic of every neural network.
 :::
 
+
+::: {.viz-wrap}
+**🎮 Try it — Vector Addition**
+
+<div class="ml-viz" data-viz="vecadd" data-params="{}"></div>
+:::
+
+::: {.viz-wrap}
+**🎮 Try it — Vector Subtraction**
+
+<div class="ml-viz" data-viz="vecsub" data-params="{}"></div>
+:::
+
+::: {.viz-wrap}
+**🎮 Try it — Dot Product**
+
+<div class="ml-viz" data-viz="dot" data-params="{}"></div>
+:::
+
+::: {.viz-wrap}
+**🎮 Try it — Cross Product**
+
+<div class="ml-viz" data-viz="cross" data-params="{}"></div>
+:::
+
 ## 1.2 — Matrices & matrix operations
 
 A **matrix** is a grid of numbers — a stack of vectors. Its **shape** is rows × columns: a $2\times 3$ matrix has 2 rows, 3 columns. In ML the convention is a **design matrix** $X$ of shape (samples × features): each row is one example, each column one feature. A dataset of 1000 houses with 5 features is a $1000\times 5$ matrix.
@@ -168,6 +193,19 @@ Matrix multiplication is **associative** ($A(BC)=(AB)C$) and **distributive**, b
 Shape errors are the #1 bug in ML code. Before any multiply, check inner dimensions match. $(32\times 784)(784\times 128)$ works and gives $32\times 128$; $(32\times 784)(32\times 128)$ throws. Read shapes left to right and cancel the middle.
 :::
 
+
+::: {.viz-wrap}
+**🎮 Try it — Matrix Multiplication**
+
+<div class="ml-viz" data-viz="lintransform" data-params="{&quot;mode&quot;: &quot;matmul&quot;}"></div>
+:::
+
+::: {.viz-wrap}
+**🎮 Try it — Transpose**
+
+<div class="ml-viz" data-viz="transpose" data-params="{}"></div>
+:::
+
 ## 1.3 — Matrix inverse & determinant
 
 The **inverse** $A^{-1}$ undoes what $A$ does: $A^{-1}A = AA^{-1} = I$. If $A$ rotates space 30°, $A^{-1}$ rotates it back. Inverses let you *solve* linear systems: $A\mathbf{x} = \mathbf{b}$ becomes $\mathbf{x} = A^{-1}\mathbf{b}$ — the algebra behind the closed-form least-squares solution in §1.9.
@@ -193,6 +231,19 @@ print(np.linalg.solve(A, b))   # [2. 1.]
 
 ::: {.callout-warning}
 Almost never compute `inv(A)` to solve $A\mathbf{x}=\mathbf{b}$. Use `np.linalg.solve` — it's faster and far more numerically stable. A near-singular matrix (tiny determinant) makes the inverse explode and amplifies floating-point error; this is **ill-conditioning** (see §1.8 on the condition number).
+:::
+
+
+::: {.viz-wrap}
+**🎮 Try it — Inverse**
+
+<div class="ml-viz" data-viz="lintransform" data-params="{&quot;mode&quot;: &quot;matmul&quot;}"></div>
+:::
+
+::: {.viz-wrap}
+**🎮 Try it — Determinant**
+
+<div class="ml-viz" data-viz="lintransform" data-params="{&quot;mode&quot;: &quot;determinant&quot;}"></div>
 :::
 
 ## 1.4 — Eigenvalues & eigenvectors
@@ -232,6 +283,25 @@ A symmetric matrix (like every covariance matrix) always has **real eigenvalues*
 Read eigenvalues as "how much" and eigenvectors as "in which direction". A large eigenvalue marks a direction of large variance (keep it in PCA); a near-zero eigenvalue marks a direction you can safely discard.
 :::
 
+
+::: {.viz-wrap}
+**🎮 Try it — Eigenvalues**
+
+<div class="ml-viz" data-viz="lintransform" data-params="{&quot;mode&quot;: &quot;eigen&quot;, &quot;m&quot;: [2, 0, 0, 1]}"></div>
+:::
+
+::: {.viz-wrap}
+**🎮 Try it — Eigenvectors**
+
+<div class="ml-viz" data-viz="lintransform" data-params="{&quot;mode&quot;: &quot;eigen&quot;, &quot;m&quot;: [2, 1, 1, 2]}"></div>
+:::
+
+::: {.viz-wrap}
+**🎮 Try it — Spectral Decomposition**
+
+<div class="ml-viz" data-viz="lintransform" data-params="{&quot;mode&quot;: &quot;eigen&quot;, &quot;m&quot;: [2, 1, 1, 2]}"></div>
+:::
+
 ## 1.5 — Singular Value Decomposition (SVD)
 
 Eigendecomposition only works for square matrices. **SVD** generalizes it to *any* $m\times n$ matrix and is, arguably, the most useful factorization in all of applied math. It says any matrix can be written as three simple steps — **rotate, scale, rotate**:
@@ -269,6 +339,13 @@ The fraction of "energy" kept by $k$ components is $\sum_{i\le k}\sigma_i^2 / \s
 If you learn one decomposition, learn SVD. It always exists, it's numerically stable, and PCA, recommenders, image compression, and the rank of a matrix all fall straight out of it.
 :::
 
+
+::: {.viz-wrap}
+**🎮 Try it — SVD**
+
+<div class="ml-viz" data-viz="lintransform" data-params="{&quot;mode&quot;: &quot;matmul&quot;, &quot;m&quot;: [1.5, 0.8, 0, 1]}"></div>
+:::
+
 ## 1.6 — QR, LU & Cholesky decomposition
 
 These three factorizations are the *computational* backbone — the routines that actually run when you call `solve`. Each rewrites a matrix as a product of simpler matrices that are cheap to work with.
@@ -296,6 +373,19 @@ print(Q.shape, R.shape)              # (3,2) (2,2) — thin QR
 
 ::: {.callout-warning}
 Cholesky throws if the matrix isn't positive-definite — and that failure is a *feature*. It's the cheapest test that a covariance estimate is valid; a crash means your matrix has a negative or zero eigenvalue and needs regularization (add $\epsilon I$).
+:::
+
+
+::: {.viz-wrap}
+**🎮 Try it — QR Decomposition**
+
+<div class="ml-viz" data-viz="lintransform" data-params="{&quot;mode&quot;: &quot;matmul&quot;, &quot;m&quot;: [1, 1, 0, 1]}"></div>
+:::
+
+::: {.viz-wrap}
+**🎮 Try it — Positive Definite Matrices**
+
+<div class="ml-viz" data-viz="convexsurface" data-params="{}"></div>
 :::
 
 ## 1.7 — Matrix factorization (and its use in ML / recommenders)
@@ -361,6 +451,37 @@ A related diagnostic is the **condition number** — the ratio of largest to sma
 "Rank" and "number of columns" are not the same. Perfectly correlated features (multicollinearity) make a matrix **rank-deficient**, which breaks the matrix inverse in plain linear regression and forces a singular-matrix error. Regularization or SVD-based solvers fix it.
 :::
 
+
+::: {.viz-wrap}
+**🎮 Try it — L1 Norm**
+
+<div class="ml-viz" data-viz="norm" data-params="{&quot;kind&quot;: &quot;l1&quot;}"></div>
+:::
+
+::: {.viz-wrap}
+**🎮 Try it — L2 Norm**
+
+<div class="ml-viz" data-viz="norm" data-params="{&quot;kind&quot;: &quot;l2&quot;}"></div>
+:::
+
+::: {.viz-wrap}
+**🎮 Try it — Rank**
+
+<div class="ml-viz" data-viz="lintransform" data-params="{&quot;mode&quot;: &quot;rank&quot;, &quot;m&quot;: [1, 0.5, 2, 1]}"></div>
+:::
+
+::: {.viz-wrap}
+**🎮 Try it — Trace**
+
+<div class="ml-viz" data-viz="trace" data-params="{}"></div>
+:::
+
+::: {.viz-wrap}
+**🎮 Try it — Orthogonality**
+
+<div class="ml-viz" data-viz="ortho" data-params="{}"></div>
+:::
+
 ## 1.9 — Projection & subspaces (column/null space, least squares)
 
 A **subspace** is a flat region through the origin that's closed under linear combinations — a line, a plane, or a higher-dimensional analog. Two subspaces of a matrix matter most. The **column space** is everything you can reach by combining the columns — all possible outputs $A\mathbf{x}$. The **null space** is every input the matrix crushes to zero, $A\mathbf{x}=\mathbf{0}$ — the directions of information it throws away.
@@ -396,6 +517,31 @@ print(np.round(xhat, 3))                    # [slope, intercept] ≈ [1.92, 0.15
 Forming $A^\top A$ *squares* the condition number — it doubles the numerical damage of multicollinearity. Production solvers (and `np.linalg.lstsq`) skip the normal equations and use QR or SVD on $A$ directly, which is far more stable. Reach for the formula to understand it, not to ship it.
 :::
 
+
+::: {.viz-wrap}
+**🎮 Try it — Projection**
+
+<div class="ml-viz" data-viz="proj" data-params="{}"></div>
+:::
+
+::: {.viz-wrap}
+**🎮 Try it — Subspaces**
+
+<div class="ml-viz" data-viz="lintransform" data-params="{&quot;mode&quot;: &quot;rank&quot;, &quot;m&quot;: [1, 0.5, 2, 1]}"></div>
+:::
+
+::: {.viz-wrap}
+**🎮 Try it — Basis**
+
+<div class="ml-viz" data-viz="lintransform" data-params="{&quot;mode&quot;: &quot;matmul&quot;, &quot;m&quot;: [1, 0, 0, 1]}"></div>
+:::
+
+::: {.viz-wrap}
+**🎮 Try it — Linear Independence**
+
+<div class="ml-viz" data-viz="lintransform" data-params="{&quot;mode&quot;: &quot;rank&quot;}"></div>
+:::
+
 ## 1.10 — Tensors
 
 A **tensor** is the generalization of the scalar–vector–matrix ladder to any number of dimensions, called the **rank** or **order** (the count of indices needed to address an element). A scalar is rank-0, a vector rank-1, a matrix rank-2, and beyond that we just say "tensor". The word carries deeper meaning in physics, but in ML it's pragmatic: a tensor is an n-dimensional array, the universal container that flows through TensorFlow and PyTorch.
@@ -423,6 +569,13 @@ print((batch + bias).shape)          # (32,28,28,3) via broadcasting
 
 ::: {.callout-tip}
 When confused by a deep-learning error, print `.shape`. Ninety percent of tensor bugs are a misplaced axis — a batch dimension where a channel should be, or a transpose you forgot. The shape tuple tells you exactly where the numbers went.
+:::
+
+
+::: {.viz-wrap}
+**🎮 Try it — Tensor Algebra**
+
+<div class="ml-viz" data-viz="matnote" data-params="{&quot;text&quot;: &quot;A batch of 32 RGB 224\u00d7224 images is a 4-D tensor: shape (32, 224, 224, 3). Each axis is a dimension you index into.&quot;}"></div>
 :::
 
 ## 1.11 — Key takeaways
