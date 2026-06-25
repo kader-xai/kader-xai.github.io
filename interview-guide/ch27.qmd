@@ -1,0 +1,281 @@
+---
+title: "Chapter 27 — ⚙️ Practical Toolkit III — Serving, Apps & MLOps Tooling"
+page-layout: full
+toc: true
+toc-location: left
+toc-title: "In this chapter"
+toc-depth: 2
+toc-expand: true
+---
+
+[📖 All chapters](../interview-guide.html)  &nbsp;|&nbsp;  [← 26 · 🧰 Practical Toolkit II](ch26.html)  &nbsp;|&nbsp;  [28 · ☁️ Cloud AI Platforms →](ch28.html)
+
+<details class="ig-jump">
+<summary>📚 Jump to any chapter</summary>
+<p class="ig-era">🧮 Mathematical Foundations</p>
+<ul>
+<li><a href="ch01.html">01 &middot; 🧮 Linear Algebra — the language of data</a></li>
+<li><a href="ch02.html">02 &middot; 📉 Calculus & Optimization — how models learn</a></li>
+<li><a href="ch03.html">03 &middot; 🎲 Probability & Statistics — reasoning under uncertainty</a></li>
+<li><a href="ch04.html">04 &middot; 🔥 Information Theory & Loss Functions — measuring surprise and error</a></li>
+</ul>
+<p class="ig-era">🧩 Classical Machine Learning</p>
+<ul>
+<li><a href="ch05.html">05 &middot; 🧩 Core ML Concepts — the ground rules</a></li>
+<li><a href="ch06.html">06 &middot; 📐 Classical Supervised Algorithms — the workhorses</a></li>
+<li><a href="ch07.html">07 &middot; 🌲 Ensembles & Boosting — how to win on tabular data</a></li>
+<li><a href="ch08.html">08 &middot; 🗺️ Unsupervised Learning & Dimensionality Reduction — structure without labels</a></li>
+<li><a href="ch09.html">09 &middot; 🎯 Model Evaluation & Validation — knowing if it actually works</a></li>
+</ul>
+<p class="ig-era">🧠 Deep Learning</p>
+<ul>
+<li><a href="ch10.html">10 &middot; 🧠 Neural Network Fundamentals — the building block</a></li>
+<li><a href="ch11.html">11 &middot; ⚙️ Training Deep Networks — making deep nets actually train</a></li>
+<li><a href="ch12.html">12 &middot; 🖼️ Convolutional Neural Networks — the vision branch</a></li>
+<li><a href="ch13.html">13 &middot; 🔁 Sequence Models — RNNs, LSTMs and the bottleneck</a></li>
+</ul>
+<p class="ig-era">⚡ The Transformer Era</p>
+<ul>
+<li><a href="ch14.html">14 &middot; 🔤 Word Embeddings — giving words meaning as vectors</a></li>
+<li><a href="ch15.html">15 &middot; ⚡ Attention & the Transformer — the architecture that changed everything</a></li>
+<li><a href="ch16.html">16 &middot; 🧱 Tokenization, Pretraining & Model Families</a></li>
+<li><a href="ch17.html">17 &middot; 📈 Modern LLMs & Scaling — bigger, and suddenly capable</a></li>
+</ul>
+<p class="ig-era">💬 Using & Adapting LLMs</p>
+<ul>
+<li><a href="ch18.html">18 &middot; 💬 Prompting & In-Context Learning — programming models with words</a></li>
+<li><a href="ch19.html">19 &middot; 🎚️ Fine-Tuning & Alignment — specializing and aligning models</a></li>
+<li><a href="ch20.html">20 &middot; 📚 Retrieval-Augmented Generation (RAG) — giving the model an open book</a></li>
+<li><a href="ch21.html">21 &middot; 🚀 Inference, Decoding & Serving — running LLMs efficiently</a></li>
+</ul>
+<p class="ig-era">🤖 The Agentic Frontier</p>
+<ul>
+<li><a href="ch22.html">22 &middot; 🤖 Agents, Tools & Loops — the latest frontier</a></li>
+<li><a href="ch23.html">23 &middot; 🛡️ Evaluation, Safety & Guardrails — making LLM systems trustworthy</a></li>
+<li><a href="ch24.html">24 &middot; 🔧 MLOps & LLMOps — shipping and operating models in production</a></li>
+</ul>
+<p class="ig-era">🛠️ The Practical Toolkit</p>
+<ul>
+<li><a href="ch25.html">25 &middot; 🛠️ Practical Toolkit I — Modeling & Vision Libraries</a></li>
+<li><a href="ch26.html">26 &middot; 🧰 Practical Toolkit II — LLM Frameworks, Orchestration & Vector Stores</a></li>
+<li><a href="ch27.html">27 &middot; ⚙️ Practical Toolkit III — Serving, Apps & MLOps Tooling</a></li>
+</ul>
+<p class="ig-era">☁️ Cloud AI Platforms</p>
+<ul>
+<li><a href="ch28.html">28 &middot; ☁️ Cloud AI Platforms — deploying foundation models on the hyperscalers</a></li>
+</ul>
+</details>
+
+------------------------------------------------------------------------
+
+A trained model is worthless until people can call it. This chapter covers the tools that take a model out of a notebook and into the world: inference servers that handle real traffic (vLLM, Ollama), the framework and UI tools that wrap a model as an API or demo (FastAPI, Gradio), and the operational backbone that tracks, ships, and reproduces it all (MLflow, GitHub, Docker). These sit at the right-hand end of the ML/LLM workflow — everything after the model exists.
+
+::: {.callout-note appearance="simple"}
+🧰 **Where in the stack:** the serving + ops layer — you have a model, now you run it, expose it, and keep it reproducible in production.
+:::
+
+## 27.1 — 🚀 vLLM
+
+vLLM is a high-throughput inference server for open LLMs. You point it at a Hugging Face model and it exposes an OpenAI-compatible `/v1` endpoint that can serve many concurrent users far faster than a plain `model.generate()` loop. It is the production answer to "how do I serve this open model to lots of people at once" (see the Inference & Serving chapter).
+
+```python
+# Start the server (one line, terminal):
+#   vllm serve meta-llama/Llama-3.1-8B-Instruct
+from openai import OpenAI
+client = OpenAI(base_url="http://localhost:8000/v1", api_key="x")
+resp = client.chat.completions.create(
+    model="meta-llama/Llama-3.1-8B-Instruct",
+    messages=[{"role": "user", "content": "Hello"}],
+)
+print(resp.choices[0].message.content)
+```
+
+**Q: What problem does vLLM actually solve?**
+A naive `generate()` loop wastes GPU memory and processes requests one batch at a time. vLLM's **PagedAttention** manages the KV cache like virtual memory pages, so memory isn't pre-reserved and wasted, letting you fit far more concurrent sequences on one GPU. The result is much higher throughput (tokens/second across all users) for the same hardware.
+
+**Q: What is continuous batching?**
+Static batching waits for every request in a batch to finish before starting the next. **Continuous batching** swaps a finished sequence out and a waiting one in at every step, so the GPU never idles waiting on the slowest request. This is the single biggest reason vLLM beats a hand-rolled serving loop under real traffic.
+
+**Q: Why does the OpenAI-compatible endpoint matter?**
+vLLM speaks the same `/v1/chat/completions` API as OpenAI, so any code or library written against the **OpenAI SDK** works by just changing the `base_url`. That means you can prototype against a hosted API and switch to your self-hosted open model with almost no code change.
+
+**Q: When would I NOT reach for vLLM?**
+If you have a single user, are prototyping on a laptop, or have no GPU, vLLM is overkill — reach for **Ollama** (next section) instead. vLLM shines when you have a GPU and concurrent traffic; for one-off local experiments the setup cost isn't worth it.
+
+::: {.callout-tip}
+Start the server, then hit it with the standard `openai` Python client. You almost never need vLLM's own Python API for basic serving.
+:::
+
+## 27.2 — 🦙 Ollama
+
+Ollama runs open LLMs locally with a single command. It pulls quantized **GGUF** model files, manages them like Docker images, and gives you both a CLI and a local HTTP API — ideal for prototyping, offline work, and keeping data private on your own machine.
+
+```bash
+ollama run llama3.1        # pull + chat in the terminal
+# or hit the local API:
+curl http://localhost:11434/api/generate \
+  -d '{"model": "llama3.1", "prompt": "Why is the sky blue?"}'
+```
+
+**Q: What is Ollama in one sentence?**
+It is the easiest way to **run an LLM on your own computer** — one command pulls a quantized model and starts a local server. Think of it as "Docker for LLMs": models are named, versioned, and pulled on demand.
+
+**Q: Why quantized GGUF models?**
+**Quantization** shrinks model weights (e.g. to 4-bit) so a 7B model runs in a few GB of RAM and fits on a laptop or even CPU. The trade-off is a small quality drop for a huge gain in accessibility — that's what makes local, offline use practical.
+
+**Q: Ollama vs vLLM — when do I pick which?**
+Pick **Ollama** for single-user, local, offline, or privacy-sensitive work where setup ease matters most. Pick **vLLM** when you need to serve many concurrent users at high throughput on a GPU. Ollama optimizes for "works on my machine in 10 seconds"; vLLM optimizes for production scale.
+
+**Q: Ollama vs a hosted API (OpenAI, Anthropic)?**
+Hosted APIs give you the strongest models with zero infrastructure but send your data off-machine and cost per token. **Ollama** keeps everything **local and free to run**, at the cost of weaker models and your own hardware limits — the right call when privacy or offline operation is non-negotiable.
+
+## 27.3 — ⚡ FastAPI
+
+FastAPI is the default Python web framework for wrapping a model as a service. It gives you async endpoints, automatic request/response validation via **Pydantic**, and auto-generated interactive API docs — which is why nearly every "model behind an API" in production is a FastAPI app. It runs on an ASGI server, usually **uvicorn**.
+
+```python
+from fastapi import FastAPI
+from pydantic import BaseModel
+
+app = FastAPI()
+class Query(BaseModel):
+    text: str
+
+@app.post("/predict")
+def predict(q: Query):
+    return {"label": model(q.text)}   # run: uvicorn main:app
+```
+
+**Q: Why FastAPI over Flask for ML?**
+FastAPI has **native async** support (key when your endpoint is waiting on a slow model or a downstream LLM call) and **Pydantic validation** built in, so malformed requests are rejected automatically. Flask works too, but you'd bolt these on yourself; FastAPI gives them out of the box.
+
+**Q: What does Pydantic actually do here?**
+**Pydantic** defines your request and response shapes as typed classes and validates incoming JSON against them automatically. If a client sends the wrong type or a missing field, FastAPI returns a clear 422 error before your model code ever runs — this is your input-validation boundary.
+
+**Q: What is uvicorn and why do I need it?**
+FastAPI defines *what* your API does; **uvicorn** is the ASGI server that actually *runs* it and handles incoming connections. In production you typically run uvicorn workers (often behind gunicorn or a load balancer) to handle concurrency.
+
+**Q: FastAPI vs Gradio?**
+**FastAPI** is for production APIs that other programs call (JSON in, JSON out). **Gradio** (next) is for a quick human-facing demo UI. If a frontend or another service needs to integrate, use FastAPI; if you just want to click around and show a model off, use Gradio.
+
+::: {.callout-tip}
+Visit `/docs` on a running FastAPI app for a free interactive Swagger UI — generated automatically from your Pydantic models, no extra code.
+:::
+
+## 27.4 — 🎛️ Gradio
+
+Gradio builds a shareable ML demo UI in pure Python — no HTML or JavaScript. You wrap a function with `gr.Interface` (or compose a richer layout with `gr.Blocks`), and it generates a web UI with inputs, outputs, and an optional public link. It is the fastest path from "I have a model function" to "anyone can try it in a browser."
+
+```python
+import gradio as gr
+
+def greet(name):
+    return f"Hello {name}"
+
+gr.Interface(fn=greet, inputs="text", outputs="text").launch(share=True)
+```
+
+**Q: What is Gradio for?**
+It turns a Python function into a **web demo UI** in a few lines, so non-technical people can interact with your model without you writing any frontend code. It's built for demos, internal tools, and sharing prototypes — not production traffic.
+
+**Q: `gr.Interface` vs `gr.Blocks`?**
+**`gr.Interface`** is the one-liner: one function, fixed input→output layout. **`gr.Blocks`** is the flexible builder for multi-step or multi-component apps (chatbots, tabs, conditional logic). Start with `Interface`; reach for `Blocks` when the layout outgrows a single function.
+
+**Q: Gradio vs Streamlit?**
+Both are pure-Python UI tools. **Gradio** is function-centric and integrates tightly with **Hugging Face Spaces** for free hosting, making it the go-to for ML model demos. **Streamlit** is script-centric and better suited to data dashboards and exploratory apps; the choice is mostly about which mental model fits your app.
+
+**Q: Gradio vs FastAPI — aren't both serving the model?**
+Yes, but for different audiences. **Gradio** serves a **human a UI**; **FastAPI** serves a **program a JSON API**. A common pattern is FastAPI for the production endpoint and a small Gradio app for the internal demo of the same model.
+
+::: {.callout-warning}
+Don't ship a Gradio app as your production API. It's a demo layer — for real traffic, authentication, and integration, put the model behind FastAPI.
+:::
+
+## 27.5 — 📈 MLflow
+
+MLflow is the standard tool for experiment tracking and model management. It logs your parameters, metrics, and artifacts so you can compare training runs, then packages and versions models in a **registry** you promote through stages like Staging and Production (see the MLOps & LLMOps chapter).
+
+```python
+import mlflow
+with mlflow.start_run():
+    mlflow.log_param("lr", 0.01)
+    mlflow.log_metric("accuracy", 0.93)
+    mlflow.log_artifact("model.pkl")
+```
+
+**Q: What problem does MLflow solve?**
+Without it, you have a graveyard of notebooks and no idea which hyperparameters produced your best model. **Experiment tracking** logs every run's params, metrics, and artifacts to one place, so you can compare runs and reproduce the winner instead of guessing.
+
+**Q: What is the model registry?**
+The **model registry** is a versioned store of trained models with stage labels (e.g. Staging, Production, Archived). It gives you a single source of truth for "which model version is live" and a clean handoff from training to deployment — the backbone of model governance.
+
+**Q: When does MLflow earn its place?**
+The moment you run more than a handful of experiments or have more than one person training models. For a single throwaway script it's overhead; for any real project where you'll compare runs or need to **reproduce a result**, it pays for itself quickly.
+
+**Q: How does this connect to the rest of MLOps?**
+MLflow is the **tracking and versioning** piece of the MLOps loop — it records what you trained and packages it, while **GitHub** versions the code and **Docker** pins the environment. Together they make a training run reproducible end to end.
+
+## 27.6 — 🐙 GitHub
+
+GitHub is version control plus CI/CD for your code. **Git** tracks every change and lets teams branch and merge without overwriting each other; **GitHub Actions** runs automated pipelines on each push to test, build, and deploy. It is the spine that connects code changes to deployed systems (see the MLOps & LLMOps chapter).
+
+```bash
+git checkout -b my-feature      # branch
+git add . && git commit -m "add model endpoint"
+git push origin my-feature      # then open a Pull Request on GitHub
+```
+
+**Q: What is the basic git workflow?**
+You **branch** off main, **commit** your changes, **push**, then open a **Pull Request (PR)** so others can review before it **merges** back. This keeps main stable and gives every change a review checkpoint and an audit trail.
+
+**Q: What are GitHub Actions?**
+**GitHub Actions** is GitHub's built-in automation: a YAML file defines jobs that run on events like a push or PR. The classic use is **CI/CD** — run tests on every PR (CI) and deploy on merge to main (CD) — so broken code is caught before it ships.
+
+**Q: What is a pull request actually for?**
+A **PR** bundles your branch's changes for review and discussion before merging. It's where code review happens, where CI checks must pass, and where the team agrees a change is safe — the human + automated gate in front of main.
+
+**Q: What's CT, and how does it differ from CI/CD?**
+In ML, **CT (Continuous Training)** adds automated retraining to the usual CI/CD — when new data arrives or the model drifts, a pipeline retrains and revalidates the model, not just the code. It's the ML-specific extra loop on top of standard software CI/CD (see the MLOps & LLMOps chapter).
+
+## 27.7 — 🐳 Docker
+
+Docker packages your code and its entire runtime — OS libraries, Python version, dependencies — into a portable **image**. Run that image anywhere and you get the exact same environment, which is what kills "works on my machine" and makes both training and deployment reproducible (see the MLOps & LLMOps chapter).
+
+```dockerfile
+FROM python:3.11-slim
+WORKDIR /app
+COPY requirements.txt .
+RUN pip install -r requirements.txt
+COPY . .
+CMD ["uvicorn", "main:app", "--host", "0.0.0.0"]
+```
+
+**Q: Image vs container vs Dockerfile?**
+The **Dockerfile** is the recipe; the **image** is the built, frozen snapshot of your app and its environment; the **container** is a running instance of that image. One image, many containers — like a class and its objects.
+
+**Q: What problem does Docker actually solve?**
+It pins the **whole runtime environment**, not just your Python packages, so the code that ran on your laptop runs identically on a colleague's machine, in CI, and in production. No more "but it worked for me" caused by a different OS library or Python version.
+
+**Q: How does Docker fit the training/deployment story?**
+A Docker image makes a **reproducible environment**: the same image trains the model and serves it, so results don't shift because of an unpinned dependency. It's the environment layer beneath everything — MLflow tracks the run, GitHub versions the code, Docker freezes where it runs.
+
+**Q: One common gotcha?**
+Order your `Dockerfile` so dependencies install *before* you copy your app code. Docker **caches layers**, so copying `requirements.txt` and installing first means a code change doesn't re-run a slow `pip install` every build — a small reordering that saves minutes per build.
+
+::: {.callout-warning}
+Don't bake secrets (API keys, credentials) into an image — anyone who pulls it can read them. Pass secrets at runtime via environment variables or a secrets manager.
+:::
+
+## 27.x — Key takeaways
+
+- **vLLM** — reach for it when you need to serve an open LLM to many concurrent users at high throughput on a GPU.
+- **Ollama** — reach for it when you want to run an open LLM locally for prototyping, offline use, or privacy, with zero setup.
+- **FastAPI** — reach for it when you need to wrap a model as a production JSON API with validation and auto docs.
+- **Gradio** — reach for it when you need a quick, shareable human-facing demo UI for a model in pure Python.
+- **MLflow** — reach for it when you need to track experiments, compare runs, and version/promote models through a registry.
+- **GitHub** — reach for it when you need version control, code review via PRs, and automated CI/CD (and CT for ML).
+- **Docker** — reach for it when you need a reproducible, portable runtime so the same environment trains and deploys everywhere.
+
+------------------------------------------------------------------------
+
+[📖 All chapters](../interview-guide.html)  &nbsp;|&nbsp;  [← 26 · 🧰 Practical Toolkit II](ch26.html)  &nbsp;|&nbsp;  [28 · ☁️ Cloud AI Platforms →](ch28.html)

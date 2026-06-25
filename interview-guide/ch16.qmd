@@ -1,0 +1,385 @@
+---
+title: "Chapter 16 — 🧱 Tokenization, Pretraining & Model Families"
+page-layout: full
+toc: true
+toc-location: left
+toc-title: "In this chapter"
+toc-depth: 2
+toc-expand: true
+---
+
+[📖 All chapters](../interview-guide.html)  &nbsp;|&nbsp;  [← 15 · ⚡ Attention & the Transformer](ch15.html)  &nbsp;|&nbsp;  [17 · 📈 Modern LLMs & Scaling →](ch17.html)
+
+<details class="ig-jump">
+<summary>📚 Jump to any chapter</summary>
+<p class="ig-era">🧮 Mathematical Foundations</p>
+<ul>
+<li><a href="ch01.html">01 &middot; 🧮 Linear Algebra — the language of data</a></li>
+<li><a href="ch02.html">02 &middot; 📉 Calculus & Optimization — how models learn</a></li>
+<li><a href="ch03.html">03 &middot; 🎲 Probability & Statistics — reasoning under uncertainty</a></li>
+<li><a href="ch04.html">04 &middot; 🔥 Information Theory & Loss Functions — measuring surprise and error</a></li>
+</ul>
+<p class="ig-era">🧩 Classical Machine Learning</p>
+<ul>
+<li><a href="ch05.html">05 &middot; 🧩 Core ML Concepts — the ground rules</a></li>
+<li><a href="ch06.html">06 &middot; 📐 Classical Supervised Algorithms — the workhorses</a></li>
+<li><a href="ch07.html">07 &middot; 🌲 Ensembles & Boosting — how to win on tabular data</a></li>
+<li><a href="ch08.html">08 &middot; 🗺️ Unsupervised Learning & Dimensionality Reduction — structure without labels</a></li>
+<li><a href="ch09.html">09 &middot; 🎯 Model Evaluation & Validation — knowing if it actually works</a></li>
+</ul>
+<p class="ig-era">🧠 Deep Learning</p>
+<ul>
+<li><a href="ch10.html">10 &middot; 🧠 Neural Network Fundamentals — the building block</a></li>
+<li><a href="ch11.html">11 &middot; ⚙️ Training Deep Networks — making deep nets actually train</a></li>
+<li><a href="ch12.html">12 &middot; 🖼️ Convolutional Neural Networks — the vision branch</a></li>
+<li><a href="ch13.html">13 &middot; 🔁 Sequence Models — RNNs, LSTMs and the bottleneck</a></li>
+</ul>
+<p class="ig-era">⚡ The Transformer Era</p>
+<ul>
+<li><a href="ch14.html">14 &middot; 🔤 Word Embeddings — giving words meaning as vectors</a></li>
+<li><a href="ch15.html">15 &middot; ⚡ Attention & the Transformer — the architecture that changed everything</a></li>
+<li><a href="ch16.html">16 &middot; 🧱 Tokenization, Pretraining & Model Families</a></li>
+<li><a href="ch17.html">17 &middot; 📈 Modern LLMs & Scaling — bigger, and suddenly capable</a></li>
+</ul>
+<p class="ig-era">💬 Using & Adapting LLMs</p>
+<ul>
+<li><a href="ch18.html">18 &middot; 💬 Prompting & In-Context Learning — programming models with words</a></li>
+<li><a href="ch19.html">19 &middot; 🎚️ Fine-Tuning & Alignment — specializing and aligning models</a></li>
+<li><a href="ch20.html">20 &middot; 📚 Retrieval-Augmented Generation (RAG) — giving the model an open book</a></li>
+<li><a href="ch21.html">21 &middot; 🚀 Inference, Decoding & Serving — running LLMs efficiently</a></li>
+</ul>
+<p class="ig-era">🤖 The Agentic Frontier</p>
+<ul>
+<li><a href="ch22.html">22 &middot; 🤖 Agents, Tools & Loops — the latest frontier</a></li>
+<li><a href="ch23.html">23 &middot; 🛡️ Evaluation, Safety & Guardrails — making LLM systems trustworthy</a></li>
+<li><a href="ch24.html">24 &middot; 🔧 MLOps & LLMOps — shipping and operating models in production</a></li>
+</ul>
+<p class="ig-era">🛠️ The Practical Toolkit</p>
+<ul>
+<li><a href="ch25.html">25 &middot; 🛠️ Practical Toolkit I — Modeling & Vision Libraries</a></li>
+<li><a href="ch26.html">26 &middot; 🧰 Practical Toolkit II — LLM Frameworks, Orchestration & Vector Stores</a></li>
+<li><a href="ch27.html">27 &middot; ⚙️ Practical Toolkit III — Serving, Apps & MLOps Tooling</a></li>
+</ul>
+<p class="ig-era">☁️ Cloud AI Platforms</p>
+<ul>
+<li><a href="ch28.html">28 &middot; ☁️ Cloud AI Platforms — deploying foundation models on the hyperscalers</a></li>
+</ul>
+</details>
+
+------------------------------------------------------------------------
+
+The transformer (Chapter 15) gave us a powerful architecture, but an architecture is just an empty engine. This chapter covers the two things that turned that engine into something useful: **how we chop text into pieces a model can read** (tokenization), and **how we teach the model language from raw text with no labels** (pretraining). It also splits the transformer into three family trees — encoder-only (BERT), decoder-only (GPT), encoder-decoder (T5) — which sets up Chapter 17, where decoder-only models get scaled up and suddenly turn capable.
+
+::: {.callout-note appearance="simple"}
+📍 **Timeline:** 2018 — the year NLP went from training-from-scratch to download-and-fine-tune. ELMo and ULMFiT kicked off transfer learning early in the year; GPT-1 (June 2018) brought the decoder-only recipe; BERT (October 2018) brought bidirectional pretraining. The transformer engine finally had fuel.
+:::
+
+## 16.1 — Why tokenization, and why subwords
+
+A neural network can't read text. It reads numbers. **Tokenization** is the step that turns a string into a list of integer IDs, each pointing to a row in an embedding table. The whole question is: what should one token *be*?
+
+Think of it like Lego. If your only Lego pieces are whole pre-built houses (word-level tokens), you can't build a house you've never seen — any new word breaks you. If your pieces are individual atoms (character-level), you can build anything, but it takes forever and each piece carries almost no meaning. **Subword tokenization** is the middle brick: common words stay whole, rare words get snapped together from smaller, reusable parts.
+
+**Q: What's the difference between a character, a token, and a word?**
+A **character** is a single symbol ("c"). A **word** is a space-delimited unit ("cat"). A **token** is whatever unit the *tokenizer* decided on — usually a **subword**, sitting between the two. "cat" might be one token; "tokenization" might be two (`token` + `ization`); a rare name might be five. The model only ever sees tokens, never raw words or characters.
+
+**Q: Why not just use words as tokens?**
+Two problems. First, the **vocabulary explodes** — real text has millions of distinct words, so you'd need a giant embedding table. Second, and worse, the **out-of-vocabulary (OOV) problem**: any word not seen in training (a typo, a new product name, a rare medical term) becomes a single useless `<UNK>` token. You permanently lose that information.
+
+**Q: Why not use individual characters as tokens?**
+Characters give you a tiny vocabulary (~100 symbols) and zero OOV problem — you can spell anything. But each token carries almost no meaning on its own, and your sequences become **very long** (the word "tokenization" is 1 word but 12 characters). Since transformer compute grows with sequence length, character-level is wasteful. You also force the model to relearn that "c-a-t" means cat every time.
+
+**Q: What's the sweet spot subwords hit?**
+Subwords give you a **fixed, manageable vocabulary** (typically 30k–100k) that can still represent *any* string. Frequent words ("the", "running") get their own token; rare words get split into known pieces ("tokenization" → `token` + `ization`). You get the best of both: short sequences, meaningful units, and no hard OOV failures.
+
+::: {.callout-tip}
+**Intuition:** subword vocabularies are *learned from data*. The algorithm looks at a big corpus and decides which character sequences are common enough to deserve their own token. Common stuff stays whole; rare stuff fragments.
+:::
+
+## 16.2 — BPE, WordPiece, and SentencePiece
+
+There are three tokenizers you'll be asked about. They share the same goal — learn a subword vocabulary from a corpus — but differ in *how* they decide which pieces to merge, and *how* they handle spaces.
+
+**Byte-Pair Encoding (BPE)** is the simplest and most common (GPT family). It starts with individual characters and greedily merges the **most frequent adjacent pair** over and over, each merge adding one new token to the vocabulary, until you hit your target vocab size.
+
+Here is the full mechanism on a tiny corpus, rigged so the merges are unambiguous:
+
+```python
+# corpus as a list of symbols per word; freq = how often that word appears
+from collections import Counter
+
+# only two words; the pair ('s','t') is the clear winner, then ('e','st')
+corpus = {("n","e","w","e","s","t"): 6, ("w","i","d","e","s","t"): 3}
+
+def get_pairs(corpus):
+    pairs = Counter()
+    for syms, freq in corpus.items():
+        for a, b in zip(syms, syms[1:]):     # every adjacent pair
+            pairs[(a, b)] += freq
+    return pairs
+
+def merge(corpus, pair):
+    a, b = pair
+    new = {}
+    for syms, freq in corpus.items():
+        out, i = [], 0
+        while i < len(syms):
+            if i < len(syms)-1 and syms[i] == a and syms[i+1] == b:
+                out.append(a + b); i += 2     # fuse the pair into one symbol
+            else:
+                out.append(syms[i]); i += 1
+        new[tuple(out)] = freq
+    return new
+
+c = corpus
+merges = []
+for _ in range(2):
+    best = get_pairs(c).most_common(1)[0][0]
+    merges.append(best)
+    c = merge(c, best)
+
+assert merges[0] == ("s", "t")        # ('s','t') count = 6+3 = 9, the clear winner
+assert merges[1] == ("e", "st")       # then 'e'+'st' -> 'est', count 9
+assert ("n","e","w","est") in c       # 'est' now a single reused symbol
+print(merges)                         # [('s', 't'), ('e', 'st')]
+```
+
+The payoff: `est` becomes one token reused by both `newest` and `widest`. That reuse — common fragments earning their own token — is the whole point.
+
+**Applying learned merges to a new word (inference).** At training time you *learn* an ordered list of merges. At inference you *replay* them on any new word, in order. This is how OOV words get handled gracefully instead of becoming `<UNK>`:
+
+```python
+# learned merges from above: [('s','t'), ('e','st')]
+def encode(word, merges):
+    syms = list(word)                         # start at characters
+    for a, b in merges:                       # apply each learned merge in order
+        out, i = [], 0
+        while i < len(syms):
+            if i < len(syms)-1 and syms[i]==a and syms[i+1]==b:
+                out.append(a+b); i += 2
+            else:
+                out.append(syms[i]); i += 1
+        syms = out
+    return syms
+
+# "fastest" was NEVER in training, yet it tokenizes cleanly — no <UNK>
+assert encode("fastest", [("s","t"), ("e","st")]) == ["f","a","est"]
+print(encode("fastest", [("s","t"), ("e","st")]))   # ['f', 'a', 'est']
+```
+
+**WordPiece** (BERT) is nearly identical but changes the merge *criterion*. Instead of picking the most *frequent* pair, it picks the pair whose merge score is highest:
+
+$$\text{score}(a,b) = \frac{\text{count}(ab)}{\text{count}(a)\,\text{count}(b)}.$$
+
+This ratio is **high when $a$ and $b$ co-occur more than chance would predict** — i.e. when seeing them together is *informative*, not just when they're common. So WordPiece favors merges that earn their keep, while BPE favors raw frequency.
+
+**SentencePiece** is not a different merge rule but a different *philosophy*: it treats the input as a **raw stream of Unicode** including spaces (encoded as `▁`), so it needs no pre-tokenization and is **language-agnostic** — perfect for languages like Japanese that don't separate words with spaces. It can wrap either BPE or a **unigram language model** (see below).
+
+**The unigram tokenizer** works *subtractively*, the opposite of BPE. It **starts with a large candidate vocabulary and prunes it**: it repeatedly drops the tokens that hurt the corpus likelihood least, until it reaches the target size. BPE grows the vocabulary by merging up; unigram shrinks it by pruning down. T5 and many multilingual models use the unigram variant via SentencePiece.
+
+| Tokenizer | Used by | Merge rule | Handles spaces |
+|---|---|---|---|
+| **BPE** | GPT-2/3/4, RoBERTa, LLaMA | Most frequent adjacent pair (builds up) | Pre-tokenized (or byte-level) |
+| **WordPiece** | BERT, DistilBERT | Pair with highest likelihood score | Pre-tokenized; `##` marks continuation |
+| **Unigram** | T5, ALBERT, many multilingual | Prune least-useful tokens (shrinks down) | Via SentencePiece (`▁` = space) |
+| **SentencePiece** | (a wrapper) | Hosts BPE *or* unigram on raw text | Built in (`▁` = space) |
+
+**Q: In one sentence, how does WordPiece differ from BPE?**
+Both build subwords by merging, but **BPE merges the most frequent pair** while **WordPiece merges the pair with the highest likelihood score** $\frac{\text{count}(ab)}{\text{count}(a)\text{count}(b)}$ — frequency vs. informativeness.
+
+**Q: How does the unigram tokenizer differ from BPE in direction?**
+**BPE is additive** — start from characters and merge upward to build bigger tokens. **Unigram is subtractive** — start from a big candidate vocabulary and prune the least useful tokens downward. Different direction, same goal of a fixed subword vocabulary.
+
+**Q: What does the `##` prefix mean in BERT's tokens?**
+WordPiece marks **continuation pieces** with `##`. So "playing" → `play`, `##ing`. The `##` says "this attaches to the previous token with no space," which lets you reconstruct the original string unambiguously.
+
+**Q: Why is SentencePiece popular for multilingual models?**
+Because it operates on the **raw character stream** and treats spaces as just another symbol (`▁`), it needs no language-specific word splitter. That makes it work uniformly across languages with no spaces (Chinese, Japanese) and languages with rich morphology, from a single consistent pipeline.
+
+**Q: What is byte-level BPE and why does GPT use it?**
+Byte-level BPE runs BPE over **raw UTF-8 bytes** instead of Unicode characters. Since there are only 256 possible bytes, the base vocabulary is tiny and **nothing is ever truly OOV** — any emoji, any script, any garbled input is representable. GPT-2 onward use this.
+
+## 16.3 — Tokenizer gotchas: why LLMs fumble math and spelling
+
+Tokenization isn't a neutral preprocessing step — it shapes what the model can and can't do. A surprising number of famous LLM "failures" are really *tokenizer* failures. Interviewers love this angle because it shows you understand the plumbing, not just the headline capabilities.
+
+**Q: Why are LLMs bad at arithmetic?**
+Because **numbers tokenize erratically**. Depending on the tokenizer, "1234" might be one token, or `12`+`34`, or `1`+`234` — there's no consistent digit-by-digit structure. The model never reliably sees "the 3 in the hundreds place," so it can't learn clean place-value algorithms the way it would if each digit were its own token. (Some newer tokenizers force single-digit tokens precisely to help arithmetic.)
+
+**Q: Why do LLMs struggle to count letters in a word (e.g. "how many r's in strawberry")?**
+Because the model never sees the letters. "strawberry" arrives as a couple of **subword tokens**, not as `s-t-r-a-w-b-e-r-r-y`. Asking it to count characters is like asking someone to count the brushstrokes in a word they only ever saw printed — the per-character information was destroyed at tokenization. Spelling and reversing words fail for the same reason.
+
+**Q: Why is `" the"` (with a leading space) a different token from `"the"`?**
+In GPT-style byte-level BPE, **the leading space is part of the token**. So `"the"` at the start of a string and `" the"` mid-sentence are two distinct IDs. This is why prompt formatting matters: a stray or missing space can change tokenization and subtly shift the model's behavior.
+
+**Q: How can a trailing space in a prompt hurt generation?**
+If your prompt ends with a trailing space, you've committed the model to a token boundary that may not match how it would naturally continue. The model expects to predict the *next whole token*, and a dangling space can push it toward awkward continuations. The fix is usually to not end prompts with whitespace and let the model own the spacing.
+
+::: {.callout-warning}
+**Interview gotcha:** "Why can't GPT count the letters in a word?" The wrong answer is "it's not smart enough." The right answer is **tokenization** — the model operates on subword tokens and literally never receives the individual characters, so character-level tasks are handicapped by design.
+:::
+
+## 16.4 — Tokens, context windows, and the cost math
+
+Tokens aren't just a preprocessing detail — they're the **unit you pay for and the unit you're limited by**. Every API bills per token, and every model has a maximum number of tokens it can attend to at once: the **context window**. Knowing the rough conversion lets you estimate cost and whether your document even fits.
+
+The rule of thumb for English:
+
+$$\text{1 token} \approx 4 \text{ characters} \approx 0.75 \text{ words}.$$
+
+So **1,000 tokens ≈ 750 words**, and a 100,000-token context window holds roughly a 300-page book.
+
+```python
+# rough token estimate without calling a real tokenizer
+def est_tokens(text):
+    return len(text) / 4            # ~4 chars per token for English
+
+print(round(est_tokens("a" * 4000)))   # ~1000 tokens
+
+# word-based check: 1500 words -> ~2000 tokens (words / 0.75)
+words = 1500
+print(round(words / 0.75))             # 2000
+
+# cost: input at $3 / 1M tokens, 2000 tokens
+print(2000 / 1e6 * 3)                  # $0.006
+```
+
+**Q: What is a context window, and what lives inside it?**
+The context window is the **maximum number of tokens the model can process in a single forward pass** — and it must hold *everything*: your system prompt, the conversation history, any retrieved documents, AND the model's own generated output. It's a shared budget, not just an input limit.
+
+**Q: What are typical vocabulary sizes for the models I'll be asked about?**
+Roughly: **GPT-2 ~50k**, **LLaMA ~32k**, **BERT ~30k**, and **GPT-4 ~100k** (the larger `cl100k`/`o200k` tokenizers). Bigger vocab means fewer tokens per sentence (cheaper, shorter sequences) but a larger embedding table. That's the trade-off behind the "30k–100k" range.
+
+**Q: Why can't context windows just be infinite?**
+Because standard self-attention cost grows **quadratically** with sequence length, $O(n^2)$ — double the tokens, quadruple the compute and memory. (Chapter 15 covered the attention mechanism; Chapter 21 covers tricks like KV-caching and efficient attention to push this further.) That quadratic wall is why long context is expensive.
+
+**Q: I have a 12,000-word document and a model with an 8k-token window. Will it fit?**
+12,000 words ÷ 0.75 ≈ **16,000 tokens**, which is double the 8k window — so no. You'd need to chunk it, summarize it, or use a longer-context model. This back-of-envelope math is a common interview check.
+
+**Q: Why do non-English languages often cost more tokens?**
+Tokenizers are trained mostly on English-heavy corpora, so English words map efficiently. Other scripts (Arabic, Hindi, Thai) and even accented text frequently **fragment into many more subword/byte tokens per word**, so the same meaning costs more tokens — more money and more of your context budget.
+
+::: {.callout-warning}
+**Gotcha:** "context window" is the *total* in + out budget. If a model has an 8k window and your prompt is already 7,900 tokens, the model can generate at most ~100 tokens before running out. People forget the output competes for the same space.
+:::
+
+## 16.5 — The pretraining idea: self-supervised learning
+
+Before 2018, NLP models were mostly trained from scratch on each task's labeled dataset — expensive and limited by how much labeled data you had. The breakthrough idea: text **labels itself**. You can hide part of a sentence and ask the model to predict it, generating billions of training examples for free from raw, unlabeled text. This is **self-supervised learning**, and it's what made pretraining possible.
+
+**Q: What is self-supervised learning, in plain terms?**
+It's supervised learning where the **labels come from the data itself**, not from human annotators. You take raw text, automatically hide or shift part of it, and the hidden part *is* the answer. No labeling cost, so you can train on essentially the entire internet.
+
+**Q: Why was this such a big deal in 2018?**
+Because it broke the **labeled-data bottleneck**. Suddenly a model could learn grammar, facts, and reasoning patterns from unlimited raw text, then transfer that knowledge to small labeled tasks. It shifted the field from "train a model per task" to "pretrain once, fine-tune cheaply many times."
+
+**Q: Is self-supervised the same as unsupervised learning?**
+Not quite. **Unsupervised** learning (Chapter 8) looks for structure with no targets at all (e.g., clustering). **Self-supervised** learning *invents* a supervised target from the input itself, so it still uses a prediction loss like cross-entropy — it just doesn't need humans to provide the labels.
+
+## 16.6 — MLM vs. causal LM: the two pretraining objectives
+
+There are two dominant ways to "hide part of the text and predict it," and they shape what the model is good at. The difference comes down to one thing: **can the model see the future, or only the past?**
+
+**Masked Language Modeling (MLM)** — used by BERT — randomly blanks out ~15% of tokens and asks the model to fill them in, using context from *both sides*. It's like a fill-in-the-blank cloze test. Because it sees left and right, it builds rich **bidirectional understanding** — great for classification, embeddings, and search.
+
+**Causal (autoregressive) LM** — used by GPT — predicts the **next token** given only the tokens before it. It's like autocomplete. Because it can only look left (enforced by a causal mask), it learns to **generate** fluent text one token at a time.
+
+```{mermaid}
+flowchart LR
+  subgraph MLM["MLM (BERT): both sides feed the blank"]
+    L["The"] --> M["[MASK]"]
+    R["sat"] --> M
+    M --> P1["predict: 'cat'"]
+  end
+  subgraph CLM["Causal LM (GPT): only the left feeds the next token"]
+    B1["The big cat"] --> P2["predict next: 'sat'"]
+  end
+```
+
+The objectives written out: MLM maximizes $\log p(x_{\text{masked}} \mid x_{\text{context}})$ over the blanked tokens; causal LM maximizes the next-token likelihood over the whole sequence,
+
+$$\mathcal{L} = -\sum_{t} \log p(x_t \mid x_1, \dots, x_{t-1}).$$
+
+**Q: Why is BERT bidirectional but GPT is not?**
+BERT's MLM objective lets each masked position attend to tokens on **both sides**, so it builds context from the full sentence. GPT's causal objective must predict the next token, so it's forbidden (via a **causal/look-ahead mask**) from seeing future tokens — otherwise it would just copy the answer. Bidirectionality helps *understanding*; left-only is required for *generation*.
+
+**Q: Why does BERT mask only ~15% of tokens, not more?**
+It's a balance. Mask too few and training is slow (little signal per sentence); mask too many and there isn't enough surrounding context left to make a sensible prediction. ~15% is the empirical sweet spot. (BERT also doesn't always replace with `[MASK]` — sometimes a random or original word — to reduce the train/inference mismatch, since `[MASK]` never appears at fine-tuning time.)
+
+**Q: Can a causal LM like GPT be used for understanding/classification?**
+Yes — you can read off its hidden states or have it generate a label — but historically **bidirectional MLM models gave stronger embeddings** for understanding tasks because they see full context. That said, modern large decoder-only models have largely closed this gap by sheer scale (Chapter 17).
+
+**Q: Which objective dominates modern LLMs, and why?**
+**Causal (autoregressive) LM** dominates. Once you want a model that *generates* — chat, code, essays — next-token prediction is the natural fit, and it scales beautifully. The entire GPT-and-after lineage in Chapters 17–22 is autoregressive.
+
+::: {.callout-warning}
+**Interview gotcha:** "Is next-token prediction supervised or unsupervised?" The clean answer is **self-supervised** — the label (the next token) is taken from the data itself, and training still uses a standard supervised cross-entropy loss.
+:::
+
+## 16.7 — Model families: encoder-only, decoder-only, encoder-decoder
+
+The transformer has two halves — an encoder and a decoder (Chapter 15). The 2018-era insight was that you don't always need both. Keeping different halves gives you three families, each matched to a different objective and job.
+
+**Encoder-only** (BERT, RoBERTa): just the encoder stack, trained with MLM, bidirectional. Best at **understanding** — classification, NER, sentence embeddings, retrieval. It reads, it doesn't write.
+
+**Decoder-only** (GPT, LLaMA, Claude): just the decoder stack with causal masking, trained with next-token prediction. Best at **generation**, and now the default for general-purpose LLMs.
+
+**Encoder-decoder** (T5, BART): the full transformer. The encoder reads the input bidirectionally; the decoder generates output conditioned on it. Best at **sequence-to-sequence** tasks where input and output differ — translation, summarization. T5 famously frames *every* task as text-to-text.
+
+```{mermaid}
+flowchart TD
+  T["Transformer (2017)"] --> E["Encoder-only<br/>BERT, RoBERTa<br/>objective: MLM<br/>job: understand"]
+  T --> D["Decoder-only<br/>GPT, LLaMA<br/>objective: next-token<br/>job: generate"]
+  T --> ED["Encoder-decoder<br/>T5, BART<br/>objective: span corruption / denoising<br/>job: seq-to-seq"]
+```
+
+| Family | Examples | Attention | Pretraining | Best at |
+|---|---|---|---|---|
+| Encoder-only | BERT, RoBERTa | Bidirectional | MLM | Classify, embed, retrieve |
+| Decoder-only | GPT, LLaMA, Claude | Causal (left-only) | Next-token | Open-ended generation |
+| Encoder-decoder | T5, BART | Bi (enc) + causal (dec) | Span corruption / denoising | Translation, summarization |
+
+**Q: When would you reach for an encoder-only model over a decoder-only one?**
+When the task is **understanding, not generating** — sentiment classification, named-entity recognition, or producing **sentence embeddings** for semantic search. Encoder-only models are smaller, faster, and their bidirectional context makes them strong, cheap workhorses for these jobs.
+
+**Q: What does T5's "text-to-text" framing mean?**
+T5 casts **every** NLP task as taking a text string in and producing a text string out. Translation, classification, summarization, even regression all become "read this text, write that text," with a task prefix like `"translate English to German:"`. One model, one format, many tasks — which simplified the whole pipeline.
+
+**Q: How does BART's pretraining differ from BERT's?**
+BART is an encoder-decoder trained as a **denoising autoencoder**: it corrupts the input (masking spans, shuffling sentences, deleting tokens) and trains the decoder to **reconstruct the original full text**. BERT only predicts the masked tokens; BART regenerates the whole sequence, making it natively good at generation too. (T5 uses a related but distinct **span corruption** objective — masking contiguous spans and predicting just the missing spans.)
+
+**Q: Why did the field converge on decoder-only architectures?**
+Because decoder-only models are **simpler and more general**: a single next-token objective can do understanding *and* generation if scaled enough, and one architecture serves chat, code, reasoning, and tool use. The encoder-decoder split adds complexity that scale made largely unnecessary. Chapter 17 picks up this scaling story.
+
+## 16.8 — Transfer learning and foundation models
+
+The reason all of this matters commercially is **transfer learning**: pretrain once on a mountain of raw text, then cheaply adapt to your specific task. The expensive part (learning language) is amortized across everyone; the cheap part (specializing) is all you do. A model pretrained this broadly that many things build on top of is called a **foundation model**.
+
+**Q: What are the two phases of the pretrain-then-fine-tune recipe?**
+**Phase 1 (pretraining):** self-supervised training on huge unlabeled text, learning general language and world knowledge — done once, very expensive. **Phase 2 (fine-tuning):** continue training on a small *labeled* task dataset to specialize — cheap and fast. The pretrained weights are the starting point, not random initialization.
+
+**Q: Why does transfer learning work so well in NLP?**
+Because language has **massive shared structure** — grammar, common-sense relations, factual associations — that's useful for almost every downstream task. The pretrained model already "knows" this, so fine-tuning only needs to teach the **task-specific** mapping with a fraction of the data and compute. (Chapter 19 covers modern fine-tuning and alignment in depth.)
+
+**Q: What exactly is a "foundation model"?**
+A model **trained on broad data at scale** that serves as a **reusable base** for a wide range of downstream tasks via fine-tuning, prompting, or adaptation. The term (coined at Stanford, 2021) captures the shift from bespoke per-task models to one general base that everything builds on — BERT and GPT were the early examples.
+
+**Q: Does fine-tuning a foundation model risk losing its general knowledge?**
+Yes — aggressive fine-tuning can cause **catastrophic forgetting**, where the model overwrites general capabilities while specializing. This is one reason lighter-touch methods (parameter-efficient fine-tuning, prompting, RAG — Chapters 18–20) are often preferred over full fine-tuning.
+
+## 16.9 — Key takeaways
+
+- **Tokenization** turns text into integer IDs; **subwords** are the sweet spot — fixed vocabulary, no hard OOV, short-enough sequences. A **token** sits between a character and a word.
+- **BPE** merges the most frequent pair and builds *up* (GPT); **WordPiece** merges by likelihood score (BERT); **Unigram** prunes a big vocabulary *down* (T5); **SentencePiece** is the wrapper that runs BPE or unigram on raw text including spaces. **Byte-level BPE** makes nothing truly OOV.
+- Learned merges are *replayed in order* at inference, which is how new/OOV words tokenize cleanly instead of becoming `<UNK>`.
+- **Tokenizer gotchas:** numbers tokenize erratically (bad at **math**), subwords hide individual letters (bad at **spelling/counting letters**), and leading/trailing spaces change tokens (prompt formatting matters).
+- Rule of thumb: **1 token ≈ 4 chars ≈ 0.75 words**, so 1,000 tokens ≈ 750 words. Use it to estimate **cost** and whether text fits the **context window** — which holds prompt + history + output together. Typical vocab sizes: GPT-2 ~50k, LLaMA ~32k, GPT-4 ~100k.
+- Attention is **$O(n^2)$** in sequence length, which is why context windows are bounded and long context is costly.
+- **Pretraining** uses **self-supervised learning**: labels come free from the text itself, breaking the labeled-data bottleneck in 2018.
+- **MLM** (BERT) is bidirectional and great for *understanding*; **causal LM** (GPT) sees only the past and is great for *generation*. Modern LLMs are overwhelmingly **autoregressive/decoder-only**.
+- Three families: **encoder-only** (understand), **decoder-only** (generate, now dominant), **encoder-decoder** (seq-to-seq like translation/summarization).
+- **Transfer learning** = pretrain once, fine-tune cheaply many times. A broad, reusable base is a **foundation model**; over-aggressive fine-tuning risks **catastrophic forgetting**.
+
+------------------------------------------------------------------------
+
+[📖 All chapters](../interview-guide.html)  &nbsp;|&nbsp;  [← 15 · ⚡ Attention & the Transformer](ch15.html)  &nbsp;|&nbsp;  [17 · 📈 Modern LLMs & Scaling →](ch17.html)

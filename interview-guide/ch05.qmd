@@ -1,0 +1,398 @@
+---
+title: "Chapter 05 — 🧩 Core ML Concepts — the ground rules"
+page-layout: full
+toc: true
+toc-location: left
+toc-title: "In this chapter"
+toc-depth: 2
+toc-expand: true
+---
+
+[📖 All chapters](../interview-guide.html)  &nbsp;|&nbsp;  [← 04 · 🔥 Information Theory & Loss Functions](ch04.html)  &nbsp;|&nbsp;  [06 · 📐 Classical Supervised Algorithms →](ch06.html)
+
+<details class="ig-jump">
+<summary>📚 Jump to any chapter</summary>
+<p class="ig-era">🧮 Mathematical Foundations</p>
+<ul>
+<li><a href="ch01.html">01 &middot; 🧮 Linear Algebra — the language of data</a></li>
+<li><a href="ch02.html">02 &middot; 📉 Calculus & Optimization — how models learn</a></li>
+<li><a href="ch03.html">03 &middot; 🎲 Probability & Statistics — reasoning under uncertainty</a></li>
+<li><a href="ch04.html">04 &middot; 🔥 Information Theory & Loss Functions — measuring surprise and error</a></li>
+</ul>
+<p class="ig-era">🧩 Classical Machine Learning</p>
+<ul>
+<li><a href="ch05.html">05 &middot; 🧩 Core ML Concepts — the ground rules</a></li>
+<li><a href="ch06.html">06 &middot; 📐 Classical Supervised Algorithms — the workhorses</a></li>
+<li><a href="ch07.html">07 &middot; 🌲 Ensembles & Boosting — how to win on tabular data</a></li>
+<li><a href="ch08.html">08 &middot; 🗺️ Unsupervised Learning & Dimensionality Reduction — structure without labels</a></li>
+<li><a href="ch09.html">09 &middot; 🎯 Model Evaluation & Validation — knowing if it actually works</a></li>
+</ul>
+<p class="ig-era">🧠 Deep Learning</p>
+<ul>
+<li><a href="ch10.html">10 &middot; 🧠 Neural Network Fundamentals — the building block</a></li>
+<li><a href="ch11.html">11 &middot; ⚙️ Training Deep Networks — making deep nets actually train</a></li>
+<li><a href="ch12.html">12 &middot; 🖼️ Convolutional Neural Networks — the vision branch</a></li>
+<li><a href="ch13.html">13 &middot; 🔁 Sequence Models — RNNs, LSTMs and the bottleneck</a></li>
+</ul>
+<p class="ig-era">⚡ The Transformer Era</p>
+<ul>
+<li><a href="ch14.html">14 &middot; 🔤 Word Embeddings — giving words meaning as vectors</a></li>
+<li><a href="ch15.html">15 &middot; ⚡ Attention & the Transformer — the architecture that changed everything</a></li>
+<li><a href="ch16.html">16 &middot; 🧱 Tokenization, Pretraining & Model Families</a></li>
+<li><a href="ch17.html">17 &middot; 📈 Modern LLMs & Scaling — bigger, and suddenly capable</a></li>
+</ul>
+<p class="ig-era">💬 Using & Adapting LLMs</p>
+<ul>
+<li><a href="ch18.html">18 &middot; 💬 Prompting & In-Context Learning — programming models with words</a></li>
+<li><a href="ch19.html">19 &middot; 🎚️ Fine-Tuning & Alignment — specializing and aligning models</a></li>
+<li><a href="ch20.html">20 &middot; 📚 Retrieval-Augmented Generation (RAG) — giving the model an open book</a></li>
+<li><a href="ch21.html">21 &middot; 🚀 Inference, Decoding & Serving — running LLMs efficiently</a></li>
+</ul>
+<p class="ig-era">🤖 The Agentic Frontier</p>
+<ul>
+<li><a href="ch22.html">22 &middot; 🤖 Agents, Tools & Loops — the latest frontier</a></li>
+<li><a href="ch23.html">23 &middot; 🛡️ Evaluation, Safety & Guardrails — making LLM systems trustworthy</a></li>
+<li><a href="ch24.html">24 &middot; 🔧 MLOps & LLMOps — shipping and operating models in production</a></li>
+</ul>
+<p class="ig-era">🛠️ The Practical Toolkit</p>
+<ul>
+<li><a href="ch25.html">25 &middot; 🛠️ Practical Toolkit I — Modeling & Vision Libraries</a></li>
+<li><a href="ch26.html">26 &middot; 🧰 Practical Toolkit II — LLM Frameworks, Orchestration & Vector Stores</a></li>
+<li><a href="ch27.html">27 &middot; ⚙️ Practical Toolkit III — Serving, Apps & MLOps Tooling</a></li>
+</ul>
+<p class="ig-era">☁️ Cloud AI Platforms</p>
+<ul>
+<li><a href="ch28.html">28 &middot; ☁️ Cloud AI Platforms — deploying foundation models on the hyperscalers</a></li>
+</ul>
+</details>
+
+------------------------------------------------------------------------
+
+By 1959 the field had a name and the math it needed — linear algebra (Ch. 01), calculus (Ch. 02), probability (Ch. 03) and the loss functions that measure error (Ch. 04). This chapter sets the ground rules that every model from here on obeys: what "learning" even means, how we split data, and the single deepest tension in all of ML — the bias-variance tradeoff. The next chapter cashes these rules out into the first real workhorse algorithms.
+
+::: {.callout-note appearance="simple"}
+📍 **Timeline:** 1959 — Arthur Samuel coins "machine learning" while building a checkers program that improves from experience; the discipline gets its vocabulary and its rules.
+:::
+
+## 5.1 — What learning actually is
+
+Think of learning as curve-fitting on steroids. There is some true but unknown rule that maps inputs to outputs — house features to price, pixels to "cat or dog." We never get the rule, only example pairs. **Learning is searching for a function that reproduces those examples and, crucially, keeps working on examples we have never seen.**
+
+Formally we assume data is drawn from an unknown distribution, and there is a true function $f$ we want to approximate with a model $\hat{f}$ chosen from some family. We pick $\hat{f}$ by minimizing a loss over the data:
+
+$$\hat{f} = \arg\min_{f \in \mathcal{F}} \; \frac{1}{n}\sum_{i=1}^{n} L\big(f(x_i), y_i\big)$$
+
+```python
+# Learning = pick params that minimize average loss. Linear model, MSE.
+import numpy as np
+X = np.array([[1.,1.],[1.,2.],[1.,3.]])   # col 0 = bias term
+y = np.array([2., 4., 5.])
+w = np.linalg.lstsq(X, y, rcond=None)[0]   # closed-form fit
+pred = X @ w
+print(pred, "loss=", np.mean((pred - y)**2))  # found w that fits the points
+```
+
+**Q: Is machine learning just function approximation?**
+Largely yes. Almost every model — linear regression, a decision tree, a transformer — is a parameterized function $\hat{f}_\theta$, and **training is choosing $\theta$ so $\hat{f}_\theta$ approximates the true input-output mapping**. What differs between methods is the function family and how you search it.
+
+**Q: Why can't we just memorize the training data?**
+Memorizing gives zero training error but tells you nothing about new inputs. The goal is **generalization** — performance on unseen data drawn from the same distribution. A lookup table is a perfect memorizer and a useless model.
+
+**Q: What is the "hypothesis space"?**
+It is the **set of all functions your model can possibly represent** — e.g. all straight lines, or all trees of depth ≤ 5. Learning is a search inside this space. A bigger space can fit more but is harder to search and easier to overfit.
+
+**Q: What does it mean for data to be "i.i.d." and why does it matter?**
+**i.i.d. = independent and identically distributed**: each example is drawn from the same distribution and one draw does not influence another. Generalization guarantees rely on it — if test data comes from a different distribution (a *distribution shift*), train-set performance stops predicting test-set performance. Most real-world failures trace back to a broken i.i.d. assumption.
+
+## 5.2 — The four learning paradigms
+
+The flavors of learning differ in what signal the data gives you. With full answers it is supervised; with no answers, unsupervised; when the data labels itself, self-supervised; when you only get rewards for actions, reinforcement. Most of modern deep learning (Ch. 16+) is quietly **self-supervised**.
+
+```{mermaid}
+flowchart TD
+  A["Learning paradigm"] --> B["Supervised: x to y, labels given"]
+  A --> C["Unsupervised: only x, find structure"]
+  A --> D["Self-supervised: labels from data itself"]
+  A --> E["Reinforcement: reward from actions"]
+```
+
+| Paradigm | Signal | Example task |
+|---|---|---|
+| Supervised | Input + correct label | Spam classification, house prices |
+| Unsupervised | Inputs only | Clustering customers, PCA (Ch. 08) |
+| Self-supervised | Labels created from the data | Predict next word; masked-word fill |
+| Reinforcement | Scalar reward over time | Game playing, robot control |
+
+**Q: What is the difference between supervised and unsupervised learning?**
+In **supervised** learning every example carries a target label and you learn the mapping $x \to y$. In **unsupervised** learning there are no labels; you find structure — clusters, low-dimensional projections, density. Supervised asks "predict this answer"; unsupervised asks "what's the shape of this data?"
+
+**Q: How is self-supervised learning different from supervised?**
+It IS supervised in mechanics, but the **labels are generated automatically from the input itself** — no human annotation. Hiding a word and predicting it turns a raw text corpus into billions of free labeled examples. This is why LLM pretraining (Ch. 16) scales: the data labels itself.
+
+**Q: When would you reach for reinforcement learning?**
+When the right action is not given but you can score outcomes, and decisions are **sequential** — each action changes the next state. Think game playing or RLHF for aligning LLMs (Ch. 19). It is harder than supervised learning because the reward is delayed and you must explore.
+
+**Q: Is classification or regression supervised?**
+Both. **Classification** predicts a discrete label (cat/dog), **regression** predicts a continuous number (price). The only difference is the output type and therefore the loss (cross-entropy vs. MSE, Ch. 04).
+
+**Q: Where does semi-supervised learning fit?**
+In between: you have a **small labeled set plus a large unlabeled set**, and you use the unlabeled data to learn structure that improves the labeled prediction. It is common when labels are expensive (medical images) but raw data is cheap.
+
+## 5.3 — Features, labels, parameters, hyperparameters
+
+Four words that get muddled constantly. **Features** are the inputs, **labels** are the answers, **parameters** are what the model learns from data, and **hyperparameters** are the dials you set before training that control how learning happens.
+
+The cleanest test: did the optimizer compute it from data, or did you choose it by hand? Learned $\Rightarrow$ parameter. Chosen $\Rightarrow$ hyperparameter.
+
+| Term | What it is | Who sets it | Example |
+|---|---|---|---|
+| Feature | An input variable | The data | square footage, pixel value |
+| Label | The target answer | The data | price, "cat" |
+| Parameter | Learned from data | The optimizer | weights $w$, bias $b$ |
+| Hyperparameter | Set before training | You | learning rate, tree depth, $\lambda$ |
+
+::: {.callout-warning}
+**Interview gotcha:** the learning rate is a **hyperparameter**, not a parameter — it is never updated by gradient descent. Confusing the two is a classic red flag. Hyperparameters are tuned on the **validation** set, never the test set.
+:::
+
+**Q: What is the difference between a parameter and a hyperparameter?**
+**Parameters are learned by the optimizer from the training data** (the weights of a network). **Hyperparameters are configuration you fix before training** (learning rate, number of layers, regularization strength $\lambda$). You tune hyperparameters by trying values and checking validation performance.
+
+**Q: How do you choose hyperparameters?**
+By **searching and validating**: grid search, random search, or Bayesian optimization, each candidate scored on the validation set (or via cross-validation, Ch. 09). You never read the test set during this search, or your final estimate is optimistically biased.
+
+**Q: Are the weights of a neural network parameters or hyperparameters?**
+**Parameters** — they are exactly what backprop updates. The *number* of weights (i.e. layer widths and depth) is set by hyperparameters.
+
+**Q: What is feature engineering, and is it still relevant with deep learning?**
+**Feature engineering** is hand-crafting informative inputs (ratios, log-transforms, interaction terms) so the model has an easier signal to learn. Deep nets *learn* features from raw data, so it matters less for vision and text — but on **tabular data it is still often the biggest lever**, more than the model choice.
+
+## 5.4 — Train / validation / test, and generalization
+
+Imagine studying for an exam. The **training set** is your textbook, the **validation set** is the practice quiz you use to pick a study strategy, and the **test set** is the sealed final exam you only open once. Reuse the final to tune yourself and your "score" becomes a lie.
+
+```{mermaid}
+flowchart LR
+  D["All data"] --> T["Train (~70%): fit parameters"]
+  D --> V["Validation (~15%): tune hyperparameters, pick model"]
+  D --> E["Test (~15%): final unbiased estimate, used once"]
+```
+
+**Generalization** is the whole point: low error on *unseen* data from the same distribution. We approximate "unseen" with the held-out test set.
+
+**Q: Why do we need a separate validation AND test set — isn't one hold-out enough?**
+Because the moment you use a set to **make decisions** (pick learning rate, choose a model), you start fitting to it and its error becomes optimistic. The **validation set absorbs that selection bias**; the **test set stays sealed** so it gives an honest final estimate. One hold-out used for both jobs leaks information.
+
+**Q: What is data leakage?**
+When information from the validation/test set (or from the future) sneaks into training — e.g. scaling using statistics computed over the *whole* dataset, or having near-duplicate rows split across train and test. The result is **great offline numbers that collapse in production**. Fit all preprocessing on train only.
+
+**Q: What is generalization error and can we measure it directly?**
+It is the **expected error on the full data distribution**, which we can never see in full. We **estimate** it with test-set error, which is unbiased only if the test set was never used for any decision.
+
+**Q: Why shuffle before splitting?**
+To avoid splits that are accidentally ordered (all class A in train, class B in test), which makes the model train and test on different distributions. For time series you do the opposite — **split by time**, never shuffle, or you leak the future (Ch. 09).
+
+**Q: How does the train/test split change when classes are imbalanced?**
+You **stratify** — split so each set keeps the same class proportions. A random split of 1%-positive data can hand the test set almost no positives, making the estimate noisy and unreliable. Stratified splitting (and stratified cross-validation) fixes this.
+
+## 5.5 — Overfitting, underfitting, and capacity
+
+Overfitting is memorizing your textbook word-for-word and then failing on a rephrased exam question. Underfitting is barely skimming and failing the textbook itself. The dial between them is **model capacity** — how flexible the model is, e.g. a polynomial's degree or a tree's depth.
+
+Same data, three fits. The middle one captures the trend; the right one chases noise.
+
+<svg viewBox="0 0 660 200" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif" font-size="11">
+  <!-- underfit -->
+  <g transform="translate(10,10)">
+    <rect x="0" y="0" width="200" height="160" fill="none" stroke="#888"/>
+    <circle cx="30" cy="120" r="3"/><circle cx="60" cy="95" r="3"/><circle cx="95" cy="110" r="3"/><circle cx="130" cy="60" r="3"/><circle cx="165" cy="80" r="3"/><circle cx="185" cy="40" r="3"/>
+    <line x1="20" y1="120" x2="190" y2="55" stroke="#c0392b" stroke-width="2"/>
+    <text x="100" y="180" text-anchor="middle">Underfit (high bias)</text>
+  </g>
+  <!-- good -->
+  <g transform="translate(230,10)">
+    <rect x="0" y="0" width="200" height="160" fill="none" stroke="#888"/>
+    <circle cx="30" cy="120" r="3"/><circle cx="60" cy="95" r="3"/><circle cx="95" cy="110" r="3"/><circle cx="130" cy="60" r="3"/><circle cx="165" cy="80" r="3"/><circle cx="185" cy="40" r="3"/>
+    <path d="M20 125 Q70 80 110 95 T190 45" fill="none" stroke="#27ae60" stroke-width="2"/>
+    <text x="100" y="180" text-anchor="middle">Good fit</text>
+  </g>
+  <!-- overfit -->
+  <g transform="translate(450,10)">
+    <rect x="0" y="0" width="200" height="160" fill="none" stroke="#888"/>
+    <circle cx="30" cy="120" r="3"/><circle cx="60" cy="95" r="3"/><circle cx="95" cy="110" r="3"/><circle cx="130" cy="60" r="3"/><circle cx="165" cy="80" r="3"/><circle cx="185" cy="40" r="3"/>
+    <path d="M30 120 L60 95 L95 110 L130 60 L165 80 L185 40" fill="none" stroke="#8e44ad" stroke-width="2"/>
+    <text x="100" y="180" text-anchor="middle">Overfit (high variance)</text>
+  </g>
+</svg>
+
+**Q: How do you diagnose overfitting vs underfitting?**
+Compare **training error and validation error**. **Underfitting:** both are high (model too weak). **Overfitting:** training error is low but validation error is high — a large gap. A good model has low error on both with a small gap.
+
+**Q: What is model capacity?**
+The **richness of functions a model can represent** — more parameters, higher polynomial degree, deeper trees. Too little capacity underfits; too much capacity can memorize noise and overfit. Capacity should match the complexity of the true signal and the amount of data you have.
+
+**Q: You're overfitting. Name three things you can try.**
+**Get more data, reduce capacity, or add regularization** (L1/L2, dropout, early stopping — see 5.7). Also data augmentation and simpler features. The reverse for underfitting: add capacity, add features, train longer, reduce regularization.
+
+**Q: Does a low training error mean a good model?**
+No — by itself it can just mean **memorization**. A model with zero training error and poor validation error is overfit. Always judge on held-out data.
+
+**Q: What is a learning curve and how do you read it?**
+A **learning curve** plots train and validation error as you add training data (or training epochs). If both stay high and close, you are **underfitting** (add capacity). If train is low but validation stays far above it, you are **overfitting** (more data or regularization helps). A still-falling validation curve means more data is worth collecting.
+
+## 5.6 — The bias-variance tradeoff
+
+This is the single most important mental model in ML, so slow down here. Imagine shooting arrows at a target across many different training sets. **Bias** is how far your average shot lands from the bullseye — a systematic error from wrong assumptions. **Variance** is how scattered your shots are — sensitivity to which particular data you trained on.
+
+A too-simple model (a straight line for curved data) is **biased**: consistently wrong, but stable. A too-complex model is **high-variance**: it nails each training set differently and wobbles wildly on new data. Expected test error decomposes cleanly:
+
+$$\underbrace{\mathbb{E}\big[(y-\hat{f}(x))^2\big]}_{\text{expected error}} = \underbrace{\text{Bias}[\hat{f}]^2}_{\text{too rigid}} + \underbrace{\text{Var}[\hat{f}]}_{\text{too jumpy}} + \underbrace{\sigma^2}_{\text{irreducible noise}}$$
+
+As capacity rises, bias falls but variance grows. Total error is a **U-curve** — the sweet spot is the bottom, not either extreme.
+
+<svg viewBox="0 0 420 260" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif" font-size="11">
+  <line x1="50" y1="20" x2="50" y2="220" stroke="#333"/>
+  <line x1="50" y1="220" x2="400" y2="220" stroke="#333"/>
+  <text x="225" y="248" text-anchor="middle">Model capacity / complexity →</text>
+  <text x="18" y="120" transform="rotate(-90 18,120)" text-anchor="middle">Error</text>
+  <!-- bias^2 falling -->
+  <path d="M60 40 Q150 180 390 205" fill="none" stroke="#c0392b" stroke-width="2"/>
+  <text x="120" y="60" fill="#c0392b">Bias²</text>
+  <!-- variance rising -->
+  <path d="M60 210 Q260 200 390 40" fill="none" stroke="#2980b9" stroke-width="2"/>
+  <text x="330" y="70" fill="#2980b9">Variance</text>
+  <!-- total U -->
+  <path d="M60 70 Q220 150 390 70" fill="none" stroke="#27ae60" stroke-width="3"/>
+  <text x="300" y="150" fill="#27ae60">Total error</text>
+  <!-- sweet spot -->
+  <line x1="225" y1="138" x2="225" y2="220" stroke="#888" stroke-dasharray="4"/>
+  <circle cx="225" cy="138" r="4" fill="#27ae60"/>
+  <text x="225" y="234" text-anchor="middle" fill="#27ae60">sweet spot</text>
+</svg>
+
+::: {.callout-tip}
+**Intuition:** Bias = error from being too simple (wrong assumptions). Variance = error from being too sensitive to the specific training data. You trade one for the other; the art is finding the bottom of the U.
+:::
+
+**Q: Explain the bias-variance tradeoff.**
+Expected test error splits into **bias²** (error from overly simple assumptions), **variance** (error from sensitivity to the training sample), and **irreducible noise**. Increasing model complexity lowers bias but raises variance, and vice versa. **You cannot minimize both at once**, so you tune complexity to minimize their sum — the bottom of the U-curve.
+
+**Q: Which has high bias and which has high variance — a linear model or a deep decision tree?**
+A **linear model is high-bias, low-variance**: rigid assumptions, stable across datasets. A **deep unpruned decision tree is low-bias, high-variance**: flexible enough to fit anything, including noise, so it changes a lot with the data. This is exactly why we prune trees and ensemble them (Ch. 07).
+
+**Q: What is irreducible error?**
+The **noise floor** $\sigma^2$ — randomness in the data (measurement error, inherent unpredictability) that **no model can remove**. It sets a hard lower bound on achievable error; chasing below it is just fitting noise.
+
+**Q: How does adding more training data affect bias and variance?**
+More data mainly **reduces variance** — the model is less able to memorize a specific sample, so its predictions stabilize. It does **not** fix bias: a linear model fed a million curved points is still a poor straight line. To cut bias you need more capacity or better features.
+
+**Q: How do ensembles relate to bias-variance?**
+**Bagging (random forests) reduces variance** by averaging many high-variance models; **boosting reduces bias** by sequentially correcting a weak, high-bias learner. That framing — covered fully in Ch. 07 — is why ensembles dominate tabular data.
+
+::: {.callout-warning}
+**Interview gotcha:** the clean bias² + variance + noise decomposition is exact for **squared-error loss**. For other losses (0-1, cross-entropy) the intuition still holds but the algebra does not split this neatly — don't claim the formula universally.
+:::
+
+**Q: Doesn't deep learning break the U-curve with "double descent"?**
+Yes — modern very-overparameterized models show **double descent**: test error rises into the classic overfitting peak, then *falls again* as capacity grows far past the interpolation point. The simple U-curve is the right model for classical ML and interviews; double descent is the deep-learning refinement (Ch. 11+).
+
+## 5.7 — Regularization: fighting variance on purpose
+
+Regularization is any technique that **deliberately constrains the model to reduce variance**, trading a little bias for a big drop in overfitting. The classic move is to add a penalty on weight size to the loss, so the optimizer prefers simpler, smaller-weight solutions.
+
+$$\text{Loss} = \underbrace{\frac{1}{n}\sum L(\hat{y}_i, y_i)}_{\text{fit the data}} + \lambda \underbrace{R(w)}_{\text{stay simple}}$$
+
+with $R(w)=\sum |w_j|$ for **L1 (Lasso)** and $R(w)=\sum w_j^2$ for **L2 (Ridge)**. $\lambda$ is the hyperparameter trading fit against simplicity.
+
+```python
+# Why L1 -> sparse, L2 -> small-but-nonzero. Subgradient at w=0.
+# L2 penalty gradient = 2*w  -> shrinks proportionally, never to exactly 0.
+# L1 penalty gradient = sign(w) -> constant push toward 0, can hit 0 exactly.
+import numpy as np
+w = np.array([0.01, -2.0, 0.0])
+l2_push = 2 * w                  # tiny weights barely pushed
+l1_push = np.sign(w)             # tiny weights pushed just as hard -> zeroed out
+print("L2 push:", l2_push, " L1 push:", l1_push)
+```
+
+The geometry is the clearest way to see *why* L1 zeros weights. The penalty caps $w$ inside a region — a **diamond** for L1, a **circle** for L2 — and the solution sits where the loss contours first touch that region. The diamond's corners lie on the axes, so the touch point usually lands on an axis (a weight = 0); the circle has no corners, so weights shrink but rarely vanish.
+
+<svg viewBox="0 0 440 220" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif" font-size="11">
+  <!-- L1 diamond -->
+  <g transform="translate(10,10)">
+    <line x1="100" y1="0" x2="100" y2="190" stroke="#bbb"/>
+    <line x1="10" y1="95" x2="190" y2="95" stroke="#bbb"/>
+    <polygon points="100,40 155,95 100,150 45,95" fill="#c0392b22" stroke="#c0392b" stroke-width="2"/>
+    <ellipse cx="135" cy="55" rx="48" ry="32" fill="none" stroke="#2980b9" stroke-width="1.5"/>
+    <ellipse cx="135" cy="55" rx="30" ry="20" fill="none" stroke="#2980b9" stroke-width="1.5"/>
+    <circle cx="100" cy="40" r="4" fill="#c0392b"/>
+    <text x="100" y="205" text-anchor="middle" fill="#c0392b">L1: touches on axis → w=0</text>
+  </g>
+  <!-- L2 circle -->
+  <g transform="translate(240,10)">
+    <line x1="100" y1="0" x2="100" y2="190" stroke="#bbb"/>
+    <line x1="10" y1="95" x2="190" y2="95" stroke="#bbb"/>
+    <circle cx="100" cy="95" r="52" fill="#2980b922" stroke="#2980b9" stroke-width="2"/>
+    <ellipse cx="140" cy="55" rx="48" ry="32" fill="none" stroke="#c0392b" stroke-width="1.5"/>
+    <ellipse cx="140" cy="55" rx="30" ry="20" fill="none" stroke="#c0392b" stroke-width="1.5"/>
+    <circle cx="128" cy="64" r="4" fill="#2980b9"/>
+    <text x="100" y="205" text-anchor="middle" fill="#2980b9">L2: touches off axis → small w</text>
+  </g>
+</svg>
+
+| Technique | Mechanism | Effect | When |
+|---|---|---|---|
+| L1 (Lasso) | Penalize $\sum\lvert w\rvert$ | Drives weights to **exactly 0** → feature selection | Many irrelevant features |
+| L2 (Ridge) | Penalize $\sum w^2$ | **Shrinks** weights smoothly, rarely zero | Correlated features, general use |
+| Dropout | Randomly zero neurons in training | Prevents co-adaptation, acts like ensembling | Neural nets (Ch. 11) |
+| Early stopping | Halt when val error rises | Caps effective capacity | Iterative training |
+| Data augmentation | Synthesize new samples | More effective data → less variance | Vision, audio (Ch. 12) |
+
+**Q: What is the difference between L1 and L2 regularization?**
+**L1 penalizes the absolute value of weights and drives many to exactly zero**, producing a sparse model — it doubles as feature selection. **L2 penalizes squared weights and shrinks them smoothly toward (but not to) zero**, which handles correlated features gracefully. Geometrically, L1's diamond-shaped constraint has corners on the axes, so the optimum tends to land where some weights are zero; L2's circular constraint does not.
+
+**Q: How does regularization fit into the bias-variance picture?**
+It **adds bias to cut variance**. The penalty forbids the model from using large, finely-tuned weights to chase noise, so predictions get more stable across datasets. $\lambda$ controls the dose: too much $\lambda$ underfits (high bias), too little overfits (high variance).
+
+**Q: How does dropout regularize a network?**
+During training it **randomly zeroes a fraction of neurons each step**, so no neuron can rely on any specific other one (no co-adaptation). It approximates **training an ensemble of many sub-networks** and averaging them, which lowers variance. At inference dropout is off and activations are scaled accordingly.
+
+**Q: Why does early stopping work as regularization?**
+As training proceeds the model first learns the broad signal, then starts memorizing noise. **Stopping when validation error bottoms out caps the effective capacity** before it overfits — cheap, and it needs no extra penalty term.
+
+**Q: Is more data a form of regularization?**
+Effectively yes, and often the best one. **More (or augmented) data makes memorizing the training set harder**, directly reducing variance. Data augmentation — flips, crops, noise — manufactures plausible new examples for free.
+
+**Q: What is elastic net?**
+A **blend of L1 and L2**: $R(w)=\alpha\sum\lvert w\rvert+(1-\alpha)\sum w^2$. You get L1's feature selection plus L2's stability with correlated features — useful when you have many features, some irrelevant and some correlated.
+
+## 5.8 — Curse of dimensionality and no-free-lunch
+
+Two theoretical guardrails. The **curse of dimensionality** says that as you add features, space grows so fast that data becomes hopelessly sparse — intuition built in 2D breaks in 1000D. The **no-free-lunch theorem** says there is no single best algorithm for all problems; superiority is always relative to the kind of data.
+
+**Q: What is the curse of dimensionality?**
+As dimensions grow, **volume explodes exponentially, so any fixed dataset becomes sparse** — points are far apart and roughly equidistant, which breaks distance-based methods like k-NN and clustering. To keep the same data density you would need exponentially more samples. It is the core motivation for dimensionality reduction and feature selection (Ch. 08).
+
+**Q: Why do distances become meaningless in high dimensions?**
+Because the gap between the nearest and farthest points **shrinks relative to the average distance** — everything looks about the same distance away. "Nearest neighbor" loses meaning, so similarity-based reasoning degrades. Lower-dimensional, informative features restore it.
+
+**Q: State the no-free-lunch theorem in plain terms.**
+**Averaged over all possible problems, every algorithm performs equally well** — so no model is universally best. A method only wins because its built-in assumptions (its inductive bias) happen to match the structure of your data. This is why you try several models and validate, rather than trusting one favorite.
+
+**Q: What is inductive bias and why is it necessary?**
+It is the **set of assumptions a model uses to generalize beyond the training data** — e.g. a linear model assumes linearity, a CNN assumes spatial locality. **Without some inductive bias, generalization is impossible** (no-free-lunch). The goal is to pick a bias that matches your problem.
+
+## 5.x — Key takeaways
+
+- **Learning = function approximation:** find $\hat{f}$ that fits the data *and* generalizes to unseen examples from the same distribution — which assumes the data is **i.i.d.**
+- **Four paradigms:** supervised (labels), unsupervised (no labels), self-supervised (labels from the data itself — powers modern LLMs), reinforcement (rewards); semi-supervised sits between the first two.
+- **Parameters are learned by the optimizer; hyperparameters are set by you** and tuned on the validation set — never the test set.
+- **Three splits, three jobs:** train fits parameters, validation tunes/selects, test gives one honest final number. Decisions made on a set bias it; stratify when classes are imbalanced.
+- **Overfit = low train / high val error (high variance); underfit = both high (high bias).** Diagnose by the train-val gap and the learning curve.
+- **Bias-variance tradeoff** is the master U-curve: expected error = bias² + variance + irreducible noise (exact for squared error). Tune capacity to the bottom of the U; double descent refines this for huge models.
+- **Regularization buys variance reduction with a little bias:** L1 → sparsity/feature selection, L2 → smooth shrinkage, elastic net blends them, plus dropout, early stopping, augmentation.
+- **Curse of dimensionality** makes high-D data sparse and distances meaningless; **no-free-lunch** means the right model depends on your data's structure (its inductive bias) — always validate.
+
+------------------------------------------------------------------------
+
+[📖 All chapters](../interview-guide.html)  &nbsp;|&nbsp;  [← 04 · 🔥 Information Theory & Loss Functions](ch04.html)  &nbsp;|&nbsp;  [06 · 📐 Classical Supervised Algorithms →](ch06.html)

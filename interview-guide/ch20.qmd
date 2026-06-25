@@ -1,0 +1,315 @@
+---
+title: "Chapter 20 — 📚 Retrieval-Augmented Generation (RAG) — giving the model an open book"
+page-layout: full
+toc: true
+toc-location: left
+toc-title: "In this chapter"
+toc-depth: 2
+toc-expand: true
+---
+
+[📖 All chapters](../interview-guide.html)  &nbsp;|&nbsp;  [← 19 · 🎚️ Fine-Tuning & Alignment](ch19.html)  &nbsp;|&nbsp;  [21 · 🚀 Inference, Decoding & Serving →](ch21.html)
+
+<details class="ig-jump">
+<summary>📚 Jump to any chapter</summary>
+<p class="ig-era">🧮 Mathematical Foundations</p>
+<ul>
+<li><a href="ch01.html">01 &middot; 🧮 Linear Algebra — the language of data</a></li>
+<li><a href="ch02.html">02 &middot; 📉 Calculus & Optimization — how models learn</a></li>
+<li><a href="ch03.html">03 &middot; 🎲 Probability & Statistics — reasoning under uncertainty</a></li>
+<li><a href="ch04.html">04 &middot; 🔥 Information Theory & Loss Functions — measuring surprise and error</a></li>
+</ul>
+<p class="ig-era">🧩 Classical Machine Learning</p>
+<ul>
+<li><a href="ch05.html">05 &middot; 🧩 Core ML Concepts — the ground rules</a></li>
+<li><a href="ch06.html">06 &middot; 📐 Classical Supervised Algorithms — the workhorses</a></li>
+<li><a href="ch07.html">07 &middot; 🌲 Ensembles & Boosting — how to win on tabular data</a></li>
+<li><a href="ch08.html">08 &middot; 🗺️ Unsupervised Learning & Dimensionality Reduction — structure without labels</a></li>
+<li><a href="ch09.html">09 &middot; 🎯 Model Evaluation & Validation — knowing if it actually works</a></li>
+</ul>
+<p class="ig-era">🧠 Deep Learning</p>
+<ul>
+<li><a href="ch10.html">10 &middot; 🧠 Neural Network Fundamentals — the building block</a></li>
+<li><a href="ch11.html">11 &middot; ⚙️ Training Deep Networks — making deep nets actually train</a></li>
+<li><a href="ch12.html">12 &middot; 🖼️ Convolutional Neural Networks — the vision branch</a></li>
+<li><a href="ch13.html">13 &middot; 🔁 Sequence Models — RNNs, LSTMs and the bottleneck</a></li>
+</ul>
+<p class="ig-era">⚡ The Transformer Era</p>
+<ul>
+<li><a href="ch14.html">14 &middot; 🔤 Word Embeddings — giving words meaning as vectors</a></li>
+<li><a href="ch15.html">15 &middot; ⚡ Attention & the Transformer — the architecture that changed everything</a></li>
+<li><a href="ch16.html">16 &middot; 🧱 Tokenization, Pretraining & Model Families</a></li>
+<li><a href="ch17.html">17 &middot; 📈 Modern LLMs & Scaling — bigger, and suddenly capable</a></li>
+</ul>
+<p class="ig-era">💬 Using & Adapting LLMs</p>
+<ul>
+<li><a href="ch18.html">18 &middot; 💬 Prompting & In-Context Learning — programming models with words</a></li>
+<li><a href="ch19.html">19 &middot; 🎚️ Fine-Tuning & Alignment — specializing and aligning models</a></li>
+<li><a href="ch20.html">20 &middot; 📚 Retrieval-Augmented Generation (RAG) — giving the model an open book</a></li>
+<li><a href="ch21.html">21 &middot; 🚀 Inference, Decoding & Serving — running LLMs efficiently</a></li>
+</ul>
+<p class="ig-era">🤖 The Agentic Frontier</p>
+<ul>
+<li><a href="ch22.html">22 &middot; 🤖 Agents, Tools & Loops — the latest frontier</a></li>
+<li><a href="ch23.html">23 &middot; 🛡️ Evaluation, Safety & Guardrails — making LLM systems trustworthy</a></li>
+<li><a href="ch24.html">24 &middot; 🔧 MLOps & LLMOps — shipping and operating models in production</a></li>
+</ul>
+<p class="ig-era">🛠️ The Practical Toolkit</p>
+<ul>
+<li><a href="ch25.html">25 &middot; 🛠️ Practical Toolkit I — Modeling & Vision Libraries</a></li>
+<li><a href="ch26.html">26 &middot; 🧰 Practical Toolkit II — LLM Frameworks, Orchestration & Vector Stores</a></li>
+<li><a href="ch27.html">27 &middot; ⚙️ Practical Toolkit III — Serving, Apps & MLOps Tooling</a></li>
+</ul>
+<p class="ig-era">☁️ Cloud AI Platforms</p>
+<ul>
+<li><a href="ch28.html">28 &middot; ☁️ Cloud AI Platforms — deploying foundation models on the hyperscalers</a></li>
+</ul>
+</details>
+
+------------------------------------------------------------------------
+
+In Chapter 19 you learned to specialize a model by changing its weights through fine-tuning and alignment. But fine-tuning teaches *behavior*, not fresh *facts* — and you cannot retrain every time a document changes. This chapter covers the other way to make a model smarter: leave the weights frozen and hand it the right pages at question time. Next, in Chapter 21, we'll see how to serve all this efficiently at scale.
+
+::: {.callout-note appearance="simple"}
+📍 **Timeline:** 2020 onward — once LLMs could read long contexts, the obvious move was to stop cramming facts into weights and instead *fetch* them: connect the model to external, up-to-date, private knowledge. The term "RAG" comes from a 2020 Facebook AI paper; it became the default pattern for production LLM apps by 2023.
+:::
+
+## 20.1 — Why RAG exists
+
+Think of a closed-book exam versus an open-book exam. A plain LLM takes the closed-book exam: it answers from memory, so it forgets recent events, makes things up when unsure, and has never seen your company's internal wiki. RAG turns it into an open-book exam — before answering, the model is handed the relevant pages, so it reads first and answers second.
+
+The model's weights are frozen at training time. That creates a **knowledge cutoff** (it doesn't know what happened after training) and encourages **hallucination** (confident wrong answers when memory is fuzzy). RAG fixes both by injecting retrieved text into the prompt at query time.
+
+::: {.callout-tip}
+**Intuition:** Fine-tuning changes *how the model thinks*. RAG changes *what the model is looking at right now*. For facts that change — prices, policies, docs — you want the second one.
+:::
+
+**Q: Why not just fine-tune the model on my private documents instead of using RAG?**
+Fine-tuning bakes facts into weights, which is **expensive, slow to update, and lossy** — the model may still hallucinate or blur details. RAG keeps facts in an external store you can edit instantly (add a doc, delete a doc) with no retraining. As a rule: **fine-tune for behavior and style, retrieve for facts.**
+
+**Q: What concrete problems does RAG solve?**
+Four big ones: (1) **knowledge cutoff** — inject current information; (2) **hallucination** — ground answers in real retrieved text; (3) **private/proprietary data** — the model never saw your internal docs in training; (4) **citations** — you can show *which* source each claim came from, which fine-tuning cannot do.
+
+**Q: Does RAG eliminate hallucination?**
+No — it *reduces* it. The model can still ignore the context, misread it, or blend it with its own priors. You reduce this further with good retrieval, instructions like "answer only from the context," and **groundedness checks** (covered in 20.6).
+
+**Q: When is RAG the wrong tool?**
+When the task needs a new *skill* or *format* rather than new facts — e.g. "always answer in legal-brief style" or "speak like our brand." That's a behavior change, so fine-tuning wins. RAG also adds latency and a retrieval failure mode, so for a fixed, tiny knowledge base you might just put everything in the prompt.
+
+**Q: RAG vs long context — if the model has a million-token window, why not just paste all my docs in?**
+Because long context is **slow, expensive, and dilutes attention**. Cost and latency scale with input tokens, so pasting a whole corpus on every query is wasteful, and the model is more likely to lose the relevant needle ("lost in the middle," 20.6). RAG sends only the few chunks that matter — cheaper, faster, and usually more accurate. Big windows complement RAG; they don't replace it.
+
+## 20.2 — The RAG pipeline end to end
+
+RAG is a two-phase system. **Offline (indexing):** you prepare your documents once — load, split into chunks, embed each chunk into a vector, and store the vectors. **Online (query time):** you embed the user's question, find the most similar chunks, optionally rerank them, stuff them into the prompt, and let the LLM generate a grounded answer.
+
+```{mermaid}
+flowchart TD
+  subgraph Offline["Offline: Indexing"]
+    A["Documents"] --> B["Chunk"]
+    B --> C["Embed chunks"]
+    C --> D["Vector DB"]
+  end
+  subgraph Online["Online: Query time"]
+    Q["User question"] --> E["Embed query"]
+    E --> F["Retrieve top-k (ANN search)"]
+    D --> F
+    F --> G["Rerank (optional)"]
+    G --> H["Assemble context"]
+    H --> I["LLM generates answer + citations"]
+  end
+```
+
+**Q: What is the difference between the offline and online phases?**
+The **offline (indexing)** phase runs once per document and is where chunking, embedding, and storage happen — it's the slow, batch part. The **online (query)** phase runs on every user request and must be fast: embed the query, do nearest-neighbor search, rerank, and generate. Keeping heavy work offline is what makes RAG responsive.
+
+**Q: What does "stuffing the context" mean?**
+It means concatenating the retrieved chunks into the prompt, usually as a block like `Context:\n<chunks>\n\nQuestion: ...`, so the model reads them before answering. The retrieved text becomes part of the input tokens — that's the whole mechanism. The limit is the model's context window, so you can only stuff so many chunks.
+
+**Q: Why is the query embedded with the same model as the chunks?**
+Because similarity only makes sense if both live in the **same vector space**. If chunks and queries were embedded by different models, their coordinates wouldn't be comparable and nearest-neighbor search would be meaningless. Always embed query and documents with the same embedding model.
+
+**Q: Where does the prompt template fit in the online phase?**
+Right before generation: you wrap the retrieved chunks and the question in an instruction template — something like *"Use only the context below to answer. If the answer isn't there, say you don't know. Context: {chunks} Question: {q}"*. This template is doing real work: it tells the model to stay grounded and to refuse gracefully, which directly lowers hallucination.
+
+## 20.3 — Embeddings, chunking, and vector stores
+
+An **embedding** turns a piece of text into a list of numbers (a vector) so that texts with similar meaning land near each other in space. **Chunking** is how you cut long documents into bite-sized pieces before embedding — too big and the vector is a blurry average of many topics, too small and each piece lacks context. A **vector database** stores these vectors and finds the nearest ones fast.
+
+```python
+import numpy as np
+
+def cosine(a, b):
+    # cosine similarity = angle between vectors, ignores length
+    return a @ b / (np.linalg.norm(a) * np.linalg.norm(b))
+
+# pretend these came from an embedding model
+query = np.array([0.9, 0.1, 0.0])
+chunks = {
+    "refund policy": np.array([0.8, 0.2, 0.0]),
+    "office hours":  np.array([0.0, 0.1, 0.9]),
+}
+ranked = sorted(chunks, key=lambda k: cosine(query, chunks[k]), reverse=True)
+print(ranked[0])   # -> "refund policy"  (closest in meaning)
+```
+
+**Q: Why do we chunk documents instead of embedding the whole thing?**
+Two reasons. First, an embedding is a fixed-size summary, so embedding a 50-page doc into one vector **averages away the detail** and retrieval becomes vague. Second, you want to inject only the *relevant* passage into the limited context window, not the whole document. Chunking gives you precise, retrievable units.
+
+**Q: What is chunk overlap and why use it?**
+Overlap means consecutive chunks share some tokens at their boundary (e.g. 512-token chunks with 50-token overlap). It prevents a sentence or idea from being **split across a boundary** and lost from both chunks. The cost is mild duplication in the index.
+
+**Q: What's the difference between fixed-size and semantic chunking?**
+**Fixed-size** chunking cuts every N tokens (simple, fast, but can slice mid-thought). **Semantic** chunking splits on natural boundaries — paragraphs, headings, or where the topic shifts — so each chunk is one coherent idea. Semantic chunking retrieves better but costs more to compute.
+
+**Q: How big should a chunk be?**
+There's no universal number, but a common starting point is **256–512 tokens with ~10–20% overlap**, then tune by measuring retrieval quality. Smaller chunks give sharper matches but lose surrounding context; larger chunks carry more context but blur the embedding and waste your token budget. Match chunk size to your content — dense technical docs favor smaller chunks, narrative text tolerates larger ones.
+
+**Q: What metadata should you store alongside each chunk?**
+Source document, title, section/heading, page or URL, and timestamps — anything you'd want to **filter on or cite**. Metadata lets you do *filtered* retrieval ("only docs from 2024," "only the HR space") and lets you show provenance in the answer. Without it you can retrieve a chunk but not say where it came from.
+
+**Q: What does a vector database actually do, and name a few.**
+It stores embedding vectors plus metadata and answers "give me the k vectors closest to this query vector" quickly. Common ones: **FAISS** (a library, in-memory, great for prototypes), **pgvector** (a Postgres extension, so vectors live next to your relational data), and managed services like **Pinecone**, **Weaviate**, **Milvus**, or **Qdrant**.
+
+::: {.callout-warning}
+**Gotcha:** A vector store returns the *most similar* chunks, never "no result." If your knowledge base doesn't contain the answer, it still hands back the top-k closest (possibly irrelevant) chunks. Always handle the "retrieved junk" case — a similarity threshold or a groundedness check.
+:::
+
+## 20.4 — Similarity search and approximate nearest neighbors (ANN)
+
+Retrieval boils down to: find the vectors closest to the query vector. The natural distance for embeddings is **cosine similarity** — the angle between two vectors, which measures direction (meaning) and ignores length. The catch: comparing the query against *every* stored vector (exact search) is too slow at millions of vectors, so we use **approximate** search that's almost as accurate but vastly faster.
+
+<svg viewBox="0 0 260 180" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif" font-size="11">
+  <line x1="30" y1="150" x2="240" y2="150" stroke="currentColor" stroke-width="1"/>
+  <line x1="30" y1="150" x2="30" y2="20" stroke="currentColor" stroke-width="1"/>
+  <line x1="30" y1="150" x2="200" y2="60" stroke="#3b82f6" stroke-width="2"/>
+  <text x="205" y="58" fill="#3b82f6">query</text>
+  <line x1="30" y1="150" x2="180" y2="80" stroke="#22c55e" stroke-width="2"/>
+  <text x="183" y="82" fill="#22c55e">doc A (near)</text>
+  <line x1="30" y1="150" x2="90" y2="40" stroke="#ef4444" stroke-width="2"/>
+  <text x="60" y="35" fill="#ef4444">doc B (far)</text>
+  <path d="M 70 122 A 55 55 0 0 0 58 108" fill="none" stroke="currentColor" stroke-width="1"/>
+  <text x="72" y="108" fill="currentColor">θ</text>
+</svg>
+
+The smaller the angle θ between query and a document vector, the higher the cosine similarity, the more relevant the document.
+
+**Q: Why use cosine similarity instead of plain Euclidean distance?**
+Cosine measures the **angle** between vectors, so it compares *direction* (semantic meaning) and ignores *magnitude*. Two documents about the same topic should match even if one is longer (larger magnitude). $\text{cosine}(a,b) = \frac{a \cdot b}{\lVert a \rVert \, \lVert b \rVert}$. If vectors are normalized to unit length, cosine and Euclidean give the same ranking.
+
+**Q: Why doesn't exact nearest-neighbor search scale?**
+Exact search compares the query to **every** vector — that's $O(N \times d)$ per query for $N$ vectors of dimension $d$. At millions or billions of vectors this is too slow for real-time. ANN trades a tiny bit of recall for orders-of-magnitude speedup.
+
+**Q: What is HNSW and why is it popular?**
+**HNSW (Hierarchical Navigable Small World)** is a graph-based ANN index. Picture a multi-layer network of "friend" links: you start at a sparse top layer to jump close to the target region, then drop into denser layers to refine. It gives **logarithmic-ish search time** with high recall, which is why FAISS, pgvector, Qdrant, and others use it.
+
+**Q: What does "approximate" cost you?**
+You might miss a true nearest neighbor occasionally — that's **recall** below 100%. You tune this with knobs (e.g. how many neighbors to explore); more exploration means higher recall but slower search. For RAG, slightly imperfect recall is usually fine because reranking and the LLM can compensate.
+
+**Q: What is an IVF index, in one line?**
+**IVF (inverted file index)** clusters all vectors into buckets and, at query time, only searches the few buckets nearest the query — fewer comparisons, faster search, at the cost of missing neighbors that fall just outside the searched buckets. It's the other common ANN family alongside HNSW.
+
+## 20.5 — Hybrid search and reranking
+
+Dense embedding search is great at *meaning* but can miss exact keywords, codes, or rare names. **Hybrid search** combines dense (embedding) retrieval with sparse keyword retrieval like **BM25** so you get both semantic recall and exact-match precision. Then a **reranker** takes the merged candidates and re-scores them with a more powerful (but slower) model, keeping only the truly best few.
+
+| Method | How it matches | Strength | Weakness |
+|---|---|---|---|
+| **Dense (embeddings)** | meaning / semantics | synonyms, paraphrase | misses exact terms, rare tokens |
+| **Sparse (BM25)** | keyword overlap | exact terms, names, codes | no understanding of synonyms |
+| **Hybrid** | both, scores fused | best recall | more moving parts |
+
+**Q: What is BM25 in one sentence?**
+**BM25** is a classic keyword-ranking function that scores a document by how often the query terms appear in it, down-weighting very common words and long documents. It's the workhorse behind traditional search engines and needs no neural network.
+
+**Q: Why combine sparse and dense instead of picking one?**
+They fail in opposite ways. Dense retrieval matches "car" with "automobile" but may fumble an exact part number like `XK-4471`; BM25 nails the exact code but is blind to synonyms. **Hybrid** fuses their scores (often via Reciprocal Rank Fusion) so you catch both, raising recall.
+
+**Q: What is Reciprocal Rank Fusion (RRF) in plain terms?**
+RRF is a simple way to merge two ranked lists without comparing their raw scores (which are on different scales). Each document gets points based on its *rank* in each list — $\text{score} = \sum \frac{1}{k + \text{rank}}$ — and you sort by total points. A document ranked high by **both** dense and sparse search floats to the top. It's popular because it just needs the rankings, not calibrated scores.
+
+**Q: What is a cross-encoder reranker and how does it differ from the embedding model?**
+The embedding model is a **bi-encoder**: it encodes query and document *separately*, so retrieval is fast but the comparison is shallow (just a dot product). A **cross-encoder** feeds query *and* document **together** into a transformer and outputs one relevance score — far more accurate, but too slow to run over millions of docs. So you use the fast bi-encoder to fetch ~50 candidates, then the cross-encoder to rerank down to the top 3-5.
+
+**Q: Why retrieve many then rerank, instead of just retrieving fewer?**
+Because first-stage retrieval is optimized for **recall** (don't miss the right chunk) and is a bit noisy. Reranking is optimized for **precision** (put the best chunk first). Retrieving k=50 then reranking to 5 gives you a wide net plus a sharp final selection — better than trusting the noisy top-5 directly.
+
+::: {.callout-tip}
+**Intuition:** Think of retrieval as a *funnel*. Cheap, fast methods (BM25 + embeddings) cast a wide net for ~50 candidates; an expensive, accurate cross-encoder then carefully picks the final 3–5. Fast-and-wide first, slow-and-precise last.
+:::
+
+## 20.6 — Context assembly, "lost in the middle," and evaluation
+
+Once you have your best chunks, you assemble them into the prompt — and *order matters*. LLMs attend most strongly to the **beginning and end** of a long context and tend to overlook information buried in the **middle**; this is the "lost in the middle" effect. So put your strongest chunks at the edges, not the center, and don't blindly stuff 50 chunks in.
+
+Evaluating RAG means checking **two** things separately: did retrieval find the right context, and did generation use it faithfully.
+
+```python
+# RAG triad — three things to measure, intuitively
+# 1. Context relevance: are retrieved chunks on-topic for the query?
+# 2. Faithfulness/groundedness: is every claim in the answer supported by the chunks?
+# 3. Answer relevance: does the answer actually address the question?
+
+def recall_at_k(retrieved_ids, gold_ids):
+    # of the truly relevant docs, how many did we retrieve in top-k?
+    return len(set(retrieved_ids) & set(gold_ids)) / len(gold_ids)
+
+print(recall_at_k(["d1", "d7", "d3"], gold_ids=["d3", "d9"]))  # 0.5
+```
+
+**Q: What is the "lost in the middle" problem?**
+It's the finding that LLMs use information best when it's at the **start or end** of the context and worst when it's in the **middle** — performance sags for mid-context facts. The practical fix: rerank so the most relevant chunks sit at the edges, and keep the context lean instead of dumping everything in.
+
+**Q: How do you evaluate the *retrieval* half of a RAG system?**
+With classic information-retrieval metrics over a labeled set: **recall@k** (did the relevant chunk make it into the top-k?), **precision@k**, and **MRR / NDCG** (is the relevant chunk ranked high?). If retrieval recall is low, no amount of clever prompting will save the answer — fix retrieval first.
+
+**Q: What is faithfulness (groundedness) and why is it separate from answer relevance?**
+**Faithfulness** asks: is every claim in the answer actually supported by the retrieved context (no hallucination)? **Answer relevance** asks: does the answer address the user's question at all? They're independent — an answer can be perfectly grounded but off-topic, or on-topic but invented. Good RAG eval measures both, often using an LLM-as-judge.
+
+**Q: What is the "RAG triad" of metrics?**
+A handy framework: measure **context relevance** (are the retrieved chunks on-topic?), **faithfulness** (does the answer stick to those chunks?), and **answer relevance** (does it address the question?). Together they pinpoint *where* a bad answer broke — retrieval, grounding, or the response itself. Tools like RAGAS automate these, typically with an LLM-as-judge.
+
+**Q: Retrieval looks good but answers are still wrong — where do you look?**
+Split the pipeline. If recall@k is high, retrieval is fine, so the problem is **generation**: maybe context is too long ("lost in the middle"), chunks are poorly ordered, the prompt doesn't say "answer only from context," or chunks lack enough surrounding context to be understood. Diagnosing retrieval and generation *separately* is the key RAG debugging skill.
+
+## 20.7 — Agentic RAG
+
+Classic RAG always retrieves once, then answers. **Agentic RAG** hands the *decision* to the model: it decides **whether** to retrieve, **what** query to search with, and **whether to search again** if the first results were weak — possibly looping or hitting multiple sources. It's RAG controlled by an agent loop rather than a fixed pipeline (the agent machinery itself is Chapter 22).
+
+```{mermaid}
+flowchart LR
+  Q["Question"] --> D{"Need to retrieve?"}
+  D -- "No" --> A["Answer directly"]
+  D -- "Yes" --> R["Search (model writes query)"]
+  R --> J{"Good enough?"}
+  J -- "No, refine" --> R
+  J -- "Yes" --> A
+```
+
+**Q: How does agentic RAG differ from classic RAG?**
+Classic RAG is a **fixed pipeline**: always retrieve once with the raw query, then generate. Agentic RAG lets the model **make decisions** — skip retrieval for a question it already knows, rewrite the search query, retrieve multiple times, or pull from different tools/sources — adapting the strategy to the question.
+
+**Q: Give an example where agentic RAG clearly helps.**
+A multi-hop question like "What's the refund window for the product our CEO mentioned in the Q2 call?" needs **two retrievals**: first find what product was mentioned, then look up its refund policy. A single-shot retrieval with the raw question would likely fail; an agent can chain the steps.
+
+**Q: What is query rewriting (or query expansion) and why does it help?**
+Users ask messy, terse, or pronoun-laden questions ("what about its price?") that retrieve poorly. **Query rewriting** uses the LLM to turn the raw question into one or more clean, self-contained search queries before retrieval — resolving pronouns, adding synonyms, or splitting a compound question. Better queries in means better chunks out, which is often the cheapest win in a RAG system.
+
+**Q: What's the downside of agentic RAG?**
+**Latency, cost, and unpredictability.** Each extra retrieval-and-reason step is another LLM call and more tokens, and the loop can wander or stall. Use it when questions genuinely need multi-step or conditional retrieval; for simple lookups, plain single-shot RAG is cheaper and more reliable.
+
+## 20.x — Key takeaways
+
+- **RAG = open-book LLM:** retrieve relevant text at query time and stuff it into the prompt, so the model answers from real sources instead of frozen memory.
+- It fixes **knowledge cutoff, hallucination, private data, and citations** — and is the right tool for *facts*, while **fine-tuning is for behavior**.
+- RAG beats pasting everything into a **long context**: cheaper, faster, and dodges "lost in the middle."
+- Pipeline: **ingest → chunk → embed → store → retrieve top-k → (rerank) → assemble → generate**, split into a slow offline phase and a fast online phase.
+- Query and chunks must share **one embedding space**; chunking (size ~256–512 tokens, overlap, semantic vs fixed) and **metadata** decide retrieval quality.
+- Search uses **cosine similarity** with **ANN indexes like HNSW or IVF** because exact search doesn't scale; **hybrid (BM25 + dense, fused via RRF)** boosts recall and a **cross-encoder reranker** boosts precision.
+- Mind **"lost in the middle"** — put the best chunks at the edges and keep context lean.
+- Evaluate retrieval (**recall@k, MRR/NDCG**) and generation (**faithfulness + answer relevance**, the **RAG triad**) **separately**; debug whichever half is failing.
+- **Agentic RAG** lets the model decide whether, what, and how many times to retrieve, and **query rewriting** cleans up messy questions — powerful for multi-hop, but slower and costlier.
+
+------------------------------------------------------------------------
+
+[📖 All chapters](../interview-guide.html)  &nbsp;|&nbsp;  [← 19 · 🎚️ Fine-Tuning & Alignment](ch19.html)  &nbsp;|&nbsp;  [21 · 🚀 Inference, Decoding & Serving →](ch21.html)

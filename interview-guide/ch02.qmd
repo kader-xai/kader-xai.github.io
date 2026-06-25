@@ -1,0 +1,410 @@
+---
+title: "Chapter 02 — 📉 Calculus & Optimization — how models learn"
+page-layout: full
+toc: true
+toc-location: left
+toc-title: "In this chapter"
+toc-depth: 2
+toc-expand: true
+---
+
+[📖 All chapters](../interview-guide.html)  &nbsp;|&nbsp;  [← 01 · 🧮 Linear Algebra](ch01.html)  &nbsp;|&nbsp;  [03 · 🎲 Probability & Statistics →](ch03.html)
+
+<details class="ig-jump">
+<summary>📚 Jump to any chapter</summary>
+<p class="ig-era">🧮 Mathematical Foundations</p>
+<ul>
+<li><a href="ch01.html">01 &middot; 🧮 Linear Algebra — the language of data</a></li>
+<li><a href="ch02.html">02 &middot; 📉 Calculus & Optimization — how models learn</a></li>
+<li><a href="ch03.html">03 &middot; 🎲 Probability & Statistics — reasoning under uncertainty</a></li>
+<li><a href="ch04.html">04 &middot; 🔥 Information Theory & Loss Functions — measuring surprise and error</a></li>
+</ul>
+<p class="ig-era">🧩 Classical Machine Learning</p>
+<ul>
+<li><a href="ch05.html">05 &middot; 🧩 Core ML Concepts — the ground rules</a></li>
+<li><a href="ch06.html">06 &middot; 📐 Classical Supervised Algorithms — the workhorses</a></li>
+<li><a href="ch07.html">07 &middot; 🌲 Ensembles & Boosting — how to win on tabular data</a></li>
+<li><a href="ch08.html">08 &middot; 🗺️ Unsupervised Learning & Dimensionality Reduction — structure without labels</a></li>
+<li><a href="ch09.html">09 &middot; 🎯 Model Evaluation & Validation — knowing if it actually works</a></li>
+</ul>
+<p class="ig-era">🧠 Deep Learning</p>
+<ul>
+<li><a href="ch10.html">10 &middot; 🧠 Neural Network Fundamentals — the building block</a></li>
+<li><a href="ch11.html">11 &middot; ⚙️ Training Deep Networks — making deep nets actually train</a></li>
+<li><a href="ch12.html">12 &middot; 🖼️ Convolutional Neural Networks — the vision branch</a></li>
+<li><a href="ch13.html">13 &middot; 🔁 Sequence Models — RNNs, LSTMs and the bottleneck</a></li>
+</ul>
+<p class="ig-era">⚡ The Transformer Era</p>
+<ul>
+<li><a href="ch14.html">14 &middot; 🔤 Word Embeddings — giving words meaning as vectors</a></li>
+<li><a href="ch15.html">15 &middot; ⚡ Attention & the Transformer — the architecture that changed everything</a></li>
+<li><a href="ch16.html">16 &middot; 🧱 Tokenization, Pretraining & Model Families</a></li>
+<li><a href="ch17.html">17 &middot; 📈 Modern LLMs & Scaling — bigger, and suddenly capable</a></li>
+</ul>
+<p class="ig-era">💬 Using & Adapting LLMs</p>
+<ul>
+<li><a href="ch18.html">18 &middot; 💬 Prompting & In-Context Learning — programming models with words</a></li>
+<li><a href="ch19.html">19 &middot; 🎚️ Fine-Tuning & Alignment — specializing and aligning models</a></li>
+<li><a href="ch20.html">20 &middot; 📚 Retrieval-Augmented Generation (RAG) — giving the model an open book</a></li>
+<li><a href="ch21.html">21 &middot; 🚀 Inference, Decoding & Serving — running LLMs efficiently</a></li>
+</ul>
+<p class="ig-era">🤖 The Agentic Frontier</p>
+<ul>
+<li><a href="ch22.html">22 &middot; 🤖 Agents, Tools & Loops — the latest frontier</a></li>
+<li><a href="ch23.html">23 &middot; 🛡️ Evaluation, Safety & Guardrails — making LLM systems trustworthy</a></li>
+<li><a href="ch24.html">24 &middot; 🔧 MLOps & LLMOps — shipping and operating models in production</a></li>
+</ul>
+<p class="ig-era">🛠️ The Practical Toolkit</p>
+<ul>
+<li><a href="ch25.html">25 &middot; 🛠️ Practical Toolkit I — Modeling & Vision Libraries</a></li>
+<li><a href="ch26.html">26 &middot; 🧰 Practical Toolkit II — LLM Frameworks, Orchestration & Vector Stores</a></li>
+<li><a href="ch27.html">27 &middot; ⚙️ Practical Toolkit III — Serving, Apps & MLOps Tooling</a></li>
+</ul>
+<p class="ig-era">☁️ Cloud AI Platforms</p>
+<ul>
+<li><a href="ch28.html">28 &middot; ☁️ Cloud AI Platforms — deploying foundation models on the hyperscalers</a></li>
+</ul>
+</details>
+
+------------------------------------------------------------------------
+
+Chapter 01 gave us the language of data: vectors, matrices, dot products. But a model that can only *represent* data is useless — it has to *improve*. This chapter is about the engine that does the improving: calculus tells us which direction reduces error, and optimization repeatedly takes small steps in that direction. Next chapter (Probability) gives us the language for *uncertainty*; here we stay in the deterministic world of slopes and steps.
+
+::: {.callout-note appearance="simple"}
+📍 **Timeline:** 1600s–1950s: Newton and Leibniz invent the derivative; Cauchy sketches gradient descent in 1847 — the engine of all learning was built centuries before the data to feed it.
+:::
+
+## 2.1 — The derivative: slope and rate of change
+
+The derivative answers one question: **if I nudge the input a tiny bit, how much does the output change, and in which direction?** Picture standing on a hill — the derivative is the steepness under your feet. Positive slope means going right takes you up; negative means going right takes you down. That single number is what tells a model whether to increase or decrease a weight.
+
+Formally, the derivative of $f$ at $x$ is the limit of the rise over the run as the run shrinks to zero:
+
+$$ f'(x) = \lim_{h \to 0} \frac{f(x+h) - f(x)}{h} $$
+
+<svg viewBox="0 0 320 200" xmlns="http://www.w3.org/2000/svg">
+  <line x1="30" y1="170" x2="300" y2="170" stroke="#888" stroke-width="1"/>
+  <line x1="30" y1="170" x2="30" y2="20" stroke="#888" stroke-width="1"/>
+  <path d="M40,160 Q160,10 290,150" fill="none" stroke="#4a90d9" stroke-width="2"/>
+  <circle cx="120" cy="70" r="4" fill="#d94a4a"/>
+  <line x1="60" y1="110" x2="180" y2="30" stroke="#d94a4a" stroke-width="1.5" stroke-dasharray="4 3"/>
+  <text x="185" y="30" font-size="11" fill="#d94a4a">tangent = slope = f'(x)</text>
+  <text x="110" y="62" font-size="10" fill="#d94a4a">x</text>
+</svg>
+
+**Q: What does the derivative actually tell us in plain terms?**
+It is the **instantaneous rate of change** — how fast the output moves per unit of input, right at that point. Geometrically it is the slope of the **tangent line** touching the curve at $x$. In ML, the sign tells us which way to move a parameter, and the magnitude tells us how sensitive the loss is to that parameter.
+
+**Q: Why the limit as $h \to 0$? Why not just use a small fixed $h$?**
+A fixed $h$ gives the slope of a **secant line** between two points, which is only an approximation. As $h$ shrinks toward zero, the secant rotates into the **tangent**, giving the exact slope at the single point. We still use a finite $h$ in practice for **numerical gradient checking**, but the true derivative is the limit.
+
+**Q: What does a derivative of zero mean?**
+The slope is flat — the function is momentarily neither increasing nor decreasing. This happens at **minima, maxima, and saddle points** (collectively called **critical points**). Optimization aims for points where the derivative (or gradient) is zero, because that is where a minimum can live.
+
+**Q: What is a second derivative, and what does it tell us?**
+The **second derivative** is the derivative of the derivative — it measures how the slope itself is changing, i.e. the **curvature**. A positive second derivative means the curve bends upward (bowl shape, a minimum); negative means it bends downward (a maximum). This is the one-variable version of the **Hessian** we meet in section 2.4.
+
+::: {.callout-tip}
+**Intuition:** The derivative is a *local* fact. It tells you the slope right where you stand, not the shape of the whole landscape. Gradient descent only ever knows local slope — which is why it can get stuck.
+:::
+
+## 2.2 — Partial derivatives and the gradient
+
+Real models have millions of parameters, not one. A **partial derivative** asks the derivative question for one variable while holding all others fixed: "if I wiggle only $w_3$, how does the loss change?" Stack all those partials into a vector and you get the **gradient** — the single most important object in machine learning.
+
+For a function $f(w_1, w_2, \dots, w_n)$, the gradient is:
+
+$$ \nabla f = \left[ \frac{\partial f}{\partial w_1}, \frac{\partial f}{\partial w_2}, \dots, \frac{\partial f}{\partial w_n} \right] $$
+
+The key fact: **the gradient points in the direction of steepest ascent.** To minimize, we go the opposite way.
+
+<svg viewBox="0 0 300 200" xmlns="http://www.w3.org/2000/svg">
+  <!-- contour ellipses of a bowl seen from above -->
+  <ellipse cx="150" cy="100" rx="120" ry="75" fill="none" stroke="#bbb" stroke-width="1"/>
+  <ellipse cx="150" cy="100" rx="85" ry="52" fill="none" stroke="#bbb" stroke-width="1"/>
+  <ellipse cx="150" cy="100" rx="50" ry="30" fill="none" stroke="#bbb" stroke-width="1"/>
+  <ellipse cx="150" cy="100" rx="18" ry="11" fill="none" stroke="#bbb" stroke-width="1"/>
+  <circle cx="150" cy="100" r="3" fill="#4ad96a"/>
+  <!-- gradient arrow (uphill, outward) vs step (downhill, inward) -->
+  <line x1="200" y1="130" x2="245" y2="158" stroke="#d94a4a" stroke-width="2"/>
+  <polygon points="245,158 237,154 241,149" fill="#d94a4a"/>
+  <text x="210" y="175" font-size="10" fill="#d94a4a">∇f (uphill)</text>
+  <line x1="200" y1="130" x2="158" y2="105" stroke="#4a90d9" stroke-width="2"/>
+  <polygon points="158,105 166,108 163,113" fill="#4a90d9"/>
+  <text x="120" y="92" font-size="10" fill="#4a90d9">-∇f (step)</text>
+  <circle cx="200" cy="130" r="3" fill="#333"/>
+</svg>
+
+**Q: What is the difference between a derivative and a partial derivative?**
+A plain derivative is for a function of **one variable**. A **partial derivative** $\frac{\partial f}{\partial w_i}$ is for a function of many variables, measuring change along one axis while **freezing the rest**. Each partial is computed by treating every other variable as a constant.
+
+**Q: What exactly is the gradient and why do we care about its direction?**
+The gradient $\nabla f$ is the **vector of all partial derivatives**. Its direction is the way that increases $f$ fastest; its negative is the way that decreases $f$ fastest. That is the whole basis of learning: **step against the gradient to lower the loss.**
+
+**Q: What does the magnitude (length) of the gradient tell us?**
+It measures **how steep** the surface is. A large gradient means a steep slope and a big potential step; a near-zero gradient means we are on flat ground — possibly at a minimum, a plateau, or a saddle. The magnitude scales the size of each update.
+
+**Q: If the gradient points uphill, why do we compute it at all when we want to go down?**
+Because **downhill is just negative-uphill** — it's free. Computing the steepest-ascent direction and flipping its sign gives the steepest-descent direction at no extra cost. There's no separate "descent vector" to find.
+
+**Q: Why is the gradient perpendicular to the contour lines of the loss?**
+A **contour line** connects points of equal loss, so moving along it changes nothing. The gradient is the direction of *fastest* change, which must be the direction that leaves the contour as sharply as possible — and that is exactly **perpendicular** to it. This is why, in the diagram above, the gradient arrow shoots straight out across the rings rather than along them.
+
+## 2.3 — The chain rule: the engine of backpropagation
+
+Neural networks are **functions inside functions inside functions** — a loss applied to an output, which came from a layer, which came from another layer. To get the derivative of the final loss with respect to an early weight, we need the **chain rule**: the derivative of a composition is the product of the derivatives along the way. Think of it as a chain of gears — turning the first gear by a tiny amount, the rotation multiplies through each gear to the last.
+
+For $y = f(g(x))$:
+
+$$ \frac{dy}{dx} = \frac{dy}{dg} \cdot \frac{dg}{dx} $$
+
+Backpropagation is literally the chain rule applied layer by layer, from the loss backward to every weight.
+
+```{mermaid}
+flowchart LR
+  x["x"] --> g["g(x)"]
+  g --> f["f(g)"]
+  f --> L["Loss"]
+  L -. "dL/df" .-> f
+  f -. "df/dg" .-> g
+  g -. "dg/dx" .-> x
+```
+
+Here is the chain rule doing one backward pass by hand:
+
+```python
+import numpy as np
+
+# forward: x -> a = w*x -> y = a^2 -> loss = (y - t)^2
+x, w, t = 2.0, 3.0, 10.0
+a = w * x          # = 6
+y = a ** 2         # = 36
+loss = (y - t) ** 2  # = 676
+
+# backward: multiply local derivatives, loss back to w
+dloss_dy = 2 * (y - t)   # d(y-t)^2 / dy = 52
+dy_da    = 2 * a         # d a^2 / da    = 12
+da_dw    = x             # d (w*x) / dw  = 2
+dloss_dw = dloss_dy * dy_da * da_dw   # chain rule: 52*12*2 = 1248
+print(dloss_dw)  # 1248.0 -> how much loss changes per unit of w
+
+# self-check: chained result must match a tiny numerical nudge
+eps = 1e-5
+loss2 = ((w + eps) * x) ** 2  # recompute loss with w nudged
+loss2 = (loss2 - t) ** 2
+assert abs((loss2 - loss) / eps - dloss_dw) < 1.0  # gradient check
+```
+
+**Q: What is the chain rule in one sentence?**
+The derivative of a **composed function** is the **product of the local derivatives** of each step in the composition. If output depends on $b$ which depends on $a$, then $\frac{d\,out}{da} = \frac{d\,out}{db}\cdot\frac{db}{da}$.
+
+**Q: How does backpropagation use the chain rule?**
+**Backprop** runs the network forward to compute the loss, then walks **backward**, multiplying local derivatives at each layer to get $\frac{\partial L}{\partial w}$ for every weight. It reuses already-computed downstream gradients (the "upstream gradient") so each layer only does local work — making it efficient rather than recomputing whole paths.
+
+**Q: Why is the chain rule "the engine" of deep learning specifically?**
+Because deep nets are **deeply nested compositions** — dozens or hundreds of layers. Without the chain rule we could not get a gradient for an early-layer weight with respect to the final loss. The chain rule makes that gradient a simple product of per-layer terms, computable in one backward sweep.
+
+**Q: What is the difference between forward-mode and reverse-mode differentiation?**
+Both apply the chain rule, but in opposite order. **Reverse mode** (what backprop uses) goes from output back to inputs — efficient when there are **many inputs and few outputs** (one scalar loss, millions of weights). **Forward mode** goes inputs-to-output and is efficient in the opposite case. ML almost always uses reverse mode.
+
+**Q: How does the chain rule relate to vanishing and exploding gradients?**
+Because backprop **multiplies** a local derivative at every layer, the gradient that reaches an early layer is a long product. If those factors are mostly below 1, the product shrinks toward zero (**vanishing gradient**); if mostly above 1, it blows up (**exploding gradient**). This is *why* deep networks are hard to train, and it motivates ReLU, normalization, and residual connections — all covered in Chapter 10.
+
+::: {.callout-warning}
+**Gotcha:** Backprop is *not* a different algorithm from the chain rule — it *is* the chain rule, organized to reuse intermediate gradients. Interviewers love when you say this plainly instead of treating them as separate magic.
+:::
+
+## 2.4 — Jacobian and Hessian: derivatives go matrix-shaped
+
+When a function outputs a **vector** instead of a scalar, the gradient generalizes to the **Jacobian** — a matrix of all first partials. When we want **curvature** (how the slope itself changes), we use the **Hessian** — the matrix of all second partials. You rarely build these by hand, but interviewers ask what they are and why second-order info matters.
+
+| Object | Holds | Shape | Tells us |
+|--------|-------|-------|----------|
+| Gradient | first partials of a scalar function | vector ($n$) | steepest direction |
+| Jacobian | first partials of a vector function | matrix ($m \times n$) | how each output reacts to each input |
+| Hessian | second partials of a scalar function | matrix ($n \times n$) | curvature / how slope bends |
+
+**Q: What is the Jacobian?**
+The **Jacobian** is the matrix of all first-order partial derivatives of a **vector-valued function** $f: \mathbb{R}^n \to \mathbb{R}^m$. Entry $(i,j)$ is $\frac{\partial f_i}{\partial x_j}$. It is the natural generalization of the gradient when there are multiple outputs — and it is exactly what gets chained through layers in backprop.
+
+**Q: What is the Hessian and why would we want it?**
+The **Hessian** is the matrix of **second derivatives** of a scalar function — it captures **curvature**, how fast the gradient itself is changing. It tells us whether a critical point is a minimum, maximum, or saddle, and second-order methods (like Newton's method) use it to take smarter steps. The catch: it's $n \times n$, so for a model with millions of parameters it's far too big to compute or store directly.
+
+**Q: How does the Hessian tell a minimum from a saddle point?**
+By its **eigenvalues** (the curvatures along its principal directions). If all eigenvalues are **positive** the surface curves up everywhere — a **local minimum** (the Hessian is *positive definite*). If all are negative it's a maximum; if the signs are **mixed**, it curves up in some directions and down in others — a **saddle point**. This is the multi-variable generalization of the second-derivative test.
+
+**Q: Why don't we use the Hessian in deep learning?**
+Because it has **$n^2$ entries** — for millions of parameters that's astronomically large to form or invert. Instead we use **first-order methods** (gradient descent and its variants) and approximate curvature cheaply (e.g. Adam's per-parameter scaling, or quasi-Newton's L-BFGS), getting some of the benefit without the cost.
+
+## 2.5 — Convex vs non-convex: why some problems are easy
+
+A **convex** function is bowl-shaped: any straight line between two points on the curve stays above the curve. The beautiful consequence — **any local minimum is the global minimum.** Gradient descent on a convex loss is guaranteed to find the best answer. Neural networks, sadly, are **non-convex** — a lumpy landscape of many valleys — which is why training is fiddly.
+
+<svg viewBox="0 0 360 180" xmlns="http://www.w3.org/2000/svg">
+  <text x="20" y="15" font-size="11" fill="#4a90d9">convex (one minimum)</text>
+  <path d="M20,30 Q90,150 160,30" fill="none" stroke="#4a90d9" stroke-width="2"/>
+  <circle cx="90" cy="105" r="3.5" fill="#d94a4a"/>
+  <text x="200" y="15" font-size="11" fill="#4a90d9">non-convex (many)</text>
+  <path d="M200,40 Q230,120 255,75 Q280,30 305,100 Q325,150 345,55" fill="none" stroke="#4a90d9" stroke-width="2"/>
+  <circle cx="237" cy="95" r="3.5" fill="#d9a44a"/>
+  <circle cx="312" cy="112" r="3.5" fill="#d94a4a"/>
+  <text x="300" y="135" font-size="9" fill="#d94a4a">global</text>
+  <text x="218" y="115" font-size="9" fill="#d9a44a">local</text>
+</svg>
+
+**Q: What makes a function convex, intuitively and formally?**
+Intuitively, a **convex** function is shaped like a single bowl with no extra dips. Formally, the line segment between any two points on the graph lies **on or above** the function: $f(\lambda a + (1-\lambda) b) \le \lambda f(a) + (1-\lambda) f(b)$. Equivalently, its **Hessian is positive semi-definite** everywhere.
+
+**Q: Why is convexity such a big deal for optimization?**
+Because in a convex problem **every local minimum is the global minimum** — there are no traps. Gradient descent (with a reasonable learning rate) is guaranteed to converge to the best possible solution. You never have to worry about getting stuck in a worse valley.
+
+**Q: Are neural networks convex? What follows from that?**
+No — neural network loss surfaces are **highly non-convex**, with many local minima, saddle points, and flat regions. So we lose the global-optimum guarantee; training can land in different solutions depending on initialization and randomness. In practice many of these minima are "good enough," which is part of why deep learning works at all.
+
+**Q: Is linear/logistic regression convex?**
+Yes — with their standard losses (squared error, log-loss) they are **convex** in the parameters, so they have a single global optimum and are reliable to train. This is a classic reason these classical models are so dependable, covered more in Chapter 06.
+
+## 2.6 — Gradient descent: the update rule
+
+Here is the whole engine in one move: compute the gradient, take a small step in the **opposite** direction, repeat. Like walking downhill in fog — you can't see the valley, but you can feel the slope and step downward. Do it enough times and you reach a low point.
+
+The update rule for parameters $w$ with learning rate $\eta$ (eta):
+
+$$ w \leftarrow w - \eta \, \nabla L(w) $$
+
+<svg viewBox="0 0 300 180" xmlns="http://www.w3.org/2000/svg">
+  <path d="M20,30 Q150,210 280,30" fill="none" stroke="#4a90d9" stroke-width="2"/>
+  <circle cx="55" cy="80" r="5" fill="#d94a4a"/>
+  <circle cx="92" cy="118" r="5" fill="#d9764a"/>
+  <circle cx="125" cy="142" r="5" fill="#d9a44a"/>
+  <circle cx="150" cy="150" r="5" fill="#4ad96a"/>
+  <line x1="55" y1="80" x2="92" y2="118" stroke="#666" stroke-width="1"/>
+  <line x1="92" y1="118" x2="125" y2="142" stroke="#666" stroke-width="1"/>
+  <line x1="125" y1="142" x2="150" y2="150" stroke="#666" stroke-width="1"/>
+  <text x="158" y="153" font-size="10" fill="#4ad96a">minimum</text>
+  <text x="30" y="78" font-size="10" fill="#d94a4a">start</text>
+</svg>
+
+A from-scratch gradient descent loop minimizing $L(w) = (w-4)^2$:
+
+```python
+def grad(w):        # dL/dw for L = (w-4)^2
+    return 2 * (w - 4)
+
+w = 0.0             # start far from the answer
+lr = 0.1            # learning rate (eta)
+for step in range(25):
+    w = w - lr * grad(w)   # the update rule
+print(round(w, 3))  # -> ~4.0, the true minimum
+
+# self-check: GD must land near the analytic minimum w=4
+assert abs(w - 4.0) < 1e-2
+```
+
+**Q: Walk through the gradient descent update rule.**
+Compute the gradient $\nabla L(w)$ (steepest-ascent direction), multiply by the **learning rate** $\eta$ to get a step size, and **subtract** it from the current weights: $w \leftarrow w - \eta\nabla L(w)$. Subtracting means moving **downhill**. Repeat until the gradient is near zero or the loss stops improving.
+
+**Q: Why subtract the gradient instead of adding it?**
+The gradient points toward **increasing** loss. We want to **decrease** loss, so we move in the opposite direction — hence the minus sign. Adding it would be gradient *ascent*, which we'd use only if we were trying to maximize something.
+
+**Q: When does gradient descent stop?**
+Ideally when the **gradient is approximately zero** (a flat point, hopefully a minimum). In practice we stop on a **convergence criterion**: the loss plateaus, a max number of iterations is hit, or a validation metric stops improving (early stopping, see Chapter 09).
+
+**Q: Why does the step size naturally shrink as we approach the minimum, even with a fixed learning rate?**
+Because the step is $\eta\,\nabla L$, and the **gradient itself gets smaller** near a minimum (the slope flattens out). So even with a constant $\eta$, the actual distance moved per step tapers off — you take big strides far away and tiny ones close in. That is why plain GD converges smoothly on a clean bowl, as the shrinking arrows in the diagram show.
+
+## 2.7 — Batch, stochastic, and mini-batch
+
+Computing the gradient means averaging error over data — but over **how much** data per step? Use **all** of it (batch), **one** example (stochastic), or a **handful** (mini-batch). This single choice trades off how smooth vs. how fast and noisy each step is, and mini-batch is what essentially everyone uses today.
+
+| Variant | Data per step | Pros | Cons |
+|---------|---------------|------|------|
+| **Batch GD** | entire dataset | smooth, accurate gradient | slow, heavy memory, can't fit big data |
+| **Stochastic (SGD)** | 1 example | fast updates, noise escapes local minima | very noisy, jumpy convergence |
+| **Mini-batch** | small group (e.g. 32–512) | best of both, GPU-friendly | must tune batch size |
+
+**Q: What is the difference between batch, stochastic, and mini-batch gradient descent?**
+**Batch** uses the whole dataset to compute one gradient per step — accurate but slow. **Stochastic (SGD)** uses a single random example per step — fast and noisy. **Mini-batch** uses a small subset (commonly 32–256) — the practical middle ground that nearly all deep learning uses.
+
+**Q: Why is mini-batch the default in deep learning?**
+It balances **gradient quality and speed**, and crucially it maps perfectly onto **GPU parallelism** — a batch of examples is processed as one matrix operation. The mild noise also helps **escape sharp local minima and saddle points**, often generalizing better than full-batch.
+
+**Q: Is the "stochastic" noise good or bad?**
+Both. The **noise** in the gradient estimate can **jump the optimizer out of poor local minima and saddle points**, which is helpful on non-convex surfaces. But too much noise makes convergence erratic — which is exactly why mini-batches (averaging a few examples) are preferred over pure single-sample SGD.
+
+**Q: What is an epoch versus an iteration?**
+An **iteration** is one parameter update (one batch). An **epoch** is one full pass over the entire training set. With 10,000 examples and a batch size of 100, one epoch = **100 iterations**. Training usually runs for many epochs.
+
+**Q: How does batch size interact with the learning rate?**
+A **larger batch** gives a less noisy, more reliable gradient, so you can usually afford a **larger learning rate** (a common heuristic is to scale $\eta$ up with batch size). A **smaller batch** is noisier, so it often needs a smaller $\eta$ to stay stable. This is why batch size and learning rate are usually tuned together, not in isolation.
+
+## 2.8 — Learning rate and its failure modes
+
+The **learning rate** $\eta$ is the size of each downhill step — and it is the single most important hyperparameter in training. Too big and you overshoot the valley and bounce out (or blow up to infinity); too small and you inch along, taking forever or stalling. Getting it right is the difference between a model that trains and one that doesn't.
+
+<svg viewBox="0 0 360 170" xmlns="http://www.w3.org/2000/svg">
+  <text x="15" y="14" font-size="10" fill="#888">too small: crawls</text>
+  <path d="M15,30 Q75,140 135,30" fill="none" stroke="#4a90d9" stroke-width="1.5"/>
+  <circle cx="35" cy="68" r="3" fill="#d94a4a"/><circle cx="45" cy="86" r="3" fill="#d94a4a"/><circle cx="55" cy="100" r="3" fill="#d94a4a"/>
+  <text x="140" y="14" font-size="10" fill="#888">good: converges</text>
+  <path d="M140,30 Q200,140 260,30" fill="none" stroke="#4a90d9" stroke-width="1.5"/>
+  <circle cx="160" cy="72" r="3" fill="#4ad96a"/><circle cx="195" cy="118" r="3" fill="#4ad96a"/><circle cx="200" cy="128" r="3" fill="#4ad96a"/>
+  <text x="265" y="14" font-size="10" fill="#888">too big: diverges</text>
+  <path d="M265,30 Q310,140 355,30" fill="none" stroke="#4a90d9" stroke-width="1.5"/>
+  <circle cx="285" cy="95" r="3" fill="#d9764a"/><circle cx="335" cy="80" r="3" fill="#d9764a"/><circle cx="300" cy="50" r="3" fill="#d9764a"/>
+</svg>
+
+**Q: What goes wrong if the learning rate is too high?**
+Each step **overshoots** the minimum. The loss can oscillate, fail to settle, or **diverge** to infinity (`NaN`) as updates grow larger and larger. On the loss curve you'd see it bouncing or exploding rather than smoothly decreasing.
+
+**Q: What goes wrong if the learning rate is too low?**
+Training **crawls** — it takes a huge number of iterations to converge, wasting compute. It can also get **stuck** on plateaus or in shallow local minima because steps are too small to escape. The loss decreases, but painfully slowly.
+
+**Q: How do people choose or adjust the learning rate in practice?**
+Common tactics: a **learning rate schedule** that decays $\eta$ over time (start big to move fast, shrink to settle), **warmup** (start small to stabilize early training), and **adaptive optimizers** like Adam that scale the step per-parameter. A quick **LR range test** (sweep values, watch the loss) is a standard way to find a good starting point.
+
+**Q: What is the relationship between the learning rate and curvature?**
+The safe step size depends on how sharply the loss curves: in a **steep, narrow valley** a step that's fine on a gentle slope will overshoot the far wall. Formally, for stable convergence $\eta$ must stay below a bound set by the **largest curvature** (the top Hessian eigenvalue). This is the deep reason adaptive methods, which effectively rescale the step per direction, are so useful — more in Chapter 11.
+
+::: {.callout-warning}
+**Interview gotcha:** If asked "your loss became `NaN` after a few steps, what's the first thing you check?" — the answer is almost always **learning rate too high** (or bad input scaling). It's the most common training failure.
+:::
+
+## 2.9 — Local minima, saddle points, and plateaus
+
+On a non-convex surface, "gradient is zero" doesn't always mean "you won." The flat spot could be a true **local minimum**, a **saddle point** (downhill in some directions, uphill in others), or a wide **plateau** where the gradient is tiny everywhere. Understanding these is key to understanding why training sometimes stalls — and why it usually still works.
+
+```{mermaid}
+flowchart TD
+  Z["gradient near zero"] --> A["local minimum: down in all directions"]
+  Z --> B["saddle point: down some, up others"]
+  Z --> C["plateau: flat region, tiny gradient"]
+```
+
+**Q: What is a saddle point and why does it matter more than local minima in deep learning?**
+A **saddle point** is a flat spot that goes **down in some directions and up in others** — like a horse saddle or a mountain pass. In **high-dimensional** spaces (millions of weights), saddle points vastly outnumber true local minima, so they're the more common cause of stalling. The good news: any **slight noise or curvature** can push the optimizer off a saddle, which is why SGD's noise helps.
+
+**Q: Why are local minima less of a problem in deep nets than people assume?**
+In very high dimensions, for a point to be a **true local minimum**, the loss must curve **upward in every single direction** at once — increasingly unlikely as dimensions grow. Most "stuck" points are actually **saddles**, not minima. And empirically, most local minima in big nets reach **similar, low loss values**, so landing in one is usually fine.
+
+**Q: What is a plateau and how do optimizers deal with it?**
+A **plateau** is a large, nearly flat region where the gradient is **tiny**, so plain GD barely moves. **Momentum** (accumulating past gradients to keep rolling) and **adaptive learning rates** (Adam, RMSProp) help by maintaining or amplifying step size across the flat stretch. These optimizers are covered in depth in Chapter 11.
+
+**Q: How does momentum help escape these flat or tricky regions?**
+**Momentum** adds a fraction of the previous update to the current one, like a **heavy ball rolling downhill** — it builds speed in consistent directions and coasts through small bumps, plateaus, and saddles instead of stalling. Formally $v \leftarrow \beta v - \eta \nabla L$, then $w \leftarrow w + v$.
+
+## 2.x — Key takeaways
+
+- The **derivative** is the slope — how the output changes when you nudge the input; its sign says which way to move a weight, its magnitude how much. The **second derivative** (curvature) says how the slope itself bends.
+- The **gradient** is the vector of all partial derivatives; it points toward steepest **ascent** (perpendicular to the loss contours), so we step in its **negative** to minimize loss.
+- The **chain rule** (derivative of a composition = product of local derivatives) *is* backpropagation — not a separate algorithm; multiplying many factors is also what causes **vanishing/exploding gradients**.
+- **Jacobian** = first derivatives of a vector function; **Hessian** = second derivatives (curvature), whose eigenvalue signs distinguish minima, maxima, and saddles. The Hessian is too big to use directly in deep learning.
+- **Convex** functions have one global minimum (easy); neural nets are **non-convex** (lumpy), so no global guarantee — but it usually works anyway.
+- The core update rule is $w \leftarrow w - \eta \nabla L(w)$: compute gradient, step downhill, repeat; steps naturally shrink as the gradient flattens near a minimum.
+- **Mini-batch** GD is the default — balancing accuracy, speed, and GPU efficiency; its noise helps escape saddles, and batch size is tuned alongside the learning rate.
+- The **learning rate** is the make-or-break hyperparameter: too high diverges (`NaN`), too low crawls; its safe size is bounded by the loss curvature.
+- "Gradient near zero" can be a **local minimum, saddle point, or plateau**; in high dimensions saddles dominate, and noise + momentum get you unstuck.
+
+------------------------------------------------------------------------
+
+[📖 All chapters](../interview-guide.html)  &nbsp;|&nbsp;  [← 01 · 🧮 Linear Algebra](ch01.html)  &nbsp;|&nbsp;  [03 · 🎲 Probability & Statistics →](ch03.html)

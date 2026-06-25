@@ -1,0 +1,337 @@
+---
+title: "Chapter 13 — 🔁 Sequence Models — RNNs, LSTMs and the bottleneck"
+page-layout: full
+toc: true
+toc-location: left
+toc-title: "In this chapter"
+toc-depth: 2
+toc-expand: true
+---
+
+[📖 All chapters](../interview-guide.html)  &nbsp;|&nbsp;  [← 12 · 🖼️ Convolutional Neural Networks](ch12.html)  &nbsp;|&nbsp;  [14 · 🔤 Word Embeddings →](ch14.html)
+
+<details class="ig-jump">
+<summary>📚 Jump to any chapter</summary>
+<p class="ig-era">🧮 Mathematical Foundations</p>
+<ul>
+<li><a href="ch01.html">01 &middot; 🧮 Linear Algebra — the language of data</a></li>
+<li><a href="ch02.html">02 &middot; 📉 Calculus & Optimization — how models learn</a></li>
+<li><a href="ch03.html">03 &middot; 🎲 Probability & Statistics — reasoning under uncertainty</a></li>
+<li><a href="ch04.html">04 &middot; 🔥 Information Theory & Loss Functions — measuring surprise and error</a></li>
+</ul>
+<p class="ig-era">🧩 Classical Machine Learning</p>
+<ul>
+<li><a href="ch05.html">05 &middot; 🧩 Core ML Concepts — the ground rules</a></li>
+<li><a href="ch06.html">06 &middot; 📐 Classical Supervised Algorithms — the workhorses</a></li>
+<li><a href="ch07.html">07 &middot; 🌲 Ensembles & Boosting — how to win on tabular data</a></li>
+<li><a href="ch08.html">08 &middot; 🗺️ Unsupervised Learning & Dimensionality Reduction — structure without labels</a></li>
+<li><a href="ch09.html">09 &middot; 🎯 Model Evaluation & Validation — knowing if it actually works</a></li>
+</ul>
+<p class="ig-era">🧠 Deep Learning</p>
+<ul>
+<li><a href="ch10.html">10 &middot; 🧠 Neural Network Fundamentals — the building block</a></li>
+<li><a href="ch11.html">11 &middot; ⚙️ Training Deep Networks — making deep nets actually train</a></li>
+<li><a href="ch12.html">12 &middot; 🖼️ Convolutional Neural Networks — the vision branch</a></li>
+<li><a href="ch13.html">13 &middot; 🔁 Sequence Models — RNNs, LSTMs and the bottleneck</a></li>
+</ul>
+<p class="ig-era">⚡ The Transformer Era</p>
+<ul>
+<li><a href="ch14.html">14 &middot; 🔤 Word Embeddings — giving words meaning as vectors</a></li>
+<li><a href="ch15.html">15 &middot; ⚡ Attention & the Transformer — the architecture that changed everything</a></li>
+<li><a href="ch16.html">16 &middot; 🧱 Tokenization, Pretraining & Model Families</a></li>
+<li><a href="ch17.html">17 &middot; 📈 Modern LLMs & Scaling — bigger, and suddenly capable</a></li>
+</ul>
+<p class="ig-era">💬 Using & Adapting LLMs</p>
+<ul>
+<li><a href="ch18.html">18 &middot; 💬 Prompting & In-Context Learning — programming models with words</a></li>
+<li><a href="ch19.html">19 &middot; 🎚️ Fine-Tuning & Alignment — specializing and aligning models</a></li>
+<li><a href="ch20.html">20 &middot; 📚 Retrieval-Augmented Generation (RAG) — giving the model an open book</a></li>
+<li><a href="ch21.html">21 &middot; 🚀 Inference, Decoding & Serving — running LLMs efficiently</a></li>
+</ul>
+<p class="ig-era">🤖 The Agentic Frontier</p>
+<ul>
+<li><a href="ch22.html">22 &middot; 🤖 Agents, Tools & Loops — the latest frontier</a></li>
+<li><a href="ch23.html">23 &middot; 🛡️ Evaluation, Safety & Guardrails — making LLM systems trustworthy</a></li>
+<li><a href="ch24.html">24 &middot; 🔧 MLOps & LLMOps — shipping and operating models in production</a></li>
+</ul>
+<p class="ig-era">🛠️ The Practical Toolkit</p>
+<ul>
+<li><a href="ch25.html">25 &middot; 🛠️ Practical Toolkit I — Modeling & Vision Libraries</a></li>
+<li><a href="ch26.html">26 &middot; 🧰 Practical Toolkit II — LLM Frameworks, Orchestration & Vector Stores</a></li>
+<li><a href="ch27.html">27 &middot; ⚙️ Practical Toolkit III — Serving, Apps & MLOps Tooling</a></li>
+</ul>
+<p class="ig-era">☁️ Cloud AI Platforms</p>
+<ul>
+<li><a href="ch28.html">28 &middot; ☁️ Cloud AI Platforms — deploying foundation models on the hyperscalers</a></li>
+</ul>
+</details>
+
+------------------------------------------------------------------------
+
+Chapter 12 gave vision a dedicated architecture: the CNN, which exploits the *spatial* structure of images. But language, audio, and time series have a different kind of structure — *order in time*. This chapter covers the family of models built to read sequences one step at a time — vanilla RNNs, then LSTMs and GRUs — and ends at the famous fixed-vector bottleneck that, together with the word embeddings of Chapter 14, set the stage for the attention mechanism of Chapter 15.
+
+::: {.callout-note appearance="simple"}
+📍 **Timeline:** vanilla RNNs took shape in the 1980s–early 90s; the **LSTM** arrived in **1997** (Hochreiter & Schmidhuber); then in **2014** came the **GRU**, the **seq2seq** encoder–decoder, and Bahdanau's finding that fixed-vector translation degrades on long sentences — the spark for attention.
+:::
+
+## 13.1 — Why order matters: sequential data
+
+A CNN sees a whole image at once. But "dog bites man" and "man bites dog" use the same words and mean opposite things — the **order** carries the meaning. Sequential data is any data where position in the sequence matters: text, speech, sensor readings, stock prices. A fixed-input network like an MLP can't handle this cleanly, because sequences have **variable length** and we want the model to treat "the cat sat" the same whether it appears at the start or middle of a paragraph.
+
+The core trick of all sequence models is **weight sharing across time**: instead of a fresh set of parameters for each position, the *same* function is applied at every step, carrying a memory forward.
+
+::: {.callout-tip}
+**Intuition:** Reading a sentence, you don't restart your brain at each word. You keep a running summary and update it as each new word arrives. That running summary is the **hidden state**; the update rule is the **RNN cell**.
+:::
+
+**Q: Why can't a plain feed-forward network (MLP) handle sequences well?**
+An **MLP** expects a fixed-size input and gives every input position its own weights. Sequences vary in length, and a pattern (like a negation word) can appear anywhere, so position-specific weights waste data and don't generalize. Sequence models fix both by **sharing weights across positions** and carrying state.
+
+**Q: Before RNNs, how did people model sequences — why not just a fixed-window MLP or n-grams?**
+The classic pre-RNN approach was a **fixed-window** model: feed the last $n$ tokens into an MLP (or count **n-gram** statistics). The fatal flaw is the **fixed window** — anything outside the last $n$ tokens is invisible, so a dependency longer than the window simply can't be captured, and the parameter count blows up as you widen $n$. RNNs replace the hard window with an **unbounded** running memory: in principle any past token can still influence the present.
+
+**Q: What does "weight sharing across time" buy you?**
+The same parameters process step 1, step 2, step 3… so the model learns *one* update rule that works at any position, and it generalizes to **sequences longer than any seen in training**. It also drastically cuts the parameter count compared to a separate weight matrix per position.
+
+**Q: Give a concrete example where order changes the label.**
+Sentiment: "not good" vs "good" — the word "not" flips the meaning, and only a model that respects **order** can capture that the negation precedes and modifies "good." A bag-of-words model that ignores order would see the same tokens and struggle.
+
+## 13.2 — The vanilla RNN: a hidden state carried forward
+
+An RNN reads one element at a time. At each step it combines the **new input** with its **previous hidden state** to produce a **new hidden state** — a running memory. Because the same weights are reused at every step, you can picture the network "**unrolled**" into a chain as long as the sequence.
+
+The update at step $t$ is:
+
+$$h_t = \tanh(W_{hh}\, h_{t-1} + W_{xh}\, x_t + b_h), \qquad y_t = W_{hy}\, h_t + b_y$$
+
+Here $x_t$ is the input at step $t$, $h_t$ the hidden state, and $W_{hh}, W_{xh}, W_{hy}$ are **shared** across all steps.
+
+```{mermaid}
+flowchart LR
+  x1["x1"] --> h1["h1"]
+  x2["x2"] --> h2["h2"]
+  x3["x3"] --> h3["h3"]
+  h0["h0"] --> h1 --> h2 --> h3
+  h1 --> y1["y1"]
+  h2 --> y2["y2"]
+  h3 --> y3["y3"]
+```
+
+```python
+import numpy as np
+# one forward pass of a vanilla RNN over a sequence
+def rnn_step(x_t, h_prev, Wxh, Whh, b):
+    # same weights every step -> weight sharing across time
+    return np.tanh(Wxh @ x_t + Whh @ h_prev + b)
+
+h = np.zeros(4)              # h0 = zeros: "no memory yet" before any input
+for x_t in sequence:         # loop = "unrolling" through time
+    h = rnn_step(x_t, h, Wxh, Whh, b)
+# h now summarizes the whole sequence
+```
+
+**Q: What is the hidden state, intuitively — and why start it at zeros?**
+It is the network's **memory** — a fixed-size vector that summarizes everything seen so far. At each step the RNN overwrites it with a blend of the old memory and the new input, so it acts like a continuously updated running summary. We initialize $h_0$ to **zeros** because before the first token there is literally nothing to remember; zeros is the neutral "blank slate" starting point (it can also be made a learnable parameter, but zeros is the standard default).
+
+**Q: What does it mean to "unroll" an RNN?**
+Unrolling means drawing the recurrent loop as a **chain of copies**, one per time step, that all **share the same weights**. It's a conceptual (and computational) view that turns the loop into a deep feed-forward network, which is what lets us apply backpropagation.
+
+**Q: Why is the same weight matrix used at every time step?**
+So the model learns a single, position-independent update rule and can handle **variable-length** inputs with a **fixed** parameter count. Sharing is also what allows generalization to sequence lengths unseen in training.
+
+**Q: Why $\tanh$ in the recurrent path and not ReLU?**
+**$\tanh$ is bounded** to $[-1, 1]$, which keeps the hidden state from drifting off to huge values as it is fed back into itself step after step. **ReLU is unbounded** on the positive side, so in the *recurrent* loop its outputs can compound and blow up, making the already-present exploding-gradient problem worse. ReLU is great in feed-forward and conv layers; in the recurrent path the squashing of $\tanh$ (or sigmoid in gates) is the safer default.
+
+**Q: What are the common RNN input/output shapes (one-to-many, etc.)?**
+RNNs flex to the task: **one-to-many** (image → caption), **many-to-one** (sentence → sentiment label), and **many-to-many** (tagging each word, or translation). The same cell drives all of them; only what you read off the outputs changes.
+
+## 13.3 — Backpropagation through time (BPTT)
+
+To train an RNN you unroll it and run ordinary backprop on the resulting chain — this is **backpropagation through time**. The twist: because the weights are shared across steps, the gradient for a weight is the **sum of its gradients at every time step**.
+
+::: {.callout-tip}
+**Intuition:** One weight did a job at step 1, the same weight did a job at step 2, and so on. Its total "blame" for the loss is the sum of the blame from each step where it was used.
+:::
+
+Long sequences make the unrolled graph very deep, so BPTT is expensive in memory. In practice we use **truncated BPTT**: unroll only a fixed window (say 50 steps), backprop within it, then carry the hidden state forward without backpropagating further.
+
+**Q: How does BPTT differ from ordinary backprop?**
+It's the *same* algorithm applied to the **unrolled** network, plus one rule: since each weight is reused at every step, you **accumulate (sum) the gradient contributions across all time steps** before updating. Conceptually it's backprop on a very deep, weight-tied network.
+
+**Q: What is truncated BPTT and why use it?**
+**Truncated BPTT** limits how far back gradients flow — you unroll a fixed number of steps, update, then move on, carrying the hidden state but not the gradient. It bounds **memory and compute** for long sequences, at the cost of not learning dependencies longer than the truncation window.
+
+**Q: Why is full BPTT expensive?**
+You must store the activations of every time step to compute gradients, so memory grows with **sequence length**. A 1000-step sequence is effectively a 1000-layer-deep network during the backward pass.
+
+## 13.4 — Vanishing and exploding gradients: why plain RNNs forget
+
+Here is the heartbreak of the vanilla RNN. To learn that an early word affects a much later prediction, the gradient must travel back across many steps. But traveling back means **repeatedly multiplying by the same recurrent weight** (and by $\tanh$ derivatives), and repeated multiplication explodes or vanishes.
+
+If the relevant factor is $<1$, the gradient **shrinks exponentially** (vanishes) — early steps get almost no learning signal, so the RNN effectively **forgets** long-range context. If it's $>1$, the gradient **blows up** (explodes) and training diverges.
+
+Roughly, the gradient across $k$ steps scales like $\|W_{hh}\|^k$ — exponential in the distance.
+
+<svg viewBox="0 0 360 120" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif" font-size="11">
+  <line x1="20" y1="90" x2="340" y2="90" stroke="currentColor" stroke-width="1"/>
+  <text x="150" y="110" fill="currentColor">time steps back →</text>
+  <circle cx="40" cy="40" r="14" fill="none" stroke="currentColor"/>
+  <circle cx="110" cy="58" r="10" fill="none" stroke="currentColor"/>
+  <circle cx="180" cy="72" r="6" fill="none" stroke="currentColor"/>
+  <circle cx="250" cy="82" r="3" fill="none" stroke="currentColor"/>
+  <circle cx="320" cy="88" r="1.5" fill="none" stroke="currentColor"/>
+  <text x="20" y="25" fill="currentColor">gradient magnitude vanishing →</text>
+</svg>
+
+**Q: In one sentence, why do vanilla RNNs struggle with long-range dependencies?**
+Gradients flowing back through many steps get multiplied by the recurrent weight again and again, so they **vanish** (shrink toward zero) or **explode** (blow up) exponentially with distance — and a vanished gradient means the early input never gets a learning signal.
+
+**Q: What's the difference between vanishing and exploding gradients?**
+**Vanishing**: gradients shrink toward zero over many steps, so the model can't learn long-range dependencies (the classic RNN failure). **Exploding**: gradients grow without bound, causing huge unstable updates and NaNs. Vanishing is subtler and harder to detect; exploding is loud but easy to patch.
+
+**Q: How do you fix exploding gradients?**
+**Gradient clipping**: if the gradient's norm exceeds a threshold, rescale it down to that threshold before the update. Cache the norm so you compute it once:
+```python
+n = np.linalg.norm(g)          # compute the norm once
+if n > c:                      # c = clip threshold
+    g = g * c / n              # rescale down, keep direction
+```
+
+**Q: Why doesn't gradient clipping fix vanishing gradients?**
+Clipping only caps gradients that are **too large**; it does nothing for gradients that have already **shrunk to near zero**. Vanishing needs an **architectural** fix — a path that lets gradients flow without repeated squashing. That fix is the LSTM.
+
+::: {.callout-warning}
+**Interview gotcha:** Don't say "LSTMs solve vanishing gradients." Say they **mitigate** it. The gated cell-state path makes long-range gradient flow *much* easier, but very long dependencies are still hard — which is exactly why attention later won.
+:::
+
+## 13.5 — LSTM and GRU: gated memory
+
+The LSTM (Long Short-Term Memory, Hochreiter & Schmidhuber, 1997) fixes forgetting with a clever idea: keep a separate **cell state** $C_t$ that runs along the top of the cell like a conveyor belt, modified only by gentle, mostly-additive edits. Because information rides this belt with minimal multiplication, gradients flow back across many steps **without vanishing** as fast.
+
+Three **gates** — small sigmoid networks outputting values in $[0,1]$ — decide what happens: the **forget gate** decides what to erase from the belt, the **input gate** decides what new info to write, and the **output gate** decides what to read out as the hidden state.
+
+```{mermaid}
+flowchart LR
+  Cprev["C_t-1 (cell)"] --> mult1(("x")) --> add(("+")) --> Ct["C_t"]
+  f["forget gate sig"] --> mult1
+  i["input gate sig"] --> mult2(("x")) --> add
+  g["candidate tanh"] --> mult2
+  Ct --> tanhC["tanh"] --> mult3(("x")) --> ht["h_t"]
+  o["output gate sig"] --> mult3
+```
+
+The equations (all gates take $[h_{t-1}, x_t]$ as input):
+
+$$f_t = \sigma(W_f \cdot [h_{t-1}, x_t]),\quad i_t = \sigma(W_i \cdot [h_{t-1}, x_t]),\quad o_t = \sigma(W_o \cdot [h_{t-1}, x_t])$$
+$$\tilde{C}_t = \tanh(W_C \cdot [h_{t-1}, x_t]),\quad C_t = f_t \odot C_{t-1} + i_t \odot \tilde{C}_t,\quad h_t = o_t \odot \tanh(C_t)$$
+
+The key line is $C_t = f_t \odot C_{t-1} + i_t \odot \tilde{C}_t$: the cell state is *carried forward and added to*, not repeatedly multiplied through a squashing nonlinearity — that additive path is why gradients survive.
+
+Why that additive path helps is visible in one derivative. Differentiating the cell update with respect to the previous cell state gives
+
+$$\frac{\partial C_t}{\partial C_{t-1}} = f_t$$
+
+So the gradient between adjacent cell states is just the **forget gate** $f_t$ — an element-wise multiply by a number the network *chooses*, with **no repeated $W_{hh}$ multiply and no $\tanh$ squashing in the path**. If the network wants to remember something, it learns $f_t \approx 1$, and the gradient passes through almost untouched across many steps. This protected, near-constant gradient channel is the famous **Constant Error Carousel (CEC)** — the original 1997 motivation for the cell state.
+
+The **GRU** (Gated Recurrent Unit, 2014) is a streamlined cousin: it merges the cell and hidden state and uses only **two** gates (a **reset** gate and an **update** gate). Fewer parameters, often comparable accuracy, faster to train.
+
+```{mermaid}
+flowchart LR
+  hprev["h_t-1"] --> rmul(("x"))
+  r["reset gate sig"] --> rmul
+  rmul --> cand["candidate tanh"]
+  x["x_t"] --> cand
+  hprev --> blend(("blend"))
+  cand --> blend
+  z["update gate sig"] --> blend
+  blend --> ht["h_t"]
+```
+
+| Aspect | Vanilla RNN | LSTM | GRU |
+|---|---|---|---|
+| State carried | $h_t$ only | $h_t$ + cell $C_t$ | $h_t$ only |
+| Gates | none | 3 (forget, input, output) | 2 (reset, update) |
+| Long-range memory | poor | good | good |
+| Parameters | fewest | most | fewer than LSTM |
+| When to reach for it | rarely | long dependencies | similar, smaller/faster |
+
+**Q: What is the Constant Error Carousel (CEC)?**
+The **CEC** is the protected gradient pathway through the LSTM **cell state**. Because the cell is updated additively, the gradient from one cell state to the previous is just the forget gate, $\partial C_t / \partial C_{t-1} = f_t$ — no repeated weight multiply, no squashing. When $f_t \approx 1$, error "circulates" backward through time at roughly **constant** magnitude instead of vanishing. It is the original 1997 name for *why* the cell state preserves long-range gradients.
+
+**Q: Why does the cell state help gradients flow?**
+Because the cell state is updated mostly by **addition** ($C_t = f_t \odot C_{t-1} + \dots$), so the step-to-step gradient is the gate $f_t$, not a repeated matrix multiply through a squashing nonlinearity. This near-linear "conveyor belt" gives gradients an **uninterrupted highway** back through time, so they vanish far more slowly than in a vanilla RNN.
+
+**Q: What does each LSTM gate do?**
+The **forget gate** decides how much of the old cell state to keep (0 = erase, 1 = keep). The **input gate** decides how much new candidate information to write. The **output gate** decides how much of the cell state to expose as the hidden state $h_t$. All three are sigmoids, so they act like soft, learnable on/off valves.
+
+**Q: How is a GRU different from an LSTM?**
+A **GRU** merges the hidden and cell states into one and uses **two gates** (reset and update) instead of three. The **update gate** interpolates between keeping the old state and writing the new candidate; the **reset gate** controls how much past state feeds the candidate. It has **fewer parameters**, trains a bit faster, and usually performs comparably — LSTMs sometimes edge ahead on tasks needing very fine-grained memory control.
+
+**Q: Why is the forget gate so important?**
+It lets the network **actively clear** stale memory — e.g. forget the subject of the previous sentence once it's no longer relevant — and it is the very term that sets the step-to-step gradient ($\partial C_t/\partial C_{t-1} = f_t$). Notably, initializing the forget-gate bias to a positive value (so it defaults to "remember," $f_t \approx 1$) is a well-known trick that helps LSTMs train.
+
+**Q: Do LSTMs completely solve the vanishing gradient problem?**
+No — they **greatly mitigate** it. The additive cell path lets gradients survive across far more steps than a vanilla RNN, but extremely long dependencies still degrade, and LSTMs process tokens **sequentially** (no parallelism over time). Both limits are what attention and Transformers later overcame.
+
+## 13.6 — Bidirectional RNNs
+
+Sometimes the meaning of a word depends on what comes **after** it: in "the **bank** of the river," only the later words disambiguate "bank." A standard RNN only sees the past. A **bidirectional RNN** runs two RNNs — one **left-to-right**, one **right-to-left** — and **concatenates** their hidden states at each position, so every output sees the **full** surrounding context.
+
+The catch: you need the **entire sequence up front**, so bidirectional models can't be used for **streaming** or **autoregressive generation** (predicting the next token), where the future isn't available yet.
+
+**Q: What problem do bidirectional RNNs solve?**
+They give each position access to **both past and future** context by combining a forward pass and a backward pass. This helps tasks like **named-entity recognition** or part-of-speech tagging, where a word's role often depends on words that follow it.
+
+**Q: When can't you use a bidirectional RNN?**
+Any setting where the future isn't known yet: **real-time / streaming** inference, or **generation**, where you produce tokens one at a time left to right. A backward pass would require seeing tokens you haven't generated.
+
+## 13.7 — Sequence-to-sequence and the context-vector bottleneck
+
+Translation maps a sequence to a *different-length* sequence. The **seq2seq** architecture (2014) handles this with two RNNs: an **encoder** reads the whole input and compresses it into a single fixed-length **context vector** (its final hidden state), and a **decoder** RNN generates the output one token at a time, conditioned on that vector.
+
+During training the decoder uses **teacher forcing**: instead of feeding it its own (possibly wrong) prediction as the next input, you feed the **ground-truth** previous token. This stabilizes and speeds up training, but creates **exposure bias** — at inference time the model must rely on its own outputs, a regime it never practiced.
+
+```{mermaid}
+flowchart LR
+  e1["RNN"] --> e2["RNN"] --> e3["RNN"]
+  e3 --> c(["context vector (one fixed vector)"])
+  c --> d1["RNN"]
+  d1 --> d2["RNN"] --> d3["RNN"]
+  d1 --> o1["y1"]
+  d2 --> o2["y2"]
+  d3 --> o3["y3"]
+```
+
+Here is the wall. **The entire input sentence — however long — must be crammed into one fixed-length vector.** For a short phrase that's fine; for a 40-word sentence, the encoder's final state can't retain all of it. Bahdanau et al. (2014) showed exactly this empirically: the BLEU score of a fixed-vector seq2seq translator **degrades as sentence length grows**. This is the **bottleneck** — and it is the precise motivation for attention.
+
+::: {.callout-tip}
+**Intuition:** It's like reading a whole paragraph, then being allowed to write down **one** sentence of notes, then translating only from those notes — the original is gone. The fix, in Chapter 15, is to let the decoder **look back** at every encoder state via **attention**, instead of relying on a single summary.
+:::
+
+**Q: What is the encoder–decoder (seq2seq) architecture?**
+Two RNNs: the **encoder** consumes the input sequence and compresses it into a fixed-length **context vector**; the **decoder** generates the output sequence conditioned on that vector. It enables **variable-length input to variable-length output** — the setup for machine translation, summarization, and dialogue.
+
+**Q: What exactly is the "bottleneck" in seq2seq?**
+The whole input must be squeezed into a **single fixed-length context vector**, regardless of input length. Long inputs overflow this fixed capacity, so information is lost and **quality drops as sequences get longer** (Bahdanau's BLEU-vs-length finding). This limitation directly motivated **attention** (Chapter 15), which lets the decoder access *all* encoder states.
+
+**Q: What is teacher forcing, and what's its downside?**
+**Teacher forcing** feeds the decoder the **ground-truth** previous token during training instead of its own prediction, which stabilizes and accelerates learning. The downside is **exposure bias**: at inference the model consumes its *own* (sometimes wrong) outputs — a distribution it never trained on — so early mistakes can compound.
+
+**Q: How do you reduce exposure bias — what is scheduled sampling?**
+**Scheduled sampling** gradually weans the decoder off ground-truth tokens: early in training you mostly use teacher forcing, then with rising probability you feed the model its **own predicted** token instead, so it learns to cope with its own mistakes before inference. It narrows the train/inference gap, at the cost of a slightly noisier, harder training signal.
+
+**Q: How did attention later fix the bottleneck (one-line preview)?**
+Instead of compressing everything into one vector, **attention** lets the decoder, at each output step, **look back over all encoder hidden states** and focus on the relevant ones — removing the fixed-capacity choke point. That idea is the heart of Chapter 15.
+
+## 13.8 — Key takeaways
+
+- **Order matters** in sequential data; RNNs handle it by carrying a **hidden state** and **sharing weights across time**, so they accept **variable-length** inputs with a fixed parameter count — replacing the old **fixed-window / n-gram** baselines that could only see the last $n$ tokens.
+- A **vanilla RNN** updates $h_t = \tanh(W_{hh}h_{t-1} + W_{xh}x_t + b)$ (with $h_0$ = zeros, a blank-slate memory); "unrolling" turns the loop into a deep network trained with **BPTT** (gradients summed across time; usually **truncated** for long sequences). $\tanh$ (not ReLU) keeps the recurrent state bounded.
+- Plain RNNs suffer **vanishing/exploding gradients** over long sequences: repeated multiplication by the recurrent weight makes gradients shrink or blow up exponentially, so they **forget** long-range context. **Clip** to fix exploding; vanishing needs an architectural fix.
+- The **LSTM** adds a **cell state** with **forget/input/output gates**; because the cell is updated additively, $\partial C_t/\partial C_{t-1} = f_t$ (the **Constant Error Carousel**) — a near-constant gradient channel that **mitigates** (not fully solves) vanishing. The **GRU** is a 2-gate (reset, update), fewer-parameter alternative with similar performance.
+- **Bidirectional RNNs** read context both ways but can't be used for streaming or generation.
+- **Seq2seq** (encoder–decoder) maps sequences to sequences but suffers the **fixed-length context-vector bottleneck** (Bahdanau's BLEU drops with length) — the exact problem **attention** (Chapter 15) was invented to solve. **Teacher forcing** speeds training but introduces **exposure bias**, mitigated by **scheduled sampling**.
+
+------------------------------------------------------------------------
+
+[📖 All chapters](../interview-guide.html)  &nbsp;|&nbsp;  [← 12 · 🖼️ Convolutional Neural Networks](ch12.html)  &nbsp;|&nbsp;  [14 · 🔤 Word Embeddings →](ch14.html)

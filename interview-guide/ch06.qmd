@@ -1,0 +1,422 @@
+---
+title: "Chapter 06 — 📐 Classical Supervised Algorithms — the workhorses"
+page-layout: full
+toc: true
+toc-location: left
+toc-title: "In this chapter"
+toc-depth: 2
+toc-expand: true
+---
+
+[📖 All chapters](../interview-guide.html)  &nbsp;|&nbsp;  [← 05 · 🧩 Core ML Concepts](ch05.html)  &nbsp;|&nbsp;  [07 · 🌲 Ensembles & Boosting →](ch07.html)
+
+<details class="ig-jump">
+<summary>📚 Jump to any chapter</summary>
+<p class="ig-era">🧮 Mathematical Foundations</p>
+<ul>
+<li><a href="ch01.html">01 &middot; 🧮 Linear Algebra — the language of data</a></li>
+<li><a href="ch02.html">02 &middot; 📉 Calculus & Optimization — how models learn</a></li>
+<li><a href="ch03.html">03 &middot; 🎲 Probability & Statistics — reasoning under uncertainty</a></li>
+<li><a href="ch04.html">04 &middot; 🔥 Information Theory & Loss Functions — measuring surprise and error</a></li>
+</ul>
+<p class="ig-era">🧩 Classical Machine Learning</p>
+<ul>
+<li><a href="ch05.html">05 &middot; 🧩 Core ML Concepts — the ground rules</a></li>
+<li><a href="ch06.html">06 &middot; 📐 Classical Supervised Algorithms — the workhorses</a></li>
+<li><a href="ch07.html">07 &middot; 🌲 Ensembles & Boosting — how to win on tabular data</a></li>
+<li><a href="ch08.html">08 &middot; 🗺️ Unsupervised Learning & Dimensionality Reduction — structure without labels</a></li>
+<li><a href="ch09.html">09 &middot; 🎯 Model Evaluation & Validation — knowing if it actually works</a></li>
+</ul>
+<p class="ig-era">🧠 Deep Learning</p>
+<ul>
+<li><a href="ch10.html">10 &middot; 🧠 Neural Network Fundamentals — the building block</a></li>
+<li><a href="ch11.html">11 &middot; ⚙️ Training Deep Networks — making deep nets actually train</a></li>
+<li><a href="ch12.html">12 &middot; 🖼️ Convolutional Neural Networks — the vision branch</a></li>
+<li><a href="ch13.html">13 &middot; 🔁 Sequence Models — RNNs, LSTMs and the bottleneck</a></li>
+</ul>
+<p class="ig-era">⚡ The Transformer Era</p>
+<ul>
+<li><a href="ch14.html">14 &middot; 🔤 Word Embeddings — giving words meaning as vectors</a></li>
+<li><a href="ch15.html">15 &middot; ⚡ Attention & the Transformer — the architecture that changed everything</a></li>
+<li><a href="ch16.html">16 &middot; 🧱 Tokenization, Pretraining & Model Families</a></li>
+<li><a href="ch17.html">17 &middot; 📈 Modern LLMs & Scaling — bigger, and suddenly capable</a></li>
+</ul>
+<p class="ig-era">💬 Using & Adapting LLMs</p>
+<ul>
+<li><a href="ch18.html">18 &middot; 💬 Prompting & In-Context Learning — programming models with words</a></li>
+<li><a href="ch19.html">19 &middot; 🎚️ Fine-Tuning & Alignment — specializing and aligning models</a></li>
+<li><a href="ch20.html">20 &middot; 📚 Retrieval-Augmented Generation (RAG) — giving the model an open book</a></li>
+<li><a href="ch21.html">21 &middot; 🚀 Inference, Decoding & Serving — running LLMs efficiently</a></li>
+</ul>
+<p class="ig-era">🤖 The Agentic Frontier</p>
+<ul>
+<li><a href="ch22.html">22 &middot; 🤖 Agents, Tools & Loops — the latest frontier</a></li>
+<li><a href="ch23.html">23 &middot; 🛡️ Evaluation, Safety & Guardrails — making LLM systems trustworthy</a></li>
+<li><a href="ch24.html">24 &middot; 🔧 MLOps & LLMOps — shipping and operating models in production</a></li>
+</ul>
+<p class="ig-era">🛠️ The Practical Toolkit</p>
+<ul>
+<li><a href="ch25.html">25 &middot; 🛠️ Practical Toolkit I — Modeling & Vision Libraries</a></li>
+<li><a href="ch26.html">26 &middot; 🧰 Practical Toolkit II — LLM Frameworks, Orchestration & Vector Stores</a></li>
+<li><a href="ch27.html">27 &middot; ⚙️ Practical Toolkit III — Serving, Apps & MLOps Tooling</a></li>
+</ul>
+<p class="ig-era">☁️ Cloud AI Platforms</p>
+<ul>
+<li><a href="ch28.html">28 &middot; ☁️ Cloud AI Platforms — deploying foundation models on the hyperscalers</a></li>
+</ul>
+</details>
+
+------------------------------------------------------------------------
+
+Chapter 05 gave you the ground rules — features, labels, loss, the bias–variance tradeoff. Now we meet the actual algorithms that turn those rules into predictions: the six classics that ran production ML for forty years before deep learning arrived. Master these and you understand the spine of the field; the ensembles in Chapter 07 are mostly clever ways of combining the simplest one here (the decision tree).
+
+::: {.callout-note appearance="simple"}
+📍 **Timeline:** 1950s–1990s: the algorithms that ran ML before deep learning — least squares is older than the computer, SVMs and kernels peaked in the 1990s.
+:::
+
+## 6.1 — Linear Regression
+
+Imagine drawing the single straight line that comes closest to a cloud of points. That is linear regression: predict a continuous number as a weighted sum of the inputs, and pick the weights that make the line miss the points by as little as possible. It is the oldest and most transparent model in ML, and almost everything else is a twist on it.
+
+The prediction is a dot product plus a bias:
+
+$$ \hat{y} = w_0 + w_1 x_1 + \dots + w_n x_n = \mathbf{w}^\top \mathbf{x} $$
+
+We choose $\mathbf{w}$ to minimize the **mean squared error**:
+
+$$ \text{MSE} = \frac{1}{m}\sum_{i=1}^{m}\left(\hat{y}^{(i)} - y^{(i)}\right)^2 $$
+
+There are two ways to find the best weights. The **normal equation** solves it in one shot with linear algebra; **gradient descent** walks downhill on the loss surface step by step (the engine from Chapter 02).
+
+$$ \mathbf{w} = (\mathbf{X}^\top \mathbf{X})^{-1}\mathbf{X}^\top \mathbf{y} $$
+
+```python
+import numpy as np
+
+# X: (m, n+1) with a leading column of 1s for the bias; y: (m,)
+def fit_normal(X, y):
+    # closed form: w = (XᵀX)⁻¹ Xᵀy
+    return np.linalg.inv(X.T @ X) @ X.T @ y
+
+def fit_gd(X, y, lr=0.01, epochs=1000):
+    m, n = X.shape
+    w = np.zeros(n)
+    for _ in range(epochs):
+        grad = (2/m) * X.T @ (X @ w - y)  # ∂MSE/∂w
+        w -= lr * grad                    # step downhill
+    return w
+```
+
+::: {.callout-tip}
+**Intuition:** the normal equation is exact but inverts an $n \times n$ matrix — about $O(n^3)$. Cheap for 50 features, hopeless for 50,000. Gradient descent scales because it never inverts anything.
+:::
+
+**Q: When do you prefer gradient descent over the normal equation?**
+When you have **many features** or **huge data**. The normal equation costs roughly $O(n^3)$ to invert $\mathbf{X}^\top\mathbf{X}$ and needs all data in memory; gradient descent is $O(n)$ per step and works with mini-batches. Rule of thumb: above ~10,000 features, go iterative.
+
+**Q: What does a coefficient $w_j$ actually mean?**
+It is the expected change in $\hat{y}$ for a **one-unit increase in $x_j$, holding all other features fixed**. That "holding others fixed" clause is why correlated features make coefficients unstable and hard to interpret — the model can't isolate their individual effects.
+
+**Q: How do you evaluate a regression model — what is R²?**
+**R² (the coefficient of determination)** is the fraction of variance in the target that the model explains: $R^2 = 1 - \frac{\sum (\hat{y}_i - y_i)^2}{\sum (\bar{y} - y_i)^2}$ — model error over the error of just predicting the mean. **R² = 1** is perfect, **R² = 0** means "no better than guessing the average," and it can go **negative** for a model worse than the mean. Report **RMSE/MAE** alongside it for error in the target's own units, and prefer **adjusted R²** when comparing models with different feature counts (it penalizes adding useless features).
+
+**Q: What are the key assumptions of linear regression?**
+**Linearity** (the true relationship is linear in the parameters), **independence** of errors, **homoscedasticity** (constant error variance), and roughly **normal residuals** for valid confidence intervals. It also assumes no perfect **multicollinearity** — if two features are perfectly correlated, $\mathbf{X}^\top\mathbf{X}$ isn't invertible.
+
+**Q: Why might $\mathbf{X}^\top\mathbf{X}$ be non-invertible, and what fixes it?**
+When features are **redundant** (collinear) or there are **more features than samples**. Adding L2 regularization (**ridge regression**) replaces the inverse with $(\mathbf{X}^\top\mathbf{X} + \lambda \mathbf{I})^{-1}$, which is always invertible — the $\lambda \mathbf{I}$ term lifts the matrix off singularity.
+
+**Q: Lasso (L1) vs Ridge (L2) — what's the difference and why does Lasso do feature selection?**
+Both add a penalty on weight size to fight overfitting, but the shape differs. **Ridge (L2)** adds $\lambda\sum w_j^2$ and **shrinks** all weights smoothly toward zero without ever quite reaching it. **Lasso (L1)** adds $\lambda\sum |w_j|$ and can drive weights **exactly to zero** — so it performs automatic **feature selection**, yielding a sparse model. Geometrically, L1's diamond-shaped constraint has corners on the axes, and the loss contour tends to touch a corner (where some coordinates are zero); L2's circular constraint has no corners, so weights shrink but stay nonzero. Use **Ridge** when most features matter, **Lasso** when you suspect many are useless, and **Elastic Net** (both penalties) when features are correlated.
+
+**Q: Does linear regression require feature scaling?**
+The **normal equation does not** — it solves exactly regardless of scale. **Gradient descent does**: unscaled features create an elongated loss bowl that zig-zags and converges slowly. And **regularization (L1/L2) always requires scaling** — otherwise the penalty unfairly punishes large-scale features. Standardize features before iterative or regularized fitting.
+
+## 6.2 — Logistic Regression
+
+Linear regression outputs any number on the real line, but for a yes/no question we need a probability between 0 and 1. Logistic regression takes the same linear combination $\mathbf{w}^\top\mathbf{x}$ and squashes it through the **sigmoid** so the output reads as "probability of class 1." Despite the name, it is a **classification** algorithm.
+
+$$ \sigma(z) = \frac{1}{1 + e^{-z}}, \qquad \hat{p} = \sigma(\mathbf{w}^\top\mathbf{x}) $$
+
+The linear part predicts the **log-odds**, and the sigmoid converts log-odds back to a probability:
+
+$$ \log\frac{\hat{p}}{1-\hat{p}} = \mathbf{w}^\top\mathbf{x} $$
+
+<svg viewBox="0 0 300 160" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif" font-size="10">
+  <line x1="20" y1="140" x2="280" y2="140" stroke="#888" stroke-width="1"/>
+  <line x1="150" y1="20" x2="150" y2="150" stroke="#888" stroke-width="1"/>
+  <line x1="20" y1="30" x2="280" y2="30" stroke="#bbb" stroke-width="1" stroke-dasharray="3 3"/>
+  <text x="6" y="33">1</text>
+  <text x="10" y="143">0.5</text>
+  <path d="M20,138 C90,136 120,120 150,85 C180,50 210,34 280,32" fill="none" stroke="#3b82f6" stroke-width="2.5"/>
+  <circle cx="150" cy="85" r="3" fill="#ef4444"/>
+  <text x="156" y="80" fill="#ef4444">z=0 → p=0.5</text>
+  <text x="240" y="155">z = wᵀx</text>
+</svg>
+
+We train it by minimizing **binary cross-entropy** (log loss), not MSE — because squashing MSE through a sigmoid gives a non-convex surface, while cross-entropy stays convex.
+
+$$ \mathcal{L} = -\frac{1}{m}\sum_i \left[ y^{(i)} \log \hat{p}^{(i)} + (1-y^{(i)})\log(1-\hat{p}^{(i)}) \right] $$
+
+```python
+import numpy as np
+
+def sigmoid(z):
+    z = np.clip(z, -500, 500)  # ponytail: clip to stop np.exp(-z) overflow for big |z|
+    return 1 / (1 + np.exp(-z))
+
+def fit_logistic(X, y, lr=0.1, epochs=1000):
+    w = np.zeros(X.shape[1])
+    for _ in range(epochs):
+        p = sigmoid(X @ w)             # predicted probabilities
+        grad = X.T @ (p - y) / len(y)  # gradient of log loss — same shape as linear!
+        w -= lr * grad
+    return w
+```
+
+**Q: Why is it called regression if it does classification?**
+Because it **regresses the log-odds** — a continuous quantity — as a linear function of the inputs. The classification step is just thresholding that probability (usually at 0.5). The underlying machinery is linear regression on a transformed target.
+
+**Q: Why not just use linear regression for classification?**
+Linear regression outputs values outside $[0,1]$ (it can predict 1.7 or −0.3, meaningless as probabilities), and it is sensitive to far-away points that shift the line. The sigmoid bounds the output and makes the loss probabilistic and well-behaved.
+
+**Q: What does the decision boundary look like?**
+A **linear** boundary (a line in 2D, a hyperplane in higher dimensions). The model predicts class 1 when $\mathbf{w}^\top\mathbf{x} > 0$, i.e. when $\hat{p} > 0.5$. To get curved boundaries you must add nonlinear features (polynomial terms, interactions).
+
+**Q: Why cross-entropy instead of MSE?**
+With a sigmoid, **MSE is non-convex** (full of local minima) and its gradient vanishes when predictions are confidently wrong. **Cross-entropy is convex** in $\mathbf{w}$ and produces a clean gradient $(\hat{p}-y)$ that punishes confident mistakes hard. (See Chapter 04 for why log loss measures surprise.)
+
+**Q: Why would you move the decision threshold off 0.5?**
+Because **0.5 is only optimal when the classes are balanced and false positives and false negatives cost the same** — rarely true. With **class imbalance** (say 1% fraud), a 0.5 threshold predicts "no fraud" for almost everything; lowering it catches more positives. The choice is a **precision/recall tradeoff**: lower the threshold to boost recall (catch more positives, more false alarms), raise it to boost precision. Tune it on a validation set using the precision–recall curve or by minimizing real-world cost — never just accept 0.5. (Metrics like precision, recall, and ROC are Chapter 08.)
+
+**Q: How do you extend it to more than two classes?**
+Use **softmax regression** (multinomial logistic regression): one weight vector per class, outputs normalized to sum to 1. Or train **one-vs-rest** — one binary classifier per class and pick the highest score.
+
+## 6.3 — k-Nearest Neighbours
+
+The laziest idea in ML: to classify a new point, look at the $k$ training points closest to it and take a majority vote. There is **no training** — kNN just memorizes the dataset and does all its work at prediction time. It is the canonical **lazy learner** and a great mental baseline.
+
+<svg viewBox="0 0 220 180" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif" font-size="10">
+  <circle cx="60" cy="50" r="5" fill="#3b82f6"/>
+  <circle cx="90" cy="80" r="5" fill="#3b82f6"/>
+  <circle cx="50" cy="110" r="5" fill="#3b82f6"/>
+  <circle cx="150" cy="60" r="5" fill="#ef4444"/>
+  <circle cx="160" cy="120" r="5" fill="#ef4444"/>
+  <circle cx="130" cy="140" r="5" fill="#ef4444"/>
+  <circle cx="110" cy="95" r="6" fill="#111"/>
+  <circle cx="110" cy="95" r="42" fill="none" stroke="#888" stroke-dasharray="3 3"/>
+  <text x="118" y="92">? (k=3)</text>
+  <text x="20" y="170" fill="#3b82f6">class A</text>
+  <text x="150" y="170" fill="#ef4444">class B</text>
+</svg>
+
+Closeness is measured by a **distance metric**, most often Euclidean:
+
+$$ d(\mathbf{a}, \mathbf{b}) = \sqrt{\sum_j (a_j - b_j)^2} $$
+
+**Q: Why is kNN called a "lazy learner"?**
+Because it does **no work at training time** — it just stores the data. All computation is deferred to **inference**, when it must compute distances to (potentially) every training point. Contrast with "eager" learners like logistic regression that build a model up front and predict instantly.
+
+**Q: Does kNN do regression too?**
+Yes. For **kNN regression**, instead of voting you **average the target values of the $k$ nearest neighbours** (optionally distance-weighted). The same lazy machinery — find neighbours, aggregate — just with mean instead of majority vote. This chapter's examples are classification, but the table marks kNN as "both" for this reason.
+
+**Q: What is the cost of kNN at inference?**
+Naively $O(md)$ per query — distance to all $m$ training points across $d$ dimensions. This makes it **slow and memory-heavy on large datasets**. Spatial indexes like **KD-trees** or **ball-trees** speed it up in low dimensions; approximate nearest-neighbour (ANN) methods are used at scale.
+
+**Q: How do you choose k?**
+Via cross-validation. **Small $k$** (e.g. 1) gives a jagged, low-bias high-variance boundary that overfits noise; **large $k$** smooths the boundary toward the majority class (high bias). Use an **odd $k$** for binary problems to avoid ties. A common refinement is **distance-weighted voting** — closer neighbours count more — which softens the choice of $k$ and reduces ties.
+
+**Q: Why must you scale features for kNN?**
+Because distance is dominated by **large-magnitude features**. If "salary" ranges in tens of thousands and "age" in tens, salary swamps the distance and age becomes irrelevant. Standardize or normalize so every feature contributes fairly.
+
+**Q: How does kNN behave in high dimensions?**
+Badly — the **curse of dimensionality**. As dimensions grow, all points become roughly equidistant, so "nearest" loses meaning and the vote becomes noise. kNN shines in low-dimensional, dense feature spaces.
+
+## 6.4 — Naive Bayes
+
+Naive Bayes flips the question around using Bayes' theorem: instead of modeling the boundary, it asks "which class makes this set of features most likely?" Its trick — and its name — is the **naive assumption** that every feature is independent given the class. That assumption is almost always false, yet the model works shockingly well, especially for text.
+
+Start from **Bayes' theorem** itself:
+
+$$ P(y \mid \mathbf{x}) = \frac{P(\mathbf{x} \mid y)\, P(y)}{P(\mathbf{x})} $$
+
+We want the class $y$ that maximizes the left side. The denominator $P(\mathbf{x})$ is the **same for every class** (it doesn't depend on $y$), so it doesn't change which class wins — we can drop it. Then the **naive independence assumption** factors the likelihood $P(\mathbf{x} \mid y)$ into a product of per-feature terms:
+
+$$ P(y \mid \mathbf{x}) \propto P(y)\prod_{j} P(x_j \mid y) $$
+
+We pick the class $y$ that maximizes this product. Working in **log space** turns the product into a sum and avoids numerical underflow:
+
+$$ \hat{y} = \arg\max_y \left[ \log P(y) + \sum_j \log P(x_j \mid y) \right] $$
+
+::: {.callout-warning}
+**Gotcha:** if a word never appeared with a class in training, $P(x_j \mid y) = 0$ wipes out the entire product. Fix with **Laplace (add-one) smoothing** — add a small count to every term so nothing is ever exactly zero.
+:::
+
+**Q: Write Bayes' theorem and explain why the denominator disappears.**
+$P(y \mid \mathbf{x}) = \frac{P(\mathbf{x} \mid y)P(y)}{P(\mathbf{x})}$: the **posterior** (class given features) equals the **likelihood** times the **prior**, divided by the **evidence** $P(\mathbf{x})$. Since we only need the class with the highest posterior — an **argmax over $y$** — and $P(\mathbf{x})$ is **constant across all classes**, it scales every class equally and cannot change the winner. So we drop it and work with the proportional form $P(y \mid \mathbf{x}) \propto P(\mathbf{x} \mid y)P(y)$.
+
+**Q: What is the "naive" assumption?**
+That all features are **conditionally independent given the class**. For text, this means the model treats "New York" as if "New" and "York" are unrelated. It is rarely true, but it makes the likelihood factor into a simple product $\prod_j P(x_j \mid y)$ that needs very little data to estimate.
+
+**Q: Why does Naive Bayes work so well for text despite a false assumption?**
+Because for classification we only need the **ranking** of classes to be right, not the probabilities to be accurate. Even when the independence assumption distorts the probability magnitudes, the **argmax usually still lands on the correct class**. High-dimensional sparse word counts also play to its strengths.
+
+**Q: What are the common variants?**
+**Multinomial NB** (word counts — the text workhorse), **Bernoulli NB** (binary word present/absent), and **Gaussian NB** (continuous features modeled as normal distributions per class). Pick by the nature of your features.
+
+**Q: Why work in log space?**
+Multiplying hundreds of small probabilities causes **floating-point underflow** (the product rounds to 0). Taking logs converts the product into a **sum of log-probabilities**, which is numerically stable and faster. The argmax is unchanged because log is monotonic.
+
+**Q: Is Naive Bayes generative or discriminative?**
+**Generative** — it models $P(\mathbf{x} \mid y)$ and $P(y)$, i.e. how the data is generated per class, then applies Bayes' rule. Logistic regression is **discriminative** — it models $P(y \mid \mathbf{x})$ directly (so do SVMs and decision trees: they carve the boundary without modeling how features arise). NB needs less data and trains instantly; discriminative models usually win with enough data.
+
+## 6.5 — Support Vector Machines
+
+Many lines can separate two classes — which is best? An SVM picks the one that leaves the **widest gap** (margin) between the classes. The points that touch the edge of that gap are the **support vectors**; they alone define the boundary, and everything else could be deleted without changing it.
+
+<svg viewBox="0 0 240 170" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif" font-size="10">
+  <line x1="40" y1="20" x2="200" y2="150" stroke="#111" stroke-width="2"/>
+  <line x1="60" y1="20" x2="220" y2="150" stroke="#888" stroke-dasharray="4 3"/>
+  <line x1="20" y1="20" x2="180" y2="150" stroke="#888" stroke-dasharray="4 3"/>
+  <circle cx="55" cy="35" r="5" fill="#3b82f6"/>
+  <circle cx="40" cy="70" r="5" fill="#3b82f6" stroke="#111" stroke-width="2"/>
+  <circle cx="80" cy="120" r="5" fill="#3b82f6" stroke="#111" stroke-width="2"/>
+  <circle cx="175" cy="60" r="5" fill="#ef4444" stroke="#111" stroke-width="2"/>
+  <circle cx="200" cy="100" r="5" fill="#ef4444"/>
+  <circle cx="160" cy="135" r="5" fill="#ef4444" stroke="#111" stroke-width="2"/>
+  <text x="120" y="30" fill="#111">margin</text>
+  <text x="20" y="165" fill="#111">circled = support vectors</text>
+</svg>
+
+The **hard-margin** SVM maximizes the margin, which is equivalent to minimizing $\|\mathbf{w}\|$ subject to every point being on the correct side:
+
+$$ \min_{\mathbf{w}} \tfrac{1}{2}\|\mathbf{w}\|^2 \quad \text{s.t.}\quad y^{(i)}(\mathbf{w}^\top\mathbf{x}^{(i)} + b) \ge 1 $$
+
+Real data is rarely perfectly separable, so the **soft-margin** SVM adds slack variables $\xi_i \ge 0$ that let points violate the margin, penalized by **C**:
+
+$$ \min_{\mathbf{w}, \xi} \tfrac{1}{2}\|\mathbf{w}\|^2 + C\sum_i \xi_i \quad \text{s.t.}\quad y^{(i)}(\mathbf{w}^\top\mathbf{x}^{(i)} + b) \ge 1 - \xi_i $$
+
+The kernel trick is the hardest idea here. The picture: points you can't separate with a straight cut in their original space become separable once you **lift them into a higher dimension** — and the kernel lets you do that without ever computing the lift.
+
+<svg viewBox="0 0 320 180" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif" font-size="10">
+  <text x="10" y="14" fill="#111">1D: not linearly separable</text>
+  <line x1="10" y1="40" x2="200" y2="40" stroke="#888" stroke-width="1"/>
+  <circle cx="30" cy="40" r="5" fill="#ef4444"/>
+  <circle cx="55" cy="40" r="5" fill="#ef4444"/>
+  <circle cx="90" cy="40" r="5" fill="#3b82f6"/>
+  <circle cx="115" cy="40" r="5" fill="#3b82f6"/>
+  <circle cx="140" cy="40" r="5" fill="#3b82f6"/>
+  <circle cx="170" cy="40" r="5" fill="#ef4444"/>
+  <circle cx="195" cy="40" r="5" fill="#ef4444"/>
+  <text x="10" y="78" fill="#111">lift x → (x, x²): now a line splits them</text>
+  <line x1="10" y1="170" x2="200" y2="170" stroke="#888" stroke-width="1"/>
+  <line x1="10" y1="170" x2="10" y2="92" stroke="#888" stroke-width="1"/>
+  <line x1="10" y1="120" x2="200" y2="120" stroke="#3b82f6" stroke-width="1.5" stroke-dasharray="4 3"/>
+  <circle cx="30" cy="100" r="5" fill="#ef4444"/>
+  <circle cx="55" cy="108" r="5" fill="#ef4444"/>
+  <circle cx="90" cy="150" r="5" fill="#3b82f6"/>
+  <circle cx="115" cy="158" r="5" fill="#3b82f6"/>
+  <circle cx="140" cy="150" r="5" fill="#3b82f6"/>
+  <circle cx="170" cy="108" r="5" fill="#ef4444"/>
+  <circle cx="195" cy="100" r="5" fill="#ef4444"/>
+  <text x="120" y="115" fill="#3b82f6">separator</text>
+</svg>
+
+**Q: What is the maximum-margin idea and why does it help generalization?**
+The SVM chooses the boundary with the **largest distance to the nearest points of either class**. A wide margin is a buffer — small perturbations to a test point won't flip its label — which tends to generalize better and connects to the bias–variance story from Chapter 05.
+
+**Q: What is the kernel trick?**
+A way to get **nonlinear boundaries without ever computing high-dimensional features**. The SVM only needs **dot products** between points; a kernel $K(\mathbf{a},\mathbf{b})$ computes the dot product in some richer space directly. So you get the power of a huge feature expansion at the cost of a cheap function — that is the "trick" (see the lift-to-2D picture above).
+
+**Q: What does the RBF (Gaussian) kernel do?**
+$K(\mathbf{a},\mathbf{b}) = \exp(-\gamma\|\mathbf{a}-\mathbf{b}\|^2)$ measures **similarity by distance** — close points score near 1, far points near 0. It maps into an infinite-dimensional space, letting the SVM carve highly flexible boundaries. **$\gamma$** controls reach: large $\gamma$ = tight, wiggly boundaries (overfit risk); small $\gamma$ = smooth.
+
+**Q: What is soft margin and what does C control?**
+Real data isn't perfectly separable, so the **soft margin** allows some points inside the margin or misclassified — the slack $\xi_i$ in the objective $\min \tfrac{1}{2}\|\mathbf{w}\|^2 + C\sum \xi_i$ — penalized by **C**. Large **C** = punish violations hard → narrow margin, low bias, high variance (overfit). Small **C** = tolerate violations → wide margin, more regularization (high bias).
+
+**Q: Why are they called "support vectors"?**
+Because only the points **on or inside the margin** determine the boundary — they "support" it. Remove a non-support point and the solution is unchanged. This makes SVMs **memory-efficient** at prediction: only support vectors are stored.
+
+**Q: When do SVMs struggle?**
+On **very large datasets** (training is roughly $O(m^2)$ to $O(m^3)$) and when you need **calibrated probabilities** (SVMs output signed distances, not probabilities, by default). They shine on medium-sized, high-dimensional problems like text classification.
+
+## 6.6 — Decision Trees
+
+A decision tree is just a flowchart of yes/no questions learned from data: "Is age > 30? If yes, is income > 50k?" — splitting the data into ever-purer groups until each leaf is mostly one class. It is intuitive, needs no feature scaling, and is the single building block behind the random forests and boosting of Chapter 07.
+
+```{mermaid}
+flowchart TD
+    A["Income > 50k?"] -->|yes| B["Age > 40?"]
+    A -->|no| C["Class: Deny"]
+    B -->|yes| D["Class: Approve"]
+    B -->|no| E["Class: Deny"]
+```
+
+At each node the tree picks the split that most **reduces impurity**. Two common measures:
+
+$$ \text{Gini} = 1 - \sum_k p_k^2, \qquad \text{Entropy} = -\sum_k p_k \log_2 p_k $$
+
+where $p_k$ is the fraction of class $k$ in the node. A pure node (all one class) has impurity 0; a 50/50 split is maximally impure. The tree grows **greedily** — it picks the best split now, never looking ahead.
+
+**Q: How does a tree decide where to split?**
+It evaluates every feature and threshold, and picks the one with the highest **information gain** — the drop in impurity (Gini or entropy) from parent to weighted children. It is **greedy**: locally optimal at each node, with no guarantee of a globally optimal tree.
+
+**Q: Gini vs entropy — does it matter?**
+Rarely in practice. Both reward pure nodes; **Gini** is slightly cheaper (no logarithm) and is scikit-learn's default, while **entropy** comes from information theory (Chapter 04). They usually produce near-identical trees.
+
+**Q: How does a regression tree work?**
+Same greedy splitting, but the impurity measure is **variance (MSE)** instead of Gini/entropy: the tree picks the split that most reduces the variance of the target within the child nodes. Each **leaf predicts the mean** of the training targets that fall in it. So the tree approximates a continuous function as a **staircase** of constant pieces — which is why a single regression tree can't extrapolate beyond the range it saw in training.
+
+**Q: Why do decision trees overfit, and how do you stop it?**
+A tree grown to full depth can **memorize the training data** — one leaf per sample, zero training error, terrible generalization (classic high variance). Control it by limiting **max depth**, requiring a **minimum samples per leaf**, or **pruning** (growing fully then cutting back branches that don't improve validation performance).
+
+**Q: What is pruning?**
+Cutting back an over-grown tree to reduce variance. **Pre-pruning** (early stopping) halts growth via depth/leaf-size limits; **post-pruning** grows the full tree then removes weak branches (e.g. cost-complexity pruning, which penalizes leaf count). Both trade a little bias for a lot less variance.
+
+**Q: Why don't decision trees need feature scaling?**
+Because splits are based on **thresholds on one feature at a time** ("is $x_j > t$?"), and the ordering of values is unaffected by scaling or monotonic transforms. This scale-invariance is a major practical advantage over kNN and SVMs.
+
+**Q: What are the strengths and weaknesses of a single tree?**
+**Strengths:** interpretable, handles mixed feature types, no scaling, captures nonlinearities and interactions. **Weakness:** **high variance** — small data changes can produce a very different tree. That instability is exactly what ensembles in Chapter 07 exploit by averaging many trees.
+
+## 6.7 — Comparing the Workhorses
+
+A cheat-sheet view. The right algorithm depends on data size, dimensionality, interpretability needs, and whether you need probabilities.
+
+| Algorithm | Type | Decision boundary | Training cost | Inference cost | Needs scaling? | Interpretable? |
+|---|---|---|---|---|---|---|
+| Linear Regression | Regression | Linear | $O(n^3)$ or iterative | Fast | GD / regularized only | High |
+| Logistic Regression | Classification | Linear | Iterative | Fast | GD / regularized only | High |
+| k-NN | Both | Arbitrary (local) | None (lazy) | Slow $O(md)$ | Yes | Low |
+| Naive Bayes | Classification | Linear* | Very fast | Fast | No | Medium |
+| SVM | Both | Linear or kernel | $O(m^2$–$m^3)$ | Fast (SVs only) | Yes | Low |
+| Decision Tree | Both | Axis-parallel | Fast | Fast | No | High |
+
+\* Gaussian NB with a shared variance across classes gives a **linear** boundary; with per-class variances the boundary is **quadratic**. Multinomial/Bernoulli NB are linear in the log-count features.
+
+**Q: Given a small text-classification dataset, what's a sensible first model?**
+**Multinomial Naive Bayes** — it trains instantly, needs little data, handles high-dimensional sparse word counts naturally, and gives a strong baseline. A **linear SVM** or **logistic regression** on TF-IDF features is the usual next step.
+
+**Q: You need a model a regulator can audit. Which do you reach for?**
+**Logistic regression** or a **shallow decision tree** — both expose exactly why a decision was made (signed coefficients / a readable rule path). kNN and kernel SVMs are effectively black boxes.
+
+**Q: Which of these handle nonlinear boundaries natively?**
+**kNN** (local, arbitrary shapes), **kernel SVM** (via RBF/polynomial kernels), and **decision trees** (axis-parallel splits stacked into complex regions). Linear and logistic regression need manual nonlinear features; Naive Bayes is essentially linear in log-space.
+
+**Q: Generative vs discriminative — which of these are which?**
+**Naive Bayes is generative** (models $P(\mathbf{x}\mid y)$ and $P(y)$, then inverts via Bayes). **Logistic regression, SVMs, and decision trees are discriminative** — they model the boundary or $P(y\mid\mathbf{x})$ directly without describing how features are generated. Generative models can need less data and can generate samples; discriminative models usually predict more accurately given enough data.
+
+## Key takeaways {.unnumbered}
+
+- **Linear regression** predicts a number as $\mathbf{w}^\top\mathbf{x}$; fit via the exact **normal equation** (small $n$) or **gradient descent** (large $n$). Evaluate with **R²** (variance explained) plus RMSE/MAE; coefficients = effect of a feature holding others fixed.
+- **Regularization:** **Ridge (L2)** shrinks weights smoothly; **Lasso (L1)** drives some to exactly zero for **feature selection** (sparsity). Always scale features first.
+- **Logistic regression** wraps that linear score in a **sigmoid** to predict probabilities, trained with **cross-entropy**; it is classification with a **linear decision boundary**, modeling log-odds — and you move the **threshold** off 0.5 for class imbalance / precision–recall tradeoffs.
+- **kNN** is a **lazy learner** — zero training, expensive inference, must scale features, dies in high dimensions; does classification (vote) and regression (average the $k$ neighbours).
+- **Naive Bayes** starts from **Bayes' theorem** ($P(y\mid\mathbf{x}) \propto P(\mathbf{x}\mid y)P(y)$; the evidence drops out as it's constant across classes) and assumes **conditional independence** — false but effective for text. Use log space and Laplace smoothing. It is the chapter's one **generative** model.
+- **SVMs** find the **maximum-margin** boundary defined by **support vectors**; **soft margin** ($\min \tfrac12\|\mathbf{w}\|^2 + C\sum\xi_i$) tolerates violations via **C**, and the **kernel trick** (esp. **RBF**) buys nonlinearity cheaply by lifting points into higher dimensions.
+- **Decision trees** split greedily to reduce **Gini/entropy** impurity (classification) or **variance/MSE** (regression, leaf = mean); they need no scaling and are interpretable but **overfit** without depth limits or **pruning**.
+- Match the model to the problem: data size, dimensionality, need for probabilities, and interpretability — and remember the high-variance tree is the seed of Chapter 07's ensembles.
+
+------------------------------------------------------------------------
+
+[📖 All chapters](../interview-guide.html)  &nbsp;|&nbsp;  [← 05 · 🧩 Core ML Concepts](ch05.html)  &nbsp;|&nbsp;  [07 · 🌲 Ensembles & Boosting →](ch07.html)

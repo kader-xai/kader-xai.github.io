@@ -1,0 +1,340 @@
+---
+title: "Chapter 07 — 🌲 Ensembles & Boosting — how to win on tabular data"
+page-layout: full
+toc: true
+toc-location: left
+toc-title: "In this chapter"
+toc-depth: 2
+toc-expand: true
+---
+
+[📖 All chapters](../interview-guide.html)  &nbsp;|&nbsp;  [← 06 · 📐 Classical Supervised Algorithms](ch06.html)  &nbsp;|&nbsp;  [08 · 🗺️ Unsupervised Learning & Dimensionality Reduction →](ch08.html)
+
+<details class="ig-jump">
+<summary>📚 Jump to any chapter</summary>
+<p class="ig-era">🧮 Mathematical Foundations</p>
+<ul>
+<li><a href="ch01.html">01 &middot; 🧮 Linear Algebra — the language of data</a></li>
+<li><a href="ch02.html">02 &middot; 📉 Calculus & Optimization — how models learn</a></li>
+<li><a href="ch03.html">03 &middot; 🎲 Probability & Statistics — reasoning under uncertainty</a></li>
+<li><a href="ch04.html">04 &middot; 🔥 Information Theory & Loss Functions — measuring surprise and error</a></li>
+</ul>
+<p class="ig-era">🧩 Classical Machine Learning</p>
+<ul>
+<li><a href="ch05.html">05 &middot; 🧩 Core ML Concepts — the ground rules</a></li>
+<li><a href="ch06.html">06 &middot; 📐 Classical Supervised Algorithms — the workhorses</a></li>
+<li><a href="ch07.html">07 &middot; 🌲 Ensembles & Boosting — how to win on tabular data</a></li>
+<li><a href="ch08.html">08 &middot; 🗺️ Unsupervised Learning & Dimensionality Reduction — structure without labels</a></li>
+<li><a href="ch09.html">09 &middot; 🎯 Model Evaluation & Validation — knowing if it actually works</a></li>
+</ul>
+<p class="ig-era">🧠 Deep Learning</p>
+<ul>
+<li><a href="ch10.html">10 &middot; 🧠 Neural Network Fundamentals — the building block</a></li>
+<li><a href="ch11.html">11 &middot; ⚙️ Training Deep Networks — making deep nets actually train</a></li>
+<li><a href="ch12.html">12 &middot; 🖼️ Convolutional Neural Networks — the vision branch</a></li>
+<li><a href="ch13.html">13 &middot; 🔁 Sequence Models — RNNs, LSTMs and the bottleneck</a></li>
+</ul>
+<p class="ig-era">⚡ The Transformer Era</p>
+<ul>
+<li><a href="ch14.html">14 &middot; 🔤 Word Embeddings — giving words meaning as vectors</a></li>
+<li><a href="ch15.html">15 &middot; ⚡ Attention & the Transformer — the architecture that changed everything</a></li>
+<li><a href="ch16.html">16 &middot; 🧱 Tokenization, Pretraining & Model Families</a></li>
+<li><a href="ch17.html">17 &middot; 📈 Modern LLMs & Scaling — bigger, and suddenly capable</a></li>
+</ul>
+<p class="ig-era">💬 Using & Adapting LLMs</p>
+<ul>
+<li><a href="ch18.html">18 &middot; 💬 Prompting & In-Context Learning — programming models with words</a></li>
+<li><a href="ch19.html">19 &middot; 🎚️ Fine-Tuning & Alignment — specializing and aligning models</a></li>
+<li><a href="ch20.html">20 &middot; 📚 Retrieval-Augmented Generation (RAG) — giving the model an open book</a></li>
+<li><a href="ch21.html">21 &middot; 🚀 Inference, Decoding & Serving — running LLMs efficiently</a></li>
+</ul>
+<p class="ig-era">🤖 The Agentic Frontier</p>
+<ul>
+<li><a href="ch22.html">22 &middot; 🤖 Agents, Tools & Loops — the latest frontier</a></li>
+<li><a href="ch23.html">23 &middot; 🛡️ Evaluation, Safety & Guardrails — making LLM systems trustworthy</a></li>
+<li><a href="ch24.html">24 &middot; 🔧 MLOps & LLMOps — shipping and operating models in production</a></li>
+</ul>
+<p class="ig-era">🛠️ The Practical Toolkit</p>
+<ul>
+<li><a href="ch25.html">25 &middot; 🛠️ Practical Toolkit I — Modeling & Vision Libraries</a></li>
+<li><a href="ch26.html">26 &middot; 🧰 Practical Toolkit II — LLM Frameworks, Orchestration & Vector Stores</a></li>
+<li><a href="ch27.html">27 &middot; ⚙️ Practical Toolkit III — Serving, Apps & MLOps Tooling</a></li>
+</ul>
+<p class="ig-era">☁️ Cloud AI Platforms</p>
+<ul>
+<li><a href="ch28.html">28 &middot; ☁️ Cloud AI Platforms — deploying foundation models on the hyperscalers</a></li>
+</ul>
+</details>
+
+------------------------------------------------------------------------
+
+Chapter 06 gave us the workhorses — single decision trees, linear models, SVMs. Each has a weakness: one tree is brittle, one model is biased. This chapter is about a deceptively simple idea — combine many imperfect models into one strong one — which proved so effective it dominated structured-data competitions and production systems for two decades. Next chapter we leave labels behind for unsupervised learning.
+
+::: {.callout-note appearance="simple"}
+📍 **Timeline:** 1990s–2010s: bagging and boosting dominate structured-data ML — AdaBoost (1995), Random Forests (2001), and gradient-boosting libraries (XGBoost 2014, LightGBM/CatBoost 2017) become the default winners on tabular data.
+:::
+
+## 7.1 — Why combining models helps
+
+Imagine asking one expert versus polling a crowd. One expert is fast but can be confidently wrong; a crowd of independent, decent guessers averages out individual mistakes. Ensembles work for the same reason — combining models reduces error, but *which* part of the error you reduce depends on *how* you combine them.
+
+Recall the **bias–variance decomposition** from Chapter 05: expected error splits into bias (systematic wrongness), variance (sensitivity to the training sample), and irreducible noise.
+
+$$ \text{Error} = \text{Bias}^2 + \text{Variance} + \text{Noise} $$
+
+The two ensemble families attack different terms. **Bagging** averages many high-variance, low-bias models to cut **variance**. **Boosting** sequentially adds models to fix the previous errors, cutting **bias**. That single distinction is the spine of this whole chapter.
+
+Here is the geometry of what "average away the noise" means — scattered estimates collapsing toward the true value:
+
+<svg viewBox="0 0 420 150" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif" font-size="11">
+  <line x1="20" y1="110" x2="400" y2="110" stroke="#888" stroke-width="1"/>
+  <line x1="210" y1="40" x2="210" y2="120" stroke="#2a9d8f" stroke-width="2" stroke-dasharray="4 3"/>
+  <text x="210" y="135" text-anchor="middle" fill="#2a9d8f">true value</text>
+  <circle cx="120" cy="110" r="4" fill="#888"/>
+  <circle cx="170" cy="110" r="4" fill="#888"/>
+  <circle cx="235" cy="110" r="4" fill="#888"/>
+  <circle cx="290" cy="110" r="4" fill="#888"/>
+  <circle cx="320" cy="110" r="4" fill="#888"/>
+  <text x="230" y="25" text-anchor="middle" fill="#888">many noisy single models</text>
+  <circle cx="207" cy="80" r="6" fill="#e76f51"/>
+  <text x="207" y="68" text-anchor="middle" fill="#e76f51">their average</text>
+</svg>
+
+::: {.callout-tip}
+**Intuition:** averaging $N$ independent estimates each with variance $\sigma^2$ gives variance $\sigma^2/N$. That is bagging's whole trick — make many models, average away the noise. The catch is the word *independent*.
+:::
+
+**Q: What is the core idea behind an ensemble?**
+Combine several models (**base learners**) so the group predicts better than any single member. The gain comes from errors being partly **uncorrelated** — when one model is wrong, others can be right, so combining cancels mistakes.
+
+**Q: What is the difference between reducing variance and reducing bias?**
+**Variance** is how much your model would change if you retrained on a different sample — high-variance models (deep trees) overfit. **Bias** is systematic error from being too simple (a shallow stump underfits). Bagging targets variance; boosting targets bias.
+
+**Q: Why does averaging only help if models are not identical?**
+If all models make the *same* mistakes (perfectly correlated errors), averaging changes nothing. The clean $\sigma^2/N$ reduction assumes independence; in reality errors are partly correlated, so the true benefit lands between $\sigma^2/N$ and $\sigma^2$. Ensembles work hard to **decorrelate** their members.
+
+**Q: Are deep trees high-bias or high-variance?**
+**High-variance, low-bias.** A fully grown tree can memorize the training set (low bias) but changes wildly with the data sample (high variance). That makes them the perfect base learner for bagging, which exists to crush variance.
+
+**Q: Is an ensemble always better than a single model?**
+Not for free. You pay in **compute and interpretability** — many models to train, store, and explain. If a single well-tuned model already hits the bias–variance sweet spot, an ensemble adds little. Ensembles win most when individual models are decent but **diverse**.
+
+## 7.2 — Bootstrap and bagging
+
+**Bagging** = **B**ootstrap **agg**regat**ing**. The bootstrap is a statistics trick: to simulate "what if I had a different dataset?", you sample *with replacement* from the data you have. Each bootstrap sample is the same size as the original but contains duplicates and misses some rows. Train one model per sample, then average (regression) or vote (classification).
+
+```{mermaid}
+flowchart TD
+    D["Training set (N rows)"] --> B1["Bootstrap 1"]
+    D --> B2["Bootstrap 2"]
+    D --> B3["Bootstrap 3"]
+    B1 --> M1["Model 1"]
+    B2 --> M2["Model 2"]
+    B3 --> M3["Model 3"]
+    M1 --> A["Average / majority vote"]
+    M2 --> A
+    M3 --> A
+    A --> P["Final prediction"]
+```
+
+```python
+import numpy as np
+
+def bootstrap_sample(X, y):
+    n = len(X)
+    idx = np.random.randint(0, n, size=n)  # sample WITH replacement
+    return X[idx], y[idx]
+
+def bagging_predict(models, X):
+    # each model was trained on its own bootstrap sample
+    preds = np.array([m.predict(X) for m in models])  # (n_models, n_rows)
+    return preds.mean(axis=0)                          # average = lower variance
+```
+
+**Q: What is a bootstrap sample?**
+A dataset of the same size as the original, drawn **with replacement**. Some rows appear multiple times, others not at all. It mimics drawing a fresh dataset from the population, so each model sees a slightly different world.
+
+**Q: Why does bagging reduce variance but not bias?**
+Averaging many models pulls the combined prediction toward the *expected* prediction, shrinking variance. But the average of many biased models is still biased — if every base learner systematically underfits, so does their average. Bagging leaves bias roughly unchanged.
+
+**Q: Roughly what fraction of rows does a bootstrap sample miss?**
+About **37%**. The chance a given row is *not* picked in $n$ draws is $(1-1/n)^n \to e^{-1} \approx 0.368$. Those left-out rows are the **out-of-bag** set, useful for free validation (see 7.3).
+
+**Q: Does bagging help with stable, low-variance models like linear regression?**
+Barely. Bagging shines when base learners are **unstable** (deep trees, where a small data change flips many splits). Averaging stable models gives almost the same model back, so there is little variance to remove.
+
+**Q: For classification, do you average or vote — and what is "soft" voting?**
+You aggregate. **Hard voting** takes the majority predicted class. **Soft voting** averages the predicted *probabilities* and then picks the argmax — usually better, because it uses each model's confidence instead of throwing it away.
+
+## 7.3 — Random Forests
+
+A Random Forest is bagging applied to deep trees, plus one extra trick that makes it famous: at **every split**, the tree may only consider a *random subset of features*. Why? Plain bagged trees still look alike — they all split on the same one or two dominant features, so their errors stay correlated. Forcing feature randomness **decorrelates** the trees, and less-correlated models average to lower variance.
+
+::: {.callout-tip}
+**Intuition:** if one feature is super-predictive, every bagged tree puts it at the root and they end up near-clones. Random Forest occasionally *hides* that feature at a split, forcing trees to find other signal — making the crowd genuinely diverse.
+:::
+
+**Q: What two sources of randomness does a Random Forest use?**
+(1) **Bagging** — each tree trains on a bootstrap sample of the rows. (2) **Feature subsampling** — at each split, only a random subset of features is considered (typically $\sqrt{p}$ features for classification, $p/3$ for regression, where $p$ is the total number of features).
+
+**Q: What is out-of-bag (OOB) error?**
+Each tree was trained without ~37% of the rows. For any row, you predict it using only the trees that did *not* see it — that gives a built-in validation estimate, the **OOB error**, with no separate hold-out set or cross-validation needed.
+
+**Q: How does a Random Forest measure feature importance?**
+Two common ways. **Mean decrease in impurity (MDI / Gini importance):** sum how much each feature reduces impurity across all splits — fast but **biased toward high-cardinality features**. **Permutation importance:** shuffle one feature's values and measure the drop in OOB accuracy — slower but more trustworthy.
+
+::: {.callout-warning}
+**Gotcha:** scikit-learn's default `feature_importances_` is impurity-based and inflates the importance of continuous / high-cardinality columns. If a reviewer asks "which feature matters most," prefer **permutation importance** or SHAP and say why.
+:::
+
+**Q: Can a Random Forest overfit if you add more trees?**
+No — adding trees does not overfit; the OOB error plateaus. More trees just give a more stable average. (Boosting is the opposite — more rounds *can* overfit. See 7.4.) You *can* overfit a forest by letting individual trees grow too deep on too little data, but not via tree count.
+
+**Q: Why are tree splits unaffected by feature scaling?**
+Trees split on **thresholds** (`feature < value`), which depend only on the *ordering* of values, not their scale. So forests need no standardization — a notable convenience versus SVMs or linear models.
+
+**Q: What are Extra Trees (Extremely Randomized Trees)?**
+A more random cousin: instead of searching for the *best* threshold at each split, Extra Trees pick the split threshold **at random** and keep the best of those random choices. This adds even more decorrelation, often lowering variance further (and trains faster), at the cost of slightly higher bias.
+
+## 7.4 — Boosting: sequential error-correction
+
+Bagging builds models in **parallel** and averages them. Boosting builds them **sequentially**: each new model focuses on the examples the previous ones got wrong. The intuition is a student studying — after each practice test, you spend more time on the questions you missed. Boosting turns a sequence of **weak learners** (barely better than random, e.g. shallow stumps) into one strong learner that mainly reduces **bias**.
+
+```{mermaid}
+flowchart LR
+    D["Data"] --> M1["Weak learner 1"]
+    M1 --> R1["Look at errors"]
+    R1 --> M2["Weak learner 2 focuses on errors"]
+    M2 --> R2["Look at errors"]
+    R2 --> M3["Weak learner 3"]
+    M3 --> S["Weighted sum of all learners"]
+```
+
+**AdaBoost** (Adaptive Boosting, 1995) was the first practical version. It keeps a **weight** on each training example: misclassified examples get their weight *increased* so the next learner pays them more attention; each learner also gets a say proportional to its accuracy.
+
+**Q: What is a weak learner?**
+A model only slightly better than random guessing — classically a **decision stump** (a one-split tree). Boosting's surprising theoretical result is that you can combine many weak learners into an arbitrarily strong one, as long as each beats chance.
+
+**Q: How does AdaBoost decide which examples to focus on?**
+After each round it **re-weights** the training examples: misclassified ones get higher weight, correctly classified ones get lower. The next weak learner minimizes the *weighted* error, so it concentrates on the hard cases the ensemble keeps missing.
+
+**Q: How are the weak learners combined in AdaBoost?**
+By a **weighted vote**: each learner $m$ gets weight $\alpha_m = \frac{1}{2}\ln\frac{1-\varepsilon_m}{\varepsilon_m}$, where $\varepsilon_m$ is its weighted error. More accurate learners (lower $\varepsilon$) get a larger say. The final prediction is $\text{sign}\!\left(\sum_m \alpha_m h_m(x)\right)$.
+
+**Q: Why does boosting reduce bias?**
+Each round explicitly fits the part of the signal the current ensemble *cannot* yet explain. Stacking these corrections builds an increasingly flexible model from simple parts, driving down systematic error — the opposite emphasis from bagging.
+
+**Q: Is AdaBoost sensitive to noisy data and outliers?**
+Yes — a known weakness. Because mislabeled or outlier points keep getting misclassified, their weights blow up and later learners obsess over them, hurting generalization. Gradient boosting with robust losses handles this better.
+
+## 7.5 — Gradient boosting: fitting the residuals
+
+AdaBoost re-weights examples; **gradient boosting** reframes the same "fix the errors" idea as **gradient descent in function space**. The intuition is cleaner: train a model, look at what it got wrong (the **residuals**), then train the *next* model to predict those residuals, and add it in. Repeat. Each tree is a step downhill on the loss.
+
+For squared-error loss, the residual *is* the negative gradient, so "fit the residuals" is literally a gradient step:
+
+$$ r_i = y_i - F_{m-1}(x_i), \qquad F_m(x) = F_{m-1}(x) + \nu \, h_m(x) $$
+
+where $h_m$ is the new tree fit to residuals $r_i$ and $\nu$ is the **learning rate** (shrinkage) that scales each step.
+
+```python
+import numpy as np
+
+def gradient_boost_fit(X, y, fit_tree, n_rounds=100, lr=0.1):
+    F = np.full(len(y), y.mean())   # start with a constant prediction
+    trees = []
+    for _ in range(n_rounds):
+        residual = y - F            # = negative gradient for squared loss
+        h = fit_tree(X, residual)   # new tree predicts the residual
+        F = F + lr * h.predict(X)   # take a small step downhill
+        trees.append(h)
+    return trees, y.mean()
+```
+
+**Q: What does each new tree in gradient boosting predict?**
+The **residual error** of the current ensemble — more precisely, the **negative gradient** of the loss with respect to the current predictions (the pseudo-residuals). For squared error these are just $y - F(x)$; for other losses (log-loss, etc.) it is the gradient of that loss.
+
+**Q: What is the learning rate (shrinkage) and why use it?**
+A factor $\nu \in (0,1]$ (often 0.01–0.1) that scales each tree's contribution: $F_m = F_{m-1} + \nu\, h_m$. Small steps make the model add many gentle corrections instead of a few large ones, which **regularizes** and improves generalization — at the cost of needing more trees.
+
+**Q: How does gradient boosting differ from AdaBoost?**
+AdaBoost re-weights *examples* and was derived for exponential loss; gradient boosting fits *residuals* (negative gradients) and works for **any differentiable loss** (squared error, log-loss, quantile, etc.). Gradient boosting is the more general, modern framework — AdaBoost is essentially a special case.
+
+**Q: Why can boosting overfit while bagging cannot (via more rounds)?**
+Each boosting round *reduces training error*, so too many rounds eventually fit the noise — bias drops but variance creeps up. You control this with the **learning rate**, **number of rounds** (early stopping on a validation set), and **tree depth**. Bagging's averaging has no such drift.
+
+**Q: Why are boosting trees shallow ("weak") while Random Forest trees are deep?**
+Boosting only needs each tree to capture a *little* new signal; depth 3–6 is typical, and shallow trees keep variance low so the sequential sum does not overfit fast. Random Forest wants each tree **low-bias** (deep) and relies on averaging to kill the variance. Different jobs, opposite tree depths.
+
+::: {.callout-warning}
+**Gotcha:** "more trees is always better" is true for Random Forests, **false** for gradient boosting. In GBMs the tree count is a tuned hyperparameter — use early stopping. Mixing these up is a classic interview trip-wire.
+:::
+
+## 7.6 — XGBoost, LightGBM, CatBoost — and why GBMs still beat deep learning on tables
+
+These three libraries are highly engineered gradient-boosting implementations. They added regularization, smart split-finding, and speed tricks that made GBMs the default winner on tabular data — and, for most structured datasets, they still **outperform deep neural networks** while training faster and needing less tuning.
+
+| Library | Headline trick | Best when |
+|---|---|---|
+| **XGBoost** | Regularized objective (L1/L2 on leaf weights) + 2nd-order (Newton) gradients + sparsity-aware splits | Strong, robust general default |
+| **LightGBM** | **Leaf-wise** growth + histogram binning + GOSS sampling | Very large datasets, fastest training |
+| **CatBoost** | **Ordered boosting** + native categorical handling (no manual encoding) | Many categorical features, less tuning |
+
+**Q: Why do gradient-boosted trees often beat deep learning on tabular data?**
+Tabular data is **heterogeneous** (mixed scales and types, no spatial or sequential structure) and often **smaller** than image/text corpora. Trees handle mixed feature types, ignore scaling, capture sharp non-linear thresholds, and resist irrelevant features — without the huge data and tuning neural nets demand. Deep nets shine on **unstructured** data (images, text, audio) where structure can be learned.
+
+**Q: What does XGBoost add over plain gradient boosting?**
+A **regularized objective** (penalizes leaf weights and tree complexity), **second-order** gradient info (uses the Hessian, not just the gradient, for better steps), built-in **handling of missing values** via default split directions, and engineering for parallel, cache-efficient training.
+
+**Q: What is LightGBM's leaf-wise growth and its risk?**
+Most GBMs grow trees **level-wise** (fill every node at a depth before going deeper). LightGBM grows **leaf-wise** — it splits the leaf that reduces loss most, anywhere in the tree. This converges faster but can produce deep, **unbalanced trees that overfit**, so cap `num_leaves` / `max_depth`.
+
+**Q: How does CatBoost handle categorical features without manual encoding?**
+It uses **ordered target statistics** — encoding a category by the target mean computed only from *earlier* rows in a random permutation, which avoids the **target leakage** that naive mean-encoding causes. Combined with **ordered boosting**, this reduces the prediction-shift bias that hurts other GBMs.
+
+**Q: What are the main hyperparameters to tune in a GBM?**
+**Learning rate** and **number of trees** (traded off together — a lower rate needs more trees, use early stopping), **max depth / num_leaves** (tree complexity), **subsample** and **colsample** (row/column sampling for regularization and decorrelation), and **L1/L2 regularization** on leaf weights.
+
+## 7.7 — Stacking and blending
+
+Bagging and boosting combine models of the *same* type with a fixed rule (average / weighted sum). **Stacking** is the next step up: train *different* model types, then train a **meta-model** to learn the best way to combine their predictions. The intuition — instead of a fixed voting rule, *learn* who to trust when.
+
+```{mermaid}
+flowchart TD
+    X["Input features"] --> B1["Base: Random Forest"]
+    X --> B2["Base: GBM"]
+    X --> B3["Base: Logistic Reg."]
+    B1 --> Meta["Meta-model e.g. linear"]
+    B2 --> Meta
+    B3 --> Meta
+    Meta --> Out["Final prediction"]
+```
+
+**Q: What is stacking?**
+An ensemble where several diverse **base models** make predictions, and a **meta-model** (meta-learner) is trained on those predictions to produce the final output. The meta-model learns each base model's strengths — e.g. trust the GBM here, the linear model there.
+
+**Q: How do you avoid leakage when training the meta-model?**
+Generate the base models' predictions on data they did *not* train on, via **out-of-fold predictions** (cross-validation): split into folds, train base models on K−1 folds, predict the held-out fold, and assemble those out-of-fold predictions as the meta-model's training features. Feeding in-sample predictions would leak and inflate scores.
+
+**Q: What is the difference between stacking and blending?**
+**Blending** is a simpler variant: hold out a single validation set, train base models on the rest, then train the meta-model on their predictions for that one hold-out. It is easier and avoids fold-assembly bookkeeping but **wastes data** and is higher-variance than full out-of-fold **stacking**.
+
+**Q: Why use diverse base models in a stack?**
+Same reason ensembles work at all — **decorrelated errors**. A tree-based model and a linear model fail on different inputs; the meta-model exploits that complementarity. Stacking near-identical models gives little gain.
+
+**Q: How does a simple voting/averaging ensemble differ from stacking?**
+A **voting ensemble** combines predictions with a *fixed* rule (mean, or majority vote) — no learning on top. **Stacking** *learns* the combination weights from data via a meta-model. Voting is simpler and harder to overfit; stacking can squeeze out more accuracy when base models have clearly different strengths.
+
+## 7.x — Key takeaways
+
+- Ensembles win by combining models whose **errors are partly uncorrelated**; the gain depends on *how* you combine them, and costs compute and interpretability.
+- **Bagging** (parallel, bootstrap samples, averaging) cuts **variance**; needs unstable base learners like deep trees. It does not overfit with more models.
+- **Random Forest** = bagging + per-split feature randomness to **decorrelate** trees; gives free **OOB error**; prefer **permutation importance** over impurity-based. (Extra Trees randomize splits even further.)
+- **Boosting** (sequential, fix prior errors) cuts **bias**. AdaBoost re-weights *examples*; gradient boosting fits *residuals = negative gradients* and works for any differentiable loss.
+- Boosting **can overfit** with too many rounds — tune **learning rate**, **tree count (early stopping)**, and **depth**. Boosting trees are shallow; forest trees are deep. (Opposite of forests.)
+- **XGBoost / LightGBM / CatBoost** are the production-grade GBMs and still **beat deep nets on most tabular data**; know each one's headline trick.
+- **Stacking** learns a meta-model over diverse base models; use **out-of-fold predictions** to avoid leakage. **Blending** is the simpler single-holdout cousin; **voting** is the no-learning baseline.
+
+------------------------------------------------------------------------
+
+[📖 All chapters](../interview-guide.html)  &nbsp;|&nbsp;  [← 06 · 📐 Classical Supervised Algorithms](ch06.html)  &nbsp;|&nbsp;  [08 · 🗺️ Unsupervised Learning & Dimensionality Reduction →](ch08.html)
