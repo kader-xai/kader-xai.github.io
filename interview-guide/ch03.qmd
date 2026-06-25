@@ -1,0 +1,360 @@
+---
+title: "Chapter 03 — 🎲 Probability & Statistics — reasoning under uncertainty"
+page-layout: full
+toc: true
+toc-location: left
+toc-title: "In this chapter"
+toc-depth: 2
+toc-expand: true
+---
+
+[📖 All chapters](../interview-guide.html)  &nbsp;|&nbsp;  [← 02 · 📉 Calculus & Optimization](ch02.html)  &nbsp;|&nbsp;  [04 · 🔥 Information Theory & Loss Functions →](ch04.html)
+
+<details class="ig-jump">
+<summary>📚 Jump to any chapter</summary>
+<p class="ig-era">🧮 Mathematical Foundations</p>
+<ul>
+<li><a href="ch01.html">01 &middot; 🧮 Linear Algebra — the language of data</a></li>
+<li><a href="ch02.html">02 &middot; 📉 Calculus & Optimization — how models learn</a></li>
+<li><a href="ch03.html">03 &middot; 🎲 Probability & Statistics — reasoning under uncertainty</a></li>
+<li><a href="ch04.html">04 &middot; 🔥 Information Theory & Loss Functions — measuring surprise and error</a></li>
+</ul>
+<p class="ig-era">🧩 Classical Machine Learning</p>
+<ul>
+<li><a href="ch05.html">05 &middot; 🧩 Core ML Concepts — the ground rules</a></li>
+<li><a href="ch06.html">06 &middot; 📐 Classical Supervised Algorithms — the workhorses</a></li>
+<li><a href="ch07.html">07 &middot; 🌲 Ensembles & Boosting — how to win on tabular data</a></li>
+<li><a href="ch08.html">08 &middot; 🗺️ Unsupervised Learning & Dimensionality Reduction — structure without labels</a></li>
+<li><a href="ch09.html">09 &middot; 🎯 Model Evaluation & Validation — knowing if it actually works</a></li>
+</ul>
+<p class="ig-era">🧠 Deep Learning</p>
+<ul>
+<li><a href="ch10.html">10 &middot; 🧠 Neural Network Fundamentals — the building block</a></li>
+<li><a href="ch11.html">11 &middot; ⚙️ Training Deep Networks — making deep nets actually train</a></li>
+<li><a href="ch12.html">12 &middot; 🖼️ Convolutional Neural Networks — the vision branch</a></li>
+<li><a href="ch13.html">13 &middot; 🔁 Sequence Models — RNNs, LSTMs and the bottleneck</a></li>
+</ul>
+<p class="ig-era">⚡ The Transformer Era</p>
+<ul>
+<li><a href="ch14.html">14 &middot; 🔤 Word Embeddings — giving words meaning as vectors</a></li>
+<li><a href="ch15.html">15 &middot; ⚡ Attention & the Transformer — the architecture that changed everything</a></li>
+<li><a href="ch16.html">16 &middot; 🧱 Tokenization, Pretraining & Model Families</a></li>
+<li><a href="ch17.html">17 &middot; 📈 Modern LLMs & Scaling — bigger, and suddenly capable</a></li>
+</ul>
+<p class="ig-era">💬 Using & Adapting LLMs</p>
+<ul>
+<li><a href="ch18.html">18 &middot; 💬 Prompting & In-Context Learning — programming models with words</a></li>
+<li><a href="ch19.html">19 &middot; 🎚️ Fine-Tuning & Alignment — specializing and aligning models</a></li>
+<li><a href="ch20.html">20 &middot; 📚 Retrieval-Augmented Generation (RAG) — giving the model an open book</a></li>
+<li><a href="ch21.html">21 &middot; 🚀 Inference, Decoding & Serving — running LLMs efficiently</a></li>
+</ul>
+<p class="ig-era">🤖 The Agentic Frontier</p>
+<ul>
+<li><a href="ch22.html">22 &middot; 🤖 Agents, Tools & Loops — the latest frontier</a></li>
+<li><a href="ch23.html">23 &middot; 🛡️ Evaluation, Safety & Guardrails — making LLM systems trustworthy</a></li>
+<li><a href="ch24.html">24 &middot; 🔧 MLOps & LLMOps — shipping and operating models in production</a></li>
+</ul>
+<p class="ig-era">🛠️ The Practical Toolkit</p>
+<ul>
+<li><a href="ch25.html">25 &middot; 🛠️ Practical Toolkit I — Modeling & Vision Libraries</a></li>
+<li><a href="ch26.html">26 &middot; 🧰 Practical Toolkit II — LLM Frameworks, Orchestration & Vector Stores</a></li>
+<li><a href="ch27.html">27 &middot; ⚙️ Practical Toolkit III — Serving, Apps & MLOps Tooling</a></li>
+</ul>
+<p class="ig-era">☁️ Cloud AI Platforms</p>
+<ul>
+<li><a href="ch28.html">28 &middot; ☁️ Cloud AI Platforms — deploying foundation models on the hyperscalers</a></li>
+</ul>
+</details>
+
+------------------------------------------------------------------------
+
+Chapter 02 gave models a way to *learn* — slide downhill on a loss surface using gradients. But what is that loss actually measuring, and why are models so often phrased as "the probability of the data"? This chapter is the language of uncertainty: random variables, distributions, Bayes' rule, and the estimation principles (MLE, MAP) that quietly underpin almost every loss function you'll meet — and it sets up Chapter 04, where information theory turns "surprise" into the loss itself.
+
+::: {.callout-note appearance="simple"}
+📍 **Timeline:** 1700s–1900s — Bayes, Gauss, and Fisher turn dice, errors, and beliefs into the math of uncertainty that all of modern ML quietly stands on.
+:::
+
+## 3.1 — Random variables and distributions
+
+Intuition first: a **random variable** is just a number whose value you don't know yet — the outcome of a coin flip, the height of the next person through the door. A **distribution** is the rulebook saying which values are likely and which are rare. The whole field is about reasoning *before* the dice land.
+
+Random variables come in two flavors:
+
+- **Discrete** — countable outcomes (a die roll, number of clicks). Described by a **probability mass function (PMF)**: $P(X=k)$, and the masses sum to 1.
+- **Continuous** — values on a range (height, temperature). Described by a **probability density function (PDF)**, $f(x)$, where the *area* under the curve over an interval is the probability. A single exact point has probability zero — only ranges have mass.
+
+You don't need to memorize every distribution, but you must recognize the handful that show up constantly. Here is the cheat sheet:
+
+| Distribution | Type | Models | Key params | Shows up in ML as |
+|---|---|---|---|---|
+| **Bernoulli** | discrete | one yes/no trial | $p$ | a single binary label |
+| **Binomial** | discrete | # successes in $n$ trials | $n, p$ | counts of successes |
+| **Poisson** | discrete | # rare events in a fixed window | $\lambda$ | event/arrival counts |
+| **Uniform** | either | all outcomes equally likely | $a, b$ | random init, flat priors |
+| **Gaussian/Normal** | continuous | sums of many small effects | $\mu, \sigma^2$ | noise, weights, errors |
+| **Exponential** | continuous | waiting time until an event | $\lambda$ | time-between-events |
+
+**Q: What is the difference between a PMF and a PDF?**
+A **PMF** gives the actual probability of a discrete value: $P(X=k)$ is a real probability between 0 and 1. A **PDF** gives a *density*, not a probability — you must integrate it over an interval to get a probability. The giveaway: a PDF can exceed 1 at a point (a tall, narrow spike), which would be nonsense for a probability.
+
+**Q: What is a CDF, and how does it relate to the PMF/PDF?**
+The **cumulative distribution function** $F(x) = P(X \le x)$ accumulates probability up to $x$. For a discrete variable it's the running sum of the PMF; for a continuous variable it's the integral of the PDF, so $f(x) = F'(x)$. It always rises from 0 to 1 and is handy for "what fraction is below this threshold?" questions and for sampling.
+
+**Q: When does a Poisson distribution appear instead of a Binomial?**
+**Poisson** is the limit of a Binomial when you have *many* trials ($n$ large) each with *tiny* success probability ($p$ small), with $\lambda = np$ fixed. So it models the count of rare events over a fixed interval — emails per hour, server errors per day — when there's no obvious "number of trials."
+
+**Q: Why is the Gaussian so ubiquitous?**
+Because of the **Central Limit Theorem** (Section 3.6): anything that is the sum of many small independent effects ends up roughly Gaussian, regardless of the pieces' own shapes. Measurement noise, aggregate errors, and model residuals all tend Gaussian — which is why so many ML assumptions quietly default to it.
+
+**Q: What does the Exponential distribution model, and what is "memorylessness"?**
+It models the **waiting time until the next event** in a Poisson process. It is **memoryless**: $P(X > s+t \mid X > s) = P(X > t)$ — having already waited 5 minutes tells you nothing about the remaining wait. A lightbulb that "doesn't age" is the classic mental picture.
+
+## 3.2 — Expectation, variance, and covariance
+
+Intuition first: the **expectation** is the long-run average value — where the distribution balances if you put it on a seesaw. **Variance** is how spread out it is — are values tightly bunched or all over the place? **Covariance** asks whether two variables move together.
+
+Definitions, discrete case (swap sums for integrals when continuous):
+
+$$ \mathbb{E}[X] = \sum_x x\, P(X=x), \qquad \mathrm{Var}(X) = \mathbb{E}\big[(X-\mu)^2\big] = \mathbb{E}[X^2] - \mu^2 $$
+
+The **standard deviation** is $\sigma = \sqrt{\mathrm{Var}(X)}$ — same units as $X$, so it's the interpretable measure of spread. **Covariance** measures joint movement:
+
+$$ \mathrm{Cov}(X,Y) = \mathbb{E}\big[(X-\mu_X)(Y-\mu_Y)\big] $$
+
+```python
+import numpy as np
+x = np.array([2.0, 4.0, 4.0, 4.0, 5.0, 5.0, 7.0, 9.0])
+mu  = x.mean()                       # expectation E[X]
+var = ((x - mu) ** 2).mean()         # variance: avg squared distance from mean
+std = var ** 0.5                     # standard deviation: same units as x
+# covariance of x with a second variable y
+y = 2 * x + np.random.randn(len(x))  # y roughly tracks x -> positive cov
+cov = ((x - x.mean()) * (y - y.mean())).mean()
+```
+
+::: {.callout-tip}
+**Intuition:** Variance squares the distances, so it lives in *squared* units (e.g. dollars²) and over-weights outliers. Standard deviation un-squares it back to real units — that's why you report $\sigma$, not variance, when describing spread to a human.
+:::
+
+**Q: Is expectation linear? Does that depend on independence?**
+**Yes, always linear**, no independence needed: $\mathbb{E}[aX + bY] = a\,\mathbb{E}[X] + b\,\mathbb{E}[Y]$. This is one of the most-used facts in ML derivations. **Variance is not linear** the same way — $\mathrm{Var}(X+Y) = \mathrm{Var}(X) + \mathrm{Var}(Y) + 2\,\mathrm{Cov}(X,Y)$, and only drops the covariance term when $X$ and $Y$ are independent.
+
+**Q: What's the difference between covariance and correlation?**
+**Covariance** tells you the *direction* of joint movement (positive/negative) but its magnitude depends on the variables' units, so it's hard to interpret. **Correlation** is covariance normalized to $[-1, 1]$: $\rho = \mathrm{Cov}(X,Y) / (\sigma_X \sigma_Y)$. Correlation is unitless and comparable across variable pairs.
+
+**Q: Why does variance use squared deviations instead of absolute deviations?**
+Squaring makes the math differentiable and gives the clean identity $\mathrm{Var}(X) = \mathbb{E}[X^2] - \mathbb{E}[X]^2$, and it connects directly to the **L2 / mean-squared-error** loss you optimize in regression. Absolute deviation (L1) is more robust to outliers but isn't smooth at zero — a trade-off you'll revisit when choosing loss functions.
+
+**Q: What's the bias–variance intuition this sets up?**
+Variance here is a *property of a distribution*, but the same word returns in the **bias–variance tradeoff** for models: a high-variance model swings wildly with the training sample, a high-bias model is rigidly wrong. Same statistical spirit — how much does the answer wobble — applied to predictions instead of raw data. (Full treatment lives in the model-evaluation chapter.)
+
+## 3.3 — Joint, marginal, conditional, and independence
+
+Intuition first: when two random things interact, the **joint** distribution is the full table of every combination's probability. The **marginal** is what you get by ignoring (summing out) one variable. The **conditional** is what's left once you *learn* one variable's value — it's how new information narrows the world.
+
+The three are linked by the **product rule** and **marginalization**:
+
+$$ P(X,Y) = P(X \mid Y)\,P(Y), \qquad P(X) = \sum_y P(X, y) $$
+
+```{mermaid}
+flowchart LR
+  J["Joint P(X,Y)"] -->|"sum out Y"| M["Marginal P(X)"]
+  J -->|"divide by P(Y)"| C["Conditional P(X|Y)"]
+  M --> I{"P(X|Y) = P(X)?"}
+  C --> I
+  I -->|"yes"| IND["Independent"]
+  I -->|"no"| DEP["Dependent"]
+```
+
+**Q: What does "marginalizing out" a variable mean?**
+It means **summing (or integrating) the joint over all values of the variable you don't care about**, collapsing it away: $P(X) = \sum_y P(X,y)$. The name comes from old probability tables where these totals were literally written in the margins.
+
+**Q: Does independence imply zero correlation? Does zero correlation imply independence?**
+Independence **implies** zero correlation. The reverse is **false**: zero correlation only rules out *linear* relationships. A variable and its square can be perfectly dependent yet uncorrelated (e.g. $Y = X^2$ for symmetric $X$). This is a classic interview trap.
+
+**Q: What's the difference between independence and conditional independence?**
+$X$ and $Y$ can be dependent overall but **conditionally independent given $Z$** — once you know $Z$, they carry no extra info about each other: $P(X,Y \mid Z) = P(X\mid Z)P(Y\mid Z)$. This is the core assumption behind **Naive Bayes**: it assumes features are conditionally independent given the class label.
+
+**Q: What is the chain rule of probability?**
+Any joint factorizes into a product of conditionals: $P(X_1,\dots,X_n) = P(X_1)\,P(X_2\mid X_1)\cdots P(X_n\mid X_1,\dots,X_{n-1})$. This is the backbone of **autoregressive language models**, which predict each token conditioned on all the tokens before it — the joint probability of a sentence is just this product.
+
+## 3.4 — Bayes' theorem (worked example)
+
+Intuition first: Bayes' theorem is how you **update a belief when evidence arrives**. You start with a **prior** (what you believed before), see some data through a **likelihood** (how probable that data is under each hypothesis), and end with a **posterior** (your updated belief). The headline lesson: a positive test on a rare condition is often *still* probably a false alarm.
+
+$$ \underbrace{P(H \mid E)}_{\text{posterior}} = \frac{\overbrace{P(E \mid H)}^{\text{likelihood}}\;\overbrace{P(H)}^{\text{prior}}}{\underbrace{P(E)}_{\text{evidence}}} $$
+
+**Worked medical-test example.** A disease affects 1% of people. A test is 99% sensitive (true positive) and has a 5% false-positive rate. You test positive — what's the chance you actually have it?
+
+- Prior: $P(D) = 0.01$, so $P(\text{no } D) = 0.99$
+- Likelihoods: $P(+ \mid D) = 0.99$, $P(+ \mid \text{no } D) = 0.05$
+- Evidence (total probability of a positive): $P(+) = (0.99)(0.01) + (0.05)(0.99) = 0.0099 + 0.0495 = 0.0594$
+- Posterior: $P(D \mid +) = \dfrac{0.99 \times 0.01}{0.0594} \approx 0.167$
+
+So a positive test means only a **~17% chance** of actually having the disease.
+
+<svg viewBox="0 0 420 120" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif" font-size="11">
+  <rect x="20" y="30" width="380" height="40" fill="none" stroke="currentColor" stroke-width="1"/>
+  <rect x="20" y="30" width="3.8" height="40" fill="currentColor"/>
+  <line x1="23.8" y1="20" x2="23.8" y2="80" stroke="currentColor" stroke-width="0.7" stroke-dasharray="2 2"/>
+  <text x="26" y="16">1% truly sick</text>
+  <text x="200" y="16">99% healthy</text>
+  <rect x="23.8" y="30" width="19" height="40" fill="currentColor" opacity="0.35"/>
+  <text x="20" y="98">small slice of the big healthy bar (5% false positives)</text>
+  <text x="20" y="112">swamps the tiny sick slice → most "+" results are false alarms</text>
+</svg>
+
+```python
+p_d      = 0.01          # prior: disease prevalence
+p_pos_d  = 0.99          # sensitivity  P(+ | disease)
+p_pos_nd = 0.05          # false positive rate  P(+ | no disease)
+evidence = p_pos_d * p_d + p_pos_nd * (1 - p_d)   # P(+)
+posterior = p_pos_d * p_d / evidence
+assert abs(posterior - 0.1667) < 1e-3             # ~17%, not 99%
+```
+
+::: {.callout-warning}
+**Interview gotcha — base-rate neglect.** People hear "99% accurate" and guess the answer is ~99%. The **prior dominates** when the condition is rare: most positives come from the huge healthy population's small false-positive rate. Always fold in the base rate.
+:::
+
+**Q: Name each term in Bayes' theorem.**
+**Prior** $P(H)$ — belief before evidence. **Likelihood** $P(E\mid H)$ — how well each hypothesis explains the observed data. **Evidence** (or marginal likelihood) $P(E)$ — total probability of the data, the normalizer. **Posterior** $P(H\mid E)$ — updated belief after seeing evidence.
+
+**Q: Why is $P(E)$ called the "normalizer," and why can we sometimes ignore it?**
+$P(E)$ doesn't depend on the hypothesis $H$ — it's the same denominator for every candidate. So when you only need to find *which* hypothesis is most probable (the **argmax**), you can drop it and compare $P(E\mid H)P(H)$ directly. That's exactly what classifiers like Naive Bayes do.
+
+**Q: What's the difference between the likelihood and the posterior?**
+The **likelihood** $P(E\mid H)$ reads "given this hypothesis, how probable is the data?" — it is *not* a probability distribution over $H$. The **posterior** $P(H\mid E)$ flips that around into "given the data, how probable is this hypothesis?" Bayes' rule is precisely the bridge that turns one into the other by folding in the prior.
+
+**Q: How does Bayes' theorem connect to machine learning?**
+The posterior over model parameters is $P(\theta \mid \text{data}) \propto P(\text{data}\mid\theta)\,P(\theta)$. **Maximizing the likelihood** alone gives MLE; **maximizing likelihood times prior** gives MAP (next section). The prior $P(\theta)$ is where regularization secretly comes from.
+
+## 3.5 — MLE vs MAP
+
+Intuition first: you have data and a model with unknown parameters $\theta$. **Maximum Likelihood Estimation (MLE)** picks the $\theta$ that makes the *observed data most probable* — "what settings best explain what I saw?" **MAP** adds a prior belief about $\theta$ before looking at the data, pulling the estimate toward what you expected.
+
+$$ \theta_{\text{MLE}} = \arg\max_\theta P(\text{data}\mid\theta), \qquad \theta_{\text{MAP}} = \arg\max_\theta P(\text{data}\mid\theta)\,P(\theta) $$
+
+In practice we maximize the **log-likelihood** (sums are nicer than products, and it avoids numerical underflow):
+
+```python
+import numpy as np
+# 7 heads in 10 flips. MLE estimate of coin bias p:
+heads, n = 7, 10
+ps = np.linspace(0.01, 0.99, 99)
+loglik = heads*np.log(ps) + (n-heads)*np.log(1-ps)   # log P(data | p)
+p_mle = ps[np.argmax(loglik)]
+assert abs(p_mle - 0.7) < 0.02                        # MLE = heads/n = 0.7
+```
+
+| | MLE | MAP |
+|---|---|---|
+| Uses a prior? | No | Yes |
+| Objective | $\max P(D\mid\theta)$ | $\max P(D\mid\theta)P(\theta)$ |
+| Behaves like | unregularized fit | **regularized** fit |
+| Small data | can overfit badly | prior stabilizes it |
+| With infinite data | — | converges to MLE (prior washes out) |
+
+**Q: Why do we maximize the log-likelihood instead of the likelihood?**
+Because the likelihood of many data points is a **product** of tiny probabilities, which underflows to zero numerically and is awkward to differentiate. Taking the **log** turns products into sums, is monotonic (so the argmax is unchanged), and turns exponential-family densities into clean linear/quadratic forms.
+
+**Q: How is MAP related to regularization?**
+MAP = MLE plus a prior, and the log-prior becomes a **penalty term** on the parameters. A **Gaussian prior** on weights yields **L2 regularization (weight decay)**; a **Laplace prior** yields **L1 regularization (sparsity)**. So regularization is literally a prior belief that weights should be small.
+
+**Q: When do MLE and MAP give the same answer?**
+With a **flat (uniform) prior**, the prior term is constant and MAP reduces to MLE. They also **converge as data grows** — the likelihood overwhelms any fixed prior, so the prior "washes out." Priors matter most in the small-data regime.
+
+**Q: Why is minimizing squared error the same as MLE under Gaussian noise?**
+If you assume targets equal the model output plus Gaussian noise, the log-likelihood contains a $-(y-\hat{y})^2$ term. Maximizing it is identical to **minimizing mean squared error** — which is why MSE isn't arbitrary, it's the MLE for Gaussian residuals. (Cross-entropy plays the same role for classification — see Chapter 04.)
+
+**Q: What's the difference between MAP and full Bayesian inference?**
+**MAP** keeps a single best point estimate — the *peak* of the posterior — and throws away the rest of its shape. **Full Bayesian inference** keeps the *entire* posterior distribution and averages predictions over it, which captures uncertainty but is far more expensive. MAP is the cheap "just give me the most likely $\theta$" shortcut.
+
+## 3.6 — Sampling, LLN, and the Central Limit Theorem
+
+Intuition first: you rarely know the true distribution — you only have **samples** from it. The **Law of Large Numbers (LLN)** promises that as you collect more samples, your average converges to the true mean. The **Central Limit Theorem (CLT)** goes further: the *shape* of that sample average becomes a bell curve, no matter what you sampled from.
+
+- **LLN:** the sample mean $\bar{X}_n \to \mu$ as $n \to \infty$. (Averages stabilize.)
+- **CLT:** for large $n$, $\bar{X}_n$ is approximately $\mathcal{N}\!\left(\mu, \dfrac{\sigma^2}{n}\right)$ — *regardless* of the original distribution's shape. (Averages become Gaussian, and get tighter by $1/\sqrt{n}$.)
+
+Here's a Gaussian, with $\mu$ and $\pm\sigma$ / $\pm 2\sigma$ marked:
+
+<svg viewBox="0 0 420 230" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif" font-size="11">
+  <line x1="30" y1="190" x2="400" y2="190" stroke="currentColor" stroke-width="1"/>
+  <path d="M30,190 C140,190 150,40 215,40 C280,40 290,190 400,190" fill="none" stroke="currentColor" stroke-width="2"/>
+  <line x1="215" y1="190" x2="215" y2="40" stroke="currentColor" stroke-width="1" stroke-dasharray="3 3"/>
+  <line x1="158" y1="190" x2="158" y2="95" stroke="currentColor" stroke-width="0.8" stroke-dasharray="2 2"/>
+  <line x1="272" y1="190" x2="272" y2="95" stroke="currentColor" stroke-width="0.8" stroke-dasharray="2 2"/>
+  <line x1="101" y1="190" x2="101" y2="165" stroke="currentColor" stroke-width="0.8" stroke-dasharray="2 2"/>
+  <line x1="329" y1="190" x2="329" y2="165" stroke="currentColor" stroke-width="0.8" stroke-dasharray="2 2"/>
+  <text x="210" y="205" >μ</text>
+  <text x="146" y="205">μ−σ</text>
+  <text x="260" y="205">μ+σ</text>
+  <text x="86" y="205">μ−2σ</text>
+  <text x="314" y="205">μ+2σ</text>
+  <text x="180" y="120">68%</text>
+  <text x="120" y="155">95%</text>
+</svg>
+
+That curve is why the "68–95–99.7 rule" works: ~68% of mass within $1\sigma$, ~95% within $2\sigma$, ~99.7% within $3\sigma$.
+
+**Q: What's the difference between the LLN and the CLT?**
+**LLN** is about *convergence of a single number*: the sample mean approaches the true mean. **CLT** is about the *distribution* of that sample mean: it becomes Gaussian and shrinks at rate $1/\sqrt{n}$. LLN says the average is right; CLT tells you how it's spread around the truth.
+
+**Q: Why does standard error scale as $1/\sqrt{n}$, and why is that annoying?**
+The standard deviation of the sample mean is $\sigma/\sqrt{n}$. To **halve** your error you need **4×** the data; for 10× precision you need 100× the samples. This diminishing return is why squeezing the last bit of accuracy out of an estimate (or a benchmark) is so expensive.
+
+**Q: Where does the CLT show up in ML practice?**
+It justifies treating averaged quantities — mean loss over a **mini-batch**, an A/B test's mean metric, bootstrap estimates — as approximately Gaussian, which lets you put **confidence intervals** and error bars around them. It also underpins why so much noise in models is modeled as Gaussian.
+
+**Q: What's the difference between standard deviation and standard error?**
+**Standard deviation** describes the spread of the *raw data*. **Standard error** describes the spread of an *estimate* (like the sample mean): $\text{SE} = \sigma/\sqrt{n}$. People conflate them — but SE shrinks with more data, while the data's $\sigma$ does not.
+
+## 3.7 — Correlation vs causation, hypothesis testing, p-values
+
+Intuition first: statistics can tell you two things move *together*, but never — from observation alone — that one *causes* the other. **Hypothesis testing** is the formal ritual for deciding whether an observed effect is real or just noise, and the **p-value** measures how surprised you should be *if nothing were going on*.
+
+The logic: assume a **null hypothesis** $H_0$ ("no effect"). Compute the probability of seeing data at least as extreme as yours *if $H_0$ were true* — that's the **p-value**. Small p-value → the data would be surprising under "no effect" → you reject $H_0$.
+
+```{mermaid}
+flowchart TD
+  H0["Assume H0: no effect"] --> D["Observe data / effect size"]
+  D --> P["p-value = P(data this extreme | H0 true)"]
+  P --> T{"p < alpha (e.g. 0.05)?"}
+  T -->|"yes"| R["Reject H0: effect is significant"]
+  T -->|"no"| F["Fail to reject H0"]
+```
+
+::: {.callout-warning}
+**Interview gotcha — what a p-value is NOT.** A p-value is **not** the probability that $H_0$ is true, and **not** the probability your result happened by chance. It is $P(\text{data this extreme} \mid H_0)$ — a statement about the data given the hypothesis, not about the hypothesis given the data. Confusing the two is the single most common p-value error.
+:::
+
+**Q: Why doesn't correlation imply causation?**
+Two variables can correlate because of a hidden **confounder** driving both (ice-cream sales and drownings both rise with summer heat), **reverse causation**, or pure coincidence. To claim causation you generally need an **intervention** — a randomized controlled experiment (A/B test) — or careful causal-inference techniques, not just observed association.
+
+**Q: What is a Type I vs Type II error?**
+**Type I (false positive):** rejecting $H_0$ when it's actually true — you "found" an effect that isn't there; its rate is $\alpha$. **Type II (false negative):** failing to reject $H_0$ when there *is* a real effect; its rate is $\beta$, and **power** $= 1-\beta$. There's a trade-off: a stricter $\alpha$ reduces false positives but raises false negatives.
+
+**Q: What does the significance level $\alpha$ represent?**
+$\alpha$ is the **threshold** you pick in advance (commonly 0.05) for how much Type I error you'll tolerate. If $p < \alpha$ you call the result "statistically significant." It's a decision rule, not a property of the data — and a low p-value says nothing about whether the effect is *large* or *important*, only that it's detectable.
+
+**Q: Why is "statistically significant" not the same as "important"?**
+With a huge sample, even a **tiny, meaningless effect** can produce a tiny p-value, because the standard error shrinks with $n$. Significance answers "is the effect distinguishable from zero?"; it does not answer "is the effect big enough to matter?" Always look at the **effect size**, not just the p-value.
+
+**Q: What is a confidence interval, and what does "95% confidence" actually mean?**
+A **confidence interval** is a range of plausible values for a quantity, built from your sample. "95% confidence" is a statement about the *procedure*: if you repeated the experiment many times, ~95% of the intervals it produces would contain the true value. It is *not* a 95% probability that the truth is in this one interval — another classic misread.
+
+## 3.x — Key takeaways
+
+- A **random variable** is an unknown number; its **distribution** is the rulebook. Discrete → PMF (real probabilities); continuous → PDF (densities, integrate to get probability); the **CDF** accumulates either up to a threshold.
+- Know the staples on sight: **Bernoulli/Binomial** (counts of yes/no), **Poisson** (rare-event counts), **Gaussian** (sums of small effects), **Exponential** (waiting times, memoryless).
+- **Expectation is always linear**; variance adds a **covariance** term unless variables are independent. Report **σ** (real units), not variance.
+- **Independence ⇒ zero correlation**, but zero correlation ⇏ independence (only rules out *linear* relationships). The **chain rule** factorizes any joint into conditionals — the engine of autoregressive LMs.
+- **Bayes' theorem** updates belief: posterior ∝ likelihood × prior. Beware **base-rate neglect** — a positive rare-disease test is often still probably a false alarm.
+- **MLE** maximizes data likelihood; **MAP** adds a prior, which *is* regularization (Gaussian prior → L2, Laplace prior → L1). Work in **log-space**.
+- **LLN**: sample means converge to the truth. **CLT**: those means go Gaussian, tightening at $1/\sqrt{n}$ — quadrupling data only halves the error.
+- A **p-value** is $P(\text{data this extreme} \mid H_0)$ — not the probability $H_0$ is true. **Correlation ≠ causation**, and **significant ≠ important**; report **effect sizes** and **confidence intervals**, not just p-values.
+
+------------------------------------------------------------------------
+
+[📖 All chapters](../interview-guide.html)  &nbsp;|&nbsp;  [← 02 · 📉 Calculus & Optimization](ch02.html)  &nbsp;|&nbsp;  [04 · 🔥 Information Theory & Loss Functions →](ch04.html)

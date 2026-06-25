@@ -1,0 +1,343 @@
+---
+title: "Chapter 17 — 📈 Modern LLMs & Scaling — bigger, and suddenly capable"
+page-layout: full
+toc: true
+toc-location: left
+toc-title: "In this chapter"
+toc-depth: 2
+toc-expand: true
+---
+
+[📖 All chapters](../interview-guide.html)  &nbsp;|&nbsp;  [← 16 · 🧱 Tokenization, Pretraining & Model Families](ch16.html)  &nbsp;|&nbsp;  [18 · 💬 Prompting & In-Context Learning →](ch18.html)
+
+<details class="ig-jump">
+<summary>📚 Jump to any chapter</summary>
+<p class="ig-era">🧮 Mathematical Foundations</p>
+<ul>
+<li><a href="ch01.html">01 &middot; 🧮 Linear Algebra — the language of data</a></li>
+<li><a href="ch02.html">02 &middot; 📉 Calculus & Optimization — how models learn</a></li>
+<li><a href="ch03.html">03 &middot; 🎲 Probability & Statistics — reasoning under uncertainty</a></li>
+<li><a href="ch04.html">04 &middot; 🔥 Information Theory & Loss Functions — measuring surprise and error</a></li>
+</ul>
+<p class="ig-era">🧩 Classical Machine Learning</p>
+<ul>
+<li><a href="ch05.html">05 &middot; 🧩 Core ML Concepts — the ground rules</a></li>
+<li><a href="ch06.html">06 &middot; 📐 Classical Supervised Algorithms — the workhorses</a></li>
+<li><a href="ch07.html">07 &middot; 🌲 Ensembles & Boosting — how to win on tabular data</a></li>
+<li><a href="ch08.html">08 &middot; 🗺️ Unsupervised Learning & Dimensionality Reduction — structure without labels</a></li>
+<li><a href="ch09.html">09 &middot; 🎯 Model Evaluation & Validation — knowing if it actually works</a></li>
+</ul>
+<p class="ig-era">🧠 Deep Learning</p>
+<ul>
+<li><a href="ch10.html">10 &middot; 🧠 Neural Network Fundamentals — the building block</a></li>
+<li><a href="ch11.html">11 &middot; ⚙️ Training Deep Networks — making deep nets actually train</a></li>
+<li><a href="ch12.html">12 &middot; 🖼️ Convolutional Neural Networks — the vision branch</a></li>
+<li><a href="ch13.html">13 &middot; 🔁 Sequence Models — RNNs, LSTMs and the bottleneck</a></li>
+</ul>
+<p class="ig-era">⚡ The Transformer Era</p>
+<ul>
+<li><a href="ch14.html">14 &middot; 🔤 Word Embeddings — giving words meaning as vectors</a></li>
+<li><a href="ch15.html">15 &middot; ⚡ Attention & the Transformer — the architecture that changed everything</a></li>
+<li><a href="ch16.html">16 &middot; 🧱 Tokenization, Pretraining & Model Families</a></li>
+<li><a href="ch17.html">17 &middot; 📈 Modern LLMs & Scaling — bigger, and suddenly capable</a></li>
+</ul>
+<p class="ig-era">💬 Using & Adapting LLMs</p>
+<ul>
+<li><a href="ch18.html">18 &middot; 💬 Prompting & In-Context Learning — programming models with words</a></li>
+<li><a href="ch19.html">19 &middot; 🎚️ Fine-Tuning & Alignment — specializing and aligning models</a></li>
+<li><a href="ch20.html">20 &middot; 📚 Retrieval-Augmented Generation (RAG) — giving the model an open book</a></li>
+<li><a href="ch21.html">21 &middot; 🚀 Inference, Decoding & Serving — running LLMs efficiently</a></li>
+</ul>
+<p class="ig-era">🤖 The Agentic Frontier</p>
+<ul>
+<li><a href="ch22.html">22 &middot; 🤖 Agents, Tools & Loops — the latest frontier</a></li>
+<li><a href="ch23.html">23 &middot; 🛡️ Evaluation, Safety & Guardrails — making LLM systems trustworthy</a></li>
+<li><a href="ch24.html">24 &middot; 🔧 MLOps & LLMOps — shipping and operating models in production</a></li>
+</ul>
+<p class="ig-era">🛠️ The Practical Toolkit</p>
+<ul>
+<li><a href="ch25.html">25 &middot; 🛠️ Practical Toolkit I — Modeling & Vision Libraries</a></li>
+<li><a href="ch26.html">26 &middot; 🧰 Practical Toolkit II — LLM Frameworks, Orchestration & Vector Stores</a></li>
+<li><a href="ch27.html">27 &middot; ⚙️ Practical Toolkit III — Serving, Apps & MLOps Tooling</a></li>
+</ul>
+<p class="ig-era">☁️ Cloud AI Platforms</p>
+<ul>
+<li><a href="ch28.html">28 &middot; ☁️ Cloud AI Platforms — deploying foundation models on the hyperscalers</a></li>
+</ul>
+</details>
+
+------------------------------------------------------------------------
+
+In Chapter 16 you saw how raw text becomes tokens and how a base model is pretrained to predict the next one. This chapter answers the obvious follow-up: what happens when you make that exact recipe *much* bigger? The surprising answer — discovered around 2020 — is that scale is not just "more of the same"; past certain thresholds, models start doing things nobody explicitly trained them to do. We will cover the laws that predict this, the abilities that emerge, in-context learning, the model-family landscape, the trick (Mixture-of-Experts) that buys size cheaply, the rise of reasoning models that "think longer" — then hand off to Chapter 18, where we learn to actually *program* these models with words.
+
+::: {.callout-note appearance="simple"}
+📍 **Timeline:** 2020 onward: scale unlocks emergent abilities — GPT-3 (2020), the Chinchilla correction (2022), the chat-model era (ChatGPT, late 2022), and the reasoning-model shift (o1 / DeepSeek-R1, 2024–2025) that trades training scale for inference-time "thinking."
+:::
+
+## 17.1 — Scaling laws: loss is predictable
+
+Here is the intuition that started the modern era: if you plot a language model's loss against its size, its data, or its compute, you don't get a random scatter — you get a clean, almost boringly straight line on a log-log plot. That means you can *predict* how good a model will be **before you train it**. This was the 2020 insight from Kaplan et al. at OpenAI, and it turned "let's build a bigger model" from a gamble into an engineering forecast.
+
+The relationship is a **power law**: loss falls as a power of the resource you scale.
+
+$$ L(N) \approx \left(\frac{N_c}{N}\right)^{\alpha} $$
+
+where $N$ is the number of parameters, and $N_c$ and $\alpha$ are fitted constants. The key fact: loss keeps dropping smoothly as you grow $N$ (parameters), $D$ (data tokens), or $C$ (compute) — there is no sudden wall, just diminishing-but-predictable returns.
+
+::: {.callout-tip}
+**Intuition:** a power law on a log-log plot is a straight line. "Straight line" means *extrapolatable* — measure a few small models, draw the line, read off where a 100× bigger model lands. That predictability is what justified spending tens of millions on a single training run.
+:::
+
+The three quantities trade off against three different things — a tiny map worth memorizing:
+
+| Quantity | Symbol | What it mostly controls |
+|---|---|---|
+| Parameters | $N$ | Model **capacity** — how much it *can* learn |
+| Training tokens | $D$ | **Knowledge** — how much it actually sees |
+| Compute (FLOPs) | $C \approx 6ND$ | **Cost** — the training budget you spend |
+
+**Q: What is a scaling law in one sentence?**
+A **scaling law** says model loss decreases as a predictable power-law function of model size, dataset size, and compute. Plotted on log-log axes it is a straight line, so you can forecast a large model's loss from cheap small-scale experiments.
+
+**Q: What three quantities does the loss depend on?**
+**Parameters** $N$ (model size), **tokens** $D$ (how much data it trains on), and **compute** $C$ (total FLOPs). A useful rule of thumb is $C \approx 6ND$ — training compute is roughly six times parameters times tokens (the 6 comes from a forward pass plus a backward pass that costs about twice the forward).
+
+**Q: If loss follows a power law, does it eventually hit zero?**
+No — there is an **irreducible loss** floor set by the inherent entropy of language (text is genuinely unpredictable; many next words are equally valid). The full law is $L(N) = L_\infty + (N_c/N)^{\alpha}$, where $L_\infty$ is that floor. The simple form $\left(N_c/N\right)^{\alpha}$ just drops $L_\infty$ for readability. So scaling gives *diminishing* returns toward a floor, not infinite improvement.
+
+**Q: Why were scaling laws such a big deal?**
+They turned scaling into a **forecast instead of a gamble**. Before committing millions of dollars to one giant run, you fit the power law on small runs and predict the final loss. This de-risked the leap to GPT-3-scale models and made "just scale it" a defensible strategy.
+
+**Q: Does lower pretraining loss guarantee a more useful model?**
+Not directly — loss measures next-token prediction on held-out text, not helpfulness. But empirically, lower loss correlates strongly with better downstream task performance, which is *why* the laws matter. The gap between "low loss" and "useful assistant" is what Chapter 19 (alignment) closes.
+
+## 17.2 — GPT-3: scaling laws made real
+
+The scaling laws were a prediction; **GPT-3 (2020)** was the proof. OpenAI took the recipe to **175 billion parameters** — over 100× larger than its predecessor GPT-2 — and the result wasn't just a lower loss number. The model could perform brand-new tasks from a few examples in its prompt, with **no fine-tuning at all**. This was the concrete moment the field realized scale alone unlocks qualitatively new behavior, and it kicked off the race that defines the chapter.
+
+**Q: Why is GPT-3 the chronological hinge of this chapter?**
+GPT-3 was the first model big enough to **demonstrate scaling laws paying off in capability, not just loss**. At 175B parameters it showed strong **few-shot learning** — solving tasks from prompt examples without weight updates — which proved that "just scale it" produced new abilities, not merely incremental quality. Everything after (Chinchilla, chat models, MoE) is a response to that result.
+
+**Q: What was surprising about GPT-3 beyond its size?**
+That a pure next-token predictor, never fine-tuned for any specific task, could **translate, answer trivia, do arithmetic, and write code from a handful of in-prompt examples**. Capability emerged from scale + pretraining alone, foreshadowing both in-context learning (17.4) and emergent abilities (17.3).
+
+## 17.3 — Chinchilla: the compute-optimal correction
+
+Kaplan's laws said "scale," but were fuzzy on *how to split a fixed budget* between a bigger model and more data. Early labs read them as "parameters matter most," so they built huge models on relatively little data. In 2022, DeepMind's **Chinchilla** paper showed this was a mistake: for a fixed compute budget, you should grow parameters and training tokens **roughly in equal proportion**.
+
+The headline finding: many famous large models were badly **undertrained** — too many parameters, too few tokens.
+
+| Model (year) | Parameters | Training tokens | Tokens per param |
+|---|---|---|---|
+| GPT-3 (2020) | 175B | 300B | ~1.7 |
+| Gopher (2021) | 280B | 300B | ~1.1 |
+| Chinchilla (2022) | 70B | 1.4T | ~20 |
+
+Chinchilla used **4× fewer parameters than Gopher but ~4.7× more data**, ran at the same compute, and **beat** it on nearly every benchmark.
+
+::: {.callout-tip}
+**Intuition:** think of a fixed training budget as a fixed amount of money. Kaplan-era spending blew it almost all on a bigger "brain" and starved it of "books to read." Chinchilla said: buy a smaller brain and far more books, and it ends up smarter for the same money. The rough recipe is **~20 training tokens per parameter**.
+:::
+
+**Q: What is the core Chinchilla finding?**
+For a **fixed compute budget**, model size and training-token count should scale **in equal proportion** — roughly **20 tokens per parameter** is compute-optimal. Earlier giants like GPT-3 and Gopher were **undertrained**: too big for the little data they saw.
+
+**Q: How did a 70B model beat a 280B model?**
+**Chinchilla (70B)** spent the same compute as **Gopher (280B)** but redirected it from extra parameters into ~4.7× more training tokens. Better data balance beat raw size, and the smaller model won on most benchmarks — while also being far cheaper to run at inference.
+
+**Q: Why does a smaller, well-trained model matter beyond the benchmark win?**
+**Inference cost scales with parameters.** A 70B model is cheaper and faster to serve than a 280B one *every single time it runs*. Chinchilla showed you can get better quality *and* lower serving cost — a double win that reshaped how labs allocate budgets.
+
+**Q: If Chinchilla says 20 tokens/param is optimal, why do modern models (e.g. Llama) train far past that?**
+Chinchilla optimizes **training compute only**. If a model will be served to millions, you happily "overtrain" a smaller model — spending extra training compute — to save vastly more on **inference**. Models like Llama are deliberately trained well beyond 20 tokens/param to be cheap and strong at deployment.
+
+::: {.callout-warning}
+**Interview gotcha:** "Chinchilla-optimal" means *compute-optimal for training*, not *best to deploy*. Don't say a 7B model trained on 2T tokens is "wrong" — it is inference-optimal, a deliberate trade Chinchilla's math doesn't capture.
+:::
+
+## 17.4 — Emergent abilities: capabilities that switch on
+
+Most scaling is smooth — loss glides down a power law. But some *specific capabilities* behave differently: they sit near random for every small model, then **jump sharply** to high performance once the model crosses a size threshold. Multi-step arithmetic, chain-of-thought reasoning, and following novel instructions are classic examples. These are called **emergent abilities** — skills not present in smaller models that appear, seemingly abruptly, in larger ones.
+
+```{mermaid}
+flowchart LR
+  A["Small model<br/>~random on task"] -->|scale up| B["Threshold size"]
+  B -->|cross it| C["Sharp jump<br/>to high accuracy"]
+```
+
+**Q: What is an emergent ability?**
+An **emergent ability** is a capability absent in smaller models that appears once a model passes a certain scale. Performance stays near chance across small sizes, then rises sharply — unlike the smooth power-law drop of overall loss.
+
+**Q: Give concrete examples.**
+**Multi-digit arithmetic**, **multi-step (chain-of-thought) reasoning**, **following instructions phrased in novel ways**, and certain **few-shot benchmark tasks**. Small models score near zero; past a threshold they suddenly succeed.
+
+**Q: Are emergent abilities controversial?**
+Yes. A well-known critique argues some "emergence" is a **measurement artifact**: a harsh metric (exact-match: all-or-nothing) makes gradual improvement *look* like a sudden jump. Under a smoother metric (e.g. per-token probability), the same capability often improves continuously. The honest interview answer: *the underlying skill may grow smoothly, but the metric we report can make it appear abrupt.*
+
+**Q: Why do emergent abilities matter practically?**
+They make capabilities **hard to predict from small experiments**. Scaling laws forecast *loss* reliably, but not *which specific skills* will switch on at scale — so labs sometimes only discover a new ability after training the big model. This unpredictability is a core reason scaling research remains empirical.
+
+## 17.5 — In-context learning: learning without weight updates
+
+The most consequential emergent ability deserves its own section. Normally a model "learns" by gradient descent updating its weights. **In-context learning (ICL)** is different: you show the model a few examples *inside the prompt*, and it performs the task on a new input — **with no weight update at all**. The model's weights are frozen; the "learning" happens entirely in the forward pass, by conditioning on what it just read.
+
+```python
+# In-context learning: the "training" is just text in the prompt.
+prompt = """Translate English to French.
+sea otter => loutre de mer
+cheese => fromage
+plush giraffe =>"""          # model continues: "girafe en peluche"
+# No fine-tuning, no gradients — the examples condition the next-token prediction.
+```
+
+This is the bridge to Chapter 18: once a model can learn from examples in its prompt, the prompt itself becomes a programming interface.
+
+**Q: What is in-context learning?**
+**In-context learning** is a model performing a task from examples or instructions given *in the prompt*, **without any weight update**. The pattern in the context steers the frozen model's next-token predictions toward the right answer.
+
+**Q: How is it different from fine-tuning?**
+**Fine-tuning changes the weights** via gradient descent and persists across sessions. **In-context learning changes nothing permanent** — it only conditions one forward pass, and the "knowledge" vanishes when the prompt ends. ICL is instant and cheap; fine-tuning is durable but costly (Chapter 19).
+
+**Q: What do "zero-shot," "one-shot," and "few-shot" mean?**
+They count the worked examples placed in the prompt: **zero-shot** = task description only, **one-shot** = one example, **few-shot** = several. GPT-3's 2020 headline was that a large enough model does respectable few-shot learning *without* any task-specific fine-tuning.
+
+**Q: Why is in-context learning considered emergent?**
+Small models barely benefit from in-prompt examples; large ones improve markedly with them. The *ability to exploit context* strengthens with scale — making ICL one of the clearest emergent behaviors and the foundation of modern prompting.
+
+## 17.6 — The context window: how much the model can "see"
+
+Intuition: a model has no memory of your conversation beyond what fits in front of it right now. The **context window** is exactly that — the maximum number of tokens (your prompt plus its own generated reply) the model can attend to in a single forward pass. Everything outside it simply doesn't exist to the model. Early GPT-3 saw ~2,048 tokens; modern models stretch to hundreds of thousands or millions.
+
+**Q: What is a context window (or context length)?**
+The **context window** is the maximum number of tokens a model can process at once — prompt *plus* generated output. It is a hard architectural limit: tokens beyond it are truncated or must be dropped. Think of it as the model's working memory; nothing outside the window influences the next token.
+
+**Q: Why does long context matter, and what does it cost?**
+Long context lets you stuff whole documents, codebases, or long chats into one prompt — powering RAG, long-document QA, and agents that remember more. The cost: standard **self-attention scales quadratically** with sequence length, $O(n^2)$ — double the context, roughly **4×** the attention compute and memory (this is the same attention from Chapters 15–16). That quadratic wall is why long-context support is a real engineering achievement, not a free config flag.
+
+**Q: How is the context window different from the model's trained knowledge?**
+**Trained knowledge** lives in the weights (fixed at pretraining); the **context window** is transient working memory for *this* request. Facts in the weights persist across calls; anything in the context vanishes once the request ends — the same distinction as fine-tuning vs in-context learning (17.5).
+
+## 17.7 — Reasoning models: thinking longer at inference
+
+Until ~2024 the lever for better models was bigger training runs. The newest shift moves the lever to **inference time**: instead of answering immediately, a **reasoning model** generates a long internal chain of thought first — effectively "thinking" before it speaks — and spends *more compute per question* to get a better answer. OpenAI's **o1** (2024) and the open-weight **DeepSeek-R1** (2025) made this the headline trend, trained largely with **reinforcement learning** to reward correct reasoning rather than just imitating text.
+
+::: {.callout-tip}
+**Intuition:** a normal model is a student blurting the first answer that comes to mind. A reasoning model is the same student told "show your working" — it scribbles steps on scratch paper, catches its own mistakes, then writes the final answer. More thinking time, better answers — no bigger brain required.
+:::
+
+**Q: What is test-time (inference-time) compute?**
+**Test-time compute** is spending *more computation when answering*, not when training — typically by generating a long reasoning chain before the final answer. The insight: for hard problems, letting a model "think longer" (more tokens of reasoning) can beat simply making the model bigger. It is a new scaling axis: scale *inference*, not just *parameters and data*.
+
+**Q: How do reasoning models relate to chain-of-thought?**
+**Chain-of-thought** (prompting a model to reason step by step, seen in 17.4) was a *prompting trick* on ordinary models. **Reasoning models** bake that behavior in: they are *trained* (often via reinforcement learning that rewards reaching the correct answer) to produce long, self-correcting reasoning by default. CoT became a learned skill instead of a prompt you bolt on.
+
+**Q: Why does "think longer at inference" matter for scaling?**
+It opened a **second scaling axis**. When pretraining gains started getting expensive, labs found that spending more compute *at inference* — longer reasoning, sampling many attempts, self-checking — kept pushing accuracy up on math, code, and logic. As of 2025 this is arguably the dominant frontier trend, and the trade-off is concrete: better answers cost more tokens (and more latency and money) per query.
+
+**Q: What's the catch with reasoning models?**
+They are **slower and more expensive per answer** — a long hidden reasoning chain can be many times the tokens of the final reply. They shine on hard reasoning (math, coding, logic) but are overkill for simple lookups or chit-chat, where a fast standard model is cheaper and just as good.
+
+## 17.8 — Mixture-of-Experts: more parameters, same compute
+
+So far "bigger" meant "more expensive per token." **Mixture-of-Experts (MoE)** breaks that link. The intuition: instead of one giant network where every parameter fires for every token, you keep many smaller **expert** sub-networks and a **router** that sends each token to just a few of them. The model can hold *enormous* total parameters, but each token only activates a small slice — so compute per token stays modest.
+
+```{mermaid}
+flowchart TD
+  T["Token"] --> R["Router (gating)"]
+  R -->|top-2| E1["Expert 1"]
+  R -->|top-2| E3["Expert 3"]
+  R -.skip.-> E2["Expert 2"]
+  R -.skip.-> E4["Expert 4"]
+  E1 --> S["Weighted sum to output"]
+  E3 --> S
+```
+
+The router picks the **top-k** experts (often $k=2$) per token. So a model might have, say, 8 experts but route each token to 2 — **total** parameters are large, **active** parameters per token are small.
+
+**Q: What problem does MoE solve?**
+It **decouples total parameters from compute per token.** A dense model pays for *every* parameter on *every* token; MoE activates only a few experts per token, so you can grow total capacity (knowledge) without proportionally growing the FLOPs each token costs.
+
+**Q: What is the router and what does it do?**
+The **router (gating network)** is a small learned layer that scores the experts for each token and sends the token to the **top-k** (commonly 2). It outputs weights so the chosen experts' outputs are combined. The router is trained jointly with the experts.
+
+**Q: Distinguish total vs active parameters.**
+**Total parameters** = all experts summed (the model's full capacity). **Active (or activated) parameters** = those actually used for a given token (router + chosen top-k experts). Inference compute tracks **active**, not total — that's the whole point.
+
+**Q: An "8×7B" MoE — why is it ~47B parameters, not 56B?**
+Because **only the feed-forward (FFN) layers are turned into experts**; the attention layers, embeddings, and layer norms are **shared** across all experts, not copied 8 times. So you don't get a clean 8 × 7B = 56B — you get 8 copies of just the FFN blocks plus *one* shared copy of everything else, which lands around **47B total**. At inference with top-2 routing, only ~13B parameters are active per token.
+
+**Q: What's the catch with MoE?**
+Three big ones. **(1) Memory:** all experts must be loaded in VRAM even though only a few run — so you need the memory of the big model. **(2) Load balancing:** without an auxiliary loss, the router collapses onto a few favorite experts; an extra **load-balancing loss** keeps usage spread out. **(3) Training/serving complexity:** routing and expert-parallelism make systems harder to build.
+
+::: {.callout-warning}
+**Interview gotcha:** MoE saves **compute (FLOPs)**, not **memory**. People assume a sparse model is "cheaper" everywhere — but you still must hold every expert in GPU memory. The win is FLOPs-per-token, not VRAM.
+:::
+
+## 17.9 — The model-family landscape
+
+By 2023–2025 the field split into recognizable families. The key axis for an engineer isn't just "who's smartest this week" — it's **open-weight vs closed/API**, because that decides whether you can self-host, fine-tune freely, and control your data, or whether you call someone's endpoint and trade control for convenience and frontier quality.
+
+| Family / Lab | Access model | Note |
+|---|---|---|
+| GPT / OpenAI | Closed, API | Frontier general + o1-style reasoning models, API-only |
+| Claude / Anthropic | Closed, API | Frontier; safety-focused, long context |
+| Gemini / Google | Closed, API | Frontier, natively multimodal |
+| Llama / Meta | **Open-weight** | Downloadable weights, huge ecosystem |
+| Mistral / Mistral AI | **Open-weight** + API | Strong small models; Mixtral is MoE |
+| DeepSeek | **Open-weight** | Strong open MoE / reasoning models (R1) |
+
+**Q: What's the difference between open-weight and closed/API models?**
+**Open-weight** models (Llama, Mistral, DeepSeek) publish the trained weights, so you can download, self-host, fine-tune, and run them offline. **Closed/API** models (GPT, Claude, Gemini) are accessed only through a hosted endpoint — you send tokens, get tokens back, and never hold the weights.
+
+**Q: Is "open-weight" the same as "open-source"?**
+No — and this is a common slip. **Open-weight** means the *weights* are released, usually under a license with conditions; it rarely includes the training data or full training code. True **open-source** would release everything needed to reproduce the model. Most "open" LLMs are open-*weight*, not fully open-*source*.
+
+**Q: What does "multimodal" mean for an LLM?**
+A **multimodal** model accepts (and sometimes produces) more than just text — typically **images, audio, or video** alongside text, all handled by one model. Practically, the non-text input is turned into tokens/embeddings the transformer can process in the same sequence as text. Gemini is described as *natively* multimodal (trained on multiple modalities from the start), versus models that bolt vision on later.
+
+**Q: When would you pick open-weight over an API model?**
+Choose **open-weight** when you need **data privacy** (nothing leaves your servers), **cost control at scale**, **offline/air-gapped** deployment, or **deep customization** (full fine-tuning). Choose **API** for **frontier quality**, no infra to manage, and fast iteration. Regulated or sovereign customers often *must* self-host — making open-weight the only viable option.
+
+**Q: Which named families should I be able to place?**
+**Closed/API frontier:** GPT (OpenAI), Claude (Anthropic), Gemini (Google). **Open-weight:** Llama (Meta), Mistral/Mixtral (Mistral AI), DeepSeek. Knowing each one's access model and one distinguishing trait is enough for most interviews.
+
+## 17.10 — From base model to chat model
+
+A freshly pretrained model is a **base model**: it only does one thing — predict the next token over web-scale text. Ask it a question and it might continue with *more questions*, because that's a plausible continuation of the text, not because it wants to help. The leap to the assistants we actually use (ChatGPT, late 2022) required turning that raw predictor into something **helpful, honest, and harmless**.
+
+```{mermaid}
+flowchart LR
+  P["Pretraining<br/>(next-token on web text)"] --> B["Base model<br/>(raw completer)"]
+  B --> I["Instruction tuning"]
+  I --> R["RLHF / preference tuning"]
+  R --> C["Chat model<br/>(helpful assistant)"]
+```
+
+**Q: What's the difference between a base model and a chat model?**
+A **base model** is the raw pretrained next-token predictor — it completes text but doesn't reliably answer or follow instructions. A **chat model** has been further trained (instruction tuning + preference alignment) to behave as a helpful assistant that responds to requests in turn-based dialogue.
+
+**Q: Why doesn't a base model just answer questions well?**
+It was only ever optimized to **predict plausible continuations of internet text**, where a question is often followed by *more text in the same style*, not a crisp answer. Helpfulness, refusing harmful requests, and staying on task are **not** in the pretraining objective — they must be added afterward.
+
+**Q: At a high level, how do you turn a base model into a chat model?**
+Two stages (detailed in Chapter 19): **(1) instruction tuning** — supervised fine-tuning on (instruction, good-response) pairs to teach the format of being helpful; then **(2) preference alignment** (e.g. RLHF) — using human preference signals to push toward responses people rate as better. The result is the assistant behavior you interact with.
+
+**Q: Does alignment make the model "know more"?**
+No — alignment mostly **elicits and shapes** knowledge the base model already has, making it accessible and safe, rather than injecting new facts. Most raw capability comes from **pretraining + scale**; alignment is the steering layer on top. (Full treatment in Chapter 19.)
+
+## Key takeaways
+
+- **Scaling laws** (Kaplan, 2020): loss falls as a predictable **power law** in parameters $N$, tokens $D$, and compute $C$ ($C \approx 6ND$) — letting you forecast large-model quality from small runs. There is an **irreducible loss floor** ($L_\infty$), so returns diminish toward a limit, not to zero.
+- **GPT-3** (2020, 175B) was scaling laws made real: strong **few-shot learning** with no fine-tuning proved scale unlocks new capability, not just lower loss.
+- **Chinchilla** (2022): for fixed *training* compute, scale params and tokens together — **~20 tokens/param**; GPT-3 and Gopher were **undertrained**. But deployed models are often "overtrained" small to cut **inference** cost.
+- **Emergent abilities** switch on past a size threshold (arithmetic, reasoning, instruction-following); the apparent abruptness can partly be a **metric artifact**.
+- **In-context learning** is task learning from prompt examples with **no weight update** — zero/one/few-shot — and is the foundation of prompting (Chapter 18).
+- **Context window** = the model's working memory (prompt + output) in tokens; long context is costly because attention scales **quadratically** ($O(n^2)$) with sequence length.
+- **Reasoning models** (o1, DeepSeek-R1, 2024–2025) scale **test-time compute**: they "think longer" via trained-in chain-of-thought, trading more tokens/latency for better answers on hard problems — a new scaling axis beyond bigger training runs.
+- **Mixture-of-Experts** routes each token to **top-k** of many experts: large **total** params, small **active** params, modest compute-per-token. An "8×7B" MoE is ~47B (only FFNs are replicated; attention/embeddings shared), ~13B active. Saves **FLOPs, not memory**; needs **load balancing**.
+- Model families split by access: **closed/API** (GPT, Claude, Gemini) vs **open-weight** (Llama, Mistral, DeepSeek) — "open-weight" ≠ "open-source." **Multimodal** models (e.g. Gemini) handle text + image/audio/video in one model.
+- A **base model** is a raw next-token completer; **instruction tuning + alignment** turn it into a **chat model** (Chapter 19).
+
+------------------------------------------------------------------------
+
+[📖 All chapters](../interview-guide.html)  &nbsp;|&nbsp;  [← 16 · 🧱 Tokenization, Pretraining & Model Families](ch16.html)  &nbsp;|&nbsp;  [18 · 💬 Prompting & In-Context Learning →](ch18.html)

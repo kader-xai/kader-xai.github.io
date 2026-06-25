@@ -1,0 +1,374 @@
+---
+title: "Chapter 24 — 🔧 MLOps & LLMOps — shipping and operating models in production"
+page-layout: full
+toc: true
+toc-location: left
+toc-title: "In this chapter"
+toc-depth: 2
+toc-expand: true
+---
+
+[📖 All chapters](../interview-guide.html)  &nbsp;|&nbsp;  [← 23 · 🛡️ Evaluation, Safety & Guardrails](ch23.html)  &nbsp;|&nbsp;  [25 · 🛠️ Practical Toolkit I →](ch25.html)
+
+<details class="ig-jump">
+<summary>📚 Jump to any chapter</summary>
+<p class="ig-era">🧮 Mathematical Foundations</p>
+<ul>
+<li><a href="ch01.html">01 &middot; 🧮 Linear Algebra — the language of data</a></li>
+<li><a href="ch02.html">02 &middot; 📉 Calculus & Optimization — how models learn</a></li>
+<li><a href="ch03.html">03 &middot; 🎲 Probability & Statistics — reasoning under uncertainty</a></li>
+<li><a href="ch04.html">04 &middot; 🔥 Information Theory & Loss Functions — measuring surprise and error</a></li>
+</ul>
+<p class="ig-era">🧩 Classical Machine Learning</p>
+<ul>
+<li><a href="ch05.html">05 &middot; 🧩 Core ML Concepts — the ground rules</a></li>
+<li><a href="ch06.html">06 &middot; 📐 Classical Supervised Algorithms — the workhorses</a></li>
+<li><a href="ch07.html">07 &middot; 🌲 Ensembles & Boosting — how to win on tabular data</a></li>
+<li><a href="ch08.html">08 &middot; 🗺️ Unsupervised Learning & Dimensionality Reduction — structure without labels</a></li>
+<li><a href="ch09.html">09 &middot; 🎯 Model Evaluation & Validation — knowing if it actually works</a></li>
+</ul>
+<p class="ig-era">🧠 Deep Learning</p>
+<ul>
+<li><a href="ch10.html">10 &middot; 🧠 Neural Network Fundamentals — the building block</a></li>
+<li><a href="ch11.html">11 &middot; ⚙️ Training Deep Networks — making deep nets actually train</a></li>
+<li><a href="ch12.html">12 &middot; 🖼️ Convolutional Neural Networks — the vision branch</a></li>
+<li><a href="ch13.html">13 &middot; 🔁 Sequence Models — RNNs, LSTMs and the bottleneck</a></li>
+</ul>
+<p class="ig-era">⚡ The Transformer Era</p>
+<ul>
+<li><a href="ch14.html">14 &middot; 🔤 Word Embeddings — giving words meaning as vectors</a></li>
+<li><a href="ch15.html">15 &middot; ⚡ Attention & the Transformer — the architecture that changed everything</a></li>
+<li><a href="ch16.html">16 &middot; 🧱 Tokenization, Pretraining & Model Families</a></li>
+<li><a href="ch17.html">17 &middot; 📈 Modern LLMs & Scaling — bigger, and suddenly capable</a></li>
+</ul>
+<p class="ig-era">💬 Using & Adapting LLMs</p>
+<ul>
+<li><a href="ch18.html">18 &middot; 💬 Prompting & In-Context Learning — programming models with words</a></li>
+<li><a href="ch19.html">19 &middot; 🎚️ Fine-Tuning & Alignment — specializing and aligning models</a></li>
+<li><a href="ch20.html">20 &middot; 📚 Retrieval-Augmented Generation (RAG) — giving the model an open book</a></li>
+<li><a href="ch21.html">21 &middot; 🚀 Inference, Decoding & Serving — running LLMs efficiently</a></li>
+</ul>
+<p class="ig-era">🤖 The Agentic Frontier</p>
+<ul>
+<li><a href="ch22.html">22 &middot; 🤖 Agents, Tools & Loops — the latest frontier</a></li>
+<li><a href="ch23.html">23 &middot; 🛡️ Evaluation, Safety & Guardrails — making LLM systems trustworthy</a></li>
+<li><a href="ch24.html">24 &middot; 🔧 MLOps & LLMOps — shipping and operating models in production</a></li>
+</ul>
+<p class="ig-era">🛠️ The Practical Toolkit</p>
+<ul>
+<li><a href="ch25.html">25 &middot; 🛠️ Practical Toolkit I — Modeling & Vision Libraries</a></li>
+<li><a href="ch26.html">26 &middot; 🧰 Practical Toolkit II — LLM Frameworks, Orchestration & Vector Stores</a></li>
+<li><a href="ch27.html">27 &middot; ⚙️ Practical Toolkit III — Serving, Apps & MLOps Tooling</a></li>
+</ul>
+<p class="ig-era">☁️ Cloud AI Platforms</p>
+<ul>
+<li><a href="ch28.html">28 &middot; ☁️ Cloud AI Platforms — deploying foundation models on the hyperscalers</a></li>
+</ul>
+</details>
+
+------------------------------------------------------------------------
+
+A trained model is worthless until it runs in production, stays correct, and can be rebuilt tomorrow by someone who isn't you. This final chapter is the engineering discipline that surrounds everything from Chapters 1–23: it takes the safety and evaluation ideas of Chapter 23 and the LLM stack of Chapters 16–22 and asks the operational questions — how do we ship it, watch it, version it, and roll it back when it breaks? MLOps borrows DevOps habits for models; LLMOps adds the quirks of prompts, tokens, and non-deterministic text. With this chapter, the arc closes: the loop from raw data in Chapter 1 to operating live LLM systems in production is finally complete.
+
+::: {.callout-note appearance="simple"}
+📍 **Timeline:** 2018 onward — as models moved from research notebooks into revenue-critical systems, the operational discipline that keeps them alive in production grew up alongside them (and gained an LLM-flavored sequel after 2022).
+:::
+
+## 24.1 — The ML lifecycle and MLOps maturity
+
+Think of a model like a restaurant dish. Inventing the recipe once is research. MLOps is running the kitchen every night: same dish, every time, fast, and you notice the moment the tomatoes go bad. The lifecycle is a loop, not a line — data, train, evaluate, deploy, monitor, then back to data when reality drifts.
+
+```{mermaid}
+flowchart LR
+  A["Data"] --> B["Train"]
+  B --> C["Evaluate"]
+  C --> D["Deploy"]
+  D --> E["Monitor"]
+  E -->|"drift / new data"| A
+```
+
+Maturity is just how much of that loop is automated. Google's well-known framing has three levels: everything by hand, automated pipelines, and full continuous training.
+
+| Level | Name | What's automated | Pain it removes |
+|-------|------|------------------|-----------------|
+| 0 | Manual | Nothing — notebooks, manual deploy | "It worked on my laptop" |
+| 1 | ML pipeline (CI/CD) | Training pipeline + automated deploy of the pipeline | Slow, error-prone handoffs |
+| 2 | Continuous training | Pipeline auto-retrains + redeploys on triggers | Models silently going stale |
+
+**Q: What is MLOps in one sentence?**
+**MLOps** is DevOps applied to machine learning: the set of practices (versioning, CI/CD, automation, monitoring) that make models **reproducible, deployable, and observable** in production. The twist over plain DevOps is that you version **data and models**, not just code, and you monitor **statistical behavior**, not just uptime.
+
+**Q: Why is "it works in my notebook" not enough?**
+A notebook captures none of the things production needs: pinned dependencies, the exact data snapshot, random seeds, and a repeatable build. The same code can produce a different model next week because the **data or library versions drifted**. MLOps makes the whole run **reproducible** so anyone can rebuild the exact artifact.
+
+**Q: What does CI/CD/CT mean for ML specifically?**
+Standard software has CI (continuous integration) and CD (continuous delivery); ML adds a third letter, **CT (continuous training)**. **CI for ML** is more than testing code — it also runs **data validation** (schema, ranges, nulls) and **model tests** (does it train, does it beat a baseline, does it pass fairness/behavioral checks). **CD for ML** delivers a whole **training pipeline**, not just a single model artifact — you ship the thing that *produces* models. **CT** is the automation that **retrains and redeploys** when data or performance triggers fire. This maps directly to the maturity table: Level 1 is CI/CD of the pipeline, Level 2 adds CT.
+
+**Q: What triggers continuous training (level 2)?**
+Three common triggers: a **schedule** (retrain nightly/weekly), a **monitoring signal** (drift or accuracy drop crosses a threshold), and **new labeled data** arriving. The point is the retrain-and-deploy loop runs without a human kicking it off — though a human usually still approves the promotion gate.
+
+**Q: How does MLOps differ from traditional software ops?**
+Three extra axes: **data** (it changes and must be versioned), **models** (a binary artifact derived from data + code + seed), and **behavioral decay** (a deployed model silently gets worse as the world shifts, even with zero code changes). Traditional software doesn't rot just because the input distribution moved.
+
+::: {.callout-warning}
+Interview gotcha: in ML, "CD" delivers the **pipeline**, not just the model. Saying "CD = deploy the model" misses the point — Level 1 maturity is about automating the *pipeline that builds and validates models*, so a retrain is a button-press, not a project.
+:::
+
+## 24.2 — Experiment tracking and reproducibility
+
+Training runs are experiments, and experiments you can't reproduce are anecdotes. The fix is to log everything that defines a run — the inputs (params, data version, code commit), the outputs (metrics, the model file), and the environment — so any run can be compared and recreated. Tools like **MLflow** and **Weights & Biases (W&B)** are basically a lab notebook with a database behind it.
+
+The reproducibility recipe has four legs: fix the **seed**, pin the **environment**, snapshot the **data**, and record the **code commit**. Miss any one and the result wobbles.
+
+```python
+import mlflow, numpy as np, random
+
+np.random.seed(42); random.seed(42)   # leg 1: deterministic seed
+
+with mlflow.start_run():
+    mlflow.log_param("lr", 0.01)        # inputs that define the run
+    mlflow.log_param("data_version", "v3")
+    # ... train ...
+    mlflow.log_metric("val_acc", 0.91)  # outputs
+    mlflow.log_artifact("model.pkl")    # the actual artifact
+```
+
+::: {.callout-tip}
+Intuition: a tracked run is a row in a table. Params are the knobs you turned, metrics are the score, artifacts are the thing you built. Compare rows to pick a winner.
+:::
+
+**Q: What three things must you log to reproduce a run?**
+**Params** (hyperparameters, data version, code commit), **metrics** (loss, accuracy, anything you optimize or watch), and **artifacts** (the model file, plots, the environment spec). Inputs + outputs + the build environment. With all three you can rebuild and verify the run.
+
+**Q: Why isn't fixing the random seed alone enough for reproducibility?**
+The seed makes sampling and init deterministic, but the result still depends on **library versions, hardware (GPU nondeterminism), and the data snapshot**. A different PyTorch or CUDA version can change results despite an identical seed. You also need to **pin the environment** (e.g. a lockfile or Docker image) and **version the data**.
+
+**Q: What's the difference between a param and a metric?**
+A **param** is an input you set before the run (learning rate, batch size, data version) — it's fixed for that run. A **metric** is an output measured during/after the run (validation accuracy, loss curve) and can have many values over time/steps. Rule of thumb: params are knobs, metrics are readings.
+
+**Q: MLflow vs W&B — what's the rough split?**
+**MLflow** is open-source, self-hostable, and bundles tracking + a model registry + packaging; popular when you want to own the stack. **W&B** is a polished hosted product strong on live dashboards, collaboration, and sweep (hyperparameter search) visualization. Both log params/metrics/artifacts — the choice is hosting, UI, and team workflow, not core capability.
+
+## 24.3 — Versioning: data, models, and the registry
+
+Git versions code beautifully and chokes on a 10 GB dataset. So MLOps splits versioning: code stays in Git, while **DVC (Data Version Control)** stores a tiny pointer file in Git and the actual bytes in cheap object storage (S3, GCS). You get `git checkout` semantics for data without bloating the repo.
+
+The **model registry** is the next shelf up: a catalog of trained model versions with **lifecycle stages** (Staging → Production → Archived) and metadata linking each model back to the run, data, and code that made it. That backward chain is **lineage** — the answer to "what exactly produced the thing serving traffic right now?"
+
+```{mermaid}
+flowchart LR
+  C["Code commit"] --> R["Training run"]
+  D["Data version (DVC)"] --> R
+  R --> M["Model v7 in registry"]
+  M --> G{"Eval gate: beats baseline?"}
+  G -->|"yes"| P["Promoted: Production"]
+  G -->|"no"| X["Blocked: stays in Staging"]
+```
+
+**Q: Why not just put data and models in Git?**
+Git is built for **text diffs of small files**; large binaries make the repo huge and slow, and Git can't meaningfully diff them. **DVC** keeps a small hash-pointer in Git and pushes the real data to object storage, giving versioning and `dvc checkout` without the bloat. Same idea for big model weights.
+
+**Q: What is a model registry and why do you need one?**
+A **model registry** is a versioned catalog of trained models with stages (Staging, Production, Archived), approval gates, and metadata. It decouples **"which model exists"** from **"which model is serving"**, so promotion and rollback become a stage change, not a redeploy. It's the single source of truth for what's live.
+
+**Q: What is an evaluation gate before promotion?**
+An **evaluation (promotion) gate** is an automated check that a candidate model must pass *before* it's allowed into Production. Typically: score the new model on a **held-out set** and require it to **beat the current champion** (or clear an absolute threshold) on the key metric, plus pass behavioral/fairness/latency checks. If it fails, promotion is **blocked automatically** — no human can fat-finger a worse model into production. This turns "is the new model actually better?" from a judgment call into a gate in the pipeline.
+
+**Q: What is lineage and why does it matter?**
+**Lineage** is the recorded chain from a serving model back to the exact code commit, data version, params, and run that produced it. It matters for **debugging** ("a bad prediction shipped — what trained this?"), **audit/compliance**, and **reproducibility**. Without lineage a production model is an orphan binary nobody can explain.
+
+**Q: How does promoting a model to production differ from deploying code?**
+Promotion is usually a **metadata/stage change in the registry** (mark v7 as Production), and serving infra picks up the new pointer. Rollback is symmetric — repoint to the previous version. This is cleaner than redeploying because the artifact is already built, tested, and registered.
+
+## 24.4 — Pipeline orchestration
+
+Once steps repeat (pull data → validate → train → evaluate → register), you want a robot running them in order, retrying failures, and showing you where it broke. That's an **orchestrator**. It models work as a **DAG** — a directed acyclic graph — where nodes are tasks and edges are dependencies, so independent steps run in parallel and downstream steps wait for upstream ones.
+
+```{mermaid}
+flowchart LR
+  I["ingest"] --> V["validate"]
+  V --> T["train"]
+  V --> F["build features"]
+  T --> E["evaluate"]
+  F --> E
+  E --> R["register"]
+```
+
+| Tool | Flavor | Sweet spot |
+|------|--------|-----------|
+| Airflow | Mature, schedule-first | General data/ETL DAGs, cron-style |
+| Kubeflow | Kubernetes-native | ML pipelines on K8s, containerized steps |
+| Prefect | Pythonic, dynamic | Code-first flows, easy local→cloud |
+| Dagster | Asset / data-aware | Data assets, strong typing & lineage |
+
+**Q: Why a DAG and not just a script?**
+A **DAG** makes dependencies explicit, so the orchestrator can run independent tasks **in parallel**, **retry** only the failed node, and **resume** from a failure instead of rerunning everything. A linear script gives you none of that — one failure means rerun from the top.
+
+**Q: What is idempotency and why do orchestrators care?**
+**Idempotent** means running a task twice produces the same result as running it once (e.g. writing to a fixed partition, not appending). Orchestrators **retry** on failure, so non-idempotent tasks cause duplicates or corruption. Designing tasks to overwrite-by-key rather than append makes retries safe.
+
+**Q: What is a backfill?**
+A **backfill** re-runs a pipeline over **past time windows** — for example, you fixed a bug or added a new feature and need to recompute the last 90 days. It relies on tasks being **parameterized by date** and **idempotent**, so rerunning Jan 5th cleanly replaces Jan 5th's output rather than duplicating it.
+
+**Q: Airflow vs Kubeflow vs Prefect/Dagster — how do you pick?**
+**Airflow** if you live in scheduled ETL and want maturity/ecosystem. **Kubeflow** if you're Kubernetes-native and want containerized ML steps. **Prefect** for a lighter, Pythonic code-first feel; **Dagster** when you think in **data assets** and want built-in typing and lineage. There's no "best" — match it to your infra and how your team thinks about work.
+
+## 24.5 — Feature stores and training-serving skew
+
+Here's a classic production bug: in training you compute "average purchase over last 30 days" with a clean pandas one-liner; in production some engineer reimplements it in Java slightly differently. The model now sees **different numbers at serving time than at training time** — that's **training-serving skew**, and it quietly wrecks accuracy. A **feature store** fixes it by computing each feature **once** and serving the **same definition** to both training and inference.
+
+It also solves **point-in-time correctness**: when building training data, each feature value must reflect **only what was known at that timestamp**, never the future. Joining "today's" feature value onto a year-old label leaks the future and inflates offline metrics.
+
+::: {.callout-warning}
+Interview gotcha: high offline accuracy that collapses in production is the signature of **either** training-serving skew **or** a point-in-time leak. Both are feature-store problems, not model problems.
+:::
+
+```{mermaid}
+flowchart LR
+  S["Feature definition (once)"] --> O["Offline store: training"]
+  S --> N["Online store: low-latency serving"]
+```
+
+**Q: What is training-serving skew?**
+It's a **mismatch between the feature values a model sees in training versus in production**, caused by features being computed two different ways (different code, different data freshness). The model was trained on one distribution and served another, so accuracy drops even though the model is "correct." Feature stores prevent it by sharing **one feature definition** across both paths.
+
+**Q: What is point-in-time correctness?**
+When assembling a training row for a label at time $t$, every feature must use **only data available at or before $t$** — no peeking at future values. Violating it causes **label leakage**: offline metrics look great, production fails. Feature stores enforce this with **time-travel joins** (as-of joins on event timestamps).
+
+**Q: What are the online and offline parts of a feature store?**
+The **offline store** holds large historical feature tables for **training** (high throughput, latency doesn't matter). The **online store** holds the latest feature values in a fast key-value DB for **serving** (millisecond lookups by entity id). The store keeps them in sync from a single definition so both agree.
+
+**Q: When is a feature store overkill?**
+When you have **few features, one model, and no real-time serving**, a feature store is heavy machinery for a small job — a versioned table and shared utility function may suffice. Its value scales with **feature reuse across teams/models** and the need for **low-latency online features**. Rule of thumb: don't stand one up for a single batch model.
+
+## 24.6 — Deployment strategies, monitoring, and drift
+
+You rarely flip the whole world to a new model at once — that's how you turn a bad model into an outage. Instead you release **gradually** and keep an escape hatch. The strategies below trade off **safety vs. speed vs. cost**, and all of them assume one thing: you're **monitoring** so you know when to abort.
+
+A useful mental picture is the **traffic share over time**: canary slides the dial up (1% → 10% → 50% → 100%) while watching metrics, whereas blue-green is a single hard flip from 0% to 100% with the old environment kept warm for an instant flip back.
+
+<svg viewBox="0 0 420 170" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif" font-size="11">
+  <line x1="40" y1="130" x2="200" y2="130" stroke="#888" stroke-width="1"/>
+  <line x1="40" y1="130" x2="40" y2="20" stroke="#888" stroke-width="1"/>
+  <text x="120" y="150" text-anchor="middle">canary: ramp</text>
+  <polyline points="40,128 80,118 120,90 160,45 200,25" fill="none" stroke="#3b82f6" stroke-width="2"/>
+  <circle cx="80" cy="118" r="2.5" fill="#3b82f6"/>
+  <circle cx="120" cy="90" r="2.5" fill="#3b82f6"/>
+  <circle cx="160" cy="45" r="2.5" fill="#3b82f6"/>
+  <text x="34" y="24" text-anchor="end">100%</text>
+  <text x="34" y="132" text-anchor="end">0%</text>
+  <line x1="250" y1="130" x2="410" y2="130" stroke="#888" stroke-width="1"/>
+  <line x1="250" y1="130" x2="250" y2="20" stroke="#888" stroke-width="1"/>
+  <text x="330" y="150" text-anchor="middle">blue-green: flip</text>
+  <polyline points="250,128 318,128 318,25 410,25" fill="none" stroke="#10b981" stroke-width="2"/>
+  <text x="244" y="24" text-anchor="end">100%</text>
+  <text x="244" y="132" text-anchor="end">0%</text>
+</svg>
+
+| Strategy | How it works | Why use it |
+|----------|--------------|-----------|
+| Shadow | New model runs on real traffic, predictions **not used** | Safest test on prod data, zero user risk |
+| Canary | Send small % of traffic to new model, ramp up | Limit blast radius, watch metrics |
+| Blue-green | Two full envs, switch all traffic at once | Instant cutover **and** instant rollback |
+| A/B | Split traffic, compare a **business metric** statistically | Decide which model is actually better |
+| Champion/challenger | Champion serves all live traffic; challenger scores in parallel, serves none | Continuous "is there a better model?" |
+
+Once live, you watch two very different kinds of decay. **Data drift** is the *inputs* changing (a new user segment, a sensor recalibrated). **Concept drift** is the *relationship* between inputs and the right answer changing (fraud tactics evolve, so the same features now mean something different). Data drift you can see without labels; concept drift you often can't catch until labels arrive.
+
+```{mermaid}
+flowchart TD
+  M["Monitor production"] --> I["Input stats vs training?"]
+  I -->|"shifted"| DD["Data drift alert"]
+  M --> A["Accuracy vs baseline?"]
+  A -->|"dropped"| CD["Concept drift / decay"]
+  DD --> RT["Retrain / investigate"]
+  CD --> RT
+```
+
+**Q: Shadow vs canary — what's the difference?**
+**Shadow** sends real traffic to the new model but **discards its outputs** — users are never affected, so it's purely a correctness/latency test on production data. **Canary** sends a **small fraction of real users** to the new model and **uses its outputs**, ramping up while watching metrics. Shadow = zero user risk, no business signal; canary = small real risk, real signal.
+
+**Q: Blue-green vs canary?**
+**Blue-green** keeps two complete environments and switches **100% of traffic at once**, with the old env standing by for instant rollback — fast cutover, but the new model hits everyone simultaneously. **Canary** is gradual (1% → 10% → 100%). Blue-green optimizes for **clean rollback**; canary optimizes for **limiting blast radius**.
+
+**Q: A/B test vs champion/challenger — aren't they the same?**
+No — they answer different questions. An **A/B test** splits live traffic between two models and runs a **statistical test on a business metric** (conversion, revenue) to decide, with significance, which is better; it's a time-boxed experiment that ends in a decision. **Champion/challenger** is an **ongoing** setup where the champion serves **all** live traffic and the challenger **scores the same requests in parallel but serves none of them** — you continuously compare to see if a contender should be promoted. Key distinction: in A/B both models affect real users; in champion/challenger only the champion does (the challenger is shadow-style, never customer-facing).
+
+**Q: Data drift vs concept drift?**
+**Data drift** = the input distribution $P(X)$ changes (e.g. more mobile users). **Concept drift** = the input→output mapping $P(Y \mid X)$ changes (e.g. spammers change tactics, so the same email features now mean "not spam"). Data drift can be detected from inputs alone; concept drift usually needs **ground-truth labels** to see the accuracy fall.
+
+**Q: How do you detect data drift without labels?**
+Compare the **live input distribution to the training distribution** using statistical measures — e.g. **PSI (Population Stability Index)**, **KL divergence**, or a **KS test** per feature. PSI buckets each feature and sums the divergence between the training proportion $q_i$ and the live proportion $p_i$ per bucket:
+$$\text{PSI} = \sum_i (p_i - q_i)\ln\frac{p_i}{q_i}$$
+The intuition: it's zero when the two distributions match and grows as they pull apart. Common bands: **PSI < 0.1** = no meaningful shift, **0.1–0.25** = moderate shift (watch it), **> 0.25** = significant shift (investigate/retrain). A breach means "investigate," not automatically "the model is wrong."
+
+**Q: What should you actually alert on in production?**
+A layered set: **operational** (latency, error rate, throughput), **data quality** (nulls, schema changes, out-of-range values), **drift** (input distribution shift), and **performance** (accuracy/AUC once labels land, or a proxy if they lag). Alert on the **leading indicators** (data quality, drift) because the real metric (accuracy) often arrives too late.
+
+**Q: Why is delayed feedback a monitoring problem?**
+Many labels arrive **late or never** (did the loan default? did the user churn?), so you can't measure true accuracy in real time. You bridge the gap with **proxy signals** (prediction distribution shifts, drift metrics, user behavior) until labels catch up. Concept drift is dangerous precisely because it hides in this label-delay window.
+
+**Q: What makes a model rollback fast, and why is it trickier than a code rollback?**
+Rollback is fast when the previous model is **kept warm and registered**: you just **repoint the registry/serving pointer** to the last-good version (no rebuild, no retrain). What makes model rollback **subtler than code** is **coupling to data and feature pipelines** — the old model may expect feature definitions, schemas, or preprocessing that have since changed, so "just revert the binary" can fail if the surrounding pipeline moved on. Safe rollback means versioning the **model *and* its feature/preprocessing contract** together.
+
+## 24.7 — LLMOps: what changes for large language models
+
+LLMOps is MLOps after someone swapped your model for a giant, expensive, non-deterministic text generator you often don't even own. Three things break the old assumptions: the "code" is now a **prompt** (versioned text, not weights), outputs are **stochastic and open-ended** (so eval is hard, per Chapter 23), and every call **costs tokens and latency** against a third-party API. The discipline adapts accordingly.
+
+```{mermaid}
+flowchart LR
+  U["Request"] --> G["Model gateway / router"]
+  G --> C{"Semantic cache hit?"}
+  C -->|"yes"| H["Cached answer"]
+  C -->|"no"| L["LLM provider"]
+  L --> T["Trace + token/cost log"]
+  T --> R["Response"]
+```
+
+| Concern | MLOps | LLMOps |
+|---------|-------|--------|
+| The "model logic" | Trained weights | Prompt + weights + tools |
+| Versioning | Data + model | **Prompts**, data, model |
+| Eval | Metrics on a test set | **LLM-as-judge / regression suites** (Ch. 23) |
+| Cost driver | Compute hours | **Tokens per request** |
+| Observability | Metrics + logs | **Traces** (multi-step chains/agents) |
+
+**Q: Why version prompts, and what goes in a prompt registry?**
+Because the **prompt is now part of your program** — a wording change silently alters behavior just like a code change. A **prompt registry** stores versioned prompt templates with metadata, lets you roll back a bad prompt, and ties each production response to the **exact prompt version** that produced it (lineage for prompts). Treat prompts like code: review, version, test.
+
+**Q: What is eval-in-CI / a regression suite for LLMs?**
+It's running an **automated evaluation set on every prompt or model change before shipping** — a curated set of inputs with expected qualities, scored by assertions or an **LLM-as-judge** (Chapter 23). It catches the classic LLM failure: fixing one prompt case while **silently breaking ten others**. Without it, prompt changes are deploys with no tests. This is the LLM version of the **evaluation gate** from 24.3 — a candidate prompt/model must pass the suite before promotion.
+
+**Q: How do you monitor a RAG system in production?**
+Beyond the usual latency/cost, RAG has a **retrieval layer to watch separately from generation**. Track **retrieval quality** — are the fetched chunks actually relevant to the query (hit rate, context relevance, sometimes a judge scoring retrieved-vs-needed)? A subtle failure mode is **the index going stale or drifting** as documents change, so the model answers confidently from outdated context. Split your monitoring: **retrieval** (did we fetch the right context?) vs **generation** (did the model use it faithfully, i.e. groundedness/faithfulness from Ch. 23). A drop in answer quality is often a *retrieval* regression, not a model one. (RAG architecture itself is Chapters 16–22.)
+
+**Q: What is semantic caching and how does it differ from a normal cache?**
+A normal cache keys on an **exact string match**. A **semantic cache** keys on **embedding similarity**, so "What's your refund policy?" and "How do I get a refund?" can hit the **same cached answer**. It cuts **cost and latency** for repeated-intent queries — at the risk of a too-loose similarity threshold returning a subtly wrong answer, so the threshold needs tuning.
+
+**Q: Why track tokens and cost per request?**
+Because in LLMOps **cost scales with tokens, not just request count**, and a single chatty prompt or runaway agent loop can blow the budget. Tracking input/output tokens **per request, per feature, per user** turns cost into an observable metric you can alert on and optimize (shorter prompts, smaller models, caching). It's the LLM equivalent of watching compute spend.
+
+**Q: What is a model gateway/router and why use one?**
+A **model gateway** is a single proxy in front of all LLM providers; a **router** picks which model handles each request (e.g. cheap model for easy queries, frontier model for hard ones). It centralizes **auth, rate limiting, caching, cost tracking, fallbacks, and guardrails** so you don't reimplement them per app, and it lets you **swap providers without touching app code**.
+
+**Q: What does LLM tracing/observability capture that metrics don't?**
+A **trace** records the **full execution tree of one request** — every prompt, retrieval, tool call, and model response in a multi-step chain or agent (Chapter 22). Flat metrics tell you *that* latency rose; a trace tells you **which step** in the chain caused it. Tools like **Langfuse** and **LangSmith** specialize in this step-level visibility.
+
+**Q: How do guardrails fit into LLMOps?**
+Guardrails (Chapter 23) become an **operational service in the request path** — input checks (prompt-injection, PII) and output checks (toxicity, schema, hallucination) that run on every call, often hosted centrally behind the **gateway**. The LLMOps job is making them **fast, versioned, and monitored**, so they protect production without becoming a latency bottleneck.
+
+## 24.8 — Key takeaways
+
+- **MLOps = reproducibility + automation + monitoring** for models; the lifecycle is a **loop** (data → train → eval → deploy → monitor → data), and maturity is how much of it runs without you.
+- **CI/CD/CT for ML**: CI validates code **plus data plus the model**, CD delivers the **pipeline** (not just one model), CT **auto-retrains** on triggers — Level 1 is CI/CD, Level 2 adds CT.
+- Reproducibility needs **four legs**: seed, pinned environment, versioned data, recorded code commit. Track **params, metrics, artifacts** (MLflow/W&B).
+- Version everything: **code in Git, data/models via DVC + a model registry**, with **lineage** linking a serving model back to its run, data, and code — and an **evaluation gate** that blocks any candidate that doesn't beat the baseline on a holdout.
+- **Orchestrators run DAGs**; design tasks to be **idempotent** so retries and **backfills** are safe.
+- **Feature stores** kill **training-serving skew** and enforce **point-in-time correctness** — the usual cause of "great offline, terrible in production."
+- Deploy **gradually** (shadow → canary → blue-green / A/B / champion-challenger) with **fast rollback** (repoint the registry to a warm previous version; remember the model is coupled to its feature/preprocessing contract). A/B both models touch users; champion/challenger only the champion does.
+- Monitor for **data drift** ($P(X)$) and **concept drift** ($P(Y\mid X)$), alerting on leading indicators because labels lag; quantify input shift with **PSI** ($<0.1$ none, $0.1$–$0.25$ moderate, $>0.25$ significant).
+- **LLMOps** adds **prompt versioning, eval-in-CI, RAG/retrieval monitoring, semantic caching, token/cost tracking, request tracing (Langfuse/LangSmith), guardrails-as-a-service, and a model gateway/router** — because the "code" is a prompt and every call costs tokens.
+
+------------------------------------------------------------------------
+
+[📖 All chapters](../interview-guide.html)  &nbsp;|&nbsp;  [← 23 · 🛡️ Evaluation, Safety & Guardrails](ch23.html)  &nbsp;|&nbsp;  [25 · 🛠️ Practical Toolkit I →](ch25.html)

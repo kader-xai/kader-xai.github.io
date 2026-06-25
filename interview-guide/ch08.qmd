@@ -1,0 +1,367 @@
+---
+title: "Chapter 08 — 🗺️ Unsupervised Learning & Dimensionality Reduction — structure without labels"
+page-layout: full
+toc: true
+toc-location: left
+toc-title: "In this chapter"
+toc-depth: 2
+toc-expand: true
+---
+
+[📖 All chapters](../interview-guide.html)  &nbsp;|&nbsp;  [← 07 · 🌲 Ensembles & Boosting](ch07.html)  &nbsp;|&nbsp;  [09 · 🎯 Model Evaluation & Validation →](ch09.html)
+
+<details class="ig-jump">
+<summary>📚 Jump to any chapter</summary>
+<p class="ig-era">🧮 Mathematical Foundations</p>
+<ul>
+<li><a href="ch01.html">01 &middot; 🧮 Linear Algebra — the language of data</a></li>
+<li><a href="ch02.html">02 &middot; 📉 Calculus & Optimization — how models learn</a></li>
+<li><a href="ch03.html">03 &middot; 🎲 Probability & Statistics — reasoning under uncertainty</a></li>
+<li><a href="ch04.html">04 &middot; 🔥 Information Theory & Loss Functions — measuring surprise and error</a></li>
+</ul>
+<p class="ig-era">🧩 Classical Machine Learning</p>
+<ul>
+<li><a href="ch05.html">05 &middot; 🧩 Core ML Concepts — the ground rules</a></li>
+<li><a href="ch06.html">06 &middot; 📐 Classical Supervised Algorithms — the workhorses</a></li>
+<li><a href="ch07.html">07 &middot; 🌲 Ensembles & Boosting — how to win on tabular data</a></li>
+<li><a href="ch08.html">08 &middot; 🗺️ Unsupervised Learning & Dimensionality Reduction — structure without labels</a></li>
+<li><a href="ch09.html">09 &middot; 🎯 Model Evaluation & Validation — knowing if it actually works</a></li>
+</ul>
+<p class="ig-era">🧠 Deep Learning</p>
+<ul>
+<li><a href="ch10.html">10 &middot; 🧠 Neural Network Fundamentals — the building block</a></li>
+<li><a href="ch11.html">11 &middot; ⚙️ Training Deep Networks — making deep nets actually train</a></li>
+<li><a href="ch12.html">12 &middot; 🖼️ Convolutional Neural Networks — the vision branch</a></li>
+<li><a href="ch13.html">13 &middot; 🔁 Sequence Models — RNNs, LSTMs and the bottleneck</a></li>
+</ul>
+<p class="ig-era">⚡ The Transformer Era</p>
+<ul>
+<li><a href="ch14.html">14 &middot; 🔤 Word Embeddings — giving words meaning as vectors</a></li>
+<li><a href="ch15.html">15 &middot; ⚡ Attention & the Transformer — the architecture that changed everything</a></li>
+<li><a href="ch16.html">16 &middot; 🧱 Tokenization, Pretraining & Model Families</a></li>
+<li><a href="ch17.html">17 &middot; 📈 Modern LLMs & Scaling — bigger, and suddenly capable</a></li>
+</ul>
+<p class="ig-era">💬 Using & Adapting LLMs</p>
+<ul>
+<li><a href="ch18.html">18 &middot; 💬 Prompting & In-Context Learning — programming models with words</a></li>
+<li><a href="ch19.html">19 &middot; 🎚️ Fine-Tuning & Alignment — specializing and aligning models</a></li>
+<li><a href="ch20.html">20 &middot; 📚 Retrieval-Augmented Generation (RAG) — giving the model an open book</a></li>
+<li><a href="ch21.html">21 &middot; 🚀 Inference, Decoding & Serving — running LLMs efficiently</a></li>
+</ul>
+<p class="ig-era">🤖 The Agentic Frontier</p>
+<ul>
+<li><a href="ch22.html">22 &middot; 🤖 Agents, Tools & Loops — the latest frontier</a></li>
+<li><a href="ch23.html">23 &middot; 🛡️ Evaluation, Safety & Guardrails — making LLM systems trustworthy</a></li>
+<li><a href="ch24.html">24 &middot; 🔧 MLOps & LLMOps — shipping and operating models in production</a></li>
+</ul>
+<p class="ig-era">🛠️ The Practical Toolkit</p>
+<ul>
+<li><a href="ch25.html">25 &middot; 🛠️ Practical Toolkit I — Modeling & Vision Libraries</a></li>
+<li><a href="ch26.html">26 &middot; 🧰 Practical Toolkit II — LLM Frameworks, Orchestration & Vector Stores</a></li>
+<li><a href="ch27.html">27 &middot; ⚙️ Practical Toolkit III — Serving, Apps & MLOps Tooling</a></li>
+</ul>
+<p class="ig-era">☁️ Cloud AI Platforms</p>
+<ul>
+<li><a href="ch28.html">28 &middot; ☁️ Cloud AI Platforms — deploying foundation models on the hyperscalers</a></li>
+</ul>
+</details>
+
+------------------------------------------------------------------------
+
+Until now every algorithm we met needed a teacher: Chapter 06's linear and logistic regressions, Chapter 07's boosted trees — all of them learned from rows of data stamped with the right answer. This chapter throws the answer key away. We ask a harder, more human question: given a pile of unlabelled points, what *structure* is hiding in it? We will group points (clustering), squeeze high-dimensional data down to a few directions (dimensionality reduction), and spot the oddballs (anomaly detection) — the same instinct that later lets us learn word vectors from raw text in Chapter 14, and the anomaly work hands straight off to Chapter 09's treatment of imbalanced evaluation.
+
+::: {.callout-note appearance="simple"}
+📍 **Timeline:** mid-20th century onward — k-means (1957), hierarchical clustering, and PCA (which dates all the way back to Pearson, 1901) matured into the workhorses for finding patterns when nobody labelled the data; t-SNE (2008) and UMAP (2018) are the modern visualization heirs.
+:::
+
+## 8.1 — k-means clustering
+
+Imagine dropping $k$ flags on a map, assigning every house to its nearest flag, then moving each flag to the centre of the houses that chose it — and repeating until nobody switches. That is **k-means**: it partitions $n$ points into $k$ groups by alternating between *assign* and *update* steps, each one lowering the total squared distance from points to their cluster centre.
+
+Formally it minimizes the **within-cluster sum of squares (WCSS)**, also called inertia:
+
+$$ J = \sum_{i=1}^{n} \lVert x_i - \mu_{c_i} \rVert^2 $$
+
+where $\mu_{c_i}$ is the centroid of the cluster point $x_i$ belongs to.
+
+```{mermaid}
+flowchart TD
+  A["Pick k initial centroids"] --> B["Assign each point to nearest centroid"]
+  B --> C["Recompute each centroid as mean of its points"]
+  C --> D{"Any assignment changed?"}
+  D -->|"yes"| B
+  D -->|"no"| E["Done — clusters stable"]
+```
+
+Here is the whole mechanism in a few lines of numpy — no framework call:
+
+```python
+import numpy as np
+
+def kmeans(X, k, iters=100):
+    # start: k random points as centroids
+    rng = np.random.default_rng(0)
+    centroids = X[rng.choice(len(X), k, replace=False)]
+    for _ in range(iters):
+        # assign: nearest centroid by squared distance
+        d = ((X[:, None, :] - centroids[None, :, :])**2).sum(2)
+        labels = d.argmin(1)
+        # update: move each centroid to the mean of its members
+        new = np.array([X[labels == j].mean(0) for j in range(k)])
+        if np.allclose(new, centroids):   # converged
+            break
+        centroids = new
+    return labels, centroids
+```
+
+The centroid is just the **mean** of its cluster — sitting in the middle of its points, not on top of any one of them:
+
+<svg viewBox="0 0 320 180" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif" font-size="9">
+  <!-- blue blob, mean ~ (58,54) -->
+  <circle cx="55" cy="50" r="4" fill="#4e79a7"/><circle cx="70" cy="40" r="4" fill="#4e79a7"/><circle cx="45" cy="65" r="4" fill="#4e79a7"/><circle cx="65" cy="62" r="4" fill="#4e79a7"/>
+  <!-- red blob, mean ~ (215,45) -->
+  <circle cx="200" cy="45" r="4" fill="#e15759"/><circle cx="220" cy="55" r="4" fill="#e15759"/><circle cx="210" cy="35" r="4" fill="#e15759"/><circle cx="230" cy="48" r="4" fill="#e15759"/>
+  <!-- green blob, mean ~ (135,139) -->
+  <circle cx="130" cy="135" r="4" fill="#59a14f"/><circle cx="150" cy="145" r="4" fill="#59a14f"/><circle cx="115" cy="150" r="4" fill="#59a14f"/><circle cx="145" cy="125" r="4" fill="#59a14f"/>
+  <!-- centroids: one consistent marker (X) at each blob's mean -->
+  <g stroke="#000" stroke-width="2">
+    <line x1="53" y1="49" x2="63" y2="59"/><line x1="63" y1="49" x2="53" y2="59"/>
+    <line x1="210" y1="40" x2="220" y2="50"/><line x1="220" y1="40" x2="210" y2="50"/>
+    <line x1="130" y1="134" x2="140" y2="144"/><line x1="140" y1="134" x2="130" y2="144"/>
+  </g>
+  <text x="245" y="120">✕ = centroid (cluster mean)</text>
+  <text x="190" y="20">3 clusters, k=3</text>
+</svg>
+
+**Q: What are the two alternating steps of k-means?**
+The **assignment step** (each point joins its nearest centroid) and the **update step** (each centroid moves to the mean of its assigned points). This is a special case of the **EM** pattern: a hard-assignment expectation followed by a maximization. Each step provably never increases the WCSS, so the algorithm converges.
+
+**Q: Does k-means find the global optimum?**
+No. Minimizing WCSS exactly is **NP-hard**; k-means only reaches a **local optimum** that depends on where the centroids started. That is why you run it several times with different seeds (`n_init` in scikit-learn) and keep the run with the lowest inertia.
+
+**Q: Why is initialization so important, and what does k-means++ do?**
+Random initial centroids can land two flags inside the same true cluster, giving a bad local minimum. **k-means++** spreads the initial centroids out: it picks the first centroid at random, then picks each next one with probability proportional to its squared distance from the nearest existing centroid. Far-apart seeds converge faster and to better solutions.
+
+**Q: Why must you scale features before k-means?**
+k-means uses **Euclidean distance**, so a feature measured in large units (say salary in dollars) dominates one in small units (years of experience). Standardize features (zero mean, unit variance) first, or the clustering just reflects the units. This same caution applies to PCA.
+
+**Q: What is the time complexity of k-means, and why does it scale where agglomerative clustering doesn't?**
+Each iteration compares all $n$ points against all $k$ centroids in $d$ dimensions, so k-means is roughly $O(n \cdot k \cdot d \cdot \text{iters})$ — **linear in the number of points**. That is why it happily scales to millions of rows. Hierarchical clustering, by contrast, must compare every pair of clusters, costing $O(n^3)$ time and $O(n^2)$ memory — fine for thousands of points, hopeless for millions.
+
+**Q: What happens if a cluster ends up with no points assigned to it?**
+You get an **empty cluster** — its centroid has no members to average, so the mean is undefined. This happens when a centroid gets stranded far from all the data. In practice libraries handle it for you: **scikit-learn reinitializes** the empty centroid (e.g. to the point farthest from its current cluster) and continues, so $k$ clusters are preserved.
+
+**Q: How do you choose k?**
+Two common heuristics. The **elbow method** plots inertia against $k$ and looks for the "elbow" where adding clusters stops helping much. The **silhouette score** measures, for each point, how much closer it is to its own cluster than the next nearest — averaged, higher is better (range $-1$ to $1$). Both share the same spirit you'll see again in PCA's scree plot: find the point of diminishing returns. There is no labelled ground truth, so these are guides, not proofs.
+
+The silhouette of a point combines two distances — $a$ (mean distance to points in its own cluster) and $b$ (mean distance to the nearest *other* cluster):
+
+$$ s = \frac{b - a}{\max(a, b)} $$
+
+A score near $+1$ means the point sits snugly in its own cluster; near $0$ it is on a boundary; negative means it was probably assigned to the wrong cluster.
+
+::: {.callout-warning}
+**Interview gotcha:** k-means implicitly assumes clusters are roughly **spherical and equal-sized** (it draws straight Voronoi boundaries). Give it two crescent moons or one tiny cluster next to one huge one and it fails. Reach for DBSCAN or a GMM instead.
+:::
+
+## 8.2 — Hierarchical (agglomerative) clustering
+
+Instead of committing to $k$ up front, **agglomerative clustering** builds a family tree: start with every point as its own cluster, then repeatedly merge the two closest clusters until one remains. You read the result off a **dendrogram** and cut it at whatever height gives the number of clusters you want.
+
+The "closest" depends on the **linkage** rule — how you measure distance between two *groups*, not two points:
+
+| Linkage | Distance between clusters A and B | Tendency |
+|---|---|---|
+| Single | min distance over all pairs | long, chained clusters |
+| Complete | max distance over all pairs | compact, equal-diameter |
+| Average | mean distance over all pairs | balanced compromise |
+| Ward | increase in within-cluster variance from merging | spherical, like k-means |
+
+**Q: What is a dendrogram and how do you use it?**
+A **dendrogram** is the tree of merges, with merge *height* equal to the distance at which two clusters joined. You "cut" it with a horizontal line: the number of vertical branches it crosses is your number of clusters. This lets you decide $k$ *after* seeing the structure, not before.
+
+**Q: How does agglomerative clustering differ from k-means?**
+It needs **no preset $k$** and is **deterministic** (no random init), and it can capture nested structure. The price is cost: naive implementations are $O(n^3)$ time and $O(n^2)$ memory, so unlike k-means' linear scaling it cannot reach millions of points.
+
+**Q: When would you pick single linkage vs Ward?**
+**Single linkage** can trace non-elliptical, stringy shapes but suffers from "chaining" (two real clusters bridged by a few stray points get merged). **Ward linkage** minimizes variance and gives tidy, roughly spherical clusters — a good default when you expect blob-like groups.
+
+## 8.3 — DBSCAN: density-based clustering
+
+k-means asks "which centre is nearest?"; **DBSCAN** asks "is this point in a crowded neighbourhood?" It grows clusters outward from dense regions and labels the sparse leftovers as **noise**. That single idea buys two things k-means lacks: it finds **arbitrarily shaped** clusters (crescents, rings) and it needs **no preset $k$**.
+
+It has two knobs: `eps` (the neighbourhood radius) and `min_samples` (how many points must sit within `eps` to count as dense). Points are then typed:
+
+- **Core point** — has at least `min_samples` neighbours within `eps`.
+- **Border point** — within `eps` of a core point but not itself dense.
+- **Noise point** — neither; it belongs to no cluster.
+
+The key mechanism is **density-reachability**: any two core points that lie within `eps` of each other are linked, and a cluster is the whole connected chain of mutually reachable core points plus the border points hanging off them. So a single cluster can stretch across an arbitrarily long, winding dense region — points are *not* classified one at a time in isolation.
+
+```{mermaid}
+flowchart LR
+  A["Unvisited point p"] --> B{"≥ min_samples<br/>within eps?"}
+  B -->|"yes"| C["Core: link to reachable<br/>core points → one cluster"]
+  B -->|"no"| D{"Near a core point?"}
+  D -->|"yes"| E["Border: join that cluster"]
+  D -->|"no"| F["Noise"]
+```
+
+**Q: What are DBSCAN's two hyperparameters and how do you set eps?**
+`eps` (radius) and `min_samples` (density threshold). A standard trick for `eps`: compute each point's distance to its $k$-th nearest neighbour, sort those distances, and plot them — the "knee" in that curve is a good `eps`. `min_samples` is often set near $2 \times \text{dimensions}$.
+
+**Q: What is density-reachability, and how does it form a cluster?**
+A point $q$ is **directly density-reachable** from a core point $p$ if $q$ lies within `eps` of $p$. Chain these links together — core point to core point to core point — and the whole connected blob becomes **one cluster**. This is why DBSCAN can follow a long crescent: it does not need a centre, just an unbroken trail of dense neighbourhoods.
+
+**Q: What is DBSCAN's biggest advantage over k-means?**
+It finds **non-convex clusters of arbitrary shape** and **automatically labels outliers as noise** instead of forcing every point into a cluster. It also discovers the number of clusters from the data rather than requiring $k$ in advance.
+
+**Q: When does DBSCAN struggle?**
+When clusters have **very different densities** — a single global `eps` cannot be loose enough for the sparse cluster and tight enough for the dense one at once. It also degrades in **high dimensions**, where distances concentrate and the notion of a dense neighbourhood breaks down. (HDBSCAN, a variant, relaxes the single-`eps` limitation.)
+
+## 8.4 — Gaussian Mixture Models and the EM algorithm
+
+k-means gives every point one hard label. But what if a point sits *between* two clusters? A **Gaussian Mixture Model (GMM)** answers softly: it assumes the data was generated by $k$ overlapping Gaussian "blobs", and for each point it returns a *probability* of belonging to each blob. Think of k-means as a GMM where every blob is a perfect sphere and every assignment is forced to 0 or 1.
+
+The density is a weighted sum of Gaussians, with mixing weights $\pi_k$ that sum to 1:
+
+$$ p(x) = \sum_{k=1}^{K} \pi_k \, \mathcal{N}(x \mid \mu_k, \Sigma_k) $$
+
+The real payoff is geometric. Because each Gaussian carries its own **covariance matrix**, a GMM can fit **tilted, stretched, overlapping ellipses**, whereas k-means can only carve space into equal round blobs:
+
+<svg viewBox="0 0 360 170" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif" font-size="9">
+  <!-- k-means: equal circles -->
+  <text x="20" y="18">k-means: equal spheres</text>
+  <circle cx="55" cy="80" r="28" fill="none" stroke="#4e79a7" stroke-width="2"/>
+  <circle cx="110" cy="95" r="28" fill="none" stroke="#e15759" stroke-width="2"/>
+  <circle cx="55" cy="80" r="2" fill="#4e79a7"/><circle cx="110" cy="95" r="2" fill="#e15759"/>
+  <!-- divider -->
+  <line x1="180" y1="20" x2="180" y2="155" stroke="#999" stroke-width="0.5" stroke-dasharray="3 3"/>
+  <!-- GMM: tilted overlapping ellipses -->
+  <text x="210" y="18">GMM: tilted ellipses</text>
+  <ellipse cx="250" cy="80" rx="38" ry="16" fill="none" stroke="#4e79a7" stroke-width="2" transform="rotate(-25 250 80)"/>
+  <ellipse cx="300" cy="100" rx="34" ry="14" fill="none" stroke="#e15759" stroke-width="2" transform="rotate(20 300 100)"/>
+  <circle cx="250" cy="80" r="2" fill="#4e79a7"/><circle cx="300" cy="100" r="2" fill="#e15759"/>
+</svg>
+
+We fit it with **Expectation–Maximization (EM)**, which alternates two steps much like k-means:
+
+```{mermaid}
+flowchart TD
+  A["Init means, covariances, weights"] --> B["E-step: compute each point's<br/>responsibility (soft membership)"]
+  B --> C["M-step: re-estimate means,<br/>covariances, weights from responsibilities"]
+  C --> D{"Log-likelihood<br/>converged?"}
+  D -->|"no"| B
+  D -->|"yes"| E["Done"]
+```
+
+**Q: What is the difference between hard and soft clustering?**
+**Hard clustering** (k-means) assigns each point to exactly one cluster. **Soft clustering** (GMM) gives each point a **responsibility** — a probability for each cluster, e.g. 70% cluster A, 30% cluster B. Soft assignments are useful when clusters overlap or when you want a confidence, not just a label.
+
+**Q: What do the E-step and M-step do?**
+The **E-step (expectation)** fixes the current parameters and computes each point's responsibility — the posterior probability $p(\text{cluster } k \mid x)$. The **M-step (maximization)** fixes those responsibilities and updates each Gaussian's mean, covariance, and weight to best fit its softly-assigned points. EM provably never decreases the data **log-likelihood**, so it converges (to a local optimum).
+
+**Q: Why is a GMM more flexible than k-means?**
+Because each Gaussian has its own **covariance matrix**, clusters can be **elliptical, rotated, and different sizes** — not just equal spheres. With a "full" covariance a GMM captures correlated, stretched clusters that k-means would split incorrectly.
+
+::: {.callout-tip}
+**Intuition:** EM is the general pattern behind both GMM and k-means — guess the hidden assignments, fit parameters to them, repeat. k-means is just EM with spherical equal-variance Gaussians and hard (argmax) responsibilities.
+:::
+
+## 8.5 — PCA: principal component analysis
+
+You have data in 100 dimensions but suspect it really lives on a 2D sheet. **PCA** finds that sheet. Intuitively: rotate the coordinate axes so the *first* new axis points along the direction of greatest spread in the data, the second along the next-greatest (at right angles to the first), and so on. Keep the first few axes and you have compressed the data while throwing away the least information.
+
+Those directions are the **eigenvectors of the covariance matrix**, and each one's eigenvalue is the variance it captures. Equivalently — and more stably in practice — they come from the **singular value decomposition (SVD)** of the centred data matrix $X = U\Sigma V^\top$, where the columns of $V$ *are* the principal components.
+
+$$ \Sigma_{\text{cov}} = \frac{1}{n-1} X^\top X, \qquad \Sigma_{\text{cov}} v_i = \lambda_i v_i $$
+
+<svg viewBox="0 0 280 200" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif" font-size="9">
+  <circle cx="70" cy="150" r="3" fill="#4e79a7"/><circle cx="95" cy="135" r="3" fill="#4e79a7"/><circle cx="110" cy="120" r="3" fill="#4e79a7"/><circle cx="130" cy="112" r="3" fill="#4e79a7"/><circle cx="150" cy="95" r="3" fill="#4e79a7"/><circle cx="170" cy="82" r="3" fill="#4e79a7"/><circle cx="185" cy="70" r="3" fill="#4e79a7"/><circle cx="120" cy="128" r="3" fill="#4e79a7"/><circle cx="160" cy="100" r="3" fill="#4e79a7"/>
+  <line x1="55" y1="160" x2="200" y2="62" stroke="#e15759" stroke-width="2"/>
+  <text x="200" y="60" fill="#e15759">PC1 (max variance)</text>
+  <line x1="120" y1="100" x2="150" y2="143" stroke="#59a14f" stroke-width="2"/>
+  <text x="150" y="158" fill="#59a14f">PC2 ⟂</text>
+</svg>
+
+**Q: What does PCA actually maximize?**
+The **variance** captured along each new axis. The first principal component is the unit direction along which the projected data has the largest variance; each subsequent component is the highest-variance direction **orthogonal** to all the previous ones. Maximizing retained variance is the same as minimizing the squared reconstruction error.
+
+**Q: How is PCA related to SVD and eigenvectors?**
+The principal components are the **eigenvectors of the covariance matrix**, with eigenvalues equal to the variance along each. Computing them via the **SVD** of the centred data ($X = U\Sigma V^\top$) is numerically more stable — you never form $X^\top X$ — and the right-singular vectors $V$ give the same components, with singular values $\sigma_i$ relating to variance by $\lambda_i = \sigma_i^2/(n-1)$.
+
+**Q: How do you choose the number of components?**
+Look at the **explained variance ratio** $\lambda_i / \sum_j \lambda_j$ and keep enough components to reach a target cumulative variance (e.g. 95%). A **scree plot** of eigenvalues — the same "find the elbow" idea you met when picking $k$ for k-means — often shows where returns flatten out.
+
+**Q: When must you standardize before PCA?**
+When features are on **different scales or units**. PCA chases variance, so a feature with a large numeric range would hijack the first component for no real reason. Standardizing to unit variance (PCA on the correlation matrix rather than covariance) puts every feature on equal footing — skip it only when all features already share meaningful, comparable units.
+
+**Q: Is PCA linear, and what's the consequence?**
+Yes — it can only rotate and project, so it captures **linear** correlations. Data lying on a curved manifold (a rolled-up sheet) won't unfold under PCA; that is where nonlinear methods like t-SNE, UMAP, or kernel PCA come in.
+
+::: {.callout-warning}
+**Interview gotcha:** PCA components are ranked by **variance, not by usefulness for your label**. A high-variance direction can be irrelevant noise, and a low-variance direction can be exactly what separates your classes. PCA is unsupervised — it never sees the target.
+:::
+
+## 8.6 — t-SNE and UMAP for visualization
+
+PCA is linear, so a 2D PCA plot often smears tangled high-dimensional structure into a blob. **t-SNE** and **UMAP** are nonlinear methods built for one job: produce a 2D or 3D picture where points that were neighbours in high-D stay neighbours on screen. They are visualization tools, not general-purpose preprocessors.
+
+The core idea: define a notion of "neighbour probability" in the original space, then arrange points in 2D so those neighbour relationships are preserved as closely as possible. **t-SNE** matches pairwise neighbour distributions (minimizing a KL divergence — see Chapter 04); **UMAP** builds a neighbour graph and lays it out, which is faster and tends to keep more global structure.
+
+| Aspect | PCA | t-SNE | UMAP |
+|---|---|---|---|
+| Linear? | yes | no | no |
+| Preserves | global variance | local neighbourhoods | local + some global |
+| Speed | fast | slow | fast |
+| Main use | compression, preprocessing | visualization | visualization, some preprocessing |
+| Key knob | n_components | perplexity | n_neighbors, min_dist |
+
+**Q: Why can't you trust cluster sizes and distances in a t-SNE plot?**
+Because t-SNE **distorts space to preserve local neighbourhoods**, not global geometry. The **size** of a blob and the **gap** between blobs are largely artefacts of the algorithm and its perplexity setting — a tight cluster and a loose one can be drawn the same size. Read t-SNE plots as "these points are neighbours," never as "this cluster is twice as big" or "these two clusters are far apart."
+
+**Q: What is perplexity in t-SNE?**
+Roughly the **effective number of neighbours** each point considers (typical range 5–50). Low perplexity emphasizes very local structure and can shatter clusters; high perplexity blends in more global structure. Different perplexities can produce visibly different plots, so it is worth trying a few.
+
+**Q: How does UMAP differ from t-SNE in practice?**
+UMAP is usually **faster**, scales to larger datasets, and tends to **preserve more global structure**, so relative cluster positions are a bit more meaningful (though still not gospel). Its main knobs are `n_neighbors` (local vs global balance) and `min_dist` (how tightly points pack). It can also transform new, unseen points, which classic t-SNE cannot.
+
+::: {.callout-warning}
+**Interview gotcha:** Never feed t-SNE/UMAP coordinates into a downstream classifier or run k-means on them as a substitute for real features. They are **stochastic, distance-distorting visualizations** — the axes have no meaning. Use PCA (or autoencoders) for dimensionality reduction you intend to *model* on.
+:::
+
+## 8.7 — Anomaly detection
+
+An **anomaly** is a point that doesn't fit the pattern the rest of the data follows — a fraudulent transaction, a failing sensor, an intrusion. The unifying intuition: **model what "normal" looks like, then flag whatever is unlikely or far from it.** Because anomalies are rare and often unlabelled, it is naturally an unsupervised problem.
+
+The methods fall into three families, each with a different definition of "weird":
+
+| Family | "Normal" is defined by | Flag a point when | Examples |
+|---|---|---|---|
+| Statistical | a fitted distribution | low probability / many σ from the mean | z-score, Gaussian / GMM density |
+| Distance / density | proximity to other points | far from neighbours / in a sparse region | k-NN distance, DBSCAN noise, LOF |
+| Model-based | a learned model of normal data | the model "explains" it poorly | Isolation Forest, one-class SVM, autoencoder reconstruction error |
+
+**Q: What are the main families of anomaly-detection methods?**
+**Statistical** (flag points beyond a few standard deviations, or with low probability under a fitted Gaussian/GMM); **distance/density-based** (DBSCAN's noise points, or k-NN distance); and **model-based** like **Isolation Forest**, which isolates points with random splits — anomalies get isolated in fewer splits because they sit apart. One-class SVM and autoencoder reconstruction error are also common.
+
+**Q: Why is accuracy a terrible metric for anomaly detection?**
+Because anomalies are **extremely rare** — if 0.1% of transactions are fraud, a model that predicts "always normal" scores 99.9% accuracy while catching nothing. You evaluate with **precision, recall, and the precision–recall curve / AUPRC** instead. This imbalanced-data evaluation is exactly what Chapter 09 takes up next.
+
+**Q: How does Isolation Forest work intuitively?**
+It repeatedly **splits the data on random features at random thresholds**, building short random trees. Normal points sit in dense regions and take many splits to isolate; an anomaly sits alone and gets cut off in just a few. The shorter a point's average **path length** to isolation, the more anomalous it is.
+
+## Key takeaways
+
+- **Unsupervised learning finds structure without labels** — the two big jobs are clustering (group points) and dimensionality reduction (compress dimensions).
+- **k-means** alternates assign/update to minimize within-cluster variance; it needs $k$ up front, assumes spherical equal clusters, is sensitive to init (use **k-means++**) and to feature scale (**standardize first**). It runs in $O(n \cdot k \cdot d \cdot \text{iters})$ — linear in $n$, so it scales to millions; empty clusters get reinitialized.
+- Choose $k$ with the **elbow** (inertia) or **silhouette** score $s = (b-a)/\max(a,b)$ — guides, not ground truth.
+- **Hierarchical/agglomerative** clustering builds a **dendrogram** you cut later; no preset $k$, but $O(n^3)$ cost. **DBSCAN** is density-based, links **density-reachable** core points into arbitrarily shaped clusters, labels **noise**, needs no $k$, but struggles with varying densities.
+- **GMM + EM** gives **soft** (probabilistic) clustering with **elliptical, tilted** clusters; k-means is the hard-assignment, spherical special case of EM.
+- **PCA** projects onto directions of **maximum variance** — the eigenvectors of the covariance matrix, best computed via **SVD**. It is **linear** and **unsupervised**; standardize when scales differ, pick components by **explained variance** (scree plot).
+- **t-SNE / UMAP** are **nonlinear visualization** tools that preserve local neighbourhoods — **cluster sizes and inter-cluster distances are not meaningful**; don't model on their output.
+- **Anomaly detection** models "normal" and flags the unlikely across **statistical, density, and model-based** families (Isolation Forest, GMM density, DBSCAN noise); evaluate with **precision/recall**, never accuracy — the imbalanced-evaluation thread continues in **Chapter 09**.
+
+------------------------------------------------------------------------
+
+[📖 All chapters](../interview-guide.html)  &nbsp;|&nbsp;  [← 07 · 🌲 Ensembles & Boosting](ch07.html)  &nbsp;|&nbsp;  [09 · 🎯 Model Evaluation & Validation →](ch09.html)

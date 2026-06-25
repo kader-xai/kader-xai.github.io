@@ -1,0 +1,271 @@
+---
+title: "Chapter 25 — 🛠️ Practical Toolkit I — Modeling & Vision Libraries"
+page-layout: full
+toc: true
+toc-location: left
+toc-title: "In this chapter"
+toc-depth: 2
+toc-expand: true
+---
+
+[📖 All chapters](../interview-guide.html)  &nbsp;|&nbsp;  [← 24 · 🔧 MLOps & LLMOps](ch24.html)  &nbsp;|&nbsp;  [26 · 🧰 Practical Toolkit II →](ch26.html)
+
+<details class="ig-jump">
+<summary>📚 Jump to any chapter</summary>
+<p class="ig-era">🧮 Mathematical Foundations</p>
+<ul>
+<li><a href="ch01.html">01 &middot; 🧮 Linear Algebra — the language of data</a></li>
+<li><a href="ch02.html">02 &middot; 📉 Calculus & Optimization — how models learn</a></li>
+<li><a href="ch03.html">03 &middot; 🎲 Probability & Statistics — reasoning under uncertainty</a></li>
+<li><a href="ch04.html">04 &middot; 🔥 Information Theory & Loss Functions — measuring surprise and error</a></li>
+</ul>
+<p class="ig-era">🧩 Classical Machine Learning</p>
+<ul>
+<li><a href="ch05.html">05 &middot; 🧩 Core ML Concepts — the ground rules</a></li>
+<li><a href="ch06.html">06 &middot; 📐 Classical Supervised Algorithms — the workhorses</a></li>
+<li><a href="ch07.html">07 &middot; 🌲 Ensembles & Boosting — how to win on tabular data</a></li>
+<li><a href="ch08.html">08 &middot; 🗺️ Unsupervised Learning & Dimensionality Reduction — structure without labels</a></li>
+<li><a href="ch09.html">09 &middot; 🎯 Model Evaluation & Validation — knowing if it actually works</a></li>
+</ul>
+<p class="ig-era">🧠 Deep Learning</p>
+<ul>
+<li><a href="ch10.html">10 &middot; 🧠 Neural Network Fundamentals — the building block</a></li>
+<li><a href="ch11.html">11 &middot; ⚙️ Training Deep Networks — making deep nets actually train</a></li>
+<li><a href="ch12.html">12 &middot; 🖼️ Convolutional Neural Networks — the vision branch</a></li>
+<li><a href="ch13.html">13 &middot; 🔁 Sequence Models — RNNs, LSTMs and the bottleneck</a></li>
+</ul>
+<p class="ig-era">⚡ The Transformer Era</p>
+<ul>
+<li><a href="ch14.html">14 &middot; 🔤 Word Embeddings — giving words meaning as vectors</a></li>
+<li><a href="ch15.html">15 &middot; ⚡ Attention & the Transformer — the architecture that changed everything</a></li>
+<li><a href="ch16.html">16 &middot; 🧱 Tokenization, Pretraining & Model Families</a></li>
+<li><a href="ch17.html">17 &middot; 📈 Modern LLMs & Scaling — bigger, and suddenly capable</a></li>
+</ul>
+<p class="ig-era">💬 Using & Adapting LLMs</p>
+<ul>
+<li><a href="ch18.html">18 &middot; 💬 Prompting & In-Context Learning — programming models with words</a></li>
+<li><a href="ch19.html">19 &middot; 🎚️ Fine-Tuning & Alignment — specializing and aligning models</a></li>
+<li><a href="ch20.html">20 &middot; 📚 Retrieval-Augmented Generation (RAG) — giving the model an open book</a></li>
+<li><a href="ch21.html">21 &middot; 🚀 Inference, Decoding & Serving — running LLMs efficiently</a></li>
+</ul>
+<p class="ig-era">🤖 The Agentic Frontier</p>
+<ul>
+<li><a href="ch22.html">22 &middot; 🤖 Agents, Tools & Loops — the latest frontier</a></li>
+<li><a href="ch23.html">23 &middot; 🛡️ Evaluation, Safety & Guardrails — making LLM systems trustworthy</a></li>
+<li><a href="ch24.html">24 &middot; 🔧 MLOps & LLMOps — shipping and operating models in production</a></li>
+</ul>
+<p class="ig-era">🛠️ The Practical Toolkit</p>
+<ul>
+<li><a href="ch25.html">25 &middot; 🛠️ Practical Toolkit I — Modeling & Vision Libraries</a></li>
+<li><a href="ch26.html">26 &middot; 🧰 Practical Toolkit II — LLM Frameworks, Orchestration & Vector Stores</a></li>
+<li><a href="ch27.html">27 &middot; ⚙️ Practical Toolkit III — Serving, Apps & MLOps Tooling</a></li>
+</ul>
+<p class="ig-era">☁️ Cloud AI Platforms</p>
+<ul>
+<li><a href="ch28.html">28 &middot; ☁️ Cloud AI Platforms — deploying foundation models on the hyperscalers</a></li>
+</ul>
+</details>
+
+------------------------------------------------------------------------
+
+This chapter covers the libraries you actually train models with: the classical-ML stack (scikit-learn, XGBoost), the two big deep-learning frameworks (PyTorch, TensorFlow/Keras), and the computer-vision tools (OpenCV, YOLO). These sit in the **modeling and training** layer of the workflow — after you have data, before you serve the result. The goal here is to know which library to reach for, and what each one's canonical usage looks like.
+
+::: {.callout-note appearance="simple"}
+🧰 **Where in the stack:** Modeling and training — turning prepared data into a trained model, before inference and serving take over.
+:::
+
+## 25.1 — 🔬 Scikit-Learn
+
+Scikit-learn is the standard Python library for **classical machine learning** — linear models, trees, SVMs, clustering, and preprocessing. It sits at the modeling layer for tabular data and is the baseline you compare deep learning against (see the Classical Supervised Algorithms chapter).
+
+```python
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.model_selection import train_test_split
+
+X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2)
+clf = RandomForestClassifier().fit(X_train, y_train)
+preds = clf.predict(X_test)
+```
+
+**Q: What is the fit / predict / transform API?**
+Every scikit-learn object follows the same **estimator interface**: `.fit()` learns parameters from data, `.predict()` produces outputs for models, and `.transform()` outputs modified data for preprocessors. This consistency means you can swap a `RandomForest` for a `LogisticRegression` by changing one line.
+
+**Q: What problem do Pipelines and ColumnTransformer solve?**
+A **Pipeline** chains preprocessing and a model into one object, so the same steps run on train and test data with no leakage. **ColumnTransformer** applies different transforms to different columns (e.g. scale numbers, one-hot encode categories), which is exactly what messy tabular data needs.
+
+**Q: Why use cross-validation instead of a single train/test split?**
+A single split can be lucky or unlucky. **Cross-validation** (e.g. `cross_val_score`) rotates the held-out fold across the data and averages the scores, giving a more honest estimate of generalization (see the Model Evaluation chapter).
+
+**Q: When do you reach for scikit-learn vs deep learning?**
+Reach for scikit-learn on **tabular data of small-to-medium size**, where tree ensembles and linear models are fast, strong, and interpretable. Deep learning wins on unstructured data (images, text, audio) and very large datasets; on a few thousand rows of spreadsheet data it usually loses to a gradient-boosted tree.
+
+::: {.callout-tip}
+Always fit preprocessing inside a `Pipeline`. If you scale or impute before splitting, statistics from the test set leak into training and your scores become optimistic.
+:::
+
+## 25.2 — 🌲 XGBoost
+
+XGBoost is a **gradient-boosted decision tree** library, famous for dominating tabular competitions on Kaggle. It builds trees sequentially, each correcting the previous one's errors, and is the go-to alternative to scikit-learn's `GradientBoosting` and `RandomForest` (see the Ensembles & Boosting chapter).
+
+```python
+import xgboost as xgb
+
+model = xgb.XGBClassifier(n_estimators=500, max_depth=6, learning_rate=0.05)
+model.fit(X_train, y_train,
+          eval_set=[(X_val, y_val)], early_stopping_rounds=50)
+preds = model.predict(X_test)
+```
+
+**Q: Why does XGBoost dominate tabular problems?**
+**Boosting** combines many shallow trees into a strong learner, capturing non-linear feature interactions without manual feature engineering. Add regularization, built-in missing-value handling, and a fast C++ core, and it consistently beats single models and often neural nets on structured data.
+
+**Q: What is a DMatrix?**
+A **DMatrix** is XGBoost's internal data structure, an optimized container for features and labels that enables fast, memory-efficient training. The scikit-learn wrapper (`XGBClassifier`) builds it for you; the native `xgb.train` API requires you to create one explicitly.
+
+**Q: What does early stopping do?**
+**Early stopping** halts training when the validation metric stops improving for a set number of rounds, preventing overfitting and saving time. You pass an `eval_set` and `early_stopping_rounds`, and XGBoost keeps the best iteration rather than running all `n_estimators`.
+
+**Q: What are the key hyperparameters?**
+The big three are **`n_estimators`** (number of trees), **`max_depth`** (tree complexity), and **`learning_rate`** (how much each tree contributes). Lower learning rate with more trees usually generalizes better but trains slower.
+
+**Q: How does it compare to LightGBM?**
+**LightGBM** is a similar gradient-boosting library that grows trees leaf-wise instead of level-wise, making it often faster on large datasets. They are close competitors; many teams try both and keep whichever scores higher on their data.
+
+::: {.callout-warning}
+Early stopping needs a separate validation set that is *not* your final test set. Tuning on the test set leaks information and inflates your reported metrics.
+:::
+
+## 25.3 — 🔥 PyTorch
+
+PyTorch is the **dynamic-graph deep-learning framework** that most researchers prefer. It gives you tensors with GPU support, automatic differentiation, and a Pythonic way to define and train neural networks (see the Training Deep Networks chapter).
+
+```python
+import torch
+import torch.nn as nn
+
+model = nn.Linear(10, 1).to("cuda")
+opt = torch.optim.Adam(model.parameters(), lr=1e-3)
+for x, y in loader:
+    pred = model(x.to("cuda"))
+    loss = nn.functional.mse_loss(pred, y.to("cuda"))
+    opt.zero_grad(); loss.backward(); opt.step()
+```
+
+**Q: What are tensors and autograd?**
+A **tensor** is a multi-dimensional array (like a NumPy array) that can live on a GPU. **Autograd** is PyTorch's automatic differentiation engine: it records operations and computes gradients for you when you call `.backward()`, which is what makes training neural nets practical.
+
+**Q: What is nn.Module?**
+**`nn.Module`** is the base class for all models and layers. You subclass it, define your layers in `__init__`, and write the `forward()` method; PyTorch then tracks parameters and gradients automatically so you can train the whole thing.
+
+**Q: What is the canonical training loop?**
+The pattern is **forward → loss → backward → step**: compute predictions, measure the loss, call `loss.backward()` to get gradients, then `optimizer.step()` to update weights. Crucially you must call `optimizer.zero_grad()` each iteration or gradients accumulate.
+
+**Q: What does .to(device) do, and why does it matter?**
+**`.to(device)`** moves a tensor or model between CPU and GPU. The common gotcha is a mismatch — model on GPU but data on CPU throws a runtime error — so both the model and every input batch must be on the same device.
+
+**Q: Why do researchers prefer PyTorch?**
+Its **dynamic computation graph** is built on the fly, so you can use ordinary Python control flow and inspect tensors with a debugger. This flexibility makes experimentation and custom architectures easier, which is why most new papers ship PyTorch code.
+
+::: {.callout-warning}
+Forgetting `optimizer.zero_grad()` is the classic PyTorch bug: gradients from previous batches accumulate, and your model trains on garbage updates without raising any error.
+:::
+
+## 25.4 — 📊 TensorFlow / Keras
+
+TensorFlow is Google's deep-learning framework, and **Keras** is its high-level API for building and training models with minimal code. It is PyTorch's main rival and is often chosen for its mature production and edge-deployment story.
+
+```python
+import tensorflow as tf
+
+model = tf.keras.Sequential([
+    tf.keras.layers.Dense(64, activation="relu"),
+    tf.keras.layers.Dense(1)])
+model.compile(optimizer="adam", loss="mse")
+model.fit(X_train, y_train, epochs=10, validation_split=0.2)
+```
+
+**Q: What does the Keras compile / fit workflow give you?**
+**Keras** hides the training loop: `model.compile()` sets the optimizer, loss, and metrics, and `model.fit()` runs the whole training process including batching and validation. It is far less code than a hand-written PyTorch loop, which makes it friendly for standard architectures.
+
+**Q: What is graph mode?**
+By default Keras compiles your model into a **static computation graph** for speed, rather than running operations eagerly one at a time. The graph can be optimized and serialized, which is part of why TensorFlow has historically been strong for production deployment.
+
+**Q: What is a SavedModel?**
+A **SavedModel** is TensorFlow's standard serialization format, bundling the architecture, weights, and computation graph into one portable directory. It is what downstream tools like TF Serving and TFLite consume, so it is the handoff point from training to deployment.
+
+**Q: When do teams pick TensorFlow over PyTorch?**
+Teams pick it for the **deployment ecosystem**: TF Serving for scalable model servers, **TFLite** for mobile and embedded, and TF.js for the browser. If your target is edge or mobile, or you have an existing TF stack, that mature tooling outweighs PyTorch's research convenience (see the Inference & Serving chapter).
+
+::: {.callout-tip}
+For new research projects PyTorch is usually the default; for shipping a model to a phone or an existing Google-stack production pipeline, TensorFlow's serving and TFLite tooling is the stronger reason to choose it.
+:::
+
+## 25.5 — 👁️ OpenCV
+
+OpenCV is the classical **computer-vision library** — fast, battle-tested functions for reading, transforming, and analyzing images. It is *not* a deep-learning framework; it is the **preprocessing layer** that prepares images before they hit a model like YOLO or a CNN.
+
+```python
+import cv2
+
+img = cv2.imread("photo.jpg")            # loads as BGR
+gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+resized = cv2.resize(gray, (224, 224))
+cv2.imwrite("out.jpg", resized)
+```
+
+**Q: What is OpenCV used for in an ML pipeline?**
+It handles the **image preprocessing** steps: reading files and video frames, resizing to the model's input size, converting color spaces, cropping, filtering, and drawing boxes on results. The model does the learning; OpenCV does everything around it.
+
+**Q: What is the BGR-vs-RGB gotcha?**
+OpenCV loads images in **BGR** channel order, while almost every other library (PIL, matplotlib, most deep-learning models) expects **RGB**. If you skip the `cv2.cvtColor(img, cv2.COLOR_BGR2RGB)` conversion, colors look wrong and a model trained on RGB will degrade.
+
+**Q: Can OpenCV read video?**
+Yes — **`cv2.VideoCapture`** reads frames from a file or webcam one at a time, and `cv2.VideoWriter` saves them back out. This is the standard way to feed a video stream frame-by-frame into a detector like YOLO.
+
+**Q: Does OpenCV do deep learning?**
+Mostly no — it is **classical CV** (filters, transforms, contours, feature detection). It does ship a `dnn` module that can run pretrained models for inference, but you train models in PyTorch or TensorFlow and use OpenCV for the pre- and post-processing around them.
+
+::: {.callout-warning}
+The BGR default bites everyone once. If your displayed image has blue and red swapped, you forgot the `COLOR_BGR2RGB` conversion — check it before debugging anything fancier.
+:::
+
+## 25.6 — 🎯 YOLO (Ultralytics)
+
+YOLO ("You Only Look Once") is a family of **real-time object-detection** models, packaged by Ultralytics into a simple Python and CLI API. Unlike a plain classifier, it finds *what* objects are in an image *and where*, drawing bounding boxes in a single forward pass.
+
+```python
+from ultralytics import YOLO
+
+model = YOLO("yolov8n.pt")          # pretrained nano model
+results = model.predict("street.jpg")
+model.train(data="mydata.yaml", epochs=50)   # fine-tune
+```
+
+**Q: What is single-shot detection?**
+YOLO does **object detection in one pass** over the image, predicting all bounding boxes and class labels simultaneously rather than scanning regions one at a time. That single-shot design is what makes it fast enough for real-time video.
+
+**Q: What do mAP and IoU mean?**
+**IoU** (Intersection over Union) measures how well a predicted box overlaps the true box, from 0 to 1. **mAP** (mean Average Precision) is the headline detection metric, averaging precision across classes and IoU thresholds — higher mAP means better detection (see the Model Evaluation chapter).
+
+**Q: When do you use YOLO vs a classifier?**
+Use a **classifier** when you only need one label for the whole image ("is this a cat?"). Use **YOLO** when you need to locate and count multiple objects in a scene ("three cars and a pedestrian, here and here") — detection, not just classification.
+
+**Q: Is YOLO a framework or a model?**
+It is a **model family**, not a general framework like PyTorch. Ultralytics ships pretrained weights (nano to extra-large) that you fine-tune on your own data with one `train()` call, which is why it is so quick to get a working detector.
+
+::: {.callout-tip}
+Start with the smallest pretrained model (`yolov8n`) and fine-tune on your own labeled images. You rarely need to train from scratch — transfer learning from COCO-pretrained weights gets you a working detector fast.
+:::
+
+## 25.x — Key takeaways
+
+- **Scikit-learn** — reach for it when you have tabular, small-to-medium data and want a fast, interpretable baseline with a uniform fit/predict API.
+- **XGBoost** — reach for it when that tabular problem needs maximum accuracy; gradient-boosted trees win Kaggle and beat most neural nets on structured data.
+- **PyTorch** — reach for it when you are building or researching deep networks and want a flexible, debuggable, dynamic-graph framework.
+- **TensorFlow / Keras** — reach for it when you need a fast high-level training API or a mature deployment path to mobile (TFLite) and servers (TF Serving).
+- **OpenCV** — reach for it whenever you need to read, resize, or transform images and video as the preprocessing layer around a vision model; mind the BGR default.
+- **YOLO (Ultralytics)** — reach for it when you need to detect and locate multiple objects in real time, fine-tuning a pretrained model rather than training from scratch.
+
+------------------------------------------------------------------------
+
+[📖 All chapters](../interview-guide.html)  &nbsp;|&nbsp;  [← 24 · 🔧 MLOps & LLMOps](ch24.html)  &nbsp;|&nbsp;  [26 · 🧰 Practical Toolkit II →](ch26.html)

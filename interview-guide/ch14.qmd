@@ -1,0 +1,333 @@
+---
+title: "Chapter 14 — 🔤 Word Embeddings — giving words meaning as vectors"
+page-layout: full
+toc: true
+toc-location: left
+toc-title: "In this chapter"
+toc-depth: 2
+toc-expand: true
+---
+
+[📖 All chapters](../interview-guide.html)  &nbsp;|&nbsp;  [← 13 · 🔁 Sequence Models](ch13.html)  &nbsp;|&nbsp;  [15 · ⚡ Attention & the Transformer →](ch15.html)
+
+<details class="ig-jump">
+<summary>📚 Jump to any chapter</summary>
+<p class="ig-era">🧮 Mathematical Foundations</p>
+<ul>
+<li><a href="ch01.html">01 &middot; 🧮 Linear Algebra — the language of data</a></li>
+<li><a href="ch02.html">02 &middot; 📉 Calculus & Optimization — how models learn</a></li>
+<li><a href="ch03.html">03 &middot; 🎲 Probability & Statistics — reasoning under uncertainty</a></li>
+<li><a href="ch04.html">04 &middot; 🔥 Information Theory & Loss Functions — measuring surprise and error</a></li>
+</ul>
+<p class="ig-era">🧩 Classical Machine Learning</p>
+<ul>
+<li><a href="ch05.html">05 &middot; 🧩 Core ML Concepts — the ground rules</a></li>
+<li><a href="ch06.html">06 &middot; 📐 Classical Supervised Algorithms — the workhorses</a></li>
+<li><a href="ch07.html">07 &middot; 🌲 Ensembles & Boosting — how to win on tabular data</a></li>
+<li><a href="ch08.html">08 &middot; 🗺️ Unsupervised Learning & Dimensionality Reduction — structure without labels</a></li>
+<li><a href="ch09.html">09 &middot; 🎯 Model Evaluation & Validation — knowing if it actually works</a></li>
+</ul>
+<p class="ig-era">🧠 Deep Learning</p>
+<ul>
+<li><a href="ch10.html">10 &middot; 🧠 Neural Network Fundamentals — the building block</a></li>
+<li><a href="ch11.html">11 &middot; ⚙️ Training Deep Networks — making deep nets actually train</a></li>
+<li><a href="ch12.html">12 &middot; 🖼️ Convolutional Neural Networks — the vision branch</a></li>
+<li><a href="ch13.html">13 &middot; 🔁 Sequence Models — RNNs, LSTMs and the bottleneck</a></li>
+</ul>
+<p class="ig-era">⚡ The Transformer Era</p>
+<ul>
+<li><a href="ch14.html">14 &middot; 🔤 Word Embeddings — giving words meaning as vectors</a></li>
+<li><a href="ch15.html">15 &middot; ⚡ Attention & the Transformer — the architecture that changed everything</a></li>
+<li><a href="ch16.html">16 &middot; 🧱 Tokenization, Pretraining & Model Families</a></li>
+<li><a href="ch17.html">17 &middot; 📈 Modern LLMs & Scaling — bigger, and suddenly capable</a></li>
+</ul>
+<p class="ig-era">💬 Using & Adapting LLMs</p>
+<ul>
+<li><a href="ch18.html">18 &middot; 💬 Prompting & In-Context Learning — programming models with words</a></li>
+<li><a href="ch19.html">19 &middot; 🎚️ Fine-Tuning & Alignment — specializing and aligning models</a></li>
+<li><a href="ch20.html">20 &middot; 📚 Retrieval-Augmented Generation (RAG) — giving the model an open book</a></li>
+<li><a href="ch21.html">21 &middot; 🚀 Inference, Decoding & Serving — running LLMs efficiently</a></li>
+</ul>
+<p class="ig-era">🤖 The Agentic Frontier</p>
+<ul>
+<li><a href="ch22.html">22 &middot; 🤖 Agents, Tools & Loops — the latest frontier</a></li>
+<li><a href="ch23.html">23 &middot; 🛡️ Evaluation, Safety & Guardrails — making LLM systems trustworthy</a></li>
+<li><a href="ch24.html">24 &middot; 🔧 MLOps & LLMOps — shipping and operating models in production</a></li>
+</ul>
+<p class="ig-era">🛠️ The Practical Toolkit</p>
+<ul>
+<li><a href="ch25.html">25 &middot; 🛠️ Practical Toolkit I — Modeling & Vision Libraries</a></li>
+<li><a href="ch26.html">26 &middot; 🧰 Practical Toolkit II — LLM Frameworks, Orchestration & Vector Stores</a></li>
+<li><a href="ch27.html">27 &middot; ⚙️ Practical Toolkit III — Serving, Apps & MLOps Tooling</a></li>
+</ul>
+<p class="ig-era">☁️ Cloud AI Platforms</p>
+<ul>
+<li><a href="ch28.html">28 &middot; ☁️ Cloud AI Platforms — deploying foundation models on the hyperscalers</a></li>
+</ul>
+</details>
+
+------------------------------------------------------------------------
+
+Chapter 13 left us with sequence models — RNNs and LSTMs — that read text one token at a time, but with a catch: they need their inputs to *be* numbers. This chapter is about how we turn words into numbers that actually carry meaning, so that "king" and "queen" live near each other in space rather than being arbitrary IDs. It is the missing input layer for everything before, and the conceptual seed for the attention models in Chapter 15.
+
+::: {.callout-note appearance="simple"}
+📍 **Timeline:** 2013 word2vec: words become geometry — meaning stops being a lookup table and becomes a direction you can do arithmetic on.
+:::
+
+## 14.1 — The distributional hypothesis
+
+Here is the core idea, in one sentence from linguist J.R. Firth: *"You shall know a word by the company it keeps."* You can guess what an unknown word means purely from the words around it. If you read "I poured the *wug* into my coffee," you already know *wug* is something like milk or sugar — not from a dictionary, but from the neighbors.
+
+This is the **distributional hypothesis**: words that appear in similar contexts tend to have similar meanings. Every embedding method in this chapter is just a different way of cashing in on this one idea — measure the company a word keeps, and turn that into a position in space.
+
+**Q: What is the distributional hypothesis?**
+The claim that **a word's meaning is captured by the distribution of contexts it appears in**. Two words with similar neighbor-word statistics ("doctor" / "nurse") end up with similar representations. It is the foundation that makes learning meaning from raw, unlabeled text possible.
+
+**Q: Why does this matter for machine learning?**
+Because it gives us a **self-supervised** signal. We do not need humans to label what words mean — the text itself provides the training target ("predict the neighbors"). This is why embeddings can be trained on billions of words of plain internet text for free.
+
+**Q: Does it have limits?**
+Yes. Words that are opposites often share contexts ("good"/"bad" both appear with "movie"), so distributional methods can place **antonyms close together**. The hypothesis captures *relatedness*, which is not always the *similarity* you want.
+
+## 14.2 — One-hot encoding and why it fails
+
+The naive first attempt: give every word in a vocabulary its own slot. With a 50,000-word vocabulary, each word is a 50,000-long vector that is all zeros except a single 1. "cat" might be slot 8,420; "dog" slot 12,011.
+
+The problem is that this representation knows *nothing* about meaning. Every word is the same distance from every other word — "cat" is exactly as far from "dog" as it is from "democracy." The vectors are huge, mostly empty (sparse), and geometrically useless.
+
+```python
+import numpy as np
+# vocab of 5 words -> each is a 5-dim one-hot
+vocab = ["cat", "dog", "king", "queen", "apple"]
+def one_hot(w):
+    v = np.zeros(len(vocab)); v[vocab.index(w)] = 1.0
+    return v
+# every pair is equally (dis)similar: dot product is 0 unless identical
+print(one_hot("cat") @ one_hot("dog"))    # 0.0  -> no shared meaning
+print(one_hot("cat") @ one_hot("cat"))    # 1.0
+```
+
+::: {.callout-warning}
+**Interview gotcha:** one-hot vectors are **orthogonal** — the dot product (and cosine similarity) of any two *different* words is exactly 0. So "cat·dog = cat·democracy = 0". The representation has no built-in notion that some words are more alike than others.
+:::
+
+**Q: Why is one-hot encoding bad for words?**
+Three reasons: it is **high-dimensional** (one dimension per vocab word — easily 50k+), **sparse** (a single 1 in a sea of zeros, wasteful), and it carries **no similarity information** (all distinct words are equidistant and orthogonal). It treats words as arbitrary IDs, not meanings.
+
+**Q: How is one-hot different from a dense embedding?**
+A one-hot vector has length = vocab size and one nonzero entry; a **dense embedding** has a small fixed length (say 300) with all entries being learned real numbers. Dense vectors pack meaning into *patterns across dimensions*, so similar words land near each other.
+
+**Q: Where does one-hot still show up?**
+As the **input index** to an embedding layer. Conceptually you one-hot the word and multiply by an embedding matrix $E$ — but in practice that multiply just selects a row, so frameworks implement it as a **lookup**, never materializing the big vector.
+
+## 14.3 — Dense embeddings: the lookup table
+
+The fix is to compress. Instead of 50,000 dimensions, give each word a short dense vector — typically 100 to 300 numbers — and *learn* those numbers from data. Stack all the vectors into one matrix $E$ of shape (vocab size × embedding dim). Looking up a word is just grabbing its row.
+
+Intuitively, each of the ~300 dimensions becomes a soft, learned "feature" — one axis might loosely track royalty, another gender, another plurality — though in practice the axes are entangled and not human-labeled.
+
+$$ \text{embedding}(w) = E[\,\text{index}(w)\,] \in \mathbb{R}^{d}, \qquad d \ll |V| $$
+
+```python
+import numpy as np
+V, d = 5, 3                       # 5 words, 3-dim embeddings
+E = np.random.randn(V, d)         # the learnable lookup table
+idx = {"cat":0,"dog":1,"king":2,"queen":3,"apple":4}
+def embed(w): return E[idx[w]]    # one-hot @ E == selecting a row
+print(embed("king").shape)        # (3,) -- dense, small, learned
+```
+
+**Q: What is an embedding matrix?**
+A learnable matrix $E$ of shape $(|V| \times d)$ where row $i$ is the dense vector for word $i$. It is **just a lookup table** trained by gradient descent like any other weights — the model nudges each row so that useful words end up in useful positions.
+
+**Q: How do you pick the embedding dimension $d$?**
+It is a **hyperparameter** — common choices are 50–300 for classic embeddings, larger for big models. Too small and you can't capture enough nuance; too large wastes parameters and risks overfitting. It is always far smaller than the vocabulary ($d \ll |V|$), which is the whole point.
+
+**Q: Why are dense embeddings "better" than one-hot beyond size?**
+Because they support **generalization**. If "cat" and "dog" sit near each other, a model that learned something about "cat" partially transfers to "dog" for free. One-hot gives zero transfer — each word is an island.
+
+**Q: Are the embeddings trained on their own, or with a task?**
+Either. You can **pre-train** them standalone (word2vec/GloVe) and reuse them, or learn them **jointly** as the first layer of a downstream model (sentiment classifier, translator). Jointly-learned embeddings get shaped by the task; pre-trained ones are general-purpose and transferable.
+
+## 14.4 — word2vec: skip-gram, CBOW, and negative sampling
+
+word2vec (Mikolov et al., 2013) is the breakthrough that made embeddings cheap and famous. The trick: turn "learn meaning" into a simple prediction game over a sliding window, then keep the byproduct. You don't care about the predictions — you care about the vectors the network learns to make them.
+
+There are two flavors. **Skip-gram** takes the center word and tries to predict its neighbors. **CBOW** (Continuous Bag of Words) does the reverse: take the surrounding words and predict the center.
+
+```{mermaid}
+flowchart LR
+  subgraph SG["Skip-gram: center -> context"]
+    C1["king"] --> N1["the"]
+    C1 --> N2["throne"]
+    C1 --> N3["royal"]
+  end
+  subgraph CB["CBOW: context -> center"]
+    X1["the"] --> Y1["?"]
+    X2["throne"] --> Y1
+    X3["royal"] --> Y1
+  end
+```
+
+The naive training target is a softmax over the *entire vocabulary* for every prediction — far too slow when $|V|$ is 50k+. **Negative sampling** fixes this: instead of scoring all words, treat it as a binary task — "is this a real (word, context) pair?" Push real pairs toward 1, and a handful (say 5–20) of random "negative" words toward 0. That turns one giant softmax into a few cheap logistic-regression updates.
+
+$$ \log \sigma(v_c \cdot v_w) + \sum_{k=1}^{K} \mathbb{E}_{w_k \sim P_n}\big[\log \sigma(-v_{w_k} \cdot v_w)\big] $$
+
+Here $\sigma$ is the **sigmoid**, $v_w$ and $v_c$ are the word and context vectors, the first term pushes the real pair's dot product up, and the sum pushes $K$ sampled impostors' dot products down.
+
+```python
+import numpy as np
+def sigmoid(x): return 1 / (1 + np.exp(-x))
+# one negative-sampling update for a (center, context) pair
+def update(v_w, v_c, negs, lr=0.05):
+    # positive pair: target label 1
+    v_w += lr * (1 - sigmoid(v_w @ v_c)) * v_c
+    # K negatives: target label 0
+    for v_n in negs:
+        v_w += lr * (0 - sigmoid(v_w @ v_n)) * v_n
+    return v_w
+# the vector moves toward real context, away from random impostors
+```
+
+::: {.callout-tip}
+**Intuition:** negative sampling reframes the question from *"which of 50,000 words comes next?"* (expensive) to *"does this pair belong together — yes or no?"* (cheap), asked against a few random impostors. Same learned geometry, a tiny fraction of the compute.
+:::
+
+**Q: Skip-gram vs CBOW — what's the difference and when to use each?**
+**Skip-gram** predicts context words from the center word; **CBOW** predicts the center word from its context. Skip-gram works better for **rare words and small datasets** (each word gets many training signals); CBOW is **faster** and smooths over frequent words. Skip-gram is the more popular default.
+
+**Q: Why is negative sampling needed?**
+Because the full **softmax over the vocabulary** costs $O(|V|)$ per training step — multiply and normalize across every word, billions of times. Negative sampling replaces it with a **binary classification** against $K$ sampled negatives, cutting the cost from "all words" to "a handful," making training tractable on huge corpora.
+
+**Q: How are negative samples chosen?**
+By sampling from a **unigram distribution raised to the 3/4 power**, $P(w) \propto \text{count}(w)^{0.75}$. The 3/4 exponent dampens very frequent words and boosts rare ones relative to raw frequency — empirically this gives better vectors than uniform or raw-frequency sampling.
+
+**Q: What is the other speed trick — hierarchical softmax?**
+An alternative to negative sampling that arranges the vocabulary as a **binary tree** (often Huffman-coded by frequency). Predicting a word becomes a series of left/right decisions down the tree, costing $O(\log |V|)$ instead of $O(|V|)$. Negative sampling is more common today, but both solve the same softmax-cost problem.
+
+**Q: Is word2vec a "deep" network?**
+No — it is **shallow**: essentially one linear projection (the embedding) into a single output layer, no hidden nonlinear stack. Its power comes from the objective and scale, not depth. The "deep learning" reputation of embeddings is a bit of a misnomer.
+
+**Q: There are actually two vector tables — what gives?**
+word2vec learns an **input ("center") matrix and an output ("context") matrix**. Usually you keep the input vectors as your embeddings and discard (or average) the context vectors. People often forget the second table exists.
+
+## 14.5 — GloVe: factorizing the co-occurrence matrix
+
+word2vec learns by sliding a window and predicting — a *local*, online approach. **GloVe** (Global Vectors, Stanford 2014) takes the other route: first count *globally* how often every word co-occurs with every other word across the whole corpus, building a giant co-occurrence matrix, then factorize it so the vectors reconstruct those counts.
+
+The intuition: ratios of co-occurrence probabilities carry meaning. "ice" co-occurs with "solid" much more than "steam" does; the *ratio* $P(\text{solid}|\text{ice}) / P(\text{solid}|\text{steam})$ is large and meaningful. GloVe trains vectors so their dot products line up with the log of co-occurrence counts.
+
+$$ J = \sum_{i,j} f(X_{ij})\,\big(v_i \cdot v_j + b_i + b_j - \log X_{ij}\big)^2 $$
+
+where $X_{ij}$ is how often word $j$ appears near word $i$, and $f$ down-weights very frequent pairs so "the" doesn't dominate.
+
+| | word2vec (skip-gram) | GloVe |
+|---|---|---|
+| Signal used | local sliding windows | global co-occurrence counts |
+| Learning style | predictive (online SGD) | count-based matrix factorization |
+| Sees whole-corpus stats at once? | no, streams windows | yes, precomputes the matrix |
+| Output | dense word vectors | dense word vectors |
+
+**Q: What does GloVe actually optimize?**
+A **weighted least-squares** objective that makes the dot product of two word vectors approximate the **log of their co-occurrence count**, $v_i \cdot v_j \approx \log X_{ij}$. The weighting function $f(X_{ij})$ caps the influence of extremely common pairs.
+
+**Q: How is GloVe philosophically different from word2vec?**
+word2vec is **predictive and local** (slide a window, predict neighbors); GloVe is **count-based and global** (tally all co-occurrences first, then factorize). In practice the two produce embeddings of **similar quality** — the famous analogy/similarity behaviors show up in both.
+
+**Q: Why down-weight frequent co-occurrences?**
+Because pairs involving "the", "of", "and" co-occur with everything and would otherwise **dominate the loss** without carrying meaning. The function $f$ rises then plateaus, so common pairs contribute but don't drown out the informative rare ones.
+
+**Q: What does FastText add on top of these?**
+FastText (Facebook, 2016) represents each word as a **bag of character n-grams** (e.g. "where" → "wh", "whe", "her", ...) and sums them. This lets it build vectors for **unseen / out-of-vocabulary words** from their sub-pieces and handle rare or morphologically rich words much better than word2vec or GloVe, which only know whole words they saw in training.
+
+## 14.6 — Vector arithmetic and cosine similarity
+
+Here is the result that made everyone pay attention: once words are vectors, **meaning becomes geometry you can do algebra on**. The direction from "man" to "woman" turns out to be roughly the same direction as "king" to "queen" — so subtracting and adding vectors moves you along meaningful axes.
+
+$$ \vec{king} - \vec{man} + \vec{woman} \approx \vec{queen} $$
+
+To *measure* closeness we don't use raw distance — we use **cosine similarity**, the angle between two vectors. Direction encodes meaning; length (often tied to word frequency) we usually want to ignore.
+
+$$ \cos(\theta) = \frac{a \cdot b}{\|a\|\,\|b\|} \in [-1, 1] $$
+
+<svg viewBox="0 0 320 230" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif" font-size="11">
+  <line x1="20" y1="210" x2="300" y2="210" stroke="#888" stroke-width="1"/>
+  <line x1="20" y1="210" x2="20" y2="20" stroke="#888" stroke-width="1"/>
+  <circle cx="90" cy="170" r="4" fill="#3b82f6"/><text x="70" y="188">man</text>
+  <circle cx="180" cy="110" r="4" fill="#3b82f6"/><text x="168" y="102">king</text>
+  <circle cx="120" cy="150" r="4" fill="#ec4899"/><text x="98" y="168">woman</text>
+  <circle cx="210" cy="90" r="4" fill="#ec4899"/><text x="200" y="82">queen</text>
+  <line x1="90" y1="170" x2="180" y2="110" stroke="#3b82f6" stroke-width="1.5" marker-end="url(#a)"/>
+  <line x1="120" y1="150" x2="210" y2="90" stroke="#ec4899" stroke-width="1.5" marker-end="url(#a)"/>
+  <text x="215" y="55" fill="#555">same "royalty" direction</text>
+  <defs><marker id="a" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto">
+    <path d="M0,0 L6,3 L0,6 Z" fill="#555"/></marker></defs>
+</svg>
+
+```python
+import numpy as np
+def cosine(a, b):
+    return (a @ b) / (np.linalg.norm(a) * np.linalg.norm(b))
+# analogy: find the vector closest to (king - man + woman)
+target = E["king"] - E["man"] + E["woman"]   # E: dict word -> vector
+# then rank all words by cosine(target, vec) and take the top -> "queen"
+```
+
+::: {.callout-warning}
+**Interview gotcha:** prefer **cosine similarity over Euclidean distance** for embeddings. Vector *length* often correlates with word frequency, not meaning; cosine looks only at **direction**, which is where the semantics live. (Note: on already-normalized vectors, cosine and Euclidean give the same ranking.)
+:::
+
+**Q: Why does king − man + woman ≈ queen work?**
+Because training places words so that **consistent relationships become consistent vector offsets**. The "male→female" shift and the "royalty" axis are encoded as roughly constant directions, so the arithmetic lands you near the word that combines those attributes. It is evidence the space has **linear semantic structure**.
+
+**Q: What is cosine similarity and why use it over Euclidean distance?**
+Cosine similarity is the **cosine of the angle** between two vectors, $\frac{a\cdot b}{\|a\|\|b\|}$, ranging from −1 (opposite) to 1 (identical direction). It is preferred because it **ignores magnitude** and compares only direction — and embedding magnitude often reflects frequency rather than meaning.
+
+**Q: What range does cosine similarity take?**
+$[-1, 1]$: **1** means same direction (very similar), **0** means orthogonal (unrelated), **−1** means opposite. For typical word embeddings, related words score high-positive; truly negative scores are rare in practice.
+
+**Q: Do these analogies always work?**
+No — they are **cherry-picked successes**. Many analogies fail, and some "results" are partly an artifact of the standard practice of **excluding the input words** from the answer search. The headline examples are real but oversold; treat them as a nice property, not a guarantee.
+
+**Q: Do embeddings inherit bias from the text?**
+Yes — and this is an interview favorite. Because they soak up real-world co-occurrence statistics, embeddings learn **societal biases** (e.g. "man : doctor :: woman : nurse"). The same geometry that gives clean analogies also encodes stereotypes, which has spawned a whole **debiasing** literature.
+
+## 14.7 — The fatal limitation: static embeddings
+
+Now the crack that motivates everything after this chapter. word2vec and GloVe give each word **exactly one vector, forever**. But "bank" in "river bank" and "bank" in "savings bank" are different meanings — and a single static vector is forced to be a blurry average of both.
+
+This is the **static (context-free) embedding** problem. The vector for a word does not change based on the sentence it sits in. To fix it, we need representations computed *from the surrounding words at runtime* — **contextual embeddings** (ELMo, then BERT) — which is exactly what the attention mechanism in **Chapter 15** delivers.
+
+```{mermaid}
+flowchart TD
+  W["word: bank"] --> S["static embedding: ONE fixed vector"]
+  S --> M["blurred average of river-bank + money-bank"]
+  M -.->|"fix: condition on context"| C["contextual embedding (ELMo / BERT, Ch.15+)"]
+```
+
+**Q: What is the main limitation of word2vec/GloVe embeddings?**
+They are **static**: one vector per word type, regardless of context. Polysemous words like "bank", "apple", or "bat" get a single vector that **averages all their senses**, so the model can't tell which meaning is intended in a given sentence.
+
+**Q: How do contextual embeddings solve this?**
+They produce a **different vector for each occurrence**, computed from the whole sentence. "Bank" near "river" and "bank" near "loan" get different representations because the model **reads the neighbors at inference time**. ELMo (biLSTM-based) started this; the Transformer (Chapter 15) made it dominant.
+
+**Q: Are static embeddings obsolete then?**
+Not entirely. They are **tiny, fast, and need no GPU at inference** — great for lightweight similarity search, baselines, or low-resource settings. But for anything sense-sensitive or state-of-the-art, **contextual** representations win decisively.
+
+**Q: Where do these static embedding ideas live on inside modern LLMs?**
+Every Transformer still starts with an **embedding lookup table** (Chapter 16's token embeddings) — the same idea as $E$ here. The difference is that the static lookup is only the *input layer*; attention layers on top then **contextualize** those vectors as they flow through the network.
+
+## 14.x — Key takeaways
+
+- **Distributional hypothesis**: a word's meaning comes from the contexts it keeps — this is the self-supervised signal behind all embeddings.
+- **One-hot is bad**: huge, sparse, and orthogonal — every distinct word is equidistant, so there's no notion of similarity.
+- **Dense embeddings** are a small learned lookup table $E$ ($|V| \times d$, $d \ll |V|$); similar words land near each other and enable generalization.
+- **word2vec** (2013): shallow predictive model; **skip-gram** (center→context, good for rare words) vs **CBOW** (context→center, faster).
+- **Negative sampling** turns an $O(|V|)$ softmax into cheap binary yes/no classification against a few sampled negatives (hierarchical softmax is the $O(\log|V|)$ alternative).
+- **GloVe** reaches similar quality from the opposite direction: factorize a global co-occurrence matrix so $v_i \cdot v_j \approx \log X_{ij}$; **FastText** adds character n-grams to handle out-of-vocabulary words.
+- **Vector arithmetic** (king − man + woman ≈ queen) shows linear semantic structure; **cosine similarity** measures meaning by direction, not magnitude — and the same geometry inherits real-world **bias**.
+- **The fatal flaw is staticness**: one vector per word can't handle polysemy ("river bank" vs "savings bank"), which motivates contextual embeddings and the Transformer in Chapter 15.
+
+------------------------------------------------------------------------
+
+[📖 All chapters](../interview-guide.html)  &nbsp;|&nbsp;  [← 13 · 🔁 Sequence Models](ch13.html)  &nbsp;|&nbsp;  [15 · ⚡ Attention & the Transformer →](ch15.html)

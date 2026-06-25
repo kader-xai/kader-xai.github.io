@@ -1,0 +1,394 @@
+---
+title: "Chapter 12 — 🖼️ Convolutional Neural Networks — the vision branch"
+page-layout: full
+toc: true
+toc-location: left
+toc-title: "In this chapter"
+toc-depth: 2
+toc-expand: true
+---
+
+[📖 All chapters](../interview-guide.html)  &nbsp;|&nbsp;  [← 11 · ⚙️ Training Deep Networks](ch11.html)  &nbsp;|&nbsp;  [13 · 🔁 Sequence Models →](ch13.html)
+
+<details class="ig-jump">
+<summary>📚 Jump to any chapter</summary>
+<p class="ig-era">🧮 Mathematical Foundations</p>
+<ul>
+<li><a href="ch01.html">01 &middot; 🧮 Linear Algebra — the language of data</a></li>
+<li><a href="ch02.html">02 &middot; 📉 Calculus & Optimization — how models learn</a></li>
+<li><a href="ch03.html">03 &middot; 🎲 Probability & Statistics — reasoning under uncertainty</a></li>
+<li><a href="ch04.html">04 &middot; 🔥 Information Theory & Loss Functions — measuring surprise and error</a></li>
+</ul>
+<p class="ig-era">🧩 Classical Machine Learning</p>
+<ul>
+<li><a href="ch05.html">05 &middot; 🧩 Core ML Concepts — the ground rules</a></li>
+<li><a href="ch06.html">06 &middot; 📐 Classical Supervised Algorithms — the workhorses</a></li>
+<li><a href="ch07.html">07 &middot; 🌲 Ensembles & Boosting — how to win on tabular data</a></li>
+<li><a href="ch08.html">08 &middot; 🗺️ Unsupervised Learning & Dimensionality Reduction — structure without labels</a></li>
+<li><a href="ch09.html">09 &middot; 🎯 Model Evaluation & Validation — knowing if it actually works</a></li>
+</ul>
+<p class="ig-era">🧠 Deep Learning</p>
+<ul>
+<li><a href="ch10.html">10 &middot; 🧠 Neural Network Fundamentals — the building block</a></li>
+<li><a href="ch11.html">11 &middot; ⚙️ Training Deep Networks — making deep nets actually train</a></li>
+<li><a href="ch12.html">12 &middot; 🖼️ Convolutional Neural Networks — the vision branch</a></li>
+<li><a href="ch13.html">13 &middot; 🔁 Sequence Models — RNNs, LSTMs and the bottleneck</a></li>
+</ul>
+<p class="ig-era">⚡ The Transformer Era</p>
+<ul>
+<li><a href="ch14.html">14 &middot; 🔤 Word Embeddings — giving words meaning as vectors</a></li>
+<li><a href="ch15.html">15 &middot; ⚡ Attention & the Transformer — the architecture that changed everything</a></li>
+<li><a href="ch16.html">16 &middot; 🧱 Tokenization, Pretraining & Model Families</a></li>
+<li><a href="ch17.html">17 &middot; 📈 Modern LLMs & Scaling — bigger, and suddenly capable</a></li>
+</ul>
+<p class="ig-era">💬 Using & Adapting LLMs</p>
+<ul>
+<li><a href="ch18.html">18 &middot; 💬 Prompting & In-Context Learning — programming models with words</a></li>
+<li><a href="ch19.html">19 &middot; 🎚️ Fine-Tuning & Alignment — specializing and aligning models</a></li>
+<li><a href="ch20.html">20 &middot; 📚 Retrieval-Augmented Generation (RAG) — giving the model an open book</a></li>
+<li><a href="ch21.html">21 &middot; 🚀 Inference, Decoding & Serving — running LLMs efficiently</a></li>
+</ul>
+<p class="ig-era">🤖 The Agentic Frontier</p>
+<ul>
+<li><a href="ch22.html">22 &middot; 🤖 Agents, Tools & Loops — the latest frontier</a></li>
+<li><a href="ch23.html">23 &middot; 🛡️ Evaluation, Safety & Guardrails — making LLM systems trustworthy</a></li>
+<li><a href="ch24.html">24 &middot; 🔧 MLOps & LLMOps — shipping and operating models in production</a></li>
+</ul>
+<p class="ig-era">🛠️ The Practical Toolkit</p>
+<ul>
+<li><a href="ch25.html">25 &middot; 🛠️ Practical Toolkit I — Modeling & Vision Libraries</a></li>
+<li><a href="ch26.html">26 &middot; 🧰 Practical Toolkit II — LLM Frameworks, Orchestration & Vector Stores</a></li>
+<li><a href="ch27.html">27 &middot; ⚙️ Practical Toolkit III — Serving, Apps & MLOps Tooling</a></li>
+</ul>
+<p class="ig-era">☁️ Cloud AI Platforms</p>
+<ul>
+<li><a href="ch28.html">28 &middot; ☁️ Cloud AI Platforms — deploying foundation models on the hyperscalers</a></li>
+</ul>
+</details>
+
+------------------------------------------------------------------------
+
+In Chapter 11 we learned how to actually *train* deep networks — initialization, normalization, regularization, the tricks that keep gradients flowing. Now we point that machinery at images, where a plain fully-connected net falls apart. This chapter builds the convolutional neural network (CNN) from the kernel up, walks the lineage of architectures that won ImageNet, and sets up the jump from grids of pixels to sequences in the next chapter.
+
+::: {.callout-note appearance="simple"}
+📍 **Timeline:** 1998 LeNet-5 → 2012 AlexNet ignites the deep-learning boom → 2014 VGG & Inception go deeper → 2015 ResNet breaks the depth barrier. The decade vision learned to see.
+:::
+
+## 12.1 — Why convolution beats fully-connected for images
+
+Imagine looking for a cat in a photo. You don't memorize "fur at pixel 14,203" — you slide your eyes around hunting for *edges, ears, whiskers* anywhere they appear. A fully-connected (FC) layer can't do that cheaply: it wires every pixel to every neuron, so a tiny 200×200 RGB image (120,000 inputs) into 1,000 neurons is 120 million weights in one layer. A **convolution** instead slides a small filter across the image, reusing the same handful of weights everywhere.
+
+Three ideas make convolution win on images:
+
+- **Local connectivity** — a pixel's meaning comes from its neighbors, so each neuron only looks at a small patch.
+- **Parameter sharing** — the same filter is reused at every location, so an "edge detector" learned in the corner also works in the center.
+- **Translation invariance** — because the filter slides everywhere, a cat detected top-left fires the same way bottom-right.
+
+| Property | MLP (fully-connected) | CNN (convolutional) |
+|---|---|---|
+| **Parameters** | Every pixel × every neuron — explodes with image size | Small shared filter — *independent* of image size |
+| **Spatial structure** | Lost the moment you flatten | Preserved; the 2D grid is kept |
+| **Invariance** | None — must relearn a pattern at every position | Translation equivariance built in (+ invariance via pooling) |
+
+::: {.callout-tip}
+**Intuition:** an FC layer asks "what's at this exact pixel?"; a conv layer asks "is this *pattern* anywhere nearby?". The second question is the right one for images, and it costs far fewer weights.
+:::
+
+**Q: Why not just flatten the image and use a big MLP?**
+You **throw away spatial structure** the moment you flatten — the model no longer knows which pixels are neighbors. You also explode the parameter count (millions per layer), which overfits and is slow. CNNs keep the 2D grid and share weights, so they need far fewer parameters and generalize across positions.
+
+**Q: What is parameter sharing and why does it help?**
+**Parameter sharing** means one filter's weights are reused at every spatial location instead of learning separate weights per position. This slashes parameters and bakes in the prior that *a useful feature is useful anywhere in the image* — an edge detector shouldn't have to be relearned for every pixel.
+
+**Q: What's the difference between translation invariance and equivariance?**
+A convolution is strictly **equivariant**: shift the input, and the feature map shifts the same way. True **invariance** (output unchanged when the input shifts) comes later from **pooling** and the final global aggregation. Interviewers love this distinction — convolution alone gives equivariance, not invariance.
+
+**Q: Are CNNs only for images?**
+No. The same local-pattern + weight-sharing idea applies to any grid-structured signal: **1D convolutions** for audio and time series, **3D convolutions** for video and volumetric scans. Images are just the most famous case.
+
+## 12.2 — Filters, stride, padding, and output size
+
+A **filter** (or **kernel**) is a small weight matrix — say 3×3 — that you slide over the image. At each position you compute a dot product between the filter and the patch underneath, producing one number. Sweep across the whole image and you get a **feature map**: a 2D grid of how strongly that pattern matched at each location.
+
+Two knobs control the sweep. **Stride** is how many pixels you jump each step (stride 2 halves the output). **Padding** adds a border of zeros so the filter can sit on edge pixels — "same" padding keeps the output the same size, "valid" padding adds nothing and shrinks the output.
+
+The output spatial size for one dimension:
+
+$$ O = \left\lfloor \frac{W - K + 2P}{S} \right\rfloor + 1 $$
+
+where $W$ is input size, $K$ kernel size, $P$ padding, $S$ stride.
+
+<svg viewBox="0 0 360 160" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif" font-size="11">
+  <text x="40" y="14" fill="currentColor">5×5 input</text>
+  <g stroke="currentColor" fill="none">
+    <rect x="20" y="24" width="120" height="120"/>
+    <line x1="44" y1="24" x2="44" y2="144"/><line x1="68" y1="24" x2="68" y2="144"/>
+    <line x1="92" y1="24" x2="92" y2="144"/><line x1="116" y1="24" x2="116" y2="144"/>
+    <line x1="20" y1="48" x2="140" y2="48"/><line x1="20" y1="72" x2="140" y2="72"/>
+    <line x1="20" y1="96" x2="140" y2="96"/><line x1="20" y1="120" x2="140" y2="120"/>
+  </g>
+  <rect x="20" y="24" width="72" height="72" fill="currentColor" opacity="0.18" stroke="currentColor"/>
+  <text x="30" y="68" fill="currentColor">3×3 kernel</text>
+  <text x="170" y="80" fill="currentColor">→</text>
+  <text x="250" y="14" fill="currentColor">3×3 output</text>
+  <g stroke="currentColor" fill="none">
+    <rect x="230" y="44" width="72" height="72"/>
+    <line x1="254" y1="44" x2="254" y2="116"/><line x1="278" y1="44" x2="278" y2="116"/>
+    <line x1="230" y1="68" x2="302" y2="68"/><line x1="230" y1="92" x2="302" y2="92"/>
+  </g>
+  <rect x="230" y="44" width="24" height="24" fill="currentColor" opacity="0.18"/>
+</svg>
+
+A 5×5 input with a 3×3 kernel, stride 1, no padding gives $(5-3)/1 + 1 = 3$, so a 3×3 output.
+
+```python
+import numpy as np
+
+def conv2d(img, kernel, stride=1, pad=0):
+    img = np.pad(img, pad)                      # symmetric zero-border on both axes
+    K = kernel.shape[0]
+    H = (img.shape[0] - K) // stride + 1        # output-size formula, height
+    W = (img.shape[1] - K) // stride + 1        # ... and width
+    out = np.zeros((H, W))
+    for i in range(H):
+        for j in range(W):
+            patch = img[i*stride:i*stride+K, j*stride:j*stride+K]
+            out[i, j] = np.sum(patch * kernel)  # dot product = match score
+    return out
+```
+
+::: {.callout-warning}
+**Gotcha:** what deep-learning libraries call "convolution" is actually **cross-correlation** — the kernel is *not* flipped. It makes no difference because the weights are learned, but say "cross-correlation" if an interviewer presses you on the math.
+:::
+
+**Q: How do you compute the output size of a conv layer?**
+Use $O = \lfloor (W - K + 2P)/S \rfloor + 1$ per spatial dimension. Example: 32×32 input, 5×5 kernel, no padding, stride 1 → $(32-5)/1+1 = 28$. Memorize this formula — it's one of the most common CNN interview questions.
+
+**Q: What does "same" vs "valid" padding mean?**
+**"Same"** pads with zeros so the output has the *same* spatial size as the input (for stride 1) — for an **odd** kernel you set $P = (K-1)/2$. **"Valid"** uses no padding, so the filter only sits on valid positions and the output shrinks by $K-1$ each layer. Same padding lets you stack many layers without the map vanishing.
+
+**Q: What does stride control, and why use stride > 1?**
+**Stride** is the step size of the slide; larger stride means a coarser, smaller output. A stride of 2 roughly halves height and width, which **downsamples** the feature map cheaply — an alternative to pooling that also reduces compute and memory.
+
+**Q: How many parameters does a conv layer have?**
+For $C_{in}$ input channels, $C_{out}$ filters of size $K \times K$: $\text{params} = (K \times K \times C_{in} + 1) \times C_{out}$ (the $+1$ is the bias per filter). Crucially this is **independent of the image's height and width** — that's the payoff of weight sharing.
+
+**Q: How do you backprop through a convolution?**
+The gradient w.r.t. the **kernel** is itself a convolution of the input patches with the upstream gradient (each weight collects gradient from every position it touched, summed — exactly what weight sharing implies). The gradient w.r.t. the **input** is a *full* convolution of the upstream gradient with the **flipped** kernel. In practice the framework's autodiff handles this; the point to know is that conv is differentiable and its backward pass is also a convolution.
+
+## 12.3 — Feature maps and channels
+
+A grayscale image is one **channel** (a single 2D grid); a color image has three (R, G, B), stacked into a depth dimension. A filter always spans the *full depth* of its input — a 3×3 filter on RGB is really 3×3×3. It produces a single 2D feature map. Use 64 such filters and you get a 64-channel output: 64 different patterns detected across the image.
+
+So as you go deeper, the spatial grid shrinks (pooling/stride) while the channel count grows. Early channels capture **edges and colors**; deeper channels combine those into **textures, parts, then whole objects** — a learned hierarchy of features.
+
+**Q: What's the difference between a channel and a feature map?**
+They're the same thing viewed from two sides. An **input channel** is one 2D slice fed in (e.g. the red plane); a **feature map** is one 2D slice coming *out* (one filter's response). One layer's output feature maps become the next layer's input channels.
+
+**Q: How does a filter handle multiple input channels?**
+Each filter has a separate $K \times K$ weight grid *per input channel*; it convolves each channel, then **sums the results into one feature map**. So a filter over $C_{in}$ channels has $K \times K \times C_{in}$ weights but still outputs a single 2D map.
+
+**Q: What is a 1×1 convolution good for, if it doesn't look at neighbors?**
+A **1×1 conv** mixes information *across channels* at each pixel — it's a tiny per-pixel fully-connected layer over the depth dimension. It's used to **reduce channel count cheaply** (a "bottleneck") before expensive 3×3 convs, a key trick in Inception and ResNet.
+
+**Q: What is a depthwise-separable convolution?**
+It splits a normal convolution into two cheap steps: a **depthwise** conv (one $K \times K$ filter *per channel*, no mixing) followed by a **pointwise** 1×1 conv (mix channels). This cuts cost from $K^2 C_{in} C_{out}$ to roughly $K^2 C_{in} + C_{in} C_{out}$ — the core trick behind **MobileNet** and other efficient on-device CNNs.
+
+**Q: What is a dilated (atrous) convolution?**
+A **dilated** conv spreads the kernel taps apart with gaps, so a 3×3 filter with dilation 2 covers a 5×5 area while still using only 9 weights. It **enlarges the receptive field without adding parameters or losing resolution** — popular in segmentation models that need wide context but full-size output.
+
+## 12.4 — Pooling and the receptive field
+
+After detecting features you often don't care *exactly* where they fired, just that they did. **Pooling** shrinks each feature map by summarizing small windows — **max pooling** keeps the strongest activation in each 2×2 window, **average pooling** takes the mean. This downsamples the map, cuts compute, and adds a bit of **translation invariance** (a feature shifting by one pixel still lands in the same pooled cell).
+
+The **receptive field** is the region of the original image that influences one neuron deep in the network. Stacking small filters grows it: two 3×3 convs see a 5×5 patch, three see 7×7. So depth lets late neurons "see" large parts of the image while each layer stays cheap.
+
+<svg viewBox="0 0 380 150" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif" font-size="11">
+  <text x="0" y="14" fill="currentColor">Stacking 3×3 convs grows the receptive field</text>
+  <g stroke="currentColor" fill="none">
+    <rect x="10" y="30" width="90" height="90"/>
+    <rect x="40" y="60" width="30" height="30" fill="currentColor" opacity="0.3"/>
+  </g>
+  <text x="20" y="138" fill="currentColor">1 layer → 3×3</text>
+  <g stroke="currentColor" fill="none">
+    <rect x="140" y="30" width="90" height="90"/>
+    <rect x="155" y="45" width="60" height="60" fill="currentColor" opacity="0.2"/>
+    <rect x="170" y="60" width="30" height="30" fill="currentColor" opacity="0.3"/>
+  </g>
+  <text x="150" y="138" fill="currentColor">2 layers → 5×5</text>
+  <g stroke="currentColor" fill="none">
+    <rect x="270" y="30" width="90" height="90"/>
+    <rect x="276" y="36" width="78" height="78" fill="currentColor" opacity="0.15"/>
+    <rect x="285" y="45" width="60" height="60" fill="currentColor" opacity="0.2"/>
+    <rect x="300" y="60" width="30" height="30" fill="currentColor" opacity="0.3"/>
+  </g>
+  <text x="280" y="138" fill="currentColor">3 layers → 7×7</text>
+</svg>
+
+```python
+def max_pool2x2(fmap):
+    H, W = fmap.shape
+    out = np.zeros((H//2, W//2))
+    for i in range(0, H-1, 2):
+        for j in range(0, W-1, 2):
+            out[i//2, j//2] = fmap[i:i+2, j:j+2].max()  # strongest in window
+    return out
+```
+
+::: {.callout-tip}
+**Intuition for stacking small filters:** two stacked 3×3 convs cover the same 5×5 receptive field as one 5×5 conv, but use fewer parameters — for $C$ channels in *and* out, $2(9C^2)$ weights vs $25C^2$ — and add an extra non-linearity in between. This is exactly why VGG chose deep stacks of 3×3 filters.
+:::
+
+**Q: Max pooling vs average pooling — when each?**
+**Max pooling** keeps the most salient activation, which suits detecting whether a feature is *present* (it dominates classification CNNs). **Average pooling** smooths and is gentler — modern nets use **global average pooling** at the very end to collapse each channel to one number, replacing big FC layers and cutting parameters.
+
+**Q: Does pooling have learnable parameters?**
+**No** — max and average pooling are fixed operations with zero weights. They only have hyperparameters (window size, stride). This is why some modern architectures drop pooling and use **strided convolutions** instead, getting downsampling *and* learnable weights in one step.
+
+**Q: How do you backprop through max pooling?**
+The gradient **routes only to the position that won the max** in each window; every other cell in that window gets zero. (You cache the *argmax* on the forward pass, then scatter the upstream gradient back to it.) **Average pooling** instead splits the gradient *evenly* across all cells in the window. Pooling has no weights, so there's nothing to update — it only passes gradient backward.
+
+**Q: What is the receptive field and why does it matter?**
+The **receptive field** is how much of the input image one deep neuron depends on. It must be large enough to cover the object you're classifying — a neuron with a 7×7 receptive field can't recognize a face spanning 100 pixels. You grow it by adding depth, increasing stride, pooling, or using dilated convs.
+
+**Q: How does pooling give translation invariance?**
+If a detected feature shifts by a pixel or two, **max pooling over a window still returns the same maximum**, so the pooled output is unchanged. Stacking pool layers compounds this, making the final prediction robust to small shifts — though not to large translations or rotations.
+
+## 12.5 — The end-to-end classifier and fighting overfitting
+
+A classification CNN is a **pipeline**: stack conv+activation blocks (with pooling or strided convs to downsample) to build a deep stack of feature maps, then **flatten** the final maps into a vector, feed it through one or two **fully-connected layers**, and end with a **softmax** that turns logits into class probabilities. The convs are the *feature extractor*; the FC head is the *classifier*.
+
+```{mermaid}
+flowchart LR
+  A["Input image"] --> B["Conv + ReLU"]
+  B --> C["Pool"]
+  C --> D["Conv + ReLU"]
+  D --> E["Pool"]
+  E --> F["Flatten"]
+  F --> G["FC layers"]
+  G --> H["Softmax → class probs"]
+```
+
+CNNs have millions of parameters, so **overfitting** is the constant enemy. Beyond the regularizers from Chapter 11 (dropout, weight decay), vision's signature weapon is **data augmentation**: cheaply manufacture new training images by transforming existing ones.
+
+**Q: What does a full CNN classifier look like end-to-end?**
+**Conv → activation → pool**, repeated to grow channels while shrinking the spatial grid, then **flatten → fully-connected → softmax**. The convolutional stack learns a hierarchy of features (edges → parts → objects); the flatten turns the final feature maps into a flat vector; the FC head plus softmax maps that to class probabilities. Modern nets often replace flatten+FC with **global average pooling** to slash parameters.
+
+**Q: Why do we flatten before the fully-connected head?**
+A fully-connected layer expects a **1D vector**, but conv layers output a 3D block (height × width × channels). **Flattening** unrolls that block into one long vector so the FC classifier can mix *all* features together for the final decision. The downside — it bakes in a fixed input size and adds many weights — is why global average pooling is now often preferred.
+
+**Q: How do you fight overfitting in a CNN?**
+The big lever is **data augmentation** — random **flips, crops, rotations, scaling, and color jitter** generate fresh-looking training images for free, teaching the model the invariances you want. Combine it with the general regularizers from Chapter 11: **dropout** in the FC head, **weight decay**, **early stopping**, and **batch norm** (which also regularizes mildly). More data, real or augmented, is almost always the best fix.
+
+**Q: What augmentations are safe to use?**
+It depends on the task's true invariances. **Horizontal flips, small rotations, crops, scaling, brightness/contrast jitter** are safe for most natural images. But beware label-breaking transforms — a **vertical flip** turns a 6 into a 9, and a horizontal flip mirrors text. Choose augmentations that preserve the label.
+
+**Q: Where does batch norm go in a CNN, and what's normalized?**
+In a CNN, batch norm is applied **per channel**: it computes mean and variance over the batch *and* all spatial positions of that channel, so each feature map gets one shared scale/shift. It's typically placed **after the conv and before the activation** (Conv → BN → ReLU). This stabilizes and speeds training; see Chapter 11 for the general mechanism.
+
+## 12.6 — Classic architectures: LeNet to ResNet
+
+The history of CNNs is a history of going *deeper* without breaking. Each landmark net solved the problem the previous one hit. Here is the lineage every interview expects you to know.
+
+```{mermaid}
+flowchart LR
+  A["LeNet-5 (1998)<br/>~60K params"] --> B["AlexNet (2012)<br/>ReLU + dropout + GPUs"]
+  B --> C["VGG (2014)<br/>deep stacks of 3x3"]
+  C --> D["GoogLeNet (2014)<br/>Inception modules"]
+  D --> E["ResNet (2015)<br/>skip connections"]
+```
+
+| Architecture | Year | Key idea | Depth |
+|---|---|---|---|
+| **LeNet-5** | 1998 | First working CNN; conv + pool + FC on digits | ~7 layers |
+| **AlexNet** | 2012 | ReLU, dropout, GPU training; won ImageNet | 8 layers |
+| **VGG** | 2014 | Uniform stacks of small 3×3 convs | 16–19 layers |
+| **GoogLeNet / Inception** | 2014 | Parallel multi-scale filters + 1×1 bottlenecks | 22 layers |
+| **ResNet** | 2015 | Residual/skip connections | 50–152+ layers |
+
+The turning point was **AlexNet (2012)**: it combined ReLU activations, dropout, data augmentation, and two GPUs to crush the ImageNet benchmark, kicking off the deep-learning boom. **VGG** showed that depth + tiny filters works. **Inception** ran several filter sizes in parallel so the net picks its own scale, using 1×1 convs to stay cheap. Then **ResNet** broke the depth barrier entirely.
+
+**The degradation problem.** You'd think stacking more layers always helps, but plain deep nets got *worse* — not from overfitting, but because gradients vanish and the optimizer can't even drive training error down. ResNet's fix: the **residual block**. Instead of learning a target mapping $H(x)$ directly, a block learns the **residual** $F(x) = H(x) - x$ and adds the input back via a **skip connection**:
+
+$$ y = F(x, W) + x $$
+
+If the best thing a layer can do is nothing, it just learns $F(x) \approx 0$ — easy. And the $+x$ gives gradients a **shortcut path** straight back, so they don't vanish through 100+ layers.
+
+<svg viewBox="0 0 320 150" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif" font-size="11">
+  <text x="10" y="80" fill="currentColor">x</text>
+  <g stroke="currentColor" fill="none">
+    <line x1="22" y1="76" x2="60" y2="76"/>
+    <rect x="60" y="56" width="70" height="40"/>
+    <rect x="150" y="56" width="70" height="40"/>
+    <line x1="130" y1="76" x2="150" y2="76"/>
+    <line x1="220" y1="76" x2="270" y2="76"/>
+    <circle cx="282" cy="76" r="12"/>
+    <path d="M40,76 C40,20 282,20 282,64" stroke-dasharray="4 3"/>
+  </g>
+  <text x="72" y="80" fill="currentColor">weight</text>
+  <text x="162" y="80" fill="currentColor">weight</text>
+  <text x="278" y="80" fill="currentColor">+</text>
+  <text x="298" y="80" fill="currentColor">y</text>
+  <text x="120" y="30" fill="currentColor">identity skip (x)</text>
+</svg>
+
+**Q: What problem did ResNet's skip connections solve — vanishing gradients or overfitting?**
+Primarily the **degradation problem**: very deep plain nets had *higher training error* than shallower ones, which isn't overfitting. Skip connections let gradients flow through the identity shortcut (easing **vanishing gradients**) and make it trivial to learn identity mappings, so adding layers never hurts. This unlocked 100+ layer networks.
+
+**Q: Why did AlexNet matter so much in 2012?**
+It was the first CNN to **win ImageNet by a huge margin**, proving deep learning beat hand-engineered features at scale. Its practical recipe — **ReLU** (faster training), **dropout** (regularization), **data augmentation**, and **GPU** training — became the template for everything after, igniting the modern deep-learning era.
+
+**Q: What's the core idea of an Inception module?**
+Run **multiple filter sizes (1×1, 3×3, 5×5) and pooling in parallel** on the same input, then concatenate the outputs — letting the network capture features at several scales at once. **1×1 convs** reduce channels first to keep the cost manageable.
+
+**Q: Why did VGG use only 3×3 filters?**
+Stacking small 3×3 filters reaches the same receptive field as larger ones with **fewer parameters and more non-linearities**, giving better representational power per parameter. VGG's uniform, simple design also made it a popular backbone for transfer learning.
+
+**Q: In a residual block, what exactly is being added back?**
+The block's input $x$ is added to the transformed output $F(x)$, giving $y = F(x) + x$. The layers therefore only need to learn the **residual** (the *change* from the input). When input and output channel counts differ, a **1×1 conv projection** on the skip path matches the dimensions.
+
+## 12.7 — Transfer learning and a teaser of Vision Transformers
+
+Training a big CNN from scratch needs millions of images and serious compute. **Transfer learning** sidesteps this: take a network already trained on ImageNet, keep its learned **backbone** (the conv layers that detect generic edges/textures/parts), and reuse it for your task. The early features are universal; you only need to teach the final layers your specific classes.
+
+Two modes: **feature extraction** freezes the backbone and trains only a new classifier head on top — fast, great when you have little data. **Fine-tuning** unfreezes some of the top conv layers and trains them at a *low* learning rate so you adapt them to your domain without wrecking the pretrained weights.
+
+```{mermaid}
+flowchart LR
+  A["Pretrained backbone<br/>(frozen conv layers)"] --> B["New classifier head<br/>(your N classes)"]
+  B --> C["Train on small dataset"]
+```
+
+::: {.callout-warning}
+**Gotcha:** when fine-tuning, use a **much smaller learning rate** than training from scratch (e.g. 10–100×). A large LR will blow away the carefully pretrained features in the first few steps — the whole point was to keep them.
+:::
+
+**Q: What's the difference between feature extraction and fine-tuning?**
+**Feature extraction** freezes all pretrained conv layers and trains only a new head — fast and ideal for small datasets. **Fine-tuning** also unfreezes some upper layers and continues training them at a low learning rate, adapting the features to your domain — better when you have more data and your domain differs from ImageNet.
+
+**Q: Why does transfer learning work at all?**
+Because **early CNN features are generic** — edges, colors, and textures are useful for almost any vision task. Only the later, task-specific layers need to change. So a backbone trained on ImageNet transfers its low-level vision knowledge to medical scans, satellite imagery, or your custom classes with little data.
+
+**Q: Which layers do you freeze, and why the early ones?**
+You typically **freeze the early layers and fine-tune the later ones**. Early layers learn universal low-level features that rarely need to change; later layers learn dataset-specific, abstract concepts that benefit most from adapting to your task.
+
+**Q: Beyond classification, what else do CNNs do?**
+The same backbone powers **object detection** (R-CNN family, **YOLO** — predict boxes *and* classes) and **semantic segmentation** (**U-Net**, FCN — classify *every pixel*, using an encoder-decoder that upsamples feature maps back to full resolution). Classification is just the entry point; the conv feature extractor is reused everywhere in vision.
+
+**Q: How do CNNs compare to Vision Transformers (ViT)?**
+CNNs have **built-in inductive biases** (locality, translation equivariance) so they learn efficiently from modest data. **ViTs** split an image into patches and treat them as a token sequence fed to a **Transformer** — they have weaker built-in biases, so they need *more* data or pretraining, but scale better and capture global relationships from layer one. We cover the Transformer machinery itself in a later chapter; today the two are often hybridized.
+
+## 12.x — Key takeaways
+
+- Convolution beats FC for images via **local connectivity, parameter sharing, and translation equivariance** — far fewer weights, position-independent features.
+- Output size: $O = \lfloor (W - K + 2P)/S \rfloor + 1$. Conv params $= (K^2 C_{in} + 1) C_{out}$, **independent of image size**.
+- A filter spans **all input channels** and outputs one feature map; stack filters to grow channels while spatial size shrinks. **1×1**, **depthwise-separable**, and **dilated** convs trade cost for reach.
+- **Pooling** (max/avg) downsamples and adds small-shift invariance with **no learnable parameters**; backprop routes gradient only to the **argmax** (max-pool) or splits it evenly (avg-pool); the **receptive field** grows with depth.
+- End-to-end classifier: **conv → activation → pool → flatten → FC → softmax**; fight overfitting with **data augmentation** (flips, crops, color jitter), dropout, and **per-channel batch norm** (Conv → BN → ReLU).
+- Architecture lineage: **LeNet (1998) → AlexNet (2012 boom) → VGG → Inception → ResNet (2015)**; **skip connections** solved the **degradation problem** and enabled 100+ layer nets.
+- **Transfer learning** reuses a pretrained backbone — **feature extraction** (freeze) for little data, **fine-tuning** (low LR) when you have more; the same backbone also drives **detection** (YOLO) and **segmentation** (U-Net).
+- **Vision Transformers** trade CNNs' built-in spatial biases for scale and global context — the bridge into the Transformer era covered in a later chapter.
+
+------------------------------------------------------------------------
+
+[📖 All chapters](../interview-guide.html)  &nbsp;|&nbsp;  [← 11 · ⚙️ Training Deep Networks](ch11.html)  &nbsp;|&nbsp;  [13 · 🔁 Sequence Models →](ch13.html)

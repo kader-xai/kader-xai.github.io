@@ -1,0 +1,397 @@
+---
+title: "Chapter 01 — 🧮 Linear Algebra — the language of data"
+page-layout: full
+toc: true
+toc-location: left
+toc-title: "In this chapter"
+toc-depth: 2
+toc-expand: true
+---
+
+[📖 All chapters](../interview-guide.html)  &nbsp;|&nbsp;  [02 · 📉 Calculus & Optimization →](ch02.html)
+
+<details class="ig-jump">
+<summary>📚 Jump to any chapter</summary>
+<p class="ig-era">🧮 Mathematical Foundations</p>
+<ul>
+<li><a href="ch01.html">01 &middot; 🧮 Linear Algebra — the language of data</a></li>
+<li><a href="ch02.html">02 &middot; 📉 Calculus & Optimization — how models learn</a></li>
+<li><a href="ch03.html">03 &middot; 🎲 Probability & Statistics — reasoning under uncertainty</a></li>
+<li><a href="ch04.html">04 &middot; 🔥 Information Theory & Loss Functions — measuring surprise and error</a></li>
+</ul>
+<p class="ig-era">🧩 Classical Machine Learning</p>
+<ul>
+<li><a href="ch05.html">05 &middot; 🧩 Core ML Concepts — the ground rules</a></li>
+<li><a href="ch06.html">06 &middot; 📐 Classical Supervised Algorithms — the workhorses</a></li>
+<li><a href="ch07.html">07 &middot; 🌲 Ensembles & Boosting — how to win on tabular data</a></li>
+<li><a href="ch08.html">08 &middot; 🗺️ Unsupervised Learning & Dimensionality Reduction — structure without labels</a></li>
+<li><a href="ch09.html">09 &middot; 🎯 Model Evaluation & Validation — knowing if it actually works</a></li>
+</ul>
+<p class="ig-era">🧠 Deep Learning</p>
+<ul>
+<li><a href="ch10.html">10 &middot; 🧠 Neural Network Fundamentals — the building block</a></li>
+<li><a href="ch11.html">11 &middot; ⚙️ Training Deep Networks — making deep nets actually train</a></li>
+<li><a href="ch12.html">12 &middot; 🖼️ Convolutional Neural Networks — the vision branch</a></li>
+<li><a href="ch13.html">13 &middot; 🔁 Sequence Models — RNNs, LSTMs and the bottleneck</a></li>
+</ul>
+<p class="ig-era">⚡ The Transformer Era</p>
+<ul>
+<li><a href="ch14.html">14 &middot; 🔤 Word Embeddings — giving words meaning as vectors</a></li>
+<li><a href="ch15.html">15 &middot; ⚡ Attention & the Transformer — the architecture that changed everything</a></li>
+<li><a href="ch16.html">16 &middot; 🧱 Tokenization, Pretraining & Model Families</a></li>
+<li><a href="ch17.html">17 &middot; 📈 Modern LLMs & Scaling — bigger, and suddenly capable</a></li>
+</ul>
+<p class="ig-era">💬 Using & Adapting LLMs</p>
+<ul>
+<li><a href="ch18.html">18 &middot; 💬 Prompting & In-Context Learning — programming models with words</a></li>
+<li><a href="ch19.html">19 &middot; 🎚️ Fine-Tuning & Alignment — specializing and aligning models</a></li>
+<li><a href="ch20.html">20 &middot; 📚 Retrieval-Augmented Generation (RAG) — giving the model an open book</a></li>
+<li><a href="ch21.html">21 &middot; 🚀 Inference, Decoding & Serving — running LLMs efficiently</a></li>
+</ul>
+<p class="ig-era">🤖 The Agentic Frontier</p>
+<ul>
+<li><a href="ch22.html">22 &middot; 🤖 Agents, Tools & Loops — the latest frontier</a></li>
+<li><a href="ch23.html">23 &middot; 🛡️ Evaluation, Safety & Guardrails — making LLM systems trustworthy</a></li>
+<li><a href="ch24.html">24 &middot; 🔧 MLOps & LLMOps — shipping and operating models in production</a></li>
+</ul>
+<p class="ig-era">🛠️ The Practical Toolkit</p>
+<ul>
+<li><a href="ch25.html">25 &middot; 🛠️ Practical Toolkit I — Modeling & Vision Libraries</a></li>
+<li><a href="ch26.html">26 &middot; 🧰 Practical Toolkit II — LLM Frameworks, Orchestration & Vector Stores</a></li>
+<li><a href="ch27.html">27 &middot; ⚙️ Practical Toolkit III — Serving, Apps & MLOps Tooling</a></li>
+</ul>
+<p class="ig-era">☁️ Cloud AI Platforms</p>
+<ul>
+<li><a href="ch28.html">28 &middot; ☁️ Cloud AI Platforms — deploying foundation models on the hyperscalers</a></li>
+</ul>
+</details>
+
+------------------------------------------------------------------------
+
+Before a model can learn anything, its data and its knobs have to live somewhere — and that "somewhere" is almost always a vector or a matrix. This is the first content chapter of the handbook, so we start here on purpose: every later chapter assumes you can read arrays, multiply them, and reason about their shapes. This chapter builds that vocabulary — how numbers, images, and words become arrays, and what it means to multiply, project, decompose, and transform them — and it is the bedrock under Chapter 02's calculus, where we ask how those numbers should *change* to make a model better.
+
+::: {.callout-note appearance="simple"}
+📍 **Timeline:** 1850s–1900s: the vectors, matrices, and eigen-theory (Cayley, Sylvester, Hilbert) that every modern model is silently built on.
+:::
+
+## 1.1 — Scalars, vectors, matrices, tensors
+
+Think of these as containers that hold more and more numbers. A single price is one number. A list of features for one house is a row of numbers. A whole spreadsheet of houses is a grid. A batch of color images is a four-dimensional stack. Same idea, more axes.
+
+| Object | Axes (rank) | Example in ML |
+|---|---|---|
+| Scalar | 0 | a learning rate, a single loss value |
+| Vector | 1 | one data point's features, one word embedding |
+| Matrix | 2 | a dataset (rows = samples, cols = features); a weight layer |
+| Tensor | 3+ | a batch of images $(N, H, W, C)$; attention scores |
+
+The mental model: **a dataset is a matrix** $X$ of shape (samples × features), and **a model's parameters are also matrices** (weight matrices) and vectors (biases). Learning means nudging those parameter numbers.
+
+**Q: What is the difference between a vector and a matrix in one sentence?**
+A **vector** is a 1-D ordered list of numbers (one axis); a **matrix** is a 2-D grid of numbers (two axes, rows and columns). In ML a vector usually represents one example or one set of weights, and a matrix represents a whole batch of examples or a whole layer's weights.
+
+**Q: What does "tensor" mean in deep learning, and is it the math definition?**
+In frameworks like PyTorch, a **tensor** just means an n-dimensional array — a container with any number of axes. This is looser than the strict mathematical/physics definition of a tensor (which carries transformation rules); in practice "tensor" simply means "multi-dimensional array of numbers".
+
+**Q: How is a batch of RGB images stored?**
+As a rank-4 tensor, commonly $(N, C, H, W)$ or $(N, H, W, C)$: $N$ images, $C$ color channels, $H$ rows of pixels, $W$ columns. The first axis is the **batch dimension**, which is why models process many examples at once.
+
+**Q: Why do we care about the "shape" of an array?**
+Because every operation (matmul, broadcasting, reshaping) has shape rules, and **most bugs in ML code are shape mismatches**. Knowing shapes lets you predict whether two arrays can combine and what comes out.
+
+**Q: What is broadcasting?**
+**Broadcasting** is NumPy's rule for combining arrays of *different but compatible* shapes without writing a loop — the smaller array is virtually "stretched" along the missing or size-1 axes. Two axes are compatible if they are equal or one of them is 1. Classic example: adding a bias vector to every row of a batch.
+```python
+X = np.random.randn(32, 4)   # 32 examples, 4 features
+b = np.array([1, 2, 3, 4])   # shape (4,)
+Y = X + b                    # b is broadcast across all 32 rows -> (32, 4)
+```
+
+## 1.2 — The dot product: similarity and projection
+
+The dot product is how we turn "how aligned are these two vectors?" into a single number. Intuitively, it answers: *if I shine vector $b$ onto the direction of vector $a$, how much of it lands there?* When two vectors point the same way the dot product is large and positive; when perpendicular it is zero; when opposite it is negative.
+
+For two vectors $a, b \in \mathbb{R}^n$:
+
+$$a \cdot b = \sum_{i=1}^{n} a_i b_i = \lVert a \rVert \, \lVert b \rVert \cos\theta$$
+
+That second form is the key: the dot product *is* the lengths times the cosine of the angle between them. So it bundles both magnitude and direction.
+
+<svg viewBox="0 0 320 200" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif" font-size="11">
+  <line x1="20" y1="170" x2="300" y2="170" stroke="#888" stroke-width="1"/>
+  <line x1="20" y1="170" x2="20" y2="20" stroke="#888" stroke-width="1"/>
+  <!-- vector a (along a slanted direction) -->
+  <line x1="20" y1="170" x2="260" y2="60" stroke="#2a7" stroke-width="2.5"/>
+  <text x="265" y="58" fill="#2a7">a</text>
+  <!-- vector b -->
+  <line x1="20" y1="170" x2="150" y2="50" stroke="#27c" stroke-width="2.5"/>
+  <text x="150" y="44" fill="#27c">b</text>
+  <!-- projection of b onto a -->
+  <line x1="20" y1="170" x2="172" y2="100" stroke="#c63" stroke-width="3"/>
+  <text x="120" y="135" fill="#c63">proj of b onto a</text>
+  <!-- dashed drop line -->
+  <line x1="150" y1="50" x2="172" y2="100" stroke="#999" stroke-width="1" stroke-dasharray="4 3"/>
+  <!-- angle arc between a and b -->
+  <path d="M 60 145 A 45 45 0 0 0 48 130" fill="none" stroke="#555" stroke-width="1"/>
+  <text x="64" y="138" fill="#555">θ</text>
+</svg>
+
+::: {.callout-tip}
+**Intuition:** the dot product = "shadow length × the length of the thing it falls on". If $a$ is a unit vector (length 1), then $a \cdot b$ is literally how far $b$ reaches in $a$'s direction — a pure projection.
+:::
+
+**Q: What does a dot product of zero mean?**
+The two vectors are **orthogonal** (perpendicular), because $\cos 90° = 0$. In ML this is the basis of "uncorrelated/independent directions" — e.g. principal components are mutually orthogonal.
+
+**Q: What is cosine similarity and why is it preferred over raw dot product for comparing embeddings?**
+**Cosine similarity** strips out magnitude and keeps only direction:
+$$\cos\theta = \frac{a \cdot b}{\lVert a \rVert \, \lVert b \rVert}$$
+It ranges from $-1$ to $1$. It is preferred for text/embedding comparison because a longer vector (e.g. a longer document) shouldn't automatically count as "more similar" — we care about *direction* (meaning), not length. (Embeddings get their own treatment in Chapter 14.)
+
+**Q: Show the dot product from scratch.**
+```python
+import numpy as np
+a = np.array([1.0, 2.0, 3.0])
+b = np.array([4.0, 5.0, 6.0])
+dot = sum(ai * bi for ai, bi in zip(a, b))  # 1*4 + 2*5 + 3*6 = 32
+cos = dot / (np.linalg.norm(a) * np.linalg.norm(b))  # angle-only similarity
+```
+
+**Q: How does the dot product show up inside a single neuron?**
+A neuron computes $w \cdot x + b$ — a dot product of its weight vector with the input, plus a bias. So **one neuron is asking "how aligned is this input with my learned direction?"** before applying a nonlinearity.
+
+## 1.3 — Matrix multiplication as a transformation
+
+Don't picture matrix multiplication as a bookkeeping rule — picture it as **applying a function to data**. A matrix $W$ takes a vector $x$ and *moves it*: rotating, stretching, squishing, or projecting it into a new space. Each output number is a dot product of one row of $W$ with $x$.
+
+For $W$ of shape $(m, n)$ and $x$ of shape $(n,)$, the output $Wx$ has shape $(m,)$. The shapes must "kiss in the middle":
+
+```
+   W        @        x       =     out
+(m × n)        (n × 1)            (m × 1)
+      └──── must match ────┘
+```
+
+The inner dimensions must be equal; the outer dimensions become the result's shape. This is the single most common shape rule in all of ML.
+
+Here is the whole rule on the smallest possible example — a $2\times2$ times a $2\times2$, where each output entry is (row of $A$) · (column of $B$):
+
+$$
+\begin{bmatrix} 1 & 2 \\ 3 & 4 \end{bmatrix}
+\begin{bmatrix} 5 & 6 \\ 7 & 8 \end{bmatrix}
+=
+\begin{bmatrix} 1\cdot5 + 2\cdot7 & 1\cdot6 + 2\cdot8 \\ 3\cdot5 + 4\cdot7 & 3\cdot6 + 4\cdot8 \end{bmatrix}
+=
+\begin{bmatrix} 19 & 22 \\ 43 & 50 \end{bmatrix}
+$$
+
+The top-left $19$ is row 1 of the left matrix dotted with column 1 of the right matrix ($1\cdot5 + 2\cdot7$). Every entry is just one dot product.
+
+```python
+import numpy as np
+W = np.random.randn(3, 4)   # layer: 4 inputs -> 3 outputs
+x = np.random.randn(4)      # one input vector
+out = W @ x                 # shape (3,): each entry = row of W dotted with x
+# manual check of first output:
+assert np.allclose(out[0], np.dot(W[0], x))
+```
+
+::: {.callout-warning}
+**Interview gotcha:** matrix multiplication is **not commutative** — $AB \neq BA$ in general (often the shapes don't even allow both). Always track shapes left to right.
+:::
+
+**Q: Why must inner dimensions match in $A B$?**
+Because each output entry is a dot product between a **row of $A$** and a **column of $B$**, and a dot product needs equal-length vectors. So $A$'s column count must equal $B$'s row count: $(m \times n)(n \times p) \to (m \times p)$.
+
+**Q: What is the geometric meaning of multiplying a vector by a matrix?**
+It's a **linear transformation**: the matrix maps the vector to a new location by some combination of rotation, scaling, shearing, and projection. The columns of the matrix tell you where the original basis vectors land.
+
+**Q: What's the difference between `np.dot`, `@`, and `einsum`?**
+For 2-D arrays they all do matrix multiply: `A @ B` is the readable operator form, `np.dot(A, B)` is the older function form, and `np.einsum("ij,jk->ik", A, B)` spells the index contraction out explicitly. Use `@` by default; reach for **`einsum`** when you need batched or higher-order contractions (e.g. attention scores) where naming the axes is clearer than reshaping. Note `*` is **elementwise** (Hadamard), not matmul — a classic bug.
+
+**Q: In a neural network layer, what do the rows of the weight matrix represent?**
+Each **row is one neuron's weight vector**, i.e. one learned direction/feature detector. With weights stored as $(\text{out}, \text{in})$, multiplying $Wx$ runs all neurons at once — every row dot-products with the input to produce that neuron's pre-activation.
+
+**Q: How does batching change the shapes?**
+You stack $N$ examples as rows into $X$ of shape $(N, n)$. With weights stored as $(\text{out}, \text{in}) = (m, n)$, you compute $X W^\top$ (shapes $(N, n)(n, m) \to (N, m)$), so the same weights transform every example in one matmul. We keep the convention **rows = neurons** throughout: a single vector uses $Wx$, a batch uses $XW^\top$ — same weights, just transposed to line the shapes up. This is why GPUs love ML: it's one big matrix multiply, not a Python loop.
+
+## 1.4 — Transpose, identity, inverse, determinant
+
+These four operations are the "edit buttons" on a matrix. **Transpose** flips it across its diagonal. The **identity** is the do-nothing matrix. The **inverse** is the undo button. The **determinant** measures how much a matrix stretches or squishes space.
+
+- **Transpose** $A^\top$: swap rows and columns, so $(A^\top)_{ij} = A_{ji}$.
+- **Identity** $I$: 1's on the diagonal, 0's elsewhere; $IA = A$.
+- **Inverse** $A^{-1}$: the matrix with $A^{-1}A = I$ (only square, non-degenerate matrices have one).
+- **Determinant** $\det(A)$: a single number; the volume-scaling factor of the transformation.
+
+::: {.callout-tip}
+**Intuition for the determinant:** apply $A$ to a unit square. If $\det(A)=3$, areas triple. If $\det(A)=0$, the square got flattened onto a line — the transformation **destroyed a dimension** and is not reversible.
+:::
+
+**Q: What does it mean if $\det(A) = 0$?**
+The matrix is **singular** (non-invertible): it collapses space onto a lower dimension, so information is lost and there's no unique way to undo it. Its columns are linearly dependent and its rank is less than full.
+
+**Q: What does a *negative* determinant mean?**
+The transformation **flips orientation** — it includes a reflection (like turning a left hand into a right hand). The *magnitude* still gives the volume scaling: $\det(A)=-2$ doubles area *and* mirrors it. Sign = orientation, absolute value = scale.
+
+**Q: Why do we rarely actually compute a matrix inverse in ML?**
+Because explicit inversion is **expensive ($O(n^3)$) and numerically unstable**. Instead we solve systems directly (e.g. `np.linalg.solve`) or use iterative optimization (gradient descent, Chapter 02). The inverse is a great concept, a poor thing to literally compute at scale.
+
+**Q: What is a symmetric matrix and why does it matter?**
+A matrix where $A = A^\top$. Covariance matrices and $X^\top X$ are symmetric, and symmetric matrices have **real eigenvalues and orthogonal eigenvectors** — which makes PCA and SVD behave nicely (next sections).
+
+**Q: What is an orthogonal (orthonormal) matrix?**
+A square matrix $Q$ whose columns are mutually orthogonal **unit** vectors, so $Q^\top Q = I$ — which means its **inverse is just its transpose** ($Q^{-1} = Q^\top$). Geometrically it's a pure **rotation (or reflection)**: it preserves lengths and angles, never stretching space. This ties transpose, inverse, and SVD together — the $U$ and $V$ in SVD are exactly such matrices.
+
+**Q: What is the transpose used for in practice?**
+Aligning shapes for matmul (e.g. $X W^\top$), forming **Gram matrices** $X^\top X$ (feature correlations), and the math of backpropagation, where gradients flow back through $W^\top$.
+
+## 1.5 — Norms, distance, linear independence, rank
+
+A **norm** measures the "size" of a vector — how long it is. **Distance** is just the norm of the difference between two points. **Linear independence** and **rank** answer a deeper question: *how many genuinely different directions does this data actually span?*
+
+The two norms you must know:
+
+$$\lVert x \rVert_1 = \sum_i |x_i| \qquad \lVert x \rVert_2 = \sqrt{\sum_i x_i^2}$$
+
+$L_2$ is ordinary straight-line (Euclidean) length. $L_1$ is "city-block" distance — how far you'd walk on a grid of streets.
+
+| | $L_1$ (Manhattan) | $L_2$ (Euclidean) |
+|---|---|---|
+| Formula | $\sum_i \lvert x_i \rvert$ | $\sqrt{\sum_i x_i^2}$ |
+| Shape of unit ball | diamond | circle |
+| As regularizer | pushes weights to **exactly 0** (sparse) | shrinks weights smoothly |
+| Sensitive to outliers | less | more (squares them) |
+
+**Q: What's the practical difference between L1 and L2 regularization?**
+**L1 (Lasso)** tends to drive some weights to exactly zero, producing **sparse** models that effectively do feature selection. **L2 (Ridge)** shrinks all weights toward zero smoothly but rarely to exactly zero. The diamond-vs-circle shape of their constraint regions is *why* L1 hits the axes (zeros) and L2 doesn't. (Regularization details live in Chapter 05.)
+
+**Q: What is linear independence?**
+A set of vectors is **linearly independent** if none of them can be written as a combination of the others — each one adds a genuinely new direction. If one vector is, say, $2\times$ another (or any weighted sum), they're **dependent** and redundant.
+
+**Q: What is the rank of a matrix, intuitively?**
+The **rank** is the number of linearly independent rows (equivalently columns) — the true number of dimensions the data spans. A $1000 \times 50$ data matrix with rank 10 means the 50 features really only carry 10 independent directions of information; the rest are redundant.
+
+**Q: Why does rank matter in ML?**
+Low rank signals **redundant/correlated features** — a chance to compress (dimensionality reduction, Chapter 08) and a warning sign for instability. Rank is the bridge to eigen/SVD methods next.
+
+**Q: Why is $X^\top X$ invertible only when $X$ has full column rank?**
+$X^\top X$ is what you must invert in the closed-form linear-regression solution $(X^\top X)^{-1}X^\top y$. It turns out $\text{rank}(X^\top X) = \text{rank}(X)$, so if two features are perfectly correlated (linearly dependent columns), $X$ is **rank-deficient**, $X^\top X$ is singular, and the inverse doesn't exist. This is exactly what **multicollinearity** is — and why regularization (adding $\lambda I$) rescues it by making the matrix full-rank again.
+
+**Q: How do you compute Euclidean distance between two points?**
+It's the $L_2$ norm of their difference: $d(a,b) = \lVert a - b \rVert_2 = \sqrt{\sum_i (a_i - b_i)^2}$. This is the distance metric behind k-NN and k-means.
+
+## 1.6 — Eigenvalues, eigenvectors, and SVD
+
+Here's the payoff. When a matrix transforms space, **most vectors get knocked off their original direction**. But a few special vectors only get stretched or shrunk, never rotated — those are the **eigenvectors**, and the stretch factor is the **eigenvalue**. They reveal the "natural axes" of a transformation.
+
+Formally, $v$ is an eigenvector of $A$ with eigenvalue $\lambda$ if:
+
+$$A v = \lambda v$$
+
+Applying $A$ to $v$ is the same as just scaling $v$ by $\lambda$ — no change in direction.
+
+<svg viewBox="0 0 320 180" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif" font-size="11">
+  <line x1="20" y1="150" x2="300" y2="150" stroke="#888"/>
+  <line x1="20" y1="150" x2="20" y2="15" stroke="#888"/>
+  <!-- eigenvector direction -->
+  <line x1="20" y1="150" x2="120" y2="90" stroke="#27c" stroke-width="2" stroke-dasharray="4 3"/>
+  <text x="124" y="88" fill="#27c">v</text>
+  <!-- Av: same direction, longer -->
+  <line x1="20" y1="150" x2="220" y2="30" stroke="#c33" stroke-width="2.5"/>
+  <text x="224" y="28" fill="#c33">Av = λv</text>
+  <text x="60" y="130" fill="#555">same line, just stretched (λ&gt;1)</text>
+</svg>
+
+**Singular Value Decomposition (SVD)** generalizes this to *any* matrix (not just square ones). It factors a matrix into three: a rotation, a scaling, and another rotation.
+
+$$A = U \Sigma V^\top$$
+
+$U$ and $V$ are **orthonormal** (the rotations from 1.4); $\Sigma$ is diagonal with the **singular values** (importance weights) in decreasing order. Keep only the top few singular values and you get the best low-rank approximation of $A$ — that single fact powers PCA, compression, embeddings, and recommender systems.
+
+::: {.callout-tip}
+**Intuition:** SVD sorts a matrix's "directions" from most to least important. Throwing away the smallest ones loses the least information — that's lossy compression and dimensionality reduction in one move.
+:::
+
+**Q: In plain words, what is an eigenvector?**
+A direction that a matrix **leaves pointing the same way**, only scaling it. If a transformation is "the way data is shaped", the eigenvectors are its natural axes and the eigenvalues say how spread the data is along each.
+
+**Q: How do eigenvectors connect to PCA?**
+PCA finds the directions of **maximum variance** in data, and those directions are exactly the **eigenvectors of the covariance matrix** — with the largest eigenvalue marking the direction of greatest spread. Keeping the top-$k$ eigenvectors keeps the most information in fewer dimensions. (Full PCA mechanics: Chapter 08.)
+
+**Q: What's the difference between eigendecomposition and SVD, and when do they coincide?**
+Eigendecomposition needs a **square** (and well-behaved) matrix; **SVD works on any $m \times n$ matrix** and is more numerically stable. They **coincide for a symmetric positive-semidefinite matrix**: there the SVD *is* the eigendecomposition, with the singular values equal to the eigenvalues ($U = V$ = the eigenvectors). This is exactly the covariance-matrix case PCA relies on.
+
+**Q: What are singular values and why are they sorted?**
+**Singular values** (the diagonal of $\Sigma$) measure how much the matrix stretches space along each principal direction — they're the "importance scores". They're sorted descending so you can **truncate**: keep the top-$k$ for the best rank-$k$ approximation (the heart of compression and latent-factor recommenders).
+
+**Q: What is a positive (semi-)definite matrix?**
+A symmetric matrix is **positive semi-definite (PSD)** if $x^\top A x \ge 0$ for every vector $x$ — equivalently, **all its eigenvalues are $\ge 0$**. Intuitively it never flips a vector to point "backwards" against itself. **Covariance matrices and $X^\top X$ are always PSD** (a variance can't be negative), which is why their eigenvalues are non-negative and SVD = eigendecomposition applies. PSD also matters in optimization: a PSD Hessian means the loss surface is bowl-shaped (convex) there.
+
+**Q: Where does SVD show up in real ML systems?**
+**PCA** (dimensionality reduction), **image/data compression** (drop small singular values), **recommender systems** (latent-factor matrix factorization of a user–item matrix), **LSA** for text, and **low-rank adaptation (LoRA)** for fine-tuning LLMs (Chapter 19). It is one of the most reused ideas in the field.
+
+**Q: Why are top singular values "the most information"?**
+Because $A \approx \sum_i \sigma_i u_i v_i^\top$ and the largest $\sigma_i$ contribute the most to reconstructing $A$. Dropping tiny $\sigma_i$ changes $A$ the least (formally, it's the optimal low-rank approximation by the Eckart–Young theorem).
+
+## 1.7 — Why a neural net is just stacked matmuls + nonlinearity
+
+Strip away the hype and a neural network is **alternating linear transformations and simple nonlinear squashing**. Each layer multiplies by a weight matrix (a transformation), adds a bias, then bends the result with a nonlinear function. Stacking these lets the network compose simple maps into very expressive ones.
+
+A two-layer network is literally:
+
+$$\hat{y} = f_2\big(W_2 \, f_1(W_1 x + b_1) + b_2\big)$$
+
+The data flows one layer at a time — transform, bend, transform, bend:
+
+```{mermaid}
+flowchart LR
+  x["x (input)"] --> L1["W1·x + b1"]
+  L1 --> A1["ReLU"]
+  A1 --> L2["W2·h + b2"]
+  L2 --> yhat["ŷ (output)"]
+```
+
+```python
+import numpy as np
+def relu(z): return np.maximum(0, z)   # the nonlinearity
+
+x  = np.random.randn(4)                # one input vector (4 features)
+W1, b1 = np.random.randn(8, 4), np.zeros(8)   # layer 1: 4 -> 8, weights (out, in)
+W2, b2 = np.random.randn(3, 8), np.zeros(3)   # layer 2: 8 -> 3
+
+h   = relu(W1 @ x + b1)   # transform, then bend  (single vector -> W @ x)
+out = W2 @ h + b2         # final linear map -> 3 outputs
+```
+
+Note the convention from 1.3: for a **single** input vector we write $W x$ with weights stored as $(\text{out}, \text{in})$; for a **batch** $X$ of shape $(N, \text{in})$ we'd write $X W^\top$. Same weights — the transpose only shows up to make the batched shapes line up.
+
+::: {.callout-warning}
+**Interview gotcha:** Why do we need the nonlinearity at all? Because **stacking linear maps just gives another linear map** — $W_2(W_1 x) = (W_2 W_1)x$ collapses to a single matrix. Without a nonlinearity between them, a 100-layer network is no more powerful than one layer. The nonlinearity is what unlocks depth. (Activations and depth: Chapters 10–11.)
+:::
+
+**Q: If layers are matrix multiplications, what is "learning"?**
+Learning is **adjusting the numbers inside the weight matrices and bias vectors** so the network's output transformation matches the data. *How* we adjust them — gradients and optimization — is exactly Chapter 02.
+
+**Q: Why can two stacked linear layers be replaced by one?**
+Because matrix multiplication is associative: $W_2(W_1 x) = (W_2 W_1)x$, and $W_2 W_1$ is just another single matrix. So linear depth is an illusion — you need nonlinearity to gain real expressive power.
+
+**Q: Where do the heaviest compute costs in a neural net come from?**
+The **matrix multiplications** ($Wx$ and batched $XW^\top$). That's why hardware (GPUs/TPUs) is built to do massive parallel matmuls, and why everything in this chapter — shapes, dot products, transposes — directly governs model speed.
+
+**Q: How does the dot product reappear at every layer?**
+Every entry of every layer's output is a dot product of a weight row with the layer's input. So the whole network is **billions of dot products** organized into matrices — the chapter's first concept scaled up.
+
+## 1.8 — Key takeaways
+
+- **Data and parameters are arrays:** scalars, vectors, matrices, and tensors differ only in how many axes they have; a dataset is a (samples × features) matrix and weights are matrices too. Watch shapes — **broadcasting** lets compatible shapes (equal, or one is 1) combine without loops.
+- **The dot product measures alignment** — it equals $\lVert a\rVert\lVert b\rVert\cos\theta$; normalize it and you get **cosine similarity**, the standard for comparing embeddings.
+- **Matrix multiplication is a transformation,** not just arithmetic; inner dimensions must match, each output entry is one row·column dot product, it's not commutative, and shape mismatches are the #1 source of ML bugs.
+- **Determinant = volume scaling;** its *sign* is orientation (negative = reflection), zero means singular (non-invertible, rank-deficient). **Orthonormal** matrices ($Q^\top Q = I$, so $Q^{-1}=Q^\top$) are pure rotations. We rarely invert matrices in practice — we solve or optimize instead.
+- **Norms measure size/distance;** $L_1$ induces sparsity, $L_2$ shrinks smoothly. **Rank** is the count of truly independent directions; $X^\top X$ is invertible only at full column rank (multicollinearity breaks it).
+- **Eigenvectors are directions a matrix only stretches** ($Av=\lambda v$); **SVD** ($A=U\Sigma V^\top$) generalizes this to any matrix and underpins PCA, compression, recommenders, and LoRA. For a symmetric **PSD** matrix (all eigenvalues $\ge 0$, like covariance and $X^\top X$), SVD = eigendecomposition.
+- **A neural network is stacked matmuls plus nonlinearities** — without the nonlinearity, all the layers collapse into one. Learning means tuning the numbers in those matrices (see Chapter 02).
+
+------------------------------------------------------------------------
+
+[📖 All chapters](../interview-guide.html)  &nbsp;|&nbsp;  [02 · 📉 Calculus & Optimization →](ch02.html)

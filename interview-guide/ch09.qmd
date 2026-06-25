@@ -1,0 +1,361 @@
+---
+title: "Chapter 09 — 🎯 Model Evaluation & Validation — knowing if it actually works"
+page-layout: full
+toc: true
+toc-location: left
+toc-title: "In this chapter"
+toc-depth: 2
+toc-expand: true
+---
+
+[📖 All chapters](../interview-guide.html)  &nbsp;|&nbsp;  [← 08 · 🗺️ Unsupervised Learning & Dimensionality Reduction](ch08.html)  &nbsp;|&nbsp;  [10 · 🧠 Neural Network Fundamentals →](ch10.html)
+
+<details class="ig-jump">
+<summary>📚 Jump to any chapter</summary>
+<p class="ig-era">🧮 Mathematical Foundations</p>
+<ul>
+<li><a href="ch01.html">01 &middot; 🧮 Linear Algebra — the language of data</a></li>
+<li><a href="ch02.html">02 &middot; 📉 Calculus & Optimization — how models learn</a></li>
+<li><a href="ch03.html">03 &middot; 🎲 Probability & Statistics — reasoning under uncertainty</a></li>
+<li><a href="ch04.html">04 &middot; 🔥 Information Theory & Loss Functions — measuring surprise and error</a></li>
+</ul>
+<p class="ig-era">🧩 Classical Machine Learning</p>
+<ul>
+<li><a href="ch05.html">05 &middot; 🧩 Core ML Concepts — the ground rules</a></li>
+<li><a href="ch06.html">06 &middot; 📐 Classical Supervised Algorithms — the workhorses</a></li>
+<li><a href="ch07.html">07 &middot; 🌲 Ensembles & Boosting — how to win on tabular data</a></li>
+<li><a href="ch08.html">08 &middot; 🗺️ Unsupervised Learning & Dimensionality Reduction — structure without labels</a></li>
+<li><a href="ch09.html">09 &middot; 🎯 Model Evaluation & Validation — knowing if it actually works</a></li>
+</ul>
+<p class="ig-era">🧠 Deep Learning</p>
+<ul>
+<li><a href="ch10.html">10 &middot; 🧠 Neural Network Fundamentals — the building block</a></li>
+<li><a href="ch11.html">11 &middot; ⚙️ Training Deep Networks — making deep nets actually train</a></li>
+<li><a href="ch12.html">12 &middot; 🖼️ Convolutional Neural Networks — the vision branch</a></li>
+<li><a href="ch13.html">13 &middot; 🔁 Sequence Models — RNNs, LSTMs and the bottleneck</a></li>
+</ul>
+<p class="ig-era">⚡ The Transformer Era</p>
+<ul>
+<li><a href="ch14.html">14 &middot; 🔤 Word Embeddings — giving words meaning as vectors</a></li>
+<li><a href="ch15.html">15 &middot; ⚡ Attention & the Transformer — the architecture that changed everything</a></li>
+<li><a href="ch16.html">16 &middot; 🧱 Tokenization, Pretraining & Model Families</a></li>
+<li><a href="ch17.html">17 &middot; 📈 Modern LLMs & Scaling — bigger, and suddenly capable</a></li>
+</ul>
+<p class="ig-era">💬 Using & Adapting LLMs</p>
+<ul>
+<li><a href="ch18.html">18 &middot; 💬 Prompting & In-Context Learning — programming models with words</a></li>
+<li><a href="ch19.html">19 &middot; 🎚️ Fine-Tuning & Alignment — specializing and aligning models</a></li>
+<li><a href="ch20.html">20 &middot; 📚 Retrieval-Augmented Generation (RAG) — giving the model an open book</a></li>
+<li><a href="ch21.html">21 &middot; 🚀 Inference, Decoding & Serving — running LLMs efficiently</a></li>
+</ul>
+<p class="ig-era">🤖 The Agentic Frontier</p>
+<ul>
+<li><a href="ch22.html">22 &middot; 🤖 Agents, Tools & Loops — the latest frontier</a></li>
+<li><a href="ch23.html">23 &middot; 🛡️ Evaluation, Safety & Guardrails — making LLM systems trustworthy</a></li>
+<li><a href="ch24.html">24 &middot; 🔧 MLOps & LLMOps — shipping and operating models in production</a></li>
+</ul>
+<p class="ig-era">🛠️ The Practical Toolkit</p>
+<ul>
+<li><a href="ch25.html">25 &middot; 🛠️ Practical Toolkit I — Modeling & Vision Libraries</a></li>
+<li><a href="ch26.html">26 &middot; 🧰 Practical Toolkit II — LLM Frameworks, Orchestration & Vector Stores</a></li>
+<li><a href="ch27.html">27 &middot; ⚙️ Practical Toolkit III — Serving, Apps & MLOps Tooling</a></li>
+</ul>
+<p class="ig-era">☁️ Cloud AI Platforms</p>
+<ul>
+<li><a href="ch28.html">28 &middot; ☁️ Cloud AI Platforms — deploying foundation models on the hyperscalers</a></li>
+</ul>
+</details>
+
+------------------------------------------------------------------------
+
+Chapter 08 found structure without labels; now we return to labeled, supervised models and ask the harder question: does this model actually work on data it has never seen? This chapter is the discipline of *proving generalization* — the metrics, the splitting protocols, and the traps that make a model look good on paper and fail in production. Master this before Chapter 10 turns to neural networks, because deep nets amplify every evaluation mistake you can make here.
+
+::: {.callout-note appearance="simple"}
+📍 **Timeline:** Not a single invention but a discipline that hardened over decades — as ML left the lab for fraud detection, medicine, and search, the field learned the expensive way that a single accuracy number lies, and built the rituals (held-out tests, cross-validation, ROC, leakage hygiene) that separate a real result from a mirage.
+:::
+
+## 9.1 — Train / validation / test and cross-validation
+
+The core fear in ML is **overfitting**: a model memorizing its training data instead of learning a pattern. The cure is simple in spirit — judge the model on data it never saw while learning. That means splitting your data into three roles: one to learn from, one to tune on, one to get an honest final score.
+
+Think of it like an exam. The **training set** is the textbook you study. The **validation set** is the practice exam you use to pick your study strategy (hyperparameters). The **test set** is the real exam, opened once — if you peek at it while studying, the score means nothing.
+
+```{mermaid}
+flowchart LR
+  A["All data"] --> B["Train (~60-80%)"]
+  A --> C["Validation (~10-20%)"]
+  A --> D["Test (~10-20%)"]
+  B --> E["fit model"]
+  C --> F["tune hyperparameters"]
+  D --> G["final unbiased score, used ONCE"]
+```
+
+When data is scarce, a single split wastes data and the score depends on luck of the draw. **k-fold cross-validation** fixes this: split the data into $k$ equal folds, train on $k-1$ and validate on the held-out one, rotate $k$ times, average the scores. Every point gets used for both training and validation, just never at the same time.
+
+```python
+import numpy as np
+
+def k_fold_indices(n, k, seed=0):
+    # shuffle then chop into k contiguous folds
+    idx = np.random.default_rng(seed).permutation(n)
+    return np.array_split(idx, k)
+
+def cross_val_score(X, y, fit_predict, k=5):
+    folds = k_fold_indices(len(X), k)
+    scores = []
+    for i in range(k):
+        val = folds[i]
+        train = np.concatenate([folds[j] for j in range(k) if j != i])
+        preds = fit_predict(X[train], y[train], X[val])  # train, then predict val
+        scores.append((preds == y[val]).mean())          # accuracy this fold
+    return np.mean(scores), np.std(scores)                # mean +/- spread
+```
+
+::: {.callout-tip}
+**Intuition:** cross-validation gives you not just a mean score but a *spread* across folds. A high mean with high variance means your model's quality depends heavily on which rows it happened to see — that instability is itself a finding.
+:::
+
+**Q: Why do you need a separate validation AND test set — isn't one held-out set enough?**
+Because the moment you use a set to **make decisions** (pick a model, tune a threshold, choose features), you start fitting to it indirectly. The validation set gets "used up" by those choices. The **test set** stays sealed so the final number reflects true generalization, not how well you optimized against the validation set.
+
+**Q: What is stratified k-fold and when do you need it?**
+**Stratified** splitting preserves the class proportions in every fold. If 5% of your data is fraud, plain random folds might hand one fold 1% fraud and another 9%, making scores noisy and sometimes leaving a fold with almost no positives. Stratification keeps each fold at ~5%, which is essential for **imbalanced classification**.
+
+**Q: What is leave-one-out cross-validation (LOOCV) and its tradeoff?**
+LOOCV is k-fold with $k=n$: each point is its own validation set. It uses almost all data for every fit, so it has **low bias**, but the $n$ models are nearly identical so their errors are correlated, giving **high variance** in the estimate — plus it is expensive ($n$ fits). Usually 5- or 10-fold is the sweet spot.
+
+**Q: Why can't you use ordinary k-fold on time-series data?**
+Because shuffling lets the model train on the future to predict the past — **lookahead leakage**. Use a **forward-chaining / expanding-window** split: train on days 1–30, validate on 31–40; then train on 1–40, validate on 41–50; always test on data that comes *after* the training window.
+
+**Q: Do you need cross-validation if you have millions of rows?**
+Often no. With abundant data, a single large held-out validation set is statistically stable and far cheaper than $k$ full retrains. Cross-validation earns its keep when data is **scarce** and a single split would be noisy.
+
+**Q: What is nested cross-validation and why bother?**
+When you tune hyperparameters *and* report a score from the same CV loop, the score is optimistically biased — you picked the settings that happened to win on those folds. **Nested CV** wraps an inner loop (which tunes hyperparameters) inside an outer loop (which scores). The inner loop picks settings; the outer loop, on data the inner loop never saw, gives an honest estimate of the whole tune-and-fit procedure.
+
+## 9.2 — The confusion matrix and why accuracy lies
+
+Every classifier prediction lands in one of four boxes versus the truth. The **confusion matrix** is just those four counts. Almost every classification metric is built from it, so learning to read it is the foundation.
+
+Convention: "positive" is the class you care about detecting (fraud, cancer, spam).
+
+<svg viewBox="0 0 360 220" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif" font-size="13">
+  <text x="180" y="16" text-anchor="middle" font-weight="bold">Predicted</text>
+  <text x="140" y="40" text-anchor="middle">Positive</text>
+  <text x="260" y="40" text-anchor="middle">Negative</text>
+  <text x="18" y="130" text-anchor="middle" transform="rotate(-90 18 130)">Actual</text>
+  <text x="60" y="87" text-anchor="middle">Pos</text>
+  <text x="60" y="142" text-anchor="middle">Neg</text>
+  <rect x="80" y="55" width="120" height="55" fill="#bbf7d0" stroke="#333"/>
+  <rect x="200" y="55" width="120" height="55" fill="#fecaca" stroke="#333"/>
+  <rect x="80" y="110" width="120" height="55" fill="#fecaca" stroke="#333"/>
+  <rect x="200" y="110" width="120" height="55" fill="#bbf7d0" stroke="#333"/>
+  <text x="140" y="80" text-anchor="middle" font-weight="bold">TP</text>
+  <text x="140" y="97" text-anchor="middle" font-size="10">correct hit</text>
+  <text x="260" y="80" text-anchor="middle" font-weight="bold">FN</text>
+  <text x="260" y="97" text-anchor="middle" font-size="10">missed it</text>
+  <text x="140" y="135" text-anchor="middle" font-weight="bold">FP</text>
+  <text x="140" y="152" text-anchor="middle" font-size="10">false alarm</text>
+  <text x="260" y="135" text-anchor="middle" font-weight="bold">TN</text>
+  <text x="260" y="152" text-anchor="middle" font-size="10">correct pass</text>
+</svg>
+
+Accuracy is $(TP+TN)/(\text{all})$ — the fraction you got right. It feels like the obvious metric, and on **balanced** data it is fine. The trap is **class imbalance**.
+
+::: {.callout-warning}
+**Interview gotcha:** If 99% of transactions are legitimate, a model that predicts "legit" for *everything* scores **99% accuracy** while catching zero fraud. Accuracy is a useless metric here because the majority class dominates it. Always ask about class balance before trusting accuracy.
+:::
+
+**Q: Define TP, FP, FN, TN in one breath.**
+**TP** = predicted positive, truly positive (caught it). **FP** = predicted positive, actually negative (**false alarm**, a Type I error). **FN** = predicted negative, actually positive (**missed it**, a Type II error). **TN** = predicted negative, truly negative.
+
+**Q: When does accuracy actively mislead you?**
+Under **class imbalance** and **asymmetric error costs**. A 95% accurate cancer screen sounds great until you learn 95% of patients are healthy and it catches none of the sick ones. The single accuracy number hides which kind of error you are making, and the rare-but-costly error is usually the one that matters.
+
+**Q: What's a quick sanity-check metric to compare against?**
+The **majority-class baseline** — always predict the most common class. If your fancy model barely beats "always say no," it has learned almost nothing. Reporting accuracy without this baseline is a red flag in any interview.
+
+**Q: What are specificity and the false positive rate?**
+**Specificity** = $TN/(TN+FP)$ — of all the true negatives, how many you correctly cleared (recall for the negative class). The **false positive rate** is its complement, $FP/(FP+TN) = 1-\text{specificity}$ — how often you cry wolf on a genuine negative. The FPR is the x-axis of the ROC curve in 9.4.
+
+## 9.3 — Precision, recall, F1: choosing what to optimize
+
+Once you accept accuracy can lie, you split error into two halves that come from columns/rows of the confusion matrix. **Precision** asks: of everything I flagged positive, how much was right? **Recall** asks: of everything that truly was positive, how much did I catch?
+
+$$\text{Precision}=\frac{TP}{TP+FP}\qquad \text{Recall}=\frac{TP}{TP+FN}$$
+
+The intuition: precision is about **not crying wolf** (keeping false alarms down); recall is about **not missing the wolf** (keeping misses down). You usually trade one for the other — flag more aggressively and recall rises while precision falls.
+
+**F1** is the **harmonic mean** of the two, a single number that stays low unless *both* are decent:
+
+$$F_1 = 2\cdot\frac{P\cdot R}{P+R}$$
+
+The harmonic mean is used (not the plain average) because it punishes imbalance: precision 1.0 with recall 0.0 gives $F_1=0$, not 0.5.
+
+| Scenario | Costlier error | Favor | Why |
+|---|---|---|---|
+| **Cancer screening** | FN (missed tumor) | **Recall** | Missing a sick patient can be fatal; a false alarm just means more tests |
+| **Spam filter** | FP (real mail in spam) | **Precision** | Losing an important email is worse than seeing one spam in the inbox |
+| **Fraud detection** | depends | balance / **F1** | Missing fraud costs money; too many false flags annoy customers and staff |
+
+::: {.callout-tip}
+**Intuition:** "Recall = don't miss it, even at the cost of false alarms. Precision = don't false-alarm, even at the cost of misses." Decide which mistake hurts more in the real world, then optimize that.
+:::
+
+**Q: Give the one-line memory hook for precision vs recall.**
+**Precision** = "when I say yes, am I right?" (quality of positive predictions). **Recall** = "of all the real positives, did I find them?" (coverage). Precision watches **FP**; recall watches **FN**.
+
+**Q: Why use the harmonic mean for F1 instead of a regular average?**
+Because the **harmonic mean** is dominated by the smaller value, so it refuses to reward a model that maxes one metric while ignoring the other. A classifier with precision 0.9 and recall 0.1 has arithmetic mean 0.5 but $F_1 \approx 0.18$ — F1 correctly says it's bad.
+
+**Q: What is the Fβ score and when would you use it?**
+$F_\beta$ generalizes F1 with a weight $\beta$: $F_\beta=(1+\beta^2)\frac{P\cdot R}{\beta^2 P + R}$. Use $\beta>1$ (e.g. $F_2$) when **recall matters more** (cancer screening) and $\beta<1$ (e.g. $F_{0.5}$) when **precision matters more** (spam). $\beta$ is "how many times more I care about recall than precision."
+
+**Q: For multi-class, what's the difference between macro and micro averaging?**
+**Macro** averages the per-class metric equally, so every class counts the same regardless of size — good when small classes matter. **Micro** pools all TP/FP/FN across classes before computing, so it's dominated by frequent classes and equals overall accuracy in single-label problems. **Weighted** macro sits between them, averaging per-class scores weighted by class size.
+
+**Q: Is there a single metric that handles imbalance well without picking a side?**
+Yes — **Matthews Correlation Coefficient (MCC)** uses all four cells of the confusion matrix and returns a value in $[-1, 1]$ (1 perfect, 0 random, −1 fully wrong). Because it accounts for TN too, it stays honest under imbalance where F1 (which ignores TN) can still flatter a model. **Balanced accuracy** — the average of recall on each class — is a simpler alternative.
+
+## 9.4 — ROC/AUC vs the precision-recall curve
+
+Most classifiers output a **probability**, not a hard label. The label only appears after you pick a **threshold** (default 0.5). Different thresholds give different precision/recall, so a single threshold tells an incomplete story. **Curves** sweep the threshold from 0 to 1 and plot the whole tradeoff.
+
+The **ROC curve** plots **True Positive Rate** (= recall) against **False Positive Rate** ($FP/(FP+TN)$) as the threshold varies. A perfect model hugs the top-left corner; random guessing is the diagonal. **AUC** (area under the ROC curve) summarizes it as one number in $[0.5, 1.0]$.
+
+<svg viewBox="0 0 240 220" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif" font-size="11">
+  <line x1="40" y1="180" x2="210" y2="180" stroke="#333"/>
+  <line x1="40" y1="180" x2="40" y2="20" stroke="#333"/>
+  <text x="125" y="205" text-anchor="middle">FPR</text>
+  <text x="14" y="100" text-anchor="middle" transform="rotate(-90 14 100)">TPR</text>
+  <line x1="40" y1="180" x2="210" y2="20" stroke="#999" stroke-dasharray="4 3"/>
+  <text x="150" y="120" fill="#999" font-size="10">random</text>
+  <path d="M40,180 Q55,55 210,20" fill="none" stroke="#2563eb" stroke-width="2.5"/>
+  <text x="95" y="55" fill="#2563eb">good model</text>
+  <circle cx="40" cy="180" r="2.5"/><text x="44" y="178" font-size="9">thr=1</text>
+  <circle cx="210" cy="20" r="2.5"/><text x="150" y="33" font-size="9">thr=0</text>
+</svg>
+
+**Q: What does an AUC of 0.5, 0.8, and 1.0 actually mean?**
+**0.5** = no better than a coin flip; **1.0** = perfect separation. The clean interpretation: AUC is the **probability that the model ranks a random positive higher than a random negative**. It measures *ranking quality* independent of any chosen threshold.
+
+**Q: When is the precision-recall (PR) curve better than ROC?**
+Under **heavy class imbalance**. ROC's FPR has the huge negative count in its denominator, so a flood of false positives barely moves the curve and AUC can look deceptively high. The **PR curve** uses precision, which directly feels false positives relative to true positives, so it honestly exposes a model that's drowning in false alarms on a rare positive class.
+
+**Q: Is AUC threshold-dependent?**
+No — that's its strength and its weakness. AUC summarizes performance across **all** thresholds, so it's great for comparing models' ranking ability. But you ship one threshold, and AUC tells you nothing about which to pick — for that you tune precision/recall at the operating point you actually deploy.
+
+**Q: What's the baseline for a PR curve?**
+A horizontal line at the **positive class prevalence**. If 2% of data is positive, random guessing yields ~0.02 precision, so a flat 0.02 line is the "no skill" baseline — and the area under a no-skill PR curve is ~0.02, not 0.5 like ROC.
+
+**Q: How do you actually choose the deployment threshold?**
+Translate business cost into the curve. If a false negative costs 10× a false positive, you sweep thresholds and pick the one that minimizes expected cost (or maximizes $F_\beta$ with the matching $\beta$). The **default 0.5 is rarely optimal** under imbalance or asymmetric costs — treat it as a knob, not a given.
+
+## 9.5 — Regression metrics
+
+For continuous targets there's no confusion matrix — you measure how far predictions land from the truth. The choice of metric is really a choice about **how much to punish big misses**.
+
+$$\text{MSE}=\frac{1}{n}\sum (y_i-\hat y_i)^2 \quad\text{RMSE}=\sqrt{\text{MSE}}\quad \text{MAE}=\frac{1}{n}\sum |y_i-\hat y_i|$$
+
+MSE/RMSE square the error, so a single big miss hurts disproportionately — they are **outlier-sensitive**. MAE treats every dollar of error equally and is **robust** to outliers. RMSE is in the same units as the target (dollars, not dollars-squared), which is why it's usually reported instead of raw MSE.
+
+$$R^2 = 1 - \frac{\sum (y_i-\hat y_i)^2}{\sum (y_i-\bar y)^2}$$
+
+**$R^2$** ("coefficient of determination") is the intuitive one: it compares your model's error to the error of just predicting the mean every time. $R^2=1$ is perfect, $R^2=0$ means you're no better than the mean, and **negative** $R^2$ means you're *worse* than guessing the mean.
+
+**Q: When do you prefer MAE over RMSE?**
+When **outliers shouldn't dominate**. RMSE squares errors, so a few huge mistakes can swamp the metric; if those outliers are noise (a sensor glitch, a data-entry typo) you don't want them steering your model. MAE gives a more typical-case error. If big errors *are* genuinely catastrophic (predicting bridge load), keep RMSE.
+
+**Q: Can R² be negative? What does that mean?**
+Yes. $R^2$ is negative when your model's squared error is **larger than** the variance around the mean — i.e. you'd have done better predicting the average constantly. It often signals a broken model or, importantly, that you computed $R^2$ on a **test set** where the model genuinely fails to generalize.
+
+**Q: Why is adjusted R² sometimes used?**
+Plain $R^2$ never decreases when you add a feature, even a useless random one — so it tempts overfitting. **Adjusted $R^2$** penalizes extra predictors, only rising when a new feature helps more than chance would. It's the fairer metric when comparing models with different numbers of features.
+
+**Q: What's MAPE and its pitfall?**
+**Mean Absolute Percentage Error** expresses error as a percent of actual values, which is nice for business communication. The pitfall: it **explodes or divides by zero** when true values are near zero, and it asymmetrically punishes over-prediction less than under-prediction.
+
+## 9.6 — Data leakage: the number-one interview trap
+
+Here's the single most common way a model lies: **data leakage** — information from outside the training set, or from the future, sneaking into training. The symptom is gorgeous validation scores that **collapse in production**. If an interviewer asks "your model got 99% offline but failed live, why?", leakage is the first suspect.
+
+The deepest example is the **fit-the-scaler-on-everything** mistake. If you compute the mean/std for normalization (or the imputation value, or the encoding) using the *whole* dataset before splitting, the test set has secretly influenced the training transform — the model has peeked.
+
+```python
+# WRONG: scaler sees test data -> leakage
+mean = X_all.mean(0); std = X_all.std(0)
+X_train, X_test = split(scale(X_all, mean, std))
+
+# RIGHT: fit transform on TRAIN ONLY, then apply to test
+X_train, X_test = split(X_all)
+mean = X_train.mean(0); std = X_train.std(0)   # stats from train only
+X_train = (X_train - mean) / std
+X_test  = (X_test  - mean) / std               # reuse train stats, no peeking
+```
+
+The fix in practice: do all fitting **inside** the cross-validation loop (e.g. an sklearn `Pipeline`), so every preprocessing step is learned only from that fold's training data.
+
+::: {.callout-warning}
+**Classic gotcha:** A model predicting hospital readmission used a "discharge medication" feature — which only exists *after* the outcome it predicts. That's **target leakage**: a feature that's a proxy for, or only available after, the label. It gives unbeatable offline scores and is useless live because the feature isn't available at prediction time.
+:::
+
+**Q: Name the three main flavors of leakage.**
+**1) Target leakage** — a feature encodes the answer or is only known after the label (e.g. "account closed date" predicting churn). **2) Train/test contamination** — the same rows, or duplicates, or near-duplicates appear in both splits, or you fit preprocessing on all data. **3) Temporal leakage** — using future information to predict the past in time-series.
+
+**Q: How do you detect leakage you didn't plant?**
+Watch for **too-good-to-be-true** scores, and for a single feature with suspiciously high importance. Ask of every feature: "would this value actually be available at the moment of prediction?" If not, drop it. A large train-vs-production performance gap is the loudest alarm.
+
+**Q: Why must preprocessing go inside the CV loop?**
+Because **any** statistic learned from data — scaling means, imputation values, feature-selection choices, target encodings — leaks test information if computed before the split. Inside a `Pipeline` evaluated per fold, each fold's transform is fit only on that fold's training portion, keeping the validation estimate honest.
+
+**Q: Is doing feature selection on the full dataset leakage?**
+Yes — a subtle but classic case. If you pick "the top 20 features correlated with the target" using **all** data, then cross-validate, you've already let the held-out labels influence which features exist. Selection must happen inside each training fold.
+
+**Q: How do duplicate or grouped rows cause leakage even with a clean split?**
+If the same patient (or user, or session) has multiple rows and a random split scatters them across train and test, the model can memorize that individual and "recognize" them at test time — **group leakage**. Use **grouped splitting** (e.g. `GroupKFold`) so all rows for one entity stay on the same side of the split.
+
+## 9.7 — Handling class imbalance and probability calibration
+
+When positives are rare, the model can hit high accuracy by ignoring them. Three families of fixes exist, and they attack the problem at different stages: change the **data**, change the **loss**, or change the **threshold**.
+
+```{mermaid}
+flowchart TD
+  A["Class imbalance"] --> B["Data-level: resample"]
+  A --> C["Algorithm-level: class weights"]
+  A --> D["Decision-level: tune threshold"]
+  B --> B1["oversample minority / SMOTE"]
+  B --> B2["undersample majority"]
+  C --> C1["weight rare class higher in loss"]
+  D --> D1["lower threshold to catch more positives"]
+```
+
+A separate but related issue: **calibration**. A model can rank well (good AUC) yet output probabilities that are systematically off — saying "0.9" for events that happen 60% of the time. If you act on the probability itself (expected-value decisions, risk pricing), you need it calibrated, not just well-ranked.
+
+**Q: What's the difference between oversampling, undersampling, and SMOTE?**
+**Oversampling** duplicates minority examples (risks overfitting to them). **Undersampling** drops majority examples (risks throwing away signal). **SMOTE** synthesizes *new* minority points by interpolating between existing ones, adding variety instead of exact copies. Critical: **resample only the training fold**, never the validation/test set, or you leak and inflate scores.
+
+**Q: How do class weights compare to resampling?**
+Class weights tell the loss function to **penalize errors on the rare class more heavily** (e.g. `class_weight='balanced'`), achieving a similar effect to oversampling without duplicating data or changing dataset size. It's often cleaner — no synthetic rows, no discarded data — and supported natively by most algorithms.
+
+**Q: Why is threshold tuning often the best first move?**
+Because the **0.5 default is arbitrary**. The model's *ranking* may already be good; you just need a different operating point. Lowering the threshold catches more positives (higher recall) at the cost of more false positives. Pick the threshold from the **PR or ROC curve** based on your real-world cost tradeoff — no retraining needed.
+
+**Q: What does "a model is well-calibrated" mean, and how do you check it?**
+**Calibrated** means predicted probabilities match observed frequencies: among samples it labels "0.7", about 70% are truly positive. Check with a **reliability diagram** (bin predictions, plot mean predicted vs actual fraction) or a metric like **Brier score** / **Expected Calibration Error**. Fixes include **Platt scaling** (fit a sigmoid) and **isotonic regression**.
+
+**Q: Does resampling affect calibration?**
+Yes — aggressive resampling or class weighting distorts the base rate the model sees, so its raw probability outputs no longer match real-world frequencies (they over-predict the minority class). If you need calibrated probabilities after resampling, **recalibrate** on data with the true class distribution.
+
+## 9.x — Key takeaways
+
+- **Never judge a model on data it trained on.** Split into train/validation/test; keep the test set sealed until the very end. Use **k-fold** (stratified for imbalance, forward-chaining for time-series, grouped for repeated entities) when data is scarce; **nested CV** when you tune and score together.
+- **Accuracy lies under class imbalance** — a 99%-accurate model can catch zero positives. Always check the **confusion matrix** and a majority-class baseline.
+- **Precision = don't false-alarm; Recall = don't miss.** Choose which error costs more (recall for cancer, precision for spam) and optimize it; **F1** balances both via the harmonic mean. **MCC / balanced accuracy** stay honest under imbalance.
+- **AUC** measures threshold-independent ranking quality; switch to the **precision-recall curve** under heavy imbalance, where ROC flatters a model drowning in false positives. The deployment **threshold is a knob** — tune it to your cost tradeoff, don't assume 0.5.
+- **Regression:** RMSE punishes big misses (outlier-sensitive), MAE is robust, $R^2$ compares you to predicting the mean (and can go negative); adjusted $R^2$ when comparing models with different feature counts.
+- **Data leakage is the #1 trap.** Fit every transform (scaler, imputer, feature selector, resampler) **inside** the CV loop on training data only; beware features that only exist after the label and grouped rows split across train/test.
+- **Imbalance fixes:** resample (train only), class weights, or threshold tuning — try threshold tuning first. If you act on probabilities, check **calibration** (reliability diagram, Brier score) separately from ranking.
+
+------------------------------------------------------------------------
+
+[📖 All chapters](../interview-guide.html)  &nbsp;|&nbsp;  [← 08 · 🗺️ Unsupervised Learning & Dimensionality Reduction](ch08.html)  &nbsp;|&nbsp;  [10 · 🧠 Neural Network Fundamentals →](ch10.html)

@@ -1,0 +1,287 @@
+---
+title: "Chapter 26 — 🧰 Practical Toolkit II — LLM Frameworks, Orchestration & Vector Stores"
+page-layout: full
+toc: true
+toc-location: left
+toc-title: "In this chapter"
+toc-depth: 2
+toc-expand: true
+---
+
+[📖 All chapters](../interview-guide.html)  &nbsp;|&nbsp;  [← 25 · 🛠️ Practical Toolkit I](ch25.html)  &nbsp;|&nbsp;  [27 · ⚙️ Practical Toolkit III →](ch27.html)
+
+<details class="ig-jump">
+<summary>📚 Jump to any chapter</summary>
+<p class="ig-era">🧮 Mathematical Foundations</p>
+<ul>
+<li><a href="ch01.html">01 &middot; 🧮 Linear Algebra — the language of data</a></li>
+<li><a href="ch02.html">02 &middot; 📉 Calculus & Optimization — how models learn</a></li>
+<li><a href="ch03.html">03 &middot; 🎲 Probability & Statistics — reasoning under uncertainty</a></li>
+<li><a href="ch04.html">04 &middot; 🔥 Information Theory & Loss Functions — measuring surprise and error</a></li>
+</ul>
+<p class="ig-era">🧩 Classical Machine Learning</p>
+<ul>
+<li><a href="ch05.html">05 &middot; 🧩 Core ML Concepts — the ground rules</a></li>
+<li><a href="ch06.html">06 &middot; 📐 Classical Supervised Algorithms — the workhorses</a></li>
+<li><a href="ch07.html">07 &middot; 🌲 Ensembles & Boosting — how to win on tabular data</a></li>
+<li><a href="ch08.html">08 &middot; 🗺️ Unsupervised Learning & Dimensionality Reduction — structure without labels</a></li>
+<li><a href="ch09.html">09 &middot; 🎯 Model Evaluation & Validation — knowing if it actually works</a></li>
+</ul>
+<p class="ig-era">🧠 Deep Learning</p>
+<ul>
+<li><a href="ch10.html">10 &middot; 🧠 Neural Network Fundamentals — the building block</a></li>
+<li><a href="ch11.html">11 &middot; ⚙️ Training Deep Networks — making deep nets actually train</a></li>
+<li><a href="ch12.html">12 &middot; 🖼️ Convolutional Neural Networks — the vision branch</a></li>
+<li><a href="ch13.html">13 &middot; 🔁 Sequence Models — RNNs, LSTMs and the bottleneck</a></li>
+</ul>
+<p class="ig-era">⚡ The Transformer Era</p>
+<ul>
+<li><a href="ch14.html">14 &middot; 🔤 Word Embeddings — giving words meaning as vectors</a></li>
+<li><a href="ch15.html">15 &middot; ⚡ Attention & the Transformer — the architecture that changed everything</a></li>
+<li><a href="ch16.html">16 &middot; 🧱 Tokenization, Pretraining & Model Families</a></li>
+<li><a href="ch17.html">17 &middot; 📈 Modern LLMs & Scaling — bigger, and suddenly capable</a></li>
+</ul>
+<p class="ig-era">💬 Using & Adapting LLMs</p>
+<ul>
+<li><a href="ch18.html">18 &middot; 💬 Prompting & In-Context Learning — programming models with words</a></li>
+<li><a href="ch19.html">19 &middot; 🎚️ Fine-Tuning & Alignment — specializing and aligning models</a></li>
+<li><a href="ch20.html">20 &middot; 📚 Retrieval-Augmented Generation (RAG) — giving the model an open book</a></li>
+<li><a href="ch21.html">21 &middot; 🚀 Inference, Decoding & Serving — running LLMs efficiently</a></li>
+</ul>
+<p class="ig-era">🤖 The Agentic Frontier</p>
+<ul>
+<li><a href="ch22.html">22 &middot; 🤖 Agents, Tools & Loops — the latest frontier</a></li>
+<li><a href="ch23.html">23 &middot; 🛡️ Evaluation, Safety & Guardrails — making LLM systems trustworthy</a></li>
+<li><a href="ch24.html">24 &middot; 🔧 MLOps & LLMOps — shipping and operating models in production</a></li>
+</ul>
+<p class="ig-era">🛠️ The Practical Toolkit</p>
+<ul>
+<li><a href="ch25.html">25 &middot; 🛠️ Practical Toolkit I — Modeling & Vision Libraries</a></li>
+<li><a href="ch26.html">26 &middot; 🧰 Practical Toolkit II — LLM Frameworks, Orchestration & Vector Stores</a></li>
+<li><a href="ch27.html">27 &middot; ⚙️ Practical Toolkit III — Serving, Apps & MLOps Tooling</a></li>
+</ul>
+<p class="ig-era">☁️ Cloud AI Platforms</p>
+<ul>
+<li><a href="ch28.html">28 &middot; ☁️ Cloud AI Platforms — deploying foundation models on the hyperscalers</a></li>
+</ul>
+</details>
+
+------------------------------------------------------------------------
+
+This chapter covers the libraries you actually `pip install` to build with LLMs: loading open models, wiring up chains and agents, indexing documents for retrieval, and storing embeddings for similarity search. They sit on the application side of the stack — above the raw model weights and the inference engine (see the Inference & Serving chapter), below your product code. The concepts behind them (fine-tuning, RAG, agents) were taught earlier; here we map each tool to the job it does.
+
+::: {.callout-note appearance="simple"}
+🧰 **Where in the stack:** model loading (Transformers) → app/agent orchestration (LangChain, LangGraph, LlamaIndex, AutoGen) → embedding storage and search (FAISS, Qdrant).
+:::
+
+## 26.1 — 🤗 Hugging Face Transformers
+
+Transformers is the de-facto library and model hub for loading open-weight models (Llama, Mistral, BERT, etc.) with a consistent Python API. It is what you reach for to download a model, tokenize text, run inference, or fine-tune — and it is usually compared to running a model through a hosted API like OpenAI's.
+
+```python
+from transformers import pipeline
+# device_map="auto" places the model on GPU and shards if needed
+pipe = pipeline("text-generation", model="meta-llama/Llama-3.1-8B-Instruct",
+                torch_dtype="auto", device_map="auto")
+print(pipe("Explain RAG in one sentence:", max_new_tokens=50))
+```
+
+**Q: What are AutoModel and AutoTokenizer?**
+They are **auto classes** that load the correct model and tokenizer architecture just from a model name or path, so you do not hand-pick the class per model. `AutoTokenizer.from_pretrained(name)` turns text into token IDs; `AutoModel.from_pretrained(name)` loads the weights. The pairing matters because every model has its own tokenizer (see the Transformers concept chapter).
+
+**Q: When do I use pipeline() vs AutoModel directly?**
+Use **`pipeline()`** for the common case — it bundles tokenization, the forward pass, and decoding into one call for tasks like text-generation or sentiment-analysis. Drop to `AutoModel` when you need control over batching, custom generation logic, or access to raw hidden states. Pipeline is the fast path; AutoModel is the flexible one.
+
+**Q: How does Transformers fit with fine-tuning and LoRA?**
+The **`Trainer`** class handles the training loop (optimizer, scheduler, checkpointing) so you supply a dataset and arguments. For parameter-efficient fine-tuning you add the **PEFT** library, which wraps the model with LoRA adapters so you train a tiny fraction of the weights (see the Fine-Tuning chapter). They are designed to work together.
+
+**Q: What is a common gotcha when loading a large model?**
+By default the model loads in **full precision** onto whatever device you place it, which can blow past your VRAM. Pass `torch_dtype="auto"` or a quantization config, and `device_map="auto"` to shard across GPU/CPU — note the snippet above already does this. Forgetting both is the usual cause of an out-of-memory error (or a silent CPU stall) on an 8B+ model.
+
+::: {.callout-tip}
+For pure inference of a popular model at scale, a dedicated serving engine (vLLM, TGI) will beat a raw Transformers loop on throughput. Use Transformers to prototype and to fine-tune; serve with the specialized engine.
+:::
+
+## 26.2 — 🔗 LangChain
+
+LangChain is an application framework that glues LLMs to prompts, tools, memory, and data sources through composable building blocks. It is the most popular "do everything" LLM library, and it is most often compared to simply calling the model's API yourself.
+
+```python
+from langchain_openai import ChatOpenAI
+from langchain_core.prompts import ChatPromptTemplate
+
+prompt = ChatPromptTemplate.from_template("Translate to French: {text}")
+chain = prompt | ChatOpenAI(model="gpt-4o-mini")
+print(chain.invoke({"text": "good morning"}).content)
+```
+
+**Q: What problem does LangChain solve?**
+It gives you **reusable abstractions** — prompt templates, chains, output parsers, tool and vector-store integrations — so you do not rewrite the same plumbing for every app. The `|` pipe (LCEL) composes steps into a runnable chain. The value is the long list of pre-built integrations.
+
+**Q: What is the common criticism of LangChain?**
+**Heavy abstraction.** Critics say the layers hide what is actually a single API call, making simple things hard to debug and pinning you to fast-changing interfaces. For a one-shot prompt, the wrapper adds more to learn than it saves.
+
+**Q: When should I use LangChain vs calling the API directly?**
+Reach for **LangChain** when you are wiring many pieces together — swapping model providers, chaining retrieval + prompt + parser, or reusing its integrations. Call the **API directly** when the task is a single prompt or two; the SDK is fewer lines and easier to trace. Match the tool to the complexity.
+
+**Q: How does LangChain relate to RAG and agents?**
+It has components for both — retriever chains for RAG (see the RAG chapter) and an agent executor for tool-using loops (see the Agents chapter). For complex agent control flow, though, its sibling LangGraph is now the recommended path (next section).
+
+## 26.3 — 🕸️ LangGraph
+
+LangGraph models an agent as an explicit graph / state machine: you define nodes (steps), edges (transitions), and a shared state object that flows between them. It comes from the LangChain team and is the structured alternative to a free-form `while` loop agent (see the Agents chapter).
+
+```python
+from langgraph.graph import StateGraph, END
+
+graph = StateGraph(dict)
+graph.add_node("plan", plan_fn)
+graph.add_node("act", act_fn)
+graph.add_edge("plan", "act")
+graph.add_conditional_edges("act", should_continue, {"loop": "plan", "done": END})
+app = graph.compile()
+```
+
+**Q: What is the core idea of LangGraph?**
+You describe the agent as a **graph of nodes and edges** with a shared **state** that each node reads and updates. Edges can be conditional and can form **cycles**, so the agent loops until a stop condition. It turns control flow into an inspectable object instead of buried `if`/`while` logic.
+
+**Q: Why is a graph more reliable than a free-form agent loop?**
+Because the transitions are **explicit and bounded** — you can see every path, set recursion limits, and add checkpoints, so the agent cannot wander indefinitely. A free-form "let the LLM decide forever" loop is hard to debug and prone to runaway cost. Structure buys you predictability.
+
+**Q: How is LangGraph different from LangChain?**
+**LangChain** chains are mostly linear (A → B → C); **LangGraph** adds cycles, branching, and persistent state for genuinely agentic flows. You can use LangChain components (models, tools) inside LangGraph nodes — it is the orchestration layer on top, not a replacement for the integrations.
+
+**Q: What does the shared state give you?**
+A single **state object** (often a dict or typed schema) that accumulates messages, intermediate results, and flags as the graph runs. This makes it easy to add **persistence/checkpointing** — pause, resume, or replay an agent run — which matters for human-in-the-loop and long-running tasks.
+
+::: {.callout-warning}
+Cycles can loop forever if your conditional edge never returns the "done" branch. Always set a recursion/step limit and a clear stop condition — a missing exit edge is the most common LangGraph bug.
+:::
+
+## 26.4 — 🦙 LlamaIndex
+
+LlamaIndex is a data framework purpose-built for RAG: it takes your documents, splits them into nodes, builds an index, and exposes retrievers and query engines (see the RAG chapter). Where LangChain is a broad toolkit, LlamaIndex is focused and opinionated about the retrieval pipeline.
+
+```python
+from llama_index.core import VectorStoreIndex, SimpleDirectoryReader, Settings
+# set these or LlamaIndex defaults to the OpenAI API for both embedding and LLM
+# Settings.embed_model = ...; Settings.llm = ...
+docs = SimpleDirectoryReader("./data").load_data()
+index = VectorStoreIndex.from_documents(docs)
+print(index.as_query_engine().query("What is the refund policy?"))
+```
+
+**Q: What is the LlamaIndex pipeline?**
+**Documents → nodes → index → retriever → query engine.** It loads raw files, chunks them into **nodes**, embeds and stores them in an **index**, then a **query engine** retrieves the relevant nodes and feeds them to the LLM. The whole RAG flow is a handful of lines.
+
+**Q: When is LlamaIndex a cleaner fit than LangChain?**
+When the app is **fundamentally about retrieval over your data** — Q&A over docs, knowledge bases, search. LlamaIndex's defaults (chunking, indexing, query engines) are tuned for that, so you write less glue. LangChain is broader but you assemble the RAG pieces yourself.
+
+**Q: What is a "node" in LlamaIndex?**
+A **node** is a chunk of a document plus its metadata and relationships (which doc it came from, neighbors, etc.). Retrieval works at the node level, so chunk size and overlap directly affect answer quality (see the RAG chapter on chunking). Nodes are the unit you actually embed and search.
+
+**Q: What is a common gotcha with the default settings?**
+LlamaIndex **defaults to the OpenAI API** for both embeddings and the LLM. `VectorStoreIndex.from_documents` and `as_query_engine()` will call OpenAI under the hood, so they fail without `OPENAI_API_KEY` — or silently run up cost — unless you set `Settings.embed_model` and `Settings.llm` to your own (e.g. a local Hugging Face model). Always set these explicitly before indexing.
+
+**Q: Can LlamaIndex and LangChain be used together?**
+Yes. A common pattern is **LlamaIndex for the retrieval layer** and LangChain (or LangGraph) for the surrounding agent/app logic. They are not mutually exclusive — pick LlamaIndex when retrieval quality is the hard part.
+
+## 26.5 — 👥 AutoGen
+
+AutoGen is a multi-agent conversation framework from Microsoft: you define several agents that talk to each other to solve a task — typically an assistant agent that writes solutions and a user-proxy agent that executes code and feeds back results. It sits in the agents space (see the Agents chapter) but emphasizes agent-to-agent dialogue rather than a single agent loop.
+
+```python
+from autogen import AssistantAgent, UserProxyAgent
+
+assistant = AssistantAgent("assistant", llm_config={"model": "gpt-4o"})
+user_proxy = UserProxyAgent("user_proxy", code_execution_config={"work_dir": "out"})
+user_proxy.initiate_chat(assistant, message="Plot a sine wave and save it.")
+```
+
+**Q: What is the core pattern in AutoGen?**
+**Conversable agents** that exchange messages to make progress. The classic duo is an **assistant** (proposes code or answers) and a **user-proxy** (runs the code, returns output or errors), looping until the task is done. Multi-agent collaboration is modeled as a structured conversation.
+
+**Q: When does multi-agent actually help?**
+When the task benefits from **distinct roles or a critique loop** — e.g. a coder agent plus a reviewer/executor that catches errors, or specialists for different subtasks. The agent-executes-then-fixes loop can solve problems a single pass cannot.
+
+**Q: When does multi-agent add cost without benefit?**
+When the task is **simple or single-step** — every extra agent turn is another LLM call, so chatter multiplies tokens, latency, and dollars. If one well-prompted call (or a simple tool loop) does the job, the conversation overhead is wasted spend. Add agents only when roles genuinely divide the work.
+
+**Q: How does AutoGen compare to LangGraph for agents?**
+**AutoGen** frames orchestration as a **conversation** between roles; **LangGraph** frames it as an explicit **graph/state machine**. AutoGen is natural for collaborative, chat-style multi-agent setups; LangGraph gives tighter, inspectable control over flow. Both target agentic tasks from different angles.
+
+## 26.6 — 📦 FAISS
+
+FAISS (Facebook AI Similarity Search) is Meta's in-memory **library** for fast vector similarity search — not a database. You hand it vectors, it builds an index, and it returns nearest neighbors blazingly fast; persistence, metadata, and serving are your job (see the RAG chapter).
+
+```python
+import faiss, numpy as np
+
+index = faiss.IndexFlatL2(768)        # exact search, 768-dim vectors
+index.add(np.array(embeddings))       # add your vectors
+D, I = index.search(query_vec, k=5)   # top-5 nearest
+```
+
+**Q: What is FAISS and what is it not?**
+It is a **similarity-search library** that finds the nearest vectors to a query, in memory, very fast. It is **not a database** — no built-in persistence, no metadata filtering, no API server. You wrap it yourself or use it as the engine inside another store.
+
+**Q: Flat vs IVF vs HNSW — what is the difference?**
+**Flat** does exact brute-force search (accurate, slow at scale). **IVF** partitions vectors into clusters and searches only the nearest few (faster, approximate). **HNSW** builds a navigable graph for fast approximate search with high recall. You trade accuracy for speed as you move from flat to approximate indexes.
+
+**Q: What is exact vs approximate search (ANN)?**
+**Exact** search compares the query against every vector — guaranteed correct, but cost grows linearly. **Approximate nearest neighbor (ANN)** indexes skip most comparisons for a large speedup at a small recall cost. At millions of vectors, ANN is essentially mandatory (see the RAG chapter).
+
+**Q: When do I reach for FAISS?**
+When you need **maximum search speed in-process** and can manage storage/metadata yourself — research, a fixed embedded index, or as the core of a larger system. If you need persistence, filtering, and a network API, reach for a vector database instead (next section).
+
+::: {.callout-warning}
+FAISS lives in RAM and does not persist on its own — if your process dies, the index is gone unless you explicitly `faiss.write_index(...)`. And it has no place to store the source text, so you must keep a side mapping from vector ID back to your documents.
+:::
+
+## 26.7 — 🗄️ Qdrant
+
+Qdrant is a production vector **database**: it persists vectors to disk, stores metadata payloads, supports filtered search, and exposes a REST/gRPC API with horizontal scaling. The clean framing is **FAISS is a library, Qdrant is a database** — Qdrant handles the operational concerns (persistence, filtering, a network API) that FAISS leaves to you. You can self-host the open-source server or use Qdrant Cloud; either way it is software you run, not inherently a managed service.
+
+```python
+from qdrant_client import QdrantClient
+from qdrant_client.models import VectorParams, Distance
+
+client = QdrantClient(url="http://localhost:6333")
+client.create_collection("docs", VectorParams(size=768, distance=Distance.COSINE))
+client.upsert("docs", points=my_points)   # vectors + payloads, persisted
+# query_points() is the current API; older code used the now-deprecated search()
+hits = client.query_points("docs", query=query_vec, limit=5, query_filter=my_filter)
+```
+
+**Q: What does Qdrant give you that FAISS does not?**
+**Persistence, metadata payloads, filtered search, and a network API.** Vectors survive restarts, each point carries arbitrary JSON you can filter on, and clients talk to it over REST/gRPC. It is built to run as a service, not embedded in one process.
+
+**Q: What is filtered (metadata) search?**
+Searching for nearest vectors **while constraining on payload fields** — e.g. "most similar docs *where* `user_id = 42` and `lang = en`." This combines semantic similarity with structured filters in one query, which is essential for multi-tenant or scoped RAG (see the RAG chapter).
+
+**Q: When do I choose Qdrant over FAISS?**
+When you are running in **production** and need durability, metadata filtering, concurrent clients, and scaling — i.e. a real backing store for a RAG app. Choose FAISS for in-process speed with no ops; choose Qdrant when it must behave like a database.
+
+**Q: What is a gotcha with the Qdrant client API?**
+The client API has moved: **`client.search(...)` is deprecated in favor of `query_points(...)`**, and the query vector is passed as a keyword (`query=` on `query_points`, or `query_vector=` on the older `search`), not positionally. Older tutorials show the deprecated call — check your installed `qdrant-client` version, since the signatures differ between releases.
+
+**Q: How does Qdrant relate to other vector databases?**
+It is one of several (alongside **Pinecone, Weaviate, Milvus, pgvector**); they share the same job — store embeddings and serve filtered ANN search. The choice usually comes down to hosting (self vs managed), filtering features, and cost; the RAG concepts are identical across them.
+
+::: {.callout-tip}
+Qdrant uses HNSW under the hood, so you get approximate search by default — the same speed/recall tradeoff as FAISS, but with persistence and filtering handled for you.
+:::
+
+## 26.8 — Key takeaways
+
+- **Hugging Face Transformers** — reach for it to load, run, or fine-tune any open-weight model; serve at scale with a dedicated engine.
+- **LangChain** — reach for it when wiring many components together; skip it and call the API directly for one-shot prompts.
+- **LangGraph** — reach for it when an agent needs cycles, branching, and inspectable state instead of a free-form loop.
+- **LlamaIndex** — reach for it when the app is fundamentally retrieval over your own documents; set `Settings.embed_model`/`Settings.llm` so you don't silently default to OpenAI.
+- **AutoGen** — reach for it when distinct agent roles or a code-execute-and-fix loop genuinely divide the work; avoid it for single-step tasks.
+- **FAISS** — reach for it when you need maximum in-process similarity-search speed and will manage persistence/metadata yourself.
+- **Qdrant** — reach for it when you need a vector database: persistence, metadata filtering, and a network API; self-hosted or via Qdrant Cloud.
+
+------------------------------------------------------------------------
+
+[📖 All chapters](../interview-guide.html)  &nbsp;|&nbsp;  [← 25 · 🛠️ Practical Toolkit I](ch25.html)  &nbsp;|&nbsp;  [27 · ⚙️ Practical Toolkit III →](ch27.html)

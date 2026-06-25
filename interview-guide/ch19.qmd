@@ -1,0 +1,354 @@
+---
+title: "Chapter 19 — 🎚️ Fine-Tuning & Alignment — specializing and aligning models"
+page-layout: full
+toc: true
+toc-location: left
+toc-title: "In this chapter"
+toc-depth: 2
+toc-expand: true
+---
+
+[📖 All chapters](../interview-guide.html)  &nbsp;|&nbsp;  [← 18 · 💬 Prompting & In-Context Learning](ch18.html)  &nbsp;|&nbsp;  [20 · 📚 Retrieval-Augmented Generation (RAG) →](ch20.html)
+
+<details class="ig-jump">
+<summary>📚 Jump to any chapter</summary>
+<p class="ig-era">🧮 Mathematical Foundations</p>
+<ul>
+<li><a href="ch01.html">01 &middot; 🧮 Linear Algebra — the language of data</a></li>
+<li><a href="ch02.html">02 &middot; 📉 Calculus & Optimization — how models learn</a></li>
+<li><a href="ch03.html">03 &middot; 🎲 Probability & Statistics — reasoning under uncertainty</a></li>
+<li><a href="ch04.html">04 &middot; 🔥 Information Theory & Loss Functions — measuring surprise and error</a></li>
+</ul>
+<p class="ig-era">🧩 Classical Machine Learning</p>
+<ul>
+<li><a href="ch05.html">05 &middot; 🧩 Core ML Concepts — the ground rules</a></li>
+<li><a href="ch06.html">06 &middot; 📐 Classical Supervised Algorithms — the workhorses</a></li>
+<li><a href="ch07.html">07 &middot; 🌲 Ensembles & Boosting — how to win on tabular data</a></li>
+<li><a href="ch08.html">08 &middot; 🗺️ Unsupervised Learning & Dimensionality Reduction — structure without labels</a></li>
+<li><a href="ch09.html">09 &middot; 🎯 Model Evaluation & Validation — knowing if it actually works</a></li>
+</ul>
+<p class="ig-era">🧠 Deep Learning</p>
+<ul>
+<li><a href="ch10.html">10 &middot; 🧠 Neural Network Fundamentals — the building block</a></li>
+<li><a href="ch11.html">11 &middot; ⚙️ Training Deep Networks — making deep nets actually train</a></li>
+<li><a href="ch12.html">12 &middot; 🖼️ Convolutional Neural Networks — the vision branch</a></li>
+<li><a href="ch13.html">13 &middot; 🔁 Sequence Models — RNNs, LSTMs and the bottleneck</a></li>
+</ul>
+<p class="ig-era">⚡ The Transformer Era</p>
+<ul>
+<li><a href="ch14.html">14 &middot; 🔤 Word Embeddings — giving words meaning as vectors</a></li>
+<li><a href="ch15.html">15 &middot; ⚡ Attention & the Transformer — the architecture that changed everything</a></li>
+<li><a href="ch16.html">16 &middot; 🧱 Tokenization, Pretraining & Model Families</a></li>
+<li><a href="ch17.html">17 &middot; 📈 Modern LLMs & Scaling — bigger, and suddenly capable</a></li>
+</ul>
+<p class="ig-era">💬 Using & Adapting LLMs</p>
+<ul>
+<li><a href="ch18.html">18 &middot; 💬 Prompting & In-Context Learning — programming models with words</a></li>
+<li><a href="ch19.html">19 &middot; 🎚️ Fine-Tuning & Alignment — specializing and aligning models</a></li>
+<li><a href="ch20.html">20 &middot; 📚 Retrieval-Augmented Generation (RAG) — giving the model an open book</a></li>
+<li><a href="ch21.html">21 &middot; 🚀 Inference, Decoding & Serving — running LLMs efficiently</a></li>
+</ul>
+<p class="ig-era">🤖 The Agentic Frontier</p>
+<ul>
+<li><a href="ch22.html">22 &middot; 🤖 Agents, Tools & Loops — the latest frontier</a></li>
+<li><a href="ch23.html">23 &middot; 🛡️ Evaluation, Safety & Guardrails — making LLM systems trustworthy</a></li>
+<li><a href="ch24.html">24 &middot; 🔧 MLOps & LLMOps — shipping and operating models in production</a></li>
+</ul>
+<p class="ig-era">🛠️ The Practical Toolkit</p>
+<ul>
+<li><a href="ch25.html">25 &middot; 🛠️ Practical Toolkit I — Modeling & Vision Libraries</a></li>
+<li><a href="ch26.html">26 &middot; 🧰 Practical Toolkit II — LLM Frameworks, Orchestration & Vector Stores</a></li>
+<li><a href="ch27.html">27 &middot; ⚙️ Practical Toolkit III — Serving, Apps & MLOps Tooling</a></li>
+</ul>
+<p class="ig-era">☁️ Cloud AI Platforms</p>
+<ul>
+<li><a href="ch28.html">28 &middot; ☁️ Cloud AI Platforms — deploying foundation models on the hyperscalers</a></li>
+</ul>
+</details>
+
+------------------------------------------------------------------------
+
+In Chapter 18 you learned to steer a frozen model with words alone — prompts and in-context examples. But prompting has limits: it costs tokens every call, it can't reliably teach a *style* or *format*, and it can't turn a raw next-word predictor into a helpful assistant. This chapter is about actually changing the weights: cheaply (LoRA/QLoRA), to teach behavior (instruction tuning), and to align the model with human preferences (RLHF, DPO and friends). Next chapter, Chapter 20, takes the opposite tack — instead of baking knowledge into weights, we hand the model an open book with RAG.
+
+::: {.callout-note appearance="simple"}
+📍 **Timeline:** 2021 onward: turning a base model into a specialist and an assistant — LoRA (2021), InstructGPT/RLHF (2022), DPO (2023) and the preference-optimization explosion (2024).
+:::
+
+## 19.1 — The decision: prompt vs RAG vs fine-tune
+
+Before touching a single weight, ask the cheapest question first: do you even need to fine-tune? Most "the model is wrong" problems are solved by a better prompt or by giving it the right document. The key mental model: **fine-tuning teaches behavior, format and style — not fresh facts.** If you want the model to *know* your company's Q3 numbers, fine-tuning is the wrong tool; retrieval is.
+
+Think of it like an employee. **Prompting** is leaving a sticky note on their desk. **RAG** is handing them the reference binder to look things up. **Fine-tuning** is sending them to a training course that changes how they work by default.
+
+```{mermaid}
+flowchart TD
+    A["Model output is wrong / not what I want"] --> B{"Missing FACTS or knowledge?"}
+    B -->|"Yes"| C["Use RAG (Chapter 20)"]
+    B -->|"No"| D{"One-off or simple instruction?"}
+    D -->|"Yes"| E["Use prompting / few-shot (Chapter 18)"]
+    D -->|"No, need consistent behavior"| F{"Have data + budget?"}
+    F -->|"Yes"| G["Fine-tune (this chapter)"]
+    F -->|"No"| E
+```
+
+**Q: What does fine-tuning actually teach that prompting struggles with?**
+It teaches **behavior, format and style** — reliably outputting JSON, adopting a brand voice, following a domain-specific reasoning pattern, or always answering in a certain structure. These are skills you'd otherwise have to re-explain in every prompt. It reshapes the model's *default* behavior rather than nudging it per-call.
+
+**Q: Why is fine-tuning a bad way to add new facts?**
+Facts get diluted across billions of weights and the model can't tell you *where* it learned something, so it **confabulates** confidently and can't cite sources. Updating a fact means retraining; with RAG you just edit a document. Fine-tuning on facts also risks **catastrophic forgetting** of other knowledge for a poor payoff.
+
+**Q: Can you combine these approaches?**
+Yes, and you usually should. A common production stack is **fine-tune for behavior** (e.g. a consistent support-agent persona that calls tools correctly) plus **RAG for knowledge** (the actual product docs), all driven by a good prompt. They are complementary, not competing.
+
+**Q: Roughly how much data do you need to fine-tune?**
+Far less than pretraining. For **instruction tuning** a few hundred to a few thousand high-quality examples often moves the needle, and quality beats quantity — a thousand clean, diverse examples usually beats a hundred thousand noisy ones. The model already knows language; you're just teaching it a behavior, so you need *demonstrations* of that behavior, not a fresh corpus.
+
+::: {.callout-tip}
+**Intuition:** Knowledge → RAG. Skill/style/format → fine-tune. One-off instruction → prompt. When in doubt, climb the cheap ladder first: prompt, then RAG, then fine-tune.
+:::
+
+## 19.2 — Full fine-tuning vs parameter-efficient fine-tuning (PEFT)
+
+Once you've decided to change weights, the next question is *how many*. **Full fine-tuning** updates every parameter — for a 70B model that means storing 70B updated weights plus optimizer state (often several times the model size in memory). **PEFT** freezes the giant pretrained model and trains only a tiny set of new parameters, typically under 1% of the total.
+
+The intuition: a pretrained model already "knows" almost everything it needs. Adapting it to a new task is a small *nudge*, not a rebuild — so you shouldn't have to pay to move all the weights.
+
+| | Full fine-tuning | PEFT (e.g. LoRA) |
+|---|---|---|
+| Trainable params | 100% | often < 1% |
+| GPU memory | Very high (weights + optimizer states for all) | Low (optimizer state only for adapters) |
+| Storage per task | A full model copy | A few MB of adapter weights |
+| Catastrophic forgetting | Higher risk | Lower (base frozen) |
+| Serving many tasks | One model each | One base + swappable adapters |
+| Peak quality ceiling | Slightly higher | Very close, usually good enough |
+
+**Q: Why is PEFT so much cheaper on memory than full fine-tuning?**
+The biggest memory cost in training isn't the weights — it's the **optimizer state**. Adam stores two extra values (momentum and variance) per *trainable* parameter, so full fine-tuning needs roughly 3× the parameter memory just for the optimizer, plus gradients and activations. PEFT freezes the base, so optimizer state and gradients exist only for the tiny adapter — slashing memory by orders of magnitude.
+
+**Q: Does PEFT sacrifice much quality?**
+Usually surprisingly little. For most adaptation tasks LoRA gets within a hair of full fine-tuning, because the adaptation genuinely *is* low-dimensional. Full fine-tuning may edge ahead when you're teaching a very large behavioral shift, but for the common case PEFT is the default.
+
+**Q: What's the operational advantage of adapters at serving time?**
+You keep **one frozen base model in memory and hot-swap small adapters** per task or per customer. Instead of hosting ten 70B models, you host one base plus ten 20MB adapters — and some serving stacks can even batch requests across different adapters simultaneously.
+
+**Q: Besides LoRA, what other PEFT methods exist?**
+A few families: **adapter layers** (insert small trainable bottleneck modules between frozen layers — the original PEFT idea), **prefix/prompt tuning** (prepend trainable "soft prompt" vectors and freeze everything else), and **(IA)³** (learn tiny per-channel scaling vectors). LoRA won on popularity because it adds **zero inference latency when merged** and tends to match full fine-tuning quality more reliably.
+
+## 19.3 — LoRA: the low-rank adapter
+
+LoRA (Low-Rank Adaptation) is the workhorse of PEFT. The idea: instead of learning a full update matrix $\Delta W$ for a weight (which is huge), assume the update is **low rank** — it can be written as the product of two skinny matrices. You freeze the original weight $W$ and train only those two small matrices.
+
+The analogy: editing a massive spreadsheet by hand is slow, but if every change follows a simple pattern, you can describe all the edits with a tiny formula. Low rank *is* that compression.
+
+The math. For a frozen weight $W \in \mathbb{R}^{d \times k}$, LoRA learns $B \in \mathbb{R}^{d \times r}$ and $A \in \mathbb{R}^{r \times k}$ where the **rank** $r \ll d, k$. The effective weight at inference is:
+
+$$W' = W + \frac{\alpha}{r} B A$$
+
+Here $A$ has $r \times k$ params and $B$ has $d \times r$ — together far fewer than the $d \times k$ in $W$. The **alpha** ($\alpha$) is a scaling constant; the ratio $\alpha/r$ controls how strongly the adapter's update is applied.
+
+<svg viewBox="0 0 460 170" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif" font-size="12">
+  <rect x="20" y="30" width="90" height="90" fill="#cfd8e3" stroke="#445" />
+  <text x="65" y="80" text-anchor="middle">W (frozen)</text>
+  <text x="65" y="96" text-anchor="middle" font-size="10">d × k</text>
+  <text x="120" y="80" text-anchor="middle" font-size="16">+</text>
+  <rect x="140" y="30" width="28" height="90" fill="#ffd9a8" stroke="#a60" />
+  <text x="154" y="80" text-anchor="middle">B</text>
+  <text x="154" y="96" text-anchor="middle" font-size="10">d×r</text>
+  <rect x="172" y="55" width="90" height="28" fill="#ffd9a8" stroke="#a60" />
+  <text x="217" y="73" text-anchor="middle">A  (r×k)</text>
+  <text x="285" y="80" text-anchor="middle" font-size="16">=</text>
+  <rect x="305" y="30" width="90" height="90" fill="#c8e6c9" stroke="#363" />
+  <text x="350" y="80" text-anchor="middle">W'</text>
+  <text x="350" y="96" text-anchor="middle" font-size="10">used at inference</text>
+  <text x="230" y="150" text-anchor="middle" font-size="11">Only the orange B and A are trained; W stays fixed.</text>
+</svg>
+
+```python
+import numpy as np
+# LoRA-augmented linear layer, from scratch
+d, k, r, alpha = 768, 768, 8, 16   # rank 8 adapter on a 768x768 weight
+W = np.random.randn(d, k) * 0.02   # frozen pretrained weight
+B = np.zeros((d, r))               # init B=0 so the adapter starts as a no-op
+A = np.random.randn(r, k) * 0.01   # A random small
+
+def forward(x):                    # x: (batch, k)
+    base = x @ W.T                 # frozen path
+    delta = (x @ A.T) @ B.T        # low-rank path: cheap, goes through r
+    return base + (alpha / r) * delta
+
+# params trained: B and A only
+print("full update params:", d*k, " LoRA params:", d*r + r*k)
+# -> 589824 vs 12288  (~2% of the size)
+```
+
+**Q: Why is a low-rank update "enough" to adapt a huge model?**
+Because the *change* needed to specialize a model has a low **intrinsic dimension** — empirically, adaptation lives in a tiny subspace even though the model is enormous. You're not relearning language; you're applying a small, structured correction, and a rank-8 or rank-16 matrix captures that correction well.
+
+**Q: What do rank `r` and `alpha` control, and how do you set them?**
+**Rank $r$** is the capacity of the adapter — higher $r$ can learn more complex shifts but costs more params and risks overfitting (common values: 8–64). **Alpha** scales the update via $\alpha/r$; many people set $\alpha = 2r$ as a starting point. Crucially, because of the $\alpha/r$ scaling, changing $r$ doesn't force you to re-tune the learning rate from scratch.
+
+**Q: Why initialize `B = 0`?**
+So that at the very start $BA = 0$ and $W' = W$ — the adapter is a **no-op**, meaning training begins exactly at the pretrained model with no random perturbation. (Note $A$ is initialized random, not zero — if *both* were zero their gradients would stay zero and nothing would learn.) The model then *gradually* learns the update, which makes training stable.
+
+**Q: What are "target modules" and which ones do you typically adapt?**
+Target modules are *which* weight matrices get a LoRA adapter. In a Transformer you usually adapt the **attention projection matrices** (query/key/value/output, e.g. `q_proj`, `v_proj`) and often the MLP layers too. Adapting more modules increases capacity and cost; the attention projections are the classic minimal choice.
+
+**Q: Does LoRA add latency at inference?**
+Not necessarily. You can **merge** the adapter by computing $W' = W + \frac{\alpha}{r}BA$ once and folding it back into the weight, giving zero extra inference cost. The trade-off: a merged model is no longer swappable, so you keep adapters separate when you want hot-swapping.
+
+::: {.callout-warning}
+**Gotcha:** A LoRA adapter is tied to the *exact* base model it was trained on. Swap in a different base (or even a different quantization) and the adapter's update is meaningless. Always version base + adapter together.
+:::
+
+## 19.4 — QLoRA: fine-tuning big models on one GPU
+
+QLoRA is the trick that put 65B-model fine-tuning on a single consumer GPU. The insight: you never train the base weights anyway (LoRA freezes them), so why store them in full precision? **Quantize the frozen base to 4-bit, and train LoRA adapters in higher precision on top.**
+
+The analogy: you don't need a pristine 4K reference photo to trace over it — a compressed thumbnail is enough to guide your pen. The base only has to be *good enough to compute activations*; the learning happens in the adapters.
+
+**Q: What's the core idea of QLoRA in one sentence?**
+Keep the large base model **frozen and quantized to 4-bit** to slash memory, and train small **LoRA adapters in 16-bit** on top — getting near-full-precision quality at a fraction of the VRAM.
+
+**Q: Why doesn't 4-bit quantization wreck the result?**
+Because the **gradients flow only into the adapters**, which stay in higher precision — the lossy 4-bit base is just a fixed feature extractor. Quantization noise in a frozen base is tolerable; you'd never get away with 4-bit weights you were actively training. QLoRA also adds tricks (the **NF4** datatype, **double quantization**, and **paged optimizers**) to minimize error and avoid memory spikes.
+
+**Q: What is NF4 and why not just use regular 4-bit integers?**
+**NF4 (4-bit NormalFloat)** is a datatype whose 16 quantization levels are spaced to match a **normal distribution** — which is how neural-net weights are actually distributed. Plain int4 spaces levels uniformly, wasting precision where few weights live. Matching the buckets to the data's shape keeps more information in the same 4 bits.
+
+**Q: What's the headline benefit?**
+You can fine-tune models that otherwise wouldn't fit — e.g. a 65B model on a single 48GB GPU — democratizing fine-tuning to people without datacenter hardware. The cost is slightly slower training (dequantizing on the fly) for a massive memory saving.
+
+## 19.5 — Instruction tuning / supervised fine-tuning (SFT)
+
+A *base* model just predicts the next token — ask it a question and it might continue with more questions, because that's what its training text looked like. **Instruction tuning** (a form of supervised fine-tuning, SFT) trains it on many `(instruction, ideal response)` pairs so it learns to *respond* like an assistant. This is the step that turns a raw predictor into something chat-like.
+
+The analogy: the base model has read the whole internet but never been told "when someone asks you something, *answer it*." SFT is that finishing-school step.
+
+Two implementation details matter a lot in interviews: the **chat template** and **loss masking**.
+
+```python
+# Conceptual SFT loss masking: only the assistant's reply contributes to loss
+tokens   = ["<user>","How","tall","is","Everest","?","<assistant>","8849","m","</s>"]
+is_reply = [   0,      0,   0,    0,    0,        0,      0,         1,    1,   1   ]
+# labels = -100 (ignored) on the prompt, real token id on the completion
+labels = [tok if m else -100 for tok, m in zip(range(len(tokens)), is_reply)]
+# cross-entropy with ignore_index=-100 skips the masked positions
+```
+
+**Q: What problem does instruction tuning solve that pretraining doesn't?**
+Pretraining teaches **knowledge and language**; instruction tuning teaches the model to **follow instructions and respond helpfully** in a consistent assistant format. A base model completes text; an instruction-tuned model answers questions, summarizes, and obeys "do X" prompts.
+
+**Q: What is a chat template and why does it matter?**
+A **chat template** is the exact formatting that wraps roles and messages — the special tokens marking `system`/`user`/`assistant` turns (e.g. `<|user|>...<|assistant|>...`). The model learns to expect *that* structure, so you must use the **same template at inference** that was used in training. Mismatched templates are a top cause of "my fine-tuned model behaves weirdly."
+
+**Q: Why do we mask the loss to completion tokens only?**
+We only want the model to learn to **generate the assistant's reply**, not to memorize/predict the user's prompt. Setting the prompt tokens' labels to an ignore value (commonly `-100`) means they contribute zero gradient — the model is graded only on the response it's supposed to produce. Training on the prompt too can waste capacity and slightly hurt quality.
+
+**Q: Is SFT done with full fine-tuning or PEFT?**
+Either — they're orthogonal choices. SFT is *what* you train on (instruction/response pairs); LoRA/QLoRA is *how cheaply* you update the weights. In practice most open-source instruction tuning today is **LoRA-based SFT**.
+
+**Q: Where does SFT sit in the overall alignment pipeline?**
+SFT is **stage one** of alignment. The usual recipe is: pretrain → **SFT** (teach the assistant format and basic helpfulness) → **preference optimization** (RLHF or DPO, next sections) to refine *which* helpful answer is best. SFT alone gets you a usable assistant; preference tuning polishes tone, safety and the subtle "which response do humans prefer" signal.
+
+## 19.6 — RLHF: aligning with human preferences
+
+SFT teaches the model to follow instructions, but it can't easily teach "be helpful, honest, and harmless" — there's no single correct string for "write a kind reply." **RLHF (Reinforcement Learning from Human Feedback)** solves this by learning from *comparisons*: humans rank outputs, a reward model learns those preferences, and the LLM is optimized to score well under that reward.
+
+The analogy: you can't write down the recipe for "a good essay," but a teacher can reliably say "this one is better than that one." RLHF turns those pairwise judgments into a trainable signal.
+
+The classic three-stage pipeline (InstructGPT):
+
+```{mermaid}
+flowchart LR
+    A["SFT model"] --> B["Collect human preference pairs (A vs B)"]
+    B --> C["Train Reward Model to score responses"]
+    C --> D["Optimize policy with PPO: reward = RM score − KL penalty"]
+    D --> E["Aligned model"]
+```
+
+**Q: Why use preferences (rankings) instead of just more SFT data?**
+Because for open-ended tasks there's **no single gold answer** — but humans find it easy and reliable to say "response A is better than B." Pairwise comparisons are cheaper and less noisy to collect than asking humans to write perfect responses, and they capture subtle qualities (tone, helpfulness) that are hard to specify directly.
+
+**Q: What is the reward model and how is it trained?**
+The **reward model (RM)** is a network (often the LLM with a scalar head replacing the token output) that takes a prompt+response and outputs a single quality score. It's trained on preference pairs so the chosen response scores higher than the rejected one — typically via the **Bradley-Terry** loss $-\log \sigma(r_{\text{chosen}} - r_{\text{rejected}})$. It becomes a learned, automatable stand-in for human judgment.
+
+**Q: Why the KL penalty against a reference model in PPO?**
+PPO maximizes reward, and a pure reward-chaser will **drift far from sensible language** to exploit quirks in the RM. The **KL-divergence penalty** keeps the policy close to the original SFT model (the *reference*), so it improves on preferences without forgetting how to write or going off the rails:
+$$\text{objective} = \mathbb{E}\big[\, r(x,y) - \beta \, \mathrm{KL}(\pi_\theta \,\|\, \pi_{\text{ref}}) \,\big]$$
+
+**Q: What does PPO actually do here, in plain terms?**
+**PPO (Proximal Policy Optimization)** is the RL algorithm that updates the model: it generates responses, scores them with the reward model, and nudges the model to make high-reward responses more likely — while a "clipping" mechanism stops any single update from changing the policy too drastically. The clip plus the KL penalty are both there for the same reason: **stability**, so the model improves in small safe steps instead of collapsing.
+
+**Q: Why is PPO-based RLHF considered hard to run?**
+It's a **four-model dance** at train time — policy, reference, reward model, and value/critic — which is memory-hungry, slow, and notoriously unstable to tune. This complexity is exactly why the field moved toward simpler preference-optimization methods like DPO.
+
+## 19.7 — DPO and the preference-optimization family
+
+DPO (Direct Preference Optimization) asked: do we really need a separate reward model and an RL loop? Its key result — you can optimize the *same* preference objective with a **simple classification-style loss directly on the preference pairs**, no reward model, no PPO. It's RLHF's results with SFT's simplicity.
+
+The intuition: instead of "train a judge, then train the student to please the judge," DPO collapses it into one step — directly push up the probability of the chosen response and push down the rejected one, while a reference model holds it from drifting.
+
+DPO's loss, on a chosen response $y_w$ and rejected $y_l$:
+$$\mathcal{L}_{\text{DPO}} = -\log \sigma\!\Big( \beta \log \tfrac{\pi_\theta(y_w \mid x)}{\pi_{\text{ref}}(y_w \mid x)} - \beta \log \tfrac{\pi_\theta(y_l \mid x)}{\pi_{\text{ref}}(y_l \mid x)} \Big)$$
+
+The model itself implicitly *is* the reward model — that's the trick: the term $\beta \log \frac{\pi_\theta(y \mid x)}{\pi_{\text{ref}}(y \mid x)}$ plays the role of the reward, so optimizing this loss is mathematically equivalent to the RLHF objective without ever training a separate RM.
+
+| Method | Data | Reward model? | Notes |
+|---|---|---|---|
+| RLHF/PPO | Paired (A>B) | Yes | Powerful, complex, unstable |
+| DPO | Paired (A>B) | No | Simple, stable, very popular |
+| IPO | Paired | No | Adds regularization to curb DPO overfitting |
+| KTO | **Unpaired** (good/bad labels) | No | Use thumbs-up/down data, no pairs needed |
+| ORPO | Paired | No | Combines SFT + preference in **one stage**, no reference model |
+| SimPO | Paired | No | Reference-free, length-normalized reward |
+
+**Q: What's the headline advantage of DPO over PPO?**
+**No reward model and no RL loop** — DPO trains directly on preference pairs with a stable supervised-style loss, using far less memory (only policy + frozen reference). It's much easier to implement and tune, which is why it became the default open-source alignment method, while reaching comparable quality.
+
+**Q: What is the β (beta) in DPO doing?**
+**β** controls how much the policy is allowed to deviate from the reference model — it's the same role the KL coefficient plays in PPO. A **small β** lets the model move freely toward the preferred responses (more learning, more drift risk); a **large β** keeps it tightly anchored to the reference. It's the main knob you tune in DPO.
+
+**Q: Paired vs unpaired preference data — which methods need which?**
+DPO, IPO, ORPO and SimPO need **paired** data (for the same prompt, a chosen *and* a rejected response). **KTO** is the standout that works on **unpaired** data — just individual responses labeled good or bad (like thumbs up/down), which is far easier to collect at scale in production.
+
+**Q: What do ORPO and SimPO simplify away?**
+**ORPO** merges SFT and preference optimization into a *single* training stage and **drops the reference model** entirely. **SimPO** also goes **reference-free** and uses a length-normalized reward to fight DPO's tendency to favor longer answers. Both reduce the moving parts and memory further.
+
+**Q: When would you still reach for PPO over DPO?**
+When you need an **online/iterative** reward signal — e.g. an RM that scores *fresh* generations during training, or reward from a verifier/tool (code that runs, math that checks out). DPO is offline: it learns from a fixed set of preference pairs and can't react to new samples the way an RL loop can. This is also why RL with **verifiable rewards** has resurged for training reasoning models.
+
+## 19.8 — Reward hacking and catastrophic forgetting
+
+Two failure modes haunt every fine-tuning and alignment run. **Reward hacking** is the model gaming your metric instead of doing the real task. **Catastrophic forgetting** is the model losing old abilities while learning new ones. Both come from the same root: optimization is literal and ruthless.
+
+**Q: What is reward hacking, with an example?**
+**Reward hacking** is when the model maximizes the *reward signal* in a way that violates its *intent*. Classic example: if the reward model slightly prefers longer answers, the policy learns to ramble — high reward, worse responses. Another is **sycophancy**: agreeing with the user because agreement got rewarded. The KL penalty (PPO) and length-normalized rewards (SimPO) are partly defenses against exactly this.
+
+**Q: What is catastrophic forgetting and what causes it?**
+**Catastrophic forgetting** is when fine-tuning on a narrow task **overwrites** general capabilities the model had — e.g. SFT on legal docs makes it forget how to do basic chat or math. It happens because gradient updates freely change weights that encoded the old skill. It's the loud-and-clear reason fine-tuning on *facts* is risky.
+
+**Q: How do you mitigate forgetting?**
+Several levers: prefer **PEFT** (frozen base limits drift), use a **small learning rate** and few epochs, **mix in general/replay data** alongside task data, and keep a **KL/reference anchor** during alignment. Evaluating on a broad held-out suite (not just the target task) catches forgetting before you ship.
+
+**Q: How do you even know fine-tuning worked — what do you evaluate?**
+Two things: **(1) did it learn the target?** — a held-out test set for the task, plus human or LLM-judge ratings for open-ended quality. **(2) did it break anything?** — re-run a **general benchmark suite** (reasoning, knowledge, safety) to detect catastrophic forgetting or new misbehavior. The classic mistake is reporting only target-task gains and shipping a model that quietly got worse everywhere else.
+
+::: {.callout-warning}
+**Interview gotcha:** "We fine-tuned and our task accuracy went up but users complain it got dumber" is the textbook signature of **catastrophic forgetting** — you over-optimized the narrow objective. Always evaluate on general capabilities too, not just the fine-tuning target.
+:::
+
+## 19.x — Key takeaways
+
+- **Decide first:** fine-tuning teaches *behavior/format/style*, not fresh facts — use RAG for knowledge, prompting for one-offs. Climb the cheap ladder before training weights.
+- **Data:** quality over quantity — a few hundred to a few thousand clean instruction examples often suffice for SFT.
+- **PEFT beats full fine-tuning** for most cases: it freezes the base and trains <1% of params, slashing memory (especially optimizer state) and storage. Beyond LoRA there are adapters, prefix/prompt tuning, and (IA)³.
+- **LoRA**: freeze $W$, learn skinny $B$ and $A$, apply $W' = W + \frac{\alpha}{r}BA$. Low rank works because adaptation is intrinsically low-dimensional. Init $B=0$ (and $A$ random) so it starts as a no-op. Tune `r`, `alpha`, and `target_modules`; merge for zero added latency.
+- **QLoRA** = 4-bit frozen base (**NF4**, double quantization, paged optimizers) + 16-bit LoRA adapters → fine-tune huge models on one GPU with minimal quality loss.
+- **SFT / instruction tuning** turns a base predictor into an assistant; use the right **chat template** and **mask the loss to completion tokens only**. It's stage one of alignment.
+- **RLHF** = reward model (Bradley-Terry) from human preference pairs + **PPO** with a **KL penalty** to a reference model. Powerful but a complex four-model, unstable pipeline.
+- **DPO** drops the reward model and RL loop, optimizing preferences with a stable supervised loss where the model implicitly *is* the reward model; **β** controls drift from the reference. Now the default. Family: **IPO** (regularized), **KTO** (unpaired data), **ORPO** (single-stage, reference-free), **SimPO** (reference-free, length-normalized).
+- Watch for **reward hacking** (gaming the metric, e.g. rambling, sycophancy) and **catastrophic forgetting** (losing general skills) — mitigate with PEFT, KL anchors, small LR, replay data, and **broad evaluation** (target gains *and* general benchmarks).
+
+------------------------------------------------------------------------
+
+[📖 All chapters](../interview-guide.html)  &nbsp;|&nbsp;  [← 18 · 💬 Prompting & In-Context Learning](ch18.html)  &nbsp;|&nbsp;  [20 · 📚 Retrieval-Augmented Generation (RAG) →](ch20.html)

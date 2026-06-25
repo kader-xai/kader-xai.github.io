@@ -1,0 +1,389 @@
+---
+title: "Chapter 21 — 🚀 Inference, Decoding & Serving — running LLMs efficiently"
+page-layout: full
+toc: true
+toc-location: left
+toc-title: "In this chapter"
+toc-depth: 2
+toc-expand: true
+---
+
+[📖 All chapters](../interview-guide.html)  &nbsp;|&nbsp;  [← 20 · 📚 Retrieval-Augmented Generation (RAG)](ch20.html)  &nbsp;|&nbsp;  [22 · 🤖 Agents, Tools & Loops →](ch22.html)
+
+<details class="ig-jump">
+<summary>📚 Jump to any chapter</summary>
+<p class="ig-era">🧮 Mathematical Foundations</p>
+<ul>
+<li><a href="ch01.html">01 &middot; 🧮 Linear Algebra — the language of data</a></li>
+<li><a href="ch02.html">02 &middot; 📉 Calculus & Optimization — how models learn</a></li>
+<li><a href="ch03.html">03 &middot; 🎲 Probability & Statistics — reasoning under uncertainty</a></li>
+<li><a href="ch04.html">04 &middot; 🔥 Information Theory & Loss Functions — measuring surprise and error</a></li>
+</ul>
+<p class="ig-era">🧩 Classical Machine Learning</p>
+<ul>
+<li><a href="ch05.html">05 &middot; 🧩 Core ML Concepts — the ground rules</a></li>
+<li><a href="ch06.html">06 &middot; 📐 Classical Supervised Algorithms — the workhorses</a></li>
+<li><a href="ch07.html">07 &middot; 🌲 Ensembles & Boosting — how to win on tabular data</a></li>
+<li><a href="ch08.html">08 &middot; 🗺️ Unsupervised Learning & Dimensionality Reduction — structure without labels</a></li>
+<li><a href="ch09.html">09 &middot; 🎯 Model Evaluation & Validation — knowing if it actually works</a></li>
+</ul>
+<p class="ig-era">🧠 Deep Learning</p>
+<ul>
+<li><a href="ch10.html">10 &middot; 🧠 Neural Network Fundamentals — the building block</a></li>
+<li><a href="ch11.html">11 &middot; ⚙️ Training Deep Networks — making deep nets actually train</a></li>
+<li><a href="ch12.html">12 &middot; 🖼️ Convolutional Neural Networks — the vision branch</a></li>
+<li><a href="ch13.html">13 &middot; 🔁 Sequence Models — RNNs, LSTMs and the bottleneck</a></li>
+</ul>
+<p class="ig-era">⚡ The Transformer Era</p>
+<ul>
+<li><a href="ch14.html">14 &middot; 🔤 Word Embeddings — giving words meaning as vectors</a></li>
+<li><a href="ch15.html">15 &middot; ⚡ Attention & the Transformer — the architecture that changed everything</a></li>
+<li><a href="ch16.html">16 &middot; 🧱 Tokenization, Pretraining & Model Families</a></li>
+<li><a href="ch17.html">17 &middot; 📈 Modern LLMs & Scaling — bigger, and suddenly capable</a></li>
+</ul>
+<p class="ig-era">💬 Using & Adapting LLMs</p>
+<ul>
+<li><a href="ch18.html">18 &middot; 💬 Prompting & In-Context Learning — programming models with words</a></li>
+<li><a href="ch19.html">19 &middot; 🎚️ Fine-Tuning & Alignment — specializing and aligning models</a></li>
+<li><a href="ch20.html">20 &middot; 📚 Retrieval-Augmented Generation (RAG) — giving the model an open book</a></li>
+<li><a href="ch21.html">21 &middot; 🚀 Inference, Decoding & Serving — running LLMs efficiently</a></li>
+</ul>
+<p class="ig-era">🤖 The Agentic Frontier</p>
+<ul>
+<li><a href="ch22.html">22 &middot; 🤖 Agents, Tools & Loops — the latest frontier</a></li>
+<li><a href="ch23.html">23 &middot; 🛡️ Evaluation, Safety & Guardrails — making LLM systems trustworthy</a></li>
+<li><a href="ch24.html">24 &middot; 🔧 MLOps & LLMOps — shipping and operating models in production</a></li>
+</ul>
+<p class="ig-era">🛠️ The Practical Toolkit</p>
+<ul>
+<li><a href="ch25.html">25 &middot; 🛠️ Practical Toolkit I — Modeling & Vision Libraries</a></li>
+<li><a href="ch26.html">26 &middot; 🧰 Practical Toolkit II — LLM Frameworks, Orchestration & Vector Stores</a></li>
+<li><a href="ch27.html">27 &middot; ⚙️ Practical Toolkit III — Serving, Apps & MLOps Tooling</a></li>
+</ul>
+<p class="ig-era">☁️ Cloud AI Platforms</p>
+<ul>
+<li><a href="ch28.html">28 &middot; ☁️ Cloud AI Platforms — deploying foundation models on the hyperscalers</a></li>
+</ul>
+</details>
+
+------------------------------------------------------------------------
+
+In Chapter 20 we gave the model an open book with RAG, but a retrieved context is useless if the model takes ten seconds to answer or costs a fortune to run. This chapter is about the *runtime*: how a trained model actually turns into tokens on a screen — the decoding strategies that shape what it says, the KV cache, FlashAttention and quantization tricks that make it fast and cheap, and the serving systems (vLLM, continuous batching) that let one GPU answer thousands of users. With efficient inference in hand, Chapter 22 turns these models into agents that loop, call tools, and act.
+
+::: {.callout-note appearance="simple"}
+📍 **Timeline:** 2022–today — once models worked, the race shifted to making generation fast, cheap and scalable, so a 70B model could serve real traffic instead of sitting in a lab.
+:::
+
+## 21.1 — Decoding strategies: turning probabilities into words
+
+A language model does not output words. At each step it outputs a **probability distribution over the whole vocabulary** — a number for every possible next token. *Decoding* is the rule you use to pick the next token from that distribution. The same model can sound robotic and repetitive or creative and surprising depending only on this choice. Think of it as a chef (the model) handing you a ranked list of ingredients; decoding is *how you decide which one to grab*.
+
+The model produces raw scores called **logits**; a softmax turns them into probabilities. Decoding then either picks the top choice, searches several paths, or rolls a weighted die.
+
+```python
+import numpy as np
+
+def softmax(logits, temperature=1.0):
+    # temperature divides logits BEFORE softmax: <1 sharpens, >1 flattens
+    z = logits / temperature
+    z = z - z.max()              # numerical stability
+    e = np.exp(z)
+    return e / e.sum()
+
+logits = np.array([2.0, 1.0, 0.1])      # 3-word vocab
+print(softmax(logits, 1.0))             # [0.659 0.242 0.099]
+print(softmax(logits, 0.5))             # sharper: [0.787 0.196 0.017]
+print(softmax(logits, 2.0))             # flatter: [0.506 0.307 0.187]
+```
+
+**Q: What is greedy decoding and what is its weakness?**
+**Greedy decoding** picks the single highest-probability token at every step. It is fast and deterministic, but **myopic**: the locally best token can lead into a globally worse sentence, and it tends to produce dull, repetitive text. It never reconsiders a choice once made.
+
+**Q: How does beam search differ from greedy?**
+**Beam search** keeps the top $k$ partial sequences (the *beams*) at each step instead of just one, expanding all of them and keeping the $k$ best by cumulative log-probability. It finds higher-probability sequences than greedy, so it is good for **closed-ended tasks** like translation or summarization. The cost is more compute, and for open-ended chat it produces bland, generic text — high probability is not the same as interesting.
+
+**Q: Why do we use the sum of log-probabilities instead of multiplying probabilities?**
+Multiplying many probabilities (each $<1$) **underflows** to zero and is numerically unstable. Since $\log(ab)=\log a+\log b$, summing log-probs is equivalent for ranking but stable: $\text{score}=\sum_i \log p(x_i)$. Adding negative numbers stays in a safe range.
+
+**Q: When would you NOT want beam search?**
+For **open-ended generation** (storytelling, chat, brainstorming). Beam search optimizes for the most *probable* continuation, which is usually the most *generic* one — you get safe, repetitive output. Sampling-based methods give the diversity these tasks need.
+
+## 21.2 — Sampling knobs: temperature, top-k, top-p, repetition penalty
+
+Instead of always taking the top token, we can **sample** — roll a weighted die over the distribution. This brings creativity and variety, but raw sampling occasionally picks an absurd low-probability token and derails. The knobs below let you tune the trade-off between **boring-but-safe** and **creative-but-risky** by reshaping or truncating the distribution before you sample.
+
+The intuition: **temperature** changes how peaked the distribution is; **top-k** and **top-p** chop off the unreliable tail; **repetition penalty** discourages loops. The tail matters more than it looks: a vocabulary has ~50k tokens, and the softmax assigns every one a tiny non-zero probability. Those thousands of near-zero tokens **sum to a non-trivial mass**, so pure sampling will eventually draw a nonsense token and derail — the phenomenon behind *neural text degeneration*. Top-p/top-k exist to amputate that unreliable tail.
+
+```python
+def sample_top_p(probs, p=0.9):
+    # nucleus: keep the smallest set of tokens whose mass >= p, renormalize
+    idx = np.argsort(probs)[::-1]            # high -> low
+    cum = np.cumsum(probs[idx])
+    cutoff = np.searchsorted(cum, p, side='left') + 1  # how many to keep
+    keep = idx[:cutoff]
+    # self-check: the kept set must cover at least p of the mass
+    assert probs[keep].sum() >= p - 1e-9
+    renorm = probs[keep] / probs[keep].sum()
+    return np.random.choice(keep, p=renorm)
+```
+
+| Knob | What it does | Low value | High value |
+|------|-------------|-----------|------------|
+| Temperature $T$ | Scales logits before softmax | Sharper, more deterministic | Flatter, more random |
+| Top-k | Keep only the $k$ most likely tokens | Conservative | Diverse |
+| Top-p (nucleus) | Keep smallest set with cumulative prob $\ge p$ | Conservative | Diverse |
+| Repetition penalty | Down-weights already-used tokens | No effect (1.0) | Strongly avoids repeats |
+
+**Q: What does temperature actually do, mechanically?**
+**Temperature** $T$ divides the logits before softmax: $p_i = \dfrac{e^{z_i/T}}{\sum_j e^{z_j/T}}$. $T<1$ makes the distribution **sharper** (more weight on the top token, more deterministic); $T>1$ **flattens** it (more random). $T \to 0$ collapses to greedy; very high $T$ approaches uniform random.
+
+**Q: What is the difference between top-k and top-p (nucleus) sampling?**
+**Top-k** keeps a *fixed number* $k$ of the most likely tokens and renormalizes. **Top-p** keeps a *variable number* — the smallest set whose cumulative probability reaches $p$. Top-p adapts to the distribution: when the model is confident it keeps few tokens, when it is unsure it keeps more. That adaptivity is why nucleus sampling is usually preferred.
+
+**Q: Why isn't pure sampling (no truncation) safe?**
+Because of the **long tail**. With a 50k-token vocabulary, even after softmax there are thousands of tokens each at ~0.0001 probability, and collectively they carry real mass. Sample long enough and you *will* draw one of these garbage tokens; once it is in the context the model can spiral into incoherence. **Top-p/top-k** cut the tail so only plausible tokens can be drawn.
+
+::: {.callout-tip}
+**Intuition:** top-k is "always invite exactly 40 guests"; top-p is "invite guests until you've covered 90% of the importance." Top-p adjusts to how spread-out the crowd is.
+:::
+
+**Q: What does repetition penalty do?**
+**Repetition penalty** divides (or subtracts from) the logits of tokens that already appeared, making the model less likely to repeat them. A value of 1.0 means no penalty; values like 1.1–1.3 reduce loops like "the the the." Related variants are **frequency penalty** (scales with how often a token appeared) and **presence penalty** (a flat penalty once a token appears at all).
+
+**Q: If you want reproducible outputs, what settings do you use?**
+Set **temperature to 0** (or use greedy decoding) and fix the random **seed**. Temperature 0 makes decoding deterministic. Note that even then, exact reproducibility across hardware or batch sizes is not guaranteed due to **floating-point non-determinism** in parallel GPU reductions.
+
+::: {.callout-warning}
+**Gotcha:** temperature, top-k and top-p stack. If you set temperature very high *and* top-p to 1.0, you remove all guardrails and get gibberish. In practice you pick one truncation method (usually top-p ≈ 0.9) and a moderate temperature (≈ 0.7), not all knobs cranked.
+:::
+
+## 21.3 — The autoregressive loop and the KV cache
+
+LLMs generate **one token at a time**, and each new token is fed back in to produce the next — this is the **autoregressive loop**. The naive way re-runs the entire model over the *whole* sequence every step, which is quadratically wasteful. The **KV cache** is the single most important inference optimization: it stores the work already done so each new token costs roughly constant compute instead of re-reading the whole past.
+
+Recall from Chapter 15 that attention computes **queries, keys, and values**. The key insight: for tokens already generated, their keys and values **never change**. So we compute them once and cache them.
+
+```{mermaid}
+flowchart LR
+    A["New token"] --> B["Compute Q, K, V for THIS token only"]
+    B --> C["Append K,V to cache"]
+    C --> D["Attention: new Q vs ALL cached K,V"]
+    D --> E["Predict next token"]
+    E --> F{"EOS or max_tokens?"}
+    F -->|"no"| A
+    F -->|"yes"| G["Stop"]
+```
+
+**Q: What does the KV cache store, and why does it help?**
+It stores the **key and value vectors** for every past token, at every layer and every attention head. Without it, generating token $n$ re-computes K and V for all $n$ tokens — $O(n)$ work per step, $O(n^2)$ total. With it, you only compute K,V for the *one* new token and attend against the cache, making each step roughly $O(1)$ in the model's forward passes. This is the difference between usably fast and unusably slow generation.
+
+**Q: Why does memory usage grow as the conversation gets longer?**
+Because the KV cache grows **linearly with sequence length**. Every new token adds its keys and values for every layer and head to the cache. Long contexts (e.g. 100k tokens) can make the KV cache larger than the model weights themselves, which is why long-context serving is memory-bound.
+
+**Q: Why don't we cache queries too?**
+Because a **query is used only once** — at the step that produced it — to attend over all past keys/values. Once you've predicted the next token, that old query is never needed again. Keys and values, by contrast, are attended *against by every future token*, so they are worth keeping.
+
+**Q: How does generation actually stop?**
+Two ways. The model emits a special **end-of-sequence (EOS) token** — a token in the vocabulary that means "I'm done" — and the loop halts when it is sampled. As a hard backstop, you also set **max_tokens** (a generation budget) so the loop terminates even if EOS never comes. You can also pass custom **stop sequences** (e.g. `"\nUser:"`) that, when matched in the output, cut generation. Without these, the loop would run forever.
+
+**Q: Give the rough size formula for the KV cache.**
+Per token: $2 \times L \times H \times d_{head} \times \text{bytes}$, where the $2$ is for K and V, $L$ is layers, $H$ is KV heads, $d_{head}$ is head dimension. Multiply by sequence length and batch size. This is exactly why techniques like **multi-query** and **grouped-query attention** (sharing K,V across heads) were invented — they shrink $H$ and so shrink the cache. We plug real numbers into this formula in §21.8.
+
+## 21.4 — Prefill vs decode: two very different phases
+
+Generation has two phases with completely different performance characteristics, and confusing them is a classic interview trap. **Prefill** processes your whole prompt at once; **decode** then emits the answer one token at a time. The analogy: prefill is *reading the question* (you can read all the words in parallel), decode is *writing the answer* (you must write it word by word).
+
+```{mermaid}
+flowchart LR
+    P["PREFILL: process N prompt tokens in parallel, fill KV cache"] --> D["DECODE: generate 1 token at a time using and extending the cache"]
+    D --> D
+```
+
+**Q: Why is prefill compute-bound but decode memory-bound?**
+In **prefill**, all prompt tokens are processed in parallel — big matrix-matrix multiplies that saturate the GPU's compute units, so it is **compute-bound**. In **decode**, you process only one token per step; the work is tiny but you must read all the model weights and the entire KV cache from memory each step. The bottleneck becomes **memory bandwidth**, not FLOPs, so decode is **memory-bound**.
+
+**Q: How does this map to the two latency metrics users feel?**
+**Time-to-first-token (TTFT)** is dominated by **prefill** — how long to digest the prompt before the first word appears. **Tokens-per-second (inter-token latency)** is dominated by **decode**. A long prompt hurts TTFT; a long answer is paced by decode speed.
+
+**Q: Why does prefill let you process all prompt tokens at once but decode cannot?**
+Because the **whole prompt is already known**, so all positions can be computed in one parallel pass. During decode, token $n+1$ **depends on** token $n$, which doesn't exist until you generate it — the dependency is sequential, so you cannot parallelize across the time dimension.
+
+**Q: What is chunked prefill and why do modern servers use it?**
+A long prefill is one giant compute job; if you let it run to completion it **blocks the GPU**, freezing the decode steps of every other in-flight request and causing latency spikes. **Chunked prefill** (used by vLLM and TensorRT-LLM) splits the prompt into smaller chunks and **interleaves** them with ongoing decode steps in the same batch. This smooths out TTFT spikes and keeps decode flowing, balancing the compute-bound and memory-bound work in one schedule.
+
+**Q: What is FlashAttention and how does it relate to all this?**
+**FlashAttention** is a fused, IO-aware attention kernel. Standard attention writes the full $N \times N$ score matrix to slow GPU memory (HBM); FlashAttention computes attention in tiles that stay in fast on-chip SRAM, never materializing the big matrix. It is **exact** (not an approximation), but far less memory-bandwidth-hungry — so alongside the KV cache it is the other half of "why modern inference is fast," especially in the memory-bound regime.
+
+## 21.5 — Quantization: trading precision for speed and memory
+
+Model weights are normally stored as 16-bit floats. **Quantization** stores them in fewer bits — 8-bit or even 4-bit integers — like saving a photo as a smaller JPEG. You lose a little fidelity but the file shrinks dramatically and loads faster. Since decode is *memory-bound*, smaller weights mean less data to move, so quantization makes inference both **cheaper** (fits on smaller GPUs) and often **faster**.
+
+The intuition: map a continuous range of float values onto a small grid of integers, remembering a scale factor to convert back.
+
+```python
+def quantize_int8(w):
+    # symmetric per-tensor int8 quantization
+    scale = np.abs(w).max() / 127.0     # map max magnitude -> 127
+    q = np.round(w / scale).astype(np.int8)
+    return q, scale
+
+def dequantize(q, scale):
+    return q.astype(np.float32) * scale  # approximate original
+
+w = np.array([0.5, -1.2, 3.1, 0.02], dtype=np.float32)
+q, s = quantize_int8(w)
+print(q)                 # [ 20 -49 127   1]
+print(dequantize(q, s))  # close to original, not exact
+```
+
+| Method | Bits | Idea | Quality cost |
+|--------|------|------|--------------|
+| FP16 / BF16 | 16 | Baseline precision | None (reference) |
+| INT8 | 8 | Linear integer mapping (needs outlier handling) | Near-lossless if outliers handled |
+| NF4 (4-bit) | 4 | "NormalFloat" grid tuned for normally-distributed weights (QLoRA) | Small |
+| GPTQ | 4 (typ.) | Post-training, minimizes layer-wise error using calibration data | Small, slower to produce |
+| AWQ | 4 (typ.) | Protects the most salient weight channels by scaling | Small, fast inference |
+
+**Q: Why does quantization speed up decode specifically?**
+Because decode is **memory-bandwidth-bound**: the bottleneck is moving weights from GPU memory to the compute units, not the math itself. Halving or quartering the bytes per weight means **less data to move per token**, so each decode step finishes faster. (Prefill, being compute-bound, benefits less directly.)
+
+**Q: What's the difference between GPTQ and AWQ?**
+Both are post-training 4-bit methods. **GPTQ** quantizes weights to minimize the reconstruction error of each layer's output, using a small calibration dataset and second-order (Hessian) information. **AWQ** (Activation-aware Weight Quantization) observes that a small fraction of weight channels matter most, and scales those to protect them. AWQ is often faster at inference and simpler; both keep quality close to FP16.
+
+**Q: What is NF4 and where is it used?**
+**NF4 (4-bit NormalFloat)** is a data type whose 16 quantization levels are spaced to match a **normal distribution**, which is how neural-net weights are roughly distributed. It is the core of **QLoRA**, where the base model is frozen in NF4 while small LoRA adapters train in higher precision (covered in Chapter 19's fine-tuning).
+
+**Q: Does quantization always degrade quality?**
+At 8-bit, **weight-only INT8 with proper outlier handling is usually near-lossless** — but naive per-tensor INT8 is *not* free: a few **activation outliers** with huge magnitudes blow up the scale factor and wreck precision, which is exactly why **LLM.int8()** uses mixed-precision decomposition (keeping the outlier dimensions in FP16). At 4-bit there is a **small** measurable drop, acceptable for most uses; below 4-bit (2–3 bit) quality degrades noticeably. There's also a distinction between **weight-only** quantization (most common) and quantizing **activations** too, which is harder precisely because of those outliers.
+
+::: {.callout-warning}
+**Gotcha:** quantizing weights does not shrink the **KV cache** unless you also quantize the cache. For long-context serving the KV cache can dominate memory, so 4-bit weights alone may not solve your memory problem — KV-cache quantization is a separate lever.
+:::
+
+## 21.6 — Batching, continuous batching, vLLM and PagedAttention
+
+A GPU is happiest doing lots of work at once. **Batching** runs many requests together so the expensive weight-loading is shared. But naive batching wastes the GPU when requests have different lengths — short answers finish early and their slot sits idle waiting for the longest one. **Continuous batching** fixes this, and **vLLM** with **PagedAttention** fixes the *memory* side of the same problem. The result is the modern high-throughput serving stack.
+
+```{mermaid}
+flowchart TD
+    subgraph Static["Static batching (wasteful)"]
+      direction LR
+      S1["req A done, slot idle"]
+      S2["req B still going"]
+    end
+    subgraph Cont["Continuous batching"]
+      direction LR
+      C1["req A done, evicted"]
+      C2["new req D slotted in immediately"]
+    end
+    Static --> Cont
+```
+
+**Q: What is continuous batching and why is it better than static batching?**
+In **static batching** the server waits for a whole batch to finish before starting the next, so finished requests waste GPU cycles waiting for the slowest one. **Continuous batching** (a.k.a. in-flight batching) operates at the **token level**: when one request finishes, it is evicted and a new request is slotted into the batch immediately. This keeps the GPU full and dramatically raises **throughput** for mixed-length workloads.
+
+**Q: What problem does PagedAttention solve?**
+Traditionally the KV cache for each request needs a **contiguous** block of memory sized for the worst-case sequence length, causing massive **fragmentation and over-reservation** (most of it unused). **PagedAttention** (from vLLM) borrows the OS idea of **virtual memory paging**: it stores the KV cache in fixed-size **non-contiguous blocks** (pages) and uses a lookup table. This near-eliminates waste, fits more concurrent requests in memory, and even lets requests **share** pages (e.g. a common prompt prefix).
+
+**Q: What is vLLM, in one sentence?**
+**vLLM** is a high-throughput LLM serving engine whose key innovation is PagedAttention; combined with continuous batching it serves many more tokens per second per GPU than naive implementations.
+
+**Q: How does prefix sharing save memory?**
+If many requests share the same **prefix** — a long system prompt, a few-shot example block — PagedAttention can store that prefix's KV pages **once** and point multiple requests at them (copy-on-write). This avoids recomputing and re-storing identical KV entries, a big win for chat apps with a fixed system prompt.
+
+## 21.7 — Throughput vs latency, and speculative decoding
+
+There is a fundamental tension: do you optimize for **one user getting a fast reply** (latency) or **the server handling the most users per second** (throughput)? Bigger batches raise throughput but can raise per-request latency. **Speculative decoding** is a clever trick that improves *latency* without changing the output — like a fast intern drafting sentences that an expert reviews in bulk.
+
+The trade-off is easiest to see as a picture: as you grow the batch size, total throughput climbs (the GPU is better utilized) but each individual request also waits longer.
+
+<svg viewBox="0 0 360 220" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif" font-size="11">
+  <line x1="45" y1="180" x2="330" y2="180" stroke="currentColor" stroke-width="1.5"/>
+  <line x1="45" y1="180" x2="45" y2="20" stroke="currentColor" stroke-width="1.5"/>
+  <text x="187" y="205" text-anchor="middle">batch size →</text>
+  <text x="18" y="100" text-anchor="middle" transform="rotate(-90 18 100)">value →</text>
+  <path d="M45,165 C120,150 210,120 330,55" fill="none" stroke="#2a9d8f" stroke-width="2.5"/>
+  <path d="M45,150 C120,148 230,140 330,110" fill="none" stroke="#e76f51" stroke-width="2.5" stroke-dasharray="5 4"/>
+  <circle cx="318" cy="60" r="3" fill="#2a9d8f"/>
+  <text x="312" y="50" text-anchor="end" fill="#2a9d8f">throughput (tok/s)</text>
+  <circle cx="318" cy="113" r="3" fill="#e76f51"/>
+  <text x="312" y="130" text-anchor="end" fill="#e76f51">per-request latency</text>
+</svg>
+
+**Q: Define throughput and latency for an LLM server, and the two latency sub-metrics.**
+**Throughput** is total tokens generated per second across all requests — a server-side, cost-efficiency metric. **Latency** is how fast one user is served, split into **time-to-first-token (TTFT)** (prefill-bound, the "spinner" time) and **inter-token latency / tokens-per-second** (decode-bound, the "typing speed"). Larger batches usually help throughput but can hurt individual latency.
+
+**Q: How does speculative decoding work?**
+A small, fast **draft model** proposes several tokens ahead (say 4). The large **target model** then verifies all of them in a *single parallel forward pass* (cheap, like prefill). Tokens that match what the big model would have produced are **accepted**; at the first mismatch you fall back to the big model's token and discard the rest. Because verification is parallel, you often get multiple tokens for the cost of roughly one big-model step.
+
+```{mermaid}
+flowchart LR
+    A["Draft model proposes 4 tokens"] --> B["Target model verifies all 4 in 1 pass"]
+    B --> C{"Match?"}
+    C -->|"accept prefix"| D["Keep accepted tokens"]
+    C -->|"first mismatch"| E["Use target's token, discard rest"]
+    D --> A
+    E --> A
+```
+
+**Q: Does speculative decoding change the output distribution?**
+**No** (for the standard rejection-sampling scheme) — that is the beauty of it. The acceptance/rejection rule is designed so the final output is **statistically identical** to sampling from the large model alone, at matched temperature. You get a latency speedup (often 2–3×) with **no quality loss**, at the cost of running an extra small model and some wasted draft compute when guesses are wrong. Some *practical* variants deliberately trade a little fidelity for more speed, so always check whether a given implementation is the exact (lossless) scheme.
+
+**Q: Can you do speculative decoding without a separate draft model?**
+Yes. Several **self-drafting** schemes drop the second model: **Medusa** adds extra prediction heads to the main model so it proposes several future tokens itself; **EAGLE** drafts in the model's feature space; **n-gram / prompt-lookup** decoding guesses the next tokens by copying from the prompt or recent text (great for summarization and code where output echoes input). All keep the same verify-and-accept idea, just with a cheaper drafter.
+
+**Q: When does speculative decoding help most / least?**
+It helps most when the draft is **accurate and cheap** and the text is **predictable** (high acceptance rate). It helps least when acceptance is low — every rejection wastes the draft work — or when the GPU is already **fully saturated** by large-batch throughput serving, where the spare compute speculation relies on isn't available.
+
+## 21.8 — Estimating GPU memory and cost
+
+A core interview skill is back-of-the-envelope sizing: *can this model even fit, and what will it cost?* The intuition is simple arithmetic — count the parameters, multiply by bytes per parameter, then add room for the KV cache and overhead.
+
+The base rule: **memory for weights ≈ params × bytes-per-param.**
+
+```python
+def weight_gb(params_billion, bytes_per_param):
+    return params_billion * 1e9 * bytes_per_param / 1e9  # = params_b * bytes
+
+for bpp, name in [(2,"FP16"), (1,"INT8"), (0.5,"4-bit")]:
+    print(name, weight_gb(70, bpp), "GB")   # 70B model
+# FP16 140.0 GB   INT8 70.0 GB   4-bit 35.0 GB
+```
+
+| Precision | Bytes/param | 7B model | 70B model |
+|-----------|-------------|----------|-----------|
+| FP32 | 4 | 28 GB | 280 GB |
+| FP16/BF16 | 2 | 14 GB | 140 GB |
+| INT8 | 1 | 7 GB | 70 GB |
+| 4-bit | 0.5 | 3.5 GB | 35 GB |
+
+**Q: A 13B model in FP16 — does it fit on a 24 GB GPU?**
+Weights are $13 \times 2 = 26$ GB, which **already exceeds 24 GB** before any KV cache or activation overhead. So no in FP16. Quantize to INT8 ($13$ GB) or 4-bit ($6.5$ GB) and it fits comfortably with room for the cache. This params × bytes rule is the first thing to compute.
+
+**Q: Work a real KV-cache size example using the §21.3 formula.**
+Take **Llama-2-7B**: $L=32$ layers, $H=32$ KV heads, $d_{head}=128$, FP16 (2 bytes). Per token the cache is $2 \times 32 \times 32 \times 128 \times 2 = 1{,}048{,}576$ bytes $\approx$ **1 MB/token**. So an 8k-token context costs roughly **8 GB** for a single sequence — already over half a 14 GB weight footprint — and a 4k-token batch of 8 requests would need ~32 GB just for cache. This is why long-context, high-batch serving is **KV-cache-bound**, and why GQA (fewer KV heads $H$) and KV-cache quantization matter so much.
+
+**Q: Besides weights, what else consumes GPU memory at inference?**
+The **KV cache** (grows with batch size × sequence length — can be huge for long contexts), **activations** for the in-flight forward pass, the **CUDA/framework overhead**, and any **fragmentation**. A common rule of thumb is to budget roughly 1.2–2× the weight size for headroom, but for long-context or high-batch serving the KV cache can dwarf the weights.
+
+**Q: How do you ballpark the cost per token?**
+Cost ≈ (GPU \$/hour) ÷ (tokens/second throughput). For example a GPU at \$2/hr serving 2000 tok/s outputs $2000 \times 3600 = 7.2$M tokens/hour, so $\$2 \div 7.2\text{M} \approx$ \$0.28 per million tokens. This is why **throughput** (via batching, quantization, PagedAttention) directly drives **unit economics** — doubling throughput halves cost per token.
+
+**Q: Why does GQA/MQA matter for the memory budget?**
+**Grouped-query and multi-query attention** share key/value heads across query heads, shrinking the KV cache by a large factor (e.g. 8×). Since the KV cache is often the binding memory constraint for long-context, high-batch serving, GQA/MQA lets you fit **more concurrent requests** and **longer contexts** on the same GPU — a serving-economics decision baked into the architecture.
+
+## Key takeaways {.unnumbered}
+
+- **Decoding** turns probabilities into tokens: **greedy/beam** for closed-ended tasks, **sampling with top-p ≈ 0.9 and moderate temperature** for open-ended generation. Knobs stack — don't crank them all.
+- **Temperature** sharpens (<1) or flattens (>1) the distribution; **top-k** keeps a fixed count, **top-p** keeps an adaptive set; top-p/top-k exist to **amputate the unreliable softmax tail**; **repetition penalty** kills loops.
+- Generation **stops** on an **EOS token**, a **stop sequence**, or the **max_tokens** budget — never assume it just ends on its own.
+- The **KV cache** is the key inference optimization: cache past keys/values so each new token is ~$O(1)$ instead of re-computing the whole sequence — but cache memory **grows linearly with context length** (~1 MB/token for Llama-2-7B).
+- Generation has two phases: **prefill** (parallel, compute-bound, sets TTFT) and **decode** (sequential, memory-bound, sets tokens/sec); **chunked prefill** interleaves them so big prompts don't stall decode, and **FlashAttention** makes the attention kernel itself memory-efficient.
+- **Quantization**: weight-only **INT8 is near-lossless only with outlier handling** (LLM.int8()), 4-bit (NF4/GPTQ/AWQ) costs a little; it does **not** shrink the KV cache unless you quantize the cache too.
+- **Continuous batching** keeps the GPU full across mixed-length requests; **vLLM's PagedAttention** ends KV-cache fragmentation and enables prefix sharing.
+- **Throughput vs latency** is the core serving trade-off; **speculative decoding** cuts latency 2–3× with no quality change via draft-then-verify (exact rejection-sampling scheme), and **Medusa/EAGLE/n-gram** variants drop the separate draft model.
+- Memory sizing is arithmetic: **params × bytes** for weights, plus KV cache and overhead. **GQA/MQA** shrink the KV cache and improve serving economics.
+
+------------------------------------------------------------------------
+
+[📖 All chapters](../interview-guide.html)  &nbsp;|&nbsp;  [← 20 · 📚 Retrieval-Augmented Generation (RAG)](ch20.html)  &nbsp;|&nbsp;  [22 · 🤖 Agents, Tools & Loops →](ch22.html)

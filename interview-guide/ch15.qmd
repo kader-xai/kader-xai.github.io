@@ -1,0 +1,356 @@
+---
+title: "Chapter 15 — ⚡ Attention & the Transformer — the architecture that changed everything"
+page-layout: full
+toc: true
+toc-location: left
+toc-title: "In this chapter"
+toc-depth: 2
+toc-expand: true
+---
+
+[📖 All chapters](../interview-guide.html)  &nbsp;|&nbsp;  [← 14 · 🔤 Word Embeddings](ch14.html)  &nbsp;|&nbsp;  [16 · 🧱 Tokenization, Pretraining & Model Families →](ch16.html)
+
+<details class="ig-jump">
+<summary>📚 Jump to any chapter</summary>
+<p class="ig-era">🧮 Mathematical Foundations</p>
+<ul>
+<li><a href="ch01.html">01 &middot; 🧮 Linear Algebra — the language of data</a></li>
+<li><a href="ch02.html">02 &middot; 📉 Calculus & Optimization — how models learn</a></li>
+<li><a href="ch03.html">03 &middot; 🎲 Probability & Statistics — reasoning under uncertainty</a></li>
+<li><a href="ch04.html">04 &middot; 🔥 Information Theory & Loss Functions — measuring surprise and error</a></li>
+</ul>
+<p class="ig-era">🧩 Classical Machine Learning</p>
+<ul>
+<li><a href="ch05.html">05 &middot; 🧩 Core ML Concepts — the ground rules</a></li>
+<li><a href="ch06.html">06 &middot; 📐 Classical Supervised Algorithms — the workhorses</a></li>
+<li><a href="ch07.html">07 &middot; 🌲 Ensembles & Boosting — how to win on tabular data</a></li>
+<li><a href="ch08.html">08 &middot; 🗺️ Unsupervised Learning & Dimensionality Reduction — structure without labels</a></li>
+<li><a href="ch09.html">09 &middot; 🎯 Model Evaluation & Validation — knowing if it actually works</a></li>
+</ul>
+<p class="ig-era">🧠 Deep Learning</p>
+<ul>
+<li><a href="ch10.html">10 &middot; 🧠 Neural Network Fundamentals — the building block</a></li>
+<li><a href="ch11.html">11 &middot; ⚙️ Training Deep Networks — making deep nets actually train</a></li>
+<li><a href="ch12.html">12 &middot; 🖼️ Convolutional Neural Networks — the vision branch</a></li>
+<li><a href="ch13.html">13 &middot; 🔁 Sequence Models — RNNs, LSTMs and the bottleneck</a></li>
+</ul>
+<p class="ig-era">⚡ The Transformer Era</p>
+<ul>
+<li><a href="ch14.html">14 &middot; 🔤 Word Embeddings — giving words meaning as vectors</a></li>
+<li><a href="ch15.html">15 &middot; ⚡ Attention & the Transformer — the architecture that changed everything</a></li>
+<li><a href="ch16.html">16 &middot; 🧱 Tokenization, Pretraining & Model Families</a></li>
+<li><a href="ch17.html">17 &middot; 📈 Modern LLMs & Scaling — bigger, and suddenly capable</a></li>
+</ul>
+<p class="ig-era">💬 Using & Adapting LLMs</p>
+<ul>
+<li><a href="ch18.html">18 &middot; 💬 Prompting & In-Context Learning — programming models with words</a></li>
+<li><a href="ch19.html">19 &middot; 🎚️ Fine-Tuning & Alignment — specializing and aligning models</a></li>
+<li><a href="ch20.html">20 &middot; 📚 Retrieval-Augmented Generation (RAG) — giving the model an open book</a></li>
+<li><a href="ch21.html">21 &middot; 🚀 Inference, Decoding & Serving — running LLMs efficiently</a></li>
+</ul>
+<p class="ig-era">🤖 The Agentic Frontier</p>
+<ul>
+<li><a href="ch22.html">22 &middot; 🤖 Agents, Tools & Loops — the latest frontier</a></li>
+<li><a href="ch23.html">23 &middot; 🛡️ Evaluation, Safety & Guardrails — making LLM systems trustworthy</a></li>
+<li><a href="ch24.html">24 &middot; 🔧 MLOps & LLMOps — shipping and operating models in production</a></li>
+</ul>
+<p class="ig-era">🛠️ The Practical Toolkit</p>
+<ul>
+<li><a href="ch25.html">25 &middot; 🛠️ Practical Toolkit I — Modeling & Vision Libraries</a></li>
+<li><a href="ch26.html">26 &middot; 🧰 Practical Toolkit II — LLM Frameworks, Orchestration & Vector Stores</a></li>
+<li><a href="ch27.html">27 &middot; ⚙️ Practical Toolkit III — Serving, Apps & MLOps Tooling</a></li>
+</ul>
+<p class="ig-era">☁️ Cloud AI Platforms</p>
+<ul>
+<li><a href="ch28.html">28 &middot; ☁️ Cloud AI Platforms — deploying foundation models on the hyperscalers</a></li>
+</ul>
+</details>
+
+------------------------------------------------------------------------
+
+In Chapter 14 we gave words static vector meanings — but "bank" got one vector whether it sat by a river or held your money, and the sequence models of Chapter 13 had to cram a whole sentence through one fixed-size hidden state. This chapter is the turning point: **attention** lets every token look directly at every other token and decide, on the fly, what matters. The result — the **Transformer** — is the architecture under every model in Chapters 16 through 24, so read this one slowly.
+
+::: {.callout-note appearance="simple"}
+📍 **Timeline:** 2017, "Attention Is All You Need" (Vaswani et al.) — the model behind every modern LLM, from BERT to GPT to Claude.
+:::
+
+## 15.1 — The attention intuition: stop squeezing everything through one vector
+
+Recall the RNN bottleneck from Chapter 13: to translate a 40-word sentence, the network read it word by word and packed all of it into one final hidden vector before producing a single output. That vector is a memory bottleneck — early words get overwritten, and long-range links (a pronoun and the noun it refers to 30 words back) fade. Attention's fix is simple and radical: keep **all** the word vectors around, and let each position dynamically pull in information from whichever other positions are relevant to it.
+
+The plain-language analogy: instead of summarizing a book into one sentence before answering a question, you keep the whole book open and, for each question, flip to the exact pages that matter and weight them.
+
+::: {.callout-tip}
+**Intuition:** Attention is a *soft, learned lookup*. Hard lookup = "fetch row 5." Soft lookup = "give me a weighted blend of all rows, weighted by how relevant each one is to what I'm asking." The weights sum to 1 and are computed, not hard-coded.
+:::
+
+**Q: What core problem with RNNs does attention solve?**
+RNNs compress an entire sequence into a single fixed-size hidden state, creating an **information bottleneck** and a long path between distant tokens. Attention removes the bottleneck: every output position can read directly from every input position, so the **path length between any two tokens is $O(1)$** instead of growing with distance.
+
+**Q: In one sentence, what does attention compute?**
+A **weighted average of value vectors**, where the weights measure how relevant each position is to the current position. The cleverness is entirely in how those relevance weights are produced.
+
+**Q: Why is attention called "dynamic" or "content-based"?**
+Because the weights depend on the actual **content** of the tokens at runtime, not on fixed positions. The same word will attend to different neighbors depending on the sentence — this is how "bank" can finally resolve its meaning from context, fixing the static-embedding limitation of Chapter 14.
+
+**Q: Did attention appear out of nowhere in 2017?**
+No. Attention was first added *on top of* RNN encoder–decoders (Bahdanau et al., 2014; Luong et al., 2015) to fix the translation bottleneck — the decoder learned to "look back" at all encoder states. The 2017 leap was to throw away the RNN entirely and keep only attention, hence the title "**Attention Is All You Need**."
+
+## 15.2 — Query, Key, Value: the heart of the mechanism
+
+Attention is built from three projections of the input, and the cleanest analogy is a **search/retrieval system** (like a library or a Python dict, but soft). Each token emits a **Query** ("what am I looking for?"), every token also offers a **Key** ("what do I contain, as an advertisement?"), and a **Value** ("what I'll actually hand over if you pick me"). You match your query against all keys to get relevance scores, then use those scores to blend the values.
+
+```{mermaid}
+flowchart LR
+  X["token embeddings X"] -->|"x W_Q"| Q["Queries Q"]
+  X -->|"x W_K"| K["Keys K"]
+  X -->|"x W_V"| V["Values V"]
+  Q --> S["scores = Q dot K_T"]
+  K --> S
+  S --> A["weights = softmax"]
+  A --> O["output = weights dot V"]
+  V --> O
+```
+
+The Q, K, V vectors are just the input multiplied by three **learned weight matrices** $W_Q, W_K, W_V$. The model learns what to advertise (keys) and what to ask for (queries) during training.
+
+**Q: What is the dictionary analogy for Q, K, V?**
+A Python dict does a **hard** lookup: `d[query]` matches one key exactly and returns its value. Attention does a **soft** lookup: the query is compared to *every* key, producing a similarity score for each, and the output is the **similarity-weighted sum of all values**. No single key "wins" — they all contribute proportionally.
+
+**Q: Where do Q, K, and V come from?**
+All three are linear projections of the same input $X$: $Q = XW_Q$, $K = XW_K$, $V = XW_V$. The matrices $W_Q, W_K, W_V$ are **learned parameters**. So Q, K, V start as different "views" of the same tokens, shaped to be good at asking, matching, and delivering respectively.
+
+**Q: Why use a dot product to measure relevance?**
+The **dot product** $q \cdot k$ is large when two vectors point the same way — it's an unnormalized similarity. So "how relevant is key $j$ to query $i$" becomes a cheap matrix multiply $QK^\top$ that scores every query against every key at once.
+
+**Q: Could Q and K just be the same thing?**
+You could tie them, but keeping $W_Q \neq W_K$ lets attention be **asymmetric**: "A wants to attend to B" need not equal "B wants to attend to A." A verb seeking its subject is a different relationship than the subject seeking its verb, and separate matrices capture that.
+
+**Q: Why have a separate Value projection — why not just blend the keys?**
+Because **what a token uses to *match*** and **what it should *contribute*** are different jobs. The key is an advertisement tuned for similarity scoring; the value is the actual payload of information. Separating $W_K$ from $W_V$ lets the model optimize each independently.
+
+## 15.3 — Scaled dot-product attention: the formula
+
+Now the single most important formula in modern ML. Score every query against every key, scale, softmax into weights, and blend the values:
+
+$$\text{Attention}(Q, K, V) = \text{softmax}\!\left(\frac{QK^\top}{\sqrt{d_k}}\right)V$$
+
+Here $Q$ is $n \times d_k$ (one query per token), $K$ is $n \times d_k$, $V$ is $n \times d_v$. $QK^\top$ is the $n \times n$ matrix of all pairwise scores; softmax is applied **row-wise** so each token's attention weights sum to 1; multiplying by $V$ produces the blended output, one new vector per token.
+
+```python
+import numpy as np
+
+def attention(Q, K, V):
+    d_k = Q.shape[-1]
+    scores = Q @ K.T / np.sqrt(d_k)              # (n,n) pairwise relevance, scaled
+    scores -= scores.max(axis=1, keepdims=True)  # softmax stability
+    w = np.exp(scores)
+    w /= w.sum(axis=1, keepdims=True)            # row-wise softmax -> weights sum to 1
+    return w @ V                                 # weighted blend of values
+
+# sanity check: each output row is a convex combo of value rows,
+# so every output value stays within the range of the inputs
+V = np.array([[1.0, 0.0], [0.0, 1.0], [2.0, 2.0]])
+Q = K = np.eye(3)
+out = attention(Q, K, V)
+assert out.shape == (3, 2)
+assert out.min() >= V.min() - 1e-9 and out.max() <= V.max() + 1e-9
+print(out)  # near-uniform mixing, since identical keys give near-equal weights
+```
+
+**Q: Walk through the formula's shapes step by step.**
+With $n$ tokens and head dim $d_k$: $Q,K$ are $n\times d_k$, so $QK^\top$ is $n\times n$ (every token scored against every other). Divide by $\sqrt{d_k}$, softmax each **row** (now each row sums to 1), then multiply by $V$ ($n\times d_v$) to get an $n\times d_v$ output — **one refreshed vector per token**, each a weighted mix of all value vectors.
+
+**Q: Why divide by $\sqrt{d_k}$ — what breaks without it?**
+If query and key components are roughly independent with unit variance, the dot product of two $d_k$-dimensional vectors has variance $\approx d_k$, so its magnitude grows like $\sqrt{d_k}$. Large scores push **softmax into a saturated regime** where one weight is ~1 and the rest ~0; the gradient there is nearly zero, so learning stalls. Dividing by $\sqrt{d_k}$ rescales the scores back to roughly unit variance, keeping softmax in a healthy, trainable range.
+
+::: {.callout-warning}
+**Interview gotcha:** It's $\sqrt{d_k}$, not $d_k$. We divide by the **standard deviation** of the dot product (which grows like $\sqrt{d_k}$) to bring its variance back to ~1. Saying "we divide by the dimension" is a common slip.
+:::
+
+**Q: Why softmax specifically, and why row-wise?**
+**Softmax** turns raw scores into a probability distribution — all weights positive, summing to 1 — so the output is a true weighted average (a convex combination of values), which keeps magnitudes stable. **Row-wise** because each query (each row) needs its own independent distribution over all keys.
+
+**Q: Is attention's output permutation-equivariant? Why does that matter?**
+Yes — with no positional information, shuffling the input tokens just shuffles the outputs identically; attention treats the input as a **set, not a sequence**. That's exactly why we must inject positional encodings (15.5).
+
+**Q: What's the difference between "additive" and "dot-product" attention?**
+Early (Bahdanau) attention scored a query–key pair with a small **MLP**: $\text{score} = v^\top \tanh(W_q q + W_k k)$ — *additive* attention. The Transformer uses **dot-product** attention, $q \cdot k$, which has no extra parameters and maps to a single big matrix multiply — far faster on GPUs. They perform similarly in quality; dot-product wins on speed, which is why it dominates.
+
+## 15.4 — Self-attention vs cross-attention, and multi-head attention
+
+Two distinctions matter. **Self-attention**: Q, K, V all come from the *same* sequence — tokens attend to each other (how a sentence understands itself). **Cross-attention**: Q comes from one sequence and K, V from *another* — e.g. a translation decoder (queries) attending to the encoded source sentence (keys/values). And rather than run attention once, the Transformer runs it **several times in parallel** — multi-head attention — then concatenates the results.
+
+The intuition for multiple heads: one attention pattern can only express one kind of relationship at a time. Splitting into heads lets the model attend to syntax in one head, coreference in another, and local word order in a third — simultaneously.
+
+```{mermaid}
+flowchart TD
+  I["input X"] --> H1["head 1: Q1,K1,V1 -> attn"]
+  I --> H2["head 2: Q2,K2,V2 -> attn"]
+  I --> H3["head h: Qh,Kh,Vh -> attn"]
+  H1 --> C["concat heads"]
+  H2 --> C
+  H3 --> C
+  C -->|"x W_O"| O["output"]
+```
+
+With $h$ heads and model dimension $d_{\text{model}}$, each head works in a smaller subspace of size $d_k = d_{\text{model}}/h$, so multi-head attention costs about the **same** as one full-width head — you get diversity for free.
+
+**Q: What is the difference between self-attention and cross-attention?**
+In **self-attention**, Q, K, and V are all projections of the *same* input sequence — tokens relate to other tokens in their own sequence. In **cross-attention**, Q comes from one sequence (e.g. the decoder's current output) while K and V come from *another* (e.g. the encoder's output). Cross-attention is the bridge that lets a decoder consult the source in translation.
+
+**Q: Why use multiple heads instead of one big attention?**
+A single softmax-weighted average tends to capture **one dominant relationship** per token. Multiple **heads** run independent attentions in parallel subspaces, each free to specialize (one tracks the verb–subject link, another tracks adjacency, another long-range coreference). Their outputs are concatenated and mixed by $W_O$, giving a richer representation than any single head.
+
+**Q: Does multi-head attention cost more compute than single-head?**
+Roughly no. Each of the $h$ heads operates in dimension $d_k = d_{\text{model}}/h$, so the total work is about the same as one attention over the full $d_{\text{model}}$ — you trade one wide head for several narrow ones at near-equal cost.
+
+**Q: What does the output projection $W_O$ do?**
+After concatenating the $h$ head outputs back to width $d_{\text{model}}$, $W_O$ is a learned linear layer that **mixes the heads** into a single representation, letting the model combine the different relationships each head discovered.
+
+**Q: Roughly how big were these knobs in the original Transformer?**
+The base model used $d_{\text{model}} = 512$, $h = 8$ heads (so $d_k = d_v = 64$ per head), an FFN hidden size of 2048 (4×), and 6 layers each in the encoder and decoder. Worth remembering as a sanity-check reference point in interviews.
+
+## 15.5 — Positional encoding: telling attention about order
+
+We just saw attention is permutation-equivariant — it sees a *bag* of tokens, so "dog bites man" and "man bites dog" look identical to it. That's unacceptable for language. The fix is to **add a position signal to each token embedding** before attention, so position becomes part of the content the model can attend to.
+
+The original Transformer used **sinusoidal** encodings: a fixed pattern of sines and cosines at different frequencies. Later models often use **learned** positional embeddings (just a trainable vector per position), and modern LLMs use relative schemes like RoPE — but the principle is the same: inject order.
+
+$$PE_{(pos,2i)} = \sin\!\left(\frac{pos}{10000^{2i/d}}\right), \qquad PE_{(pos,2i+1)} = \cos\!\left(\frac{pos}{10000^{2i/d}}\right)$$
+
+```python
+import numpy as np
+def positional_encoding(n_pos, d):
+    pos = np.arange(n_pos)[:, None]
+    i   = np.arange(d)[None, :]
+    angle = pos / np.power(10000, (2 * (i // 2)) / d)  # geometric freqs
+    pe = np.where(i % 2 == 0, np.sin(angle), np.cos(angle))
+    return pe                                          # add this to token embeddings
+assert positional_encoding(5, 16).shape == (5, 16)
+```
+
+**Q: Why does a Transformer need positional encoding when an RNN doesn't?**
+An RNN processes tokens **one at a time in order**, so sequence order is baked into the computation. Self-attention sees all tokens **simultaneously and symmetrically**, so without an explicit position signal it can't tell "first" from "last." Positional encodings restore the ordering information that parallelism throws away.
+
+**Q: Sinusoidal vs learned positional encodings — trade-offs?**
+**Sinusoidal** is parameter-free, deterministic, and can in principle **extrapolate** to sequence lengths longer than seen in training (the function is defined everywhere). **Learned** embeddings are a trainable vector per index — often slightly better in-distribution but capped at the **max length** trained on. Sinusoids also encode relative offsets nicely because a shift by $k$ is a fixed linear (rotation) transform of the encoding.
+
+**Q: Is the positional encoding added or concatenated?**
+**Added** to the token embedding (same dimension $d_{\text{model}}$). Adding keeps the dimensionality fixed and lets the network learn to read position out of the combined vector; concatenation would inflate the dimension for no clear gain.
+
+**Q: Why use many different frequencies?**
+Each dimension of the encoding oscillates at a different wavelength — fast sinusoids distinguish neighboring positions, slow ones span the whole sequence. Together they form a unique, smoothly varying fingerprint per position, much like the bits of a binary counter toggling at different rates, so the model can read both fine and coarse position.
+
+## 15.6 — The full Transformer block: attention + FFN + residuals + LayerNorm
+
+A single attention layer isn't the whole story. The **Transformer block** wraps multi-head attention together with a position-wise feed-forward network, and glues them with two tricks from Chapters 10–11: **residual connections** (add the input back to the output, so gradients flow and layers learn refinements) and **layer normalization** (stabilize activations). Stack this block N times and you have an encoder or a decoder.
+
+```{mermaid}
+flowchart TD
+  x["input"] --> mha["Multi-Head Attention"]
+  x --> a1(("+"))
+  mha --> a1
+  a1 --> ln1["LayerNorm"]
+  ln1 --> ffn["Feed-Forward per token"]
+  ln1 --> a2(("+"))
+  ffn --> a2
+  a2 --> ln2["LayerNorm"]
+  ln2 --> out["output"]
+```
+
+The **feed-forward network (FFN)** is applied identically to each position: typically two linear layers with a ReLU/GELU in between, expanding to ~4× width and back. Attention mixes information *across* tokens; the FFN then processes each token *individually*, adding non-linear capacity.
+
+**Q: What are the two sublayers of a Transformer block, and what does each do?**
+(1) **Multi-head self-attention** — mixes information *across* positions (tokens read each other). (2) A **position-wise feed-forward network** — a small MLP applied to each token *independently*, adding per-token non-linear transformation. Roughly: attention routes information, the FFN computes on it.
+
+**Q: Why the residual connections around each sublayer?**
+Each sublayer computes $\text{LayerNorm}(x + \text{Sublayer}(x))$ — the **residual** $x +$ lets the original signal skip past, so a sublayer only has to learn a *refinement*. This keeps gradients from vanishing through deep stacks (the Chapter 11 problem) and makes very deep Transformers trainable.
+
+**Q: What does LayerNorm do, and why LayerNorm rather than BatchNorm?**
+**LayerNorm** normalizes each token's feature vector to zero mean and unit variance (then rescales with learned gain/bias), stabilizing activation magnitudes. It's preferred over **BatchNorm** here because it's **independent of batch size and sequence position** — crucial when sequences vary in length and at inference you may process one token at a time, where batch statistics would be meaningless.
+
+**Q: Why does the FFN expand to ~4× width?**
+The wider hidden layer gives the network room to compute richer non-linear features per token before projecting back down. This expand-then-contract MLP is where a large share of a Transformer's parameters (and learned knowledge) actually live.
+
+**Q: Why "position-wise" — does the FFN mix tokens?**
+No. The **exact same** two-layer MLP (same weights) is applied to each token's vector independently — no information crosses between positions inside the FFN. All cross-token mixing happens in attention; the FFN is pure per-token computation. That's why you can run it in parallel over all positions.
+
+**Q: Pre-norm vs post-norm — what's the practical difference?**
+The original paper used **post-norm** ($\text{LayerNorm}(x + \text{Sublayer}(x))$). Most modern LLMs use **pre-norm** ($x + \text{Sublayer}(\text{LayerNorm}(x))$), which keeps a clean residual highway and trains more stably at great depth, usually without needing learning-rate warmup tricks.
+
+## 15.7 — Encoder, decoder, and causal masking
+
+The original Transformer was an **encoder–decoder** for translation. The **encoder** reads the whole input at once with bidirectional self-attention (every token sees every other). The **decoder** generates output one token at a time and must *not* peek at future tokens — so it uses **causal (masked) self-attention**, plus cross-attention into the encoder. This split is the ancestor of the model families in Chapter 16: encoder-only (BERT), decoder-only (GPT), and encoder–decoder (T5).
+
+The masking trick: before softmax, set the scores for "future" positions to $-\infty$ so their weights become exactly 0.
+
+<svg viewBox="0 0 280 150" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif" font-size="11">
+  <text x="80" y="14" text-anchor="middle">Causal mask (4 tokens)</text>
+  <text x="18" y="46">q1</text><text x="18" y="68">q2</text><text x="18" y="90">q3</text><text x="18" y="112">q4</text>
+  <text x="46" y="28">k1</text><text x="70" y="28">k2</text><text x="94" y="28">k3</text><text x="118" y="28">k4</text>
+  <rect x="40" y="32" width="20" height="20" fill="#4c9"/><rect x="64" y="32" width="20" height="20" fill="#333"/><rect x="88" y="32" width="20" height="20" fill="#333"/><rect x="112" y="32" width="20" height="20" fill="#333"/>
+  <rect x="40" y="54" width="20" height="20" fill="#4c9"/><rect x="64" y="54" width="20" height="20" fill="#4c9"/><rect x="88" y="54" width="20" height="20" fill="#333"/><rect x="112" y="54" width="20" height="20" fill="#333"/>
+  <rect x="40" y="76" width="20" height="20" fill="#4c9"/><rect x="64" y="76" width="20" height="20" fill="#4c9"/><rect x="88" y="76" width="20" height="20" fill="#4c9"/><rect x="112" y="76" width="20" height="20" fill="#333"/>
+  <rect x="40" y="98" width="20" height="20" fill="#4c9"/><rect x="64" y="98" width="20" height="20" fill="#4c9"/><rect x="88" y="98" width="20" height="20" fill="#4c9"/><rect x="112" y="98" width="20" height="20" fill="#4c9"/>
+  <rect x="150" y="40" width="14" height="14" fill="#4c9"/><text x="170" y="51">allowed</text>
+  <rect x="150" y="60" width="14" height="14" fill="#333"/><text x="170" y="71">masked (-inf)</text>
+</svg>
+
+**Q: What is causal masking and why is it needed?**
+In a **decoder**, predicting token $t$ may only use tokens $1\dots t$, never future ones — otherwise the model would "cheat" by seeing the answer during training. **Causal masking** enforces this by setting the attention scores for future positions to $-\infty$ *before* softmax, so $e^{-\infty}=0$ and those positions get exactly zero weight.
+
+**Q: Encoder self-attention vs decoder self-attention — key difference?**
+**Encoder** attention is **bidirectional**: every token attends to all tokens, left and right (good for understanding). **Decoder** self-attention is **causal/unidirectional**: each token attends only to itself and earlier tokens (necessary for left-to-right generation).
+
+**Q: What are the three attention blocks in a full encoder–decoder Transformer?**
+(1) Encoder **self-attention** (bidirectional over the input). (2) Decoder **masked self-attention** (causal over the output so far). (3) Decoder **cross-attention**, where decoder queries attend to encoder keys/values — the channel through which the output consults the input.
+
+**Q: How do encoder-only, decoder-only, and encoder–decoder map to real models?**
+**Encoder-only** (BERT) — bidirectional, great for classification/understanding. **Decoder-only** (GPT, Claude) — causal, built for generation, and the dominant design for modern LLMs. **Encoder–decoder** (T5, original Transformer) — for seq-to-seq tasks like translation. Chapter 16 expands on these families.
+
+**Q: Why can causal masking train on a whole sequence at once but RNNs can't?**
+Because the mask lets every position be predicted **in parallel** while still only seeing its past — one forward pass scores all $n$ next-token predictions at once (this is *teacher forcing*). An RNN must still step through time sequentially. So the Transformer keeps the autoregressive guarantee *and* full training parallelism — a key reason it scaled.
+
+## 15.8 — Why Transformers beat RNNs (and the cost they pay)
+
+The intuition for why Transformers won: RNNs are inherently **sequential** — token $t$ can't be computed until token $t-1$ is done, so you can't use a GPU's parallelism during training, and information between distant tokens must survive a long chain of steps. Transformers compute all positions **at once** and connect any two tokens **directly**. The price is that comparing every token to every other token costs $O(n^2)$ in sequence length.
+
+| Property | RNN / LSTM | Transformer |
+|---|---|---|
+| Training parallelism | Sequential (one step at a time) | Fully parallel across positions |
+| Path between two tokens | $O(n)$ steps | $O(1)$ (direct attention) |
+| Long-range dependencies | Decay through the chain | Captured directly |
+| Compute per layer | $O(n \cdot d^2)$ | $O(n^2 \cdot d)$ |
+| Memory in sequence length | $O(n)$ | $O(n^2)$ |
+
+**Q: Why can Transformers train so much faster than RNNs on GPUs?**
+RNNs are **sequential** — each timestep depends on the previous hidden state, so the time dimension can't be parallelized. A Transformer processes **all positions simultaneously** (the whole $QK^\top$ matrix is one big matmul), which maps perfectly onto GPU/TPU parallel hardware and slashes wall-clock training time.
+
+**Q: What does "$O(1)$ path length" mean and why does it help?**
+The number of computation steps information must travel between any two tokens. In an RNN it's $O(n)$ (signal passes through every intermediate step, decaying along the way); in attention it's **$O(1)$** — any token attends to any other in a single hop. Short paths mean **long-range dependencies are learned directly**, with healthy gradients.
+
+**Q: What is the main computational drawback of self-attention?**
+The $QK^\top$ score matrix is $n \times n$, so both compute and memory are **quadratic** in sequence length, $O(n^2)$. Doubling the context roughly quadruples the cost — the central reason long-context LLMs are expensive and the motivation for efficient-attention variants (FlashAttention, sparse/linear attention), revisited in Chapter 21.
+
+::: {.callout-warning}
+**Interview gotcha:** "Transformers have no recurrence and no convolution" — true, but they are **not** automatically more parameter- or compute-efficient than RNNs. For very long sequences the $O(n^2)$ attention can be *more* expensive; their win is **parallelism and direct long-range connectivity**, not raw FLOPs.
+:::
+
+**Q: If attention is permutation-equivariant and parallel, what single component makes it usable for language?**
+**Positional encoding** (15.5). Without it the Transformer is a powerful set-processor with no notion of order — adding position information is what turns it into a sequence model.
+
+## 15.x — Key takeaways
+
+- **Attention** = a soft, content-based lookup: each token forms a **Query**, matches it against all **Keys**, and takes a softmax-weighted blend of all **Values** — removing the RNN bottleneck.
+- Q, K, V are three **learned linear projections** of the same input; separating them lets matching (keys), asking (queries), and delivering (values) each specialize.
+- The core formula is $\text{softmax}\!\big(\tfrac{QK^\top}{\sqrt{d_k}}\big)V$; we divide by $\sqrt{d_k}$ because dot-product magnitude grows like $\sqrt{d_k}$ and would otherwise **saturate the softmax** and kill gradients.
+- **Self-attention** relates a sequence to itself; **cross-attention** lets a decoder read an encoder. **Multi-head** runs several attentions in parallel subspaces so different heads learn different relationships, at roughly the cost of one.
+- Attention is **permutation-equivariant**, so **positional encodings** (sinusoidal or learned) must be added to inject order.
+- A **Transformer block** = multi-head attention + position-wise FFN, each wrapped in a **residual connection** and **LayerNorm**; stack N of them for an encoder or decoder.
+- **Causal masking** ($-\infty$ before softmax) makes the decoder generation-safe and enables parallel teacher-forced training; encoders are bidirectional. This yields the encoder-only / decoder-only / encoder–decoder families of Chapter 16.
+- Transformers beat RNNs via **full parallelism** and **$O(1)$ path length** between tokens; the cost is **$O(n^2)$** attention in sequence length — the bottleneck that later efficiency work attacks.
+
+------------------------------------------------------------------------
+
+[📖 All chapters](../interview-guide.html)  &nbsp;|&nbsp;  [← 14 · 🔤 Word Embeddings](ch14.html)  &nbsp;|&nbsp;  [16 · 🧱 Tokenization, Pretraining & Model Families →](ch16.html)
