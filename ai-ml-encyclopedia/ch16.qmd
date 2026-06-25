@@ -354,6 +354,8 @@ class Tagger(nn.Module):              # many-to-one: classify a whole sequence
 
 In words, the worked sentence "The *keys* that I left on the table by the door … *are* on the floor" is exactly this trick at scale: the LSTM writes "plural" into a cell dimension via the input gate, holds the forget gate near 1 so it survives every intervening word untouched, then opens the output gate when the verb is needed. A vanilla RNN would have washed that signal out long before "are."
 
+**A practical detail — the forget-gate bias.** A standard trick is to initialize $b_f$ to a small positive number (often $1$ or $2$). That starts every forget gate near $\sigma(1)\approx 0.73$, so the cell *defaults to remembering* and only learns to forget where forgetting helps. Without it an LSTM can spend the early epochs erasing its own memory before it learns to keep anything — a one-line change that noticeably speeds convergence on long-dependency tasks.
+
 ::: {.callout-tip}
 **Intuition:** the cell state is a notebook. The forget gate erases lines, the input gate writes new ones, the output gate decides which lines you read aloud right now. Addition (not multiplication) along that notebook is the trick that keeps gradients alive.
 :::
@@ -560,20 +562,213 @@ As sentences grow, this single vector becomes a crippling information funnel —
 **Common mistake:** scaling a vanilla seq2seq to long documents and blaming the RNN cell. The limiter is usually the fixed-size context vector, not the LSTM/GRU inside it. The cure is attention (Chapter 17), not a bigger hidden state.
 :::
 
-## 16.7 — Key takeaways
+## 16.7 — Decoding: Turning Probabilities into Sequences
+
+A trained decoder does not hand you a sentence — at each step it hands you a *probability distribution* over the vocabulary. Turning that stream of distributions into one output sequence is **decoding**, and the strategy you choose matters as much as the model. Picture standing at the root of a branching tree: every node offers thousands of next-word choices, and you must walk to a leaf. You cannot try every path — a 20-word sentence over a 50,000-word vocabulary has $50000^{20}$ of them.
+
+**Greedy decoding** takes the single most probable token at each step and never looks back. It is fast and simple, but myopic: a high-probability first word can lock you into a low-probability sentence overall, the way grabbing the nearest exit can leave you on the slowest road home.
+
+**Beam search** keeps the $k$ best *partial* sequences (the "beam") at every step instead of just one. At each step it expands all $k$ candidates by every possible next token, scores the new partial sequences by their cumulative log-probability, and keeps only the top $k$. It is a middle ground between greedy ($k=1$) and exhaustive search.
+
+$$\text{score}(y_{1:t}) = \sum_{i=1}^{t} \log p(y_i \mid y_{<i}, x)$$
+
+**In words:** a candidate sequence's score is the sum of the log-probabilities of its tokens — how likely the model thinks the whole prefix is, added up step by step.
+**Also written:** $\text{score} = \log \prod_i p(y_i\mid y_{<i}, x) = \sum_i \log p(y_i\mid y_{<i}, x)$ — we add logs instead of multiplying probabilities to avoid numeric underflow, and often divide by sequence length to stop the search from unfairly preferring short outputs.
+
+```{mermaid}
+flowchart LR
+    s["start"] --> a["the (−0.2)"]
+    s --> b["a (−1.1)"]
+    a --> a1["cat (−0.5)"]
+    a --> a2["dog (−0.9)"]
+    b --> b1["car (−1.4)"]
+    a1 --> keep1["beam keeps top-2"]
+    a2 --> keep1
+    b1 --> keep1
+```
+
+**Sampling** is the alternative when you want *variety* rather than the single most likely answer — chatbots, story generation, brainstorming. Instead of always taking the top token, you draw from the distribution. Two knobs tame it:
+
+- **Temperature** $T$ rescales the logits before the softmax: $T<1$ sharpens toward the top token (safer, more repetitive), $T>1$ flattens the distribution (more surprising, more error-prone).
+- **Top-k** / **nucleus (top-p)** sampling restrict the draw to only the most probable tokens — top-k to a fixed count, top-p to the smallest set whose probabilities sum to $p$ — so you keep variety without ever sampling an absurd word from the long tail.
+
+$$p_i = \frac{\exp(z_i / T)}{\sum_j \exp(z_j / T)}$$
+
+**In words:** divide every logit by the temperature before softmax; small $T$ makes the biggest logit dominate, large $T$ evens the field.
+**Also written:** at $T\to 0$ this collapses to $\arg\max_i z_i$ (greedy); at $T=1$ it is the model's raw distribution.
+
+```python
+import torch, torch.nn.functional as F
+def sample_next(logits, temperature=1.0, top_p=0.9):
+    logits = logits / temperature
+    probs = F.softmax(logits, dim=-1)
+    sorted_probs, idx = torch.sort(probs, descending=True)
+    keep = torch.cumsum(sorted_probs, dim=-1) <= top_p   # nucleus: smallest set ≥ top_p
+    keep[..., 0] = True                                  # always keep the top token
+    sorted_probs[~keep] = 0
+    choice = torch.multinomial(sorted_probs, 1)          # draw from the truncated set
+    return idx.gather(-1, choice)
+```
+
+::: {.callout-tip}
+**Rule of thumb:** for tasks with one right answer (translation, transcription) use beam search; for open-ended generation (dialogue, stories) use temperature + nucleus sampling. Greedy is the fast baseline you reach for first and rarely keep.
+:::
+
+## 16.8 — Regularizing Recurrent Nets
+
+Recurrent nets overfit eagerly — they have many parameters reused over many steps, so a small training set is quickly memorized. The fixes are mostly the same tools as feedforward nets, but with one twist that trips people up: *where* and *how* you apply them on the time axis changes whether they help or hurt.
+
+**Dropout, applied correctly.** Plain dropout drops a different random set of units at every time step. On a recurrent connection that is destructive — it injects fresh noise into the memory at each step, so the signal you are trying to carry across 50 steps is corrupted 50 times. **Variational (or "locked") dropout** fixes this by sampling *one* dropout mask per sequence and reusing it at every time step, so the same units are dropped throughout — noise that the network can actually learn around. In practice, apply ordinary dropout freely *between stacked layers* (the vertical connections) and use the locked variant on the recurrent (horizontal) connection. PyTorch's `dropout=` argument on `nn.LSTM` applies between layers only — exactly the safe place — and applies nothing if there is just one layer.
+
+```python
+import torch.nn as nn
+# dropout=0.3 acts BETWEEN the two layers; the recurrent path is left clean.
+lstm = nn.LSTM(input_size=128, hidden_size=256, num_layers=2,
+               batch_first=True, dropout=0.3)
+```
+
+**Layer normalization, not batch norm.** Batch normalization (Chapter 15) struggles inside RNNs: statistics computed across the batch are unstable when sequences have different lengths and when the same cell is reused at every step. **Layer normalization** sidesteps the problem by normalizing across the *features of a single example at a single step* — no dependence on batch size or position — which is why it became the default normalizer for recurrent and, later, Transformer models.
+
+$$\hat h = \frac{h - \mu}{\sqrt{\sigma^2 + \epsilon}}\,\gamma + \beta, \qquad \mu = \frac{1}{d}\sum_{j=1}^{d} h_j$$
+
+**In words:** for each token's hidden vector, subtract its own mean and divide by its own standard deviation, then re-scale and re-shift with learned $\gamma, \beta$.
+**Also written:** the statistics $\mu, \sigma^2$ are taken over the $d$ feature dimensions of *one* vector — contrast batch norm, which takes them over the batch dimension for *one* feature.
+
+**Other staples.** **Weight decay** (L2) reins in parameter magnitudes; **early stopping** on validation loss is cheap and effective given that RNNs often overfit before they finish converging; and **zoneout** is a recurrence-specific trick that randomly forces some hidden units to *keep their previous value* instead of updating — dropout's cousin that, fittingly, preserves rather than zeros memory.
+
+::: {.callout-warning}
+**Common mistake:** slapping standard dropout on the recurrent connection and wondering why long-range memory got worse. Reach for variational/locked dropout there, or keep dropout to the between-layer connections only.
+:::
+
+## 16.9 — Convolutional & Attention Alternatives for Sequences
+
+Recurrence is not the only way to handle order. Its defining weakness is that it is **inherently sequential** — step $t$ cannot be computed until step $t-1$ is done — so it cannot exploit the parallelism of modern GPUs and is slow to train on long sequences. Two families sidestep this, and together they explain why pure RNNs faded.
+
+**Temporal (1D) convolutions.** A 1D convolution slides a small filter along the time axis, just as a 2D convolution slides over an image (Chapter 15). It reads a fixed *window* of recent steps in parallel — no hidden state threaded through time — so the whole sequence is processed at once. The intuition: instead of one reader passing notes forward, imagine many readers, each assigned a short window, all working simultaneously.
+
+To reach far back without an enormous filter, **dilated convolutions** insert gaps between the filter taps, so each layer skips ahead and the *receptive field* grows exponentially with depth. Stacking dilations $1, 2, 4, 8, \dots$ lets a modest stack of layers see thousands of steps back — the core idea behind **WaveNet** for raw-audio generation and **Temporal Convolutional Networks (TCNs)** for forecasting.
+
+$$\text{receptive field} = 1 + (k - 1)\sum_{\ell} d_\ell$$
+
+**In words:** the span a stacked dilated conv can "see" grows with the filter size $k$ and the sum of the per-layer dilation factors $d_\ell$ — double the dilation each layer and the reach doubles too.
+**Also written:** with $L$ layers, filter size $k$, and dilations $d_\ell = 2^{\ell-1}$, the field is $1 + (k-1)(2^{L}-1)$ — exponential in depth.
+
+<svg viewBox="0 0 440 150" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif" font-size="10">
+  <text x="10" y="14" fill="currentColor">dilated 1D conv: dilation 1 → 2 → 4 grows the receptive field</text>
+  <!-- input row -->
+  <g fill="#38bdf8" opacity="0.7">
+    <circle cx="40" cy="120" r="6"/><circle cx="80" cy="120" r="6"/><circle cx="120" cy="120" r="6"/><circle cx="160" cy="120" r="6"/>
+    <circle cx="200" cy="120" r="6"/><circle cx="240" cy="120" r="6"/><circle cx="280" cy="120" r="6"/><circle cx="320" cy="120" r="6"/>
+  </g>
+  <!-- hidden row -->
+  <g fill="#6366f1" opacity="0.7">
+    <circle cx="80" cy="75" r="6"/><circle cx="160" cy="75" r="6"/><circle cx="240" cy="75" r="6"/><circle cx="320" cy="75" r="6"/>
+  </g>
+  <!-- output node -->
+  <circle cx="320" cy="35" r="7" fill="#22c55e" opacity="0.85"/>
+  <g stroke="#6366f1" fill="none" opacity="0.55">
+    <path d="M80 75 L40 120"/><path d="M80 75 L80 120"/>
+    <path d="M160 75 L120 120"/><path d="M160 75 L160 120"/>
+    <path d="M240 75 L200 120"/><path d="M240 75 L240 120"/>
+    <path d="M320 75 L280 120"/><path d="M320 75 L320 120"/>
+  </g>
+  <g stroke="#22c55e" fill="none" opacity="0.7">
+    <path d="M320 35 L80 75"/><path d="M320 35 L160 75"/><path d="M320 35 L240 75"/><path d="M320 35 L320 75"/>
+  </g>
+  <text x="346" y="38" fill="#22c55e">output</text>
+  <text x="346" y="78" fill="#6366f1">hidden</text>
+  <text x="346" y="123" fill="#38bdf8">input</text>
+</svg>
+
+```python
+import torch.nn as nn
+# causal-ish dilated 1D conv stack (TCN flavour); pad to keep length, dilate to reach back
+conv = nn.Sequential(
+    nn.Conv1d(64, 64, kernel_size=3, padding=2, dilation=2), nn.ReLU(),
+    nn.Conv1d(64, 64, kernel_size=3, padding=4, dilation=4), nn.ReLU(),
+)
+x = torch.randn(8, 64, 200)   # (batch, channels, time) — note channels-first for Conv1d
+```
+
+**Self-attention and the Transformer.** The other escape is to drop recurrence entirely and let every position look directly at every other position in one parallel operation — **self-attention**. This solves the long-range problem (any two positions are one hop apart, not $T$ steps apart) *and* the parallelism problem (all positions computed at once). The cost is quadratic in sequence length and a loss of the built-in notion of order, which is restored with **positional encodings**. This is the **Transformer**, and it is the direct sequel to the fixed-context bottleneck of §16.6 — covered in full in Chapter 17.
+
+| Approach | Parallel over time? | Long-range reach | Built-in order? |
+|---|---|---|---|
+| RNN / LSTM / GRU | no (sequential) | good (gated) | yes (recurrence) |
+| Dilated 1D conv (TCN) | yes | grows with depth | yes (local windows) |
+| Self-attention (Transformer) | yes | direct, any-to-any | no — added via positional encoding |
+
+::: {.callout-tip}
+**When to still use an RNN:** truly streaming/online settings (decide at each step with low latency), very long sequences where attention's quadratic cost bites, and small-data regimes where a compact GRU generalizes better than a data-hungry Transformer. Recurrence is not obsolete — it is a specialist.
+:::
+
+## 16.10 — Worked End-to-End: A Character-Level Language Model
+
+To tie the chapter together, here is the smallest *complete* recurrent model that does something real: predict the next character of text. It is the canonical "hello world" of RNNs, and every piece below maps to a section above — embedding, a gated cell (§16.3), a many-to-many readout (§16.2), and sampling for generation (§16.7).
+
+The task: given the characters seen so far, output a distribution over the next character. Train it on any corpus and it learns spelling, then words, then crude grammar — purely from the running hidden state.
+
+```python
+import torch, torch.nn as nn, torch.nn.functional as F
+
+class CharLM(nn.Module):
+    def __init__(self, vocab, emb=64, hid=256, layers=2):
+        super().__init__()
+        self.embed = nn.Embedding(vocab, emb)
+        self.lstm  = nn.LSTM(emb, hid, num_layers=layers,
+                             batch_first=True, dropout=0.2)   # §16.8: between-layer dropout
+        self.head  = nn.Linear(hid, vocab)                    # §16.2: one output per step
+    def forward(self, x, state=None):
+        e = self.embed(x)                                     # (B, T) -> (B, T, emb)
+        out, state = self.lstm(e, state)                      # (B, T, hid)
+        return self.head(out), state                          # logits over vocab, per step
+
+# --- one training step (teacher forcing is implicit: targets are inputs shifted by one) ---
+model = CharLM(vocab=96)
+opt = torch.optim.Adam(model.parameters(), lr=3e-3)
+x, y = batch[:, :-1], batch[:, 1:]            # predict char t+1 from chars up to t
+logits, _ = model(x)
+loss = F.cross_entropy(logits.reshape(-1, 96), y.reshape(-1))
+loss.backward()
+torch.nn.utils.clip_grad_norm_(model.parameters(), 5.0)   # §16.2: tame exploding grads
+opt.step(); opt.zero_grad()
+
+# --- generation: feed back the model's own samples, carrying the state forward ---
+@torch.no_grad()
+def generate(model, start_ids, steps=200, temperature=0.8):
+    ids, state = start_ids, None
+    out = list(start_ids[0].tolist())
+    for _ in range(steps):
+        logits, state = model(ids, state)                 # carry hidden state across steps
+        probs = F.softmax(logits[:, -1] / temperature, -1)
+        nxt = torch.multinomial(probs, 1)                 # §16.7: temperature sampling
+        out.append(nxt.item()); ids = nxt
+    return out
+```
+
+Three things to notice, each a callback to the chapter. Training uses **teacher forcing** for free — the target sequence is just the input shifted by one, so the loss at step $t$ always conditions on the *true* prefix. Generation, by contrast, feeds the model's **own** samples back in (the exposure-bias gap of §16.6), which is exactly why temperature matters there and not in training. And the hidden `state` is threaded out of `generate` and back in on every call — the same running memory of §16.1, now used at inference time to keep the model coherent across hundreds of characters.
+
+::: {.callout-note}
+**Why this still teaches the field:** scale this exact recipe up — bigger hidden size, more data, and (the one architectural swap) self-attention in place of the LSTM — and you have the skeleton of a modern language model. The training loop, the shifted targets, the sampling-with-temperature at generation time are unchanged. RNNs are where every one of those ideas was first made to work.
+:::
+
+## 16.11 — Key takeaways
 
 - An **RNN** carries a **hidden state** updated by the *same* weights at every step; unrolled, it is a deep weight-shared network trained by **backpropagation through time**.
 - Vanilla RNNs suffer **vanishing/exploding gradients** — in the scalar case the recurrent factor raised to the sequence length — so they forget dependencies beyond ~10–20 steps. Vanishing is fixed by *architecture* (gated cells); exploding is fixed by *training* (**gradient clipping**).
 - Sequence tasks come in **four shapes** (one-to-many, many-to-one, many-to-many aligned, seq2seq); the cell is identical — only which states you read out and feed back changes. Long streams are trained with **truncated BPTT**, carrying the hidden state forward but backpropagating only within a chunk.
-- The **LSTM** adds a **cell state** with forget/input/output **gates**; with $f_t=1, i_t=0$ a memory is copied verbatim, and that additive path lets gradients survive across hundreds of steps.
+- The **LSTM** adds a **cell state** with forget/input/output **gates**; with $f_t=1, i_t=0$ a memory is copied verbatim, and that additive path lets gradients survive across hundreds of steps. A small positive **forget-gate bias** makes it default to remembering.
 - The **GRU** is a lighter LSTM with two gates and no separate cell state; its update gate $z_t$ alone toggles between keep ($z_t\!\approx\!0$) and overwrite ($z_t\!\approx\!1$) — a strong, cheaper default. Let validation, not gate count, choose between them.
 - **Bidirectional** RNNs read both directions (offline only); **deep/stacked** RNNs build temporal hierarchy. A stacked BiLSTM was the pre-Transformer NLP workhorse.
 - **Seq2seq** encoder–decoder maps variable-length input to variable-length output (trained with **teacher forcing**), but its single **fixed-context vector** is a bottleneck on long inputs — the problem that motivated **attention**.
+- **Decoding** turns per-step distributions into sequences: **greedy** and **beam search** for one-right-answer tasks, **temperature + nucleus sampling** for open-ended generation.
+- **Regularize** recurrent nets with *variational/locked* dropout on the recurrent path (or plain dropout between stacked layers) and **layer norm** rather than batch norm.
+- Recurrence is sequential and slow; **dilated 1D convolutions** (WaveNet, TCN) and **self-attention** (Transformers) parallelize over time and reach further, leaving RNNs a specialist tool for streaming, very long, or small-data settings.
 
-## 16.8 — See also
+## 16.12 — See also
 
 - **Neural Networks (Core)** — backpropagation, activations, and the feedforward machinery RNNs unroll into.
-- **Convolutional Neural Networks** — the spatial counterpart to weight sharing across time.
+- **Convolutional Neural Networks** — the spatial counterpart to weight sharing across time, and the source of the 1D/dilated convolutions used for sequences.
 - **Attention & Transformers** — how attention removes the fixed-context bottleneck and supersedes recurrence.
 - **Natural Language Processing** — tagging, translation, and the tasks RNNs and seq2seq were built for.
 - **Large Language Models** — where the Transformer successors to these models now live.
