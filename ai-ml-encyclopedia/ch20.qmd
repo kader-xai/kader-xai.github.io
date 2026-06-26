@@ -455,7 +455,163 @@ Worked cosine example with tiny 2-D vectors. Let $a = \vec{cat} = (2, 1)$ and $b
 - Lengths: $\lVert a\rVert = \sqrt{4+1} = \sqrt5 \approx 2.24$, $\lVert b\rVert = \sqrt{9+1} = \sqrt{10} \approx 3.16$.
 - $\cos(\theta) = 7 / (2.24 \times 3.16) \approx 0.99$ — nearly 1, so "cat" and "dog" point almost the same way and count as very similar. A word like $\vec{idea} = (-1, 2)$ gives $a\cdot b = -2+2 = 0 \Rightarrow \cos = 0$: perpendicular, unrelated. The geometry matches the intuition.
 
-## 20.4 — Language models (n-gram to neural; perplexity)
+## 20.4 — word2vec, in depth
+
+Section 20.3 introduced word embeddings and named word2vec as the predictive way to learn them. This section opens the box: how skip-gram actually turns a sliding window of words into trained vectors, why the training objective is reshaped into a handful of tiny logistic problems, and which knobs decide whether the vectors come out *topical* or *syntactic*. Everything here is still the distributional hypothesis — "a word is known by the company it keeps" — but made mechanical.
+
+### The skip-gram architecture
+
+Skip-gram is a deceptively shallow network: one hidden layer, no nonlinearity, trained on a fake task it never actually cares about. The setup is a **center** word $c$ and the **context** words inside a window around it; the task is "given the center word, predict each context word." We will never use the predictions — we only want the weights the network is forced to learn to make those predictions well.
+
+Concretely the data path is three steps. The center word arrives as a **one-hot** vector of length $V$ (vocabulary size): all zeros except a single 1 at the word's index. Multiplying that one-hot by an **input embedding matrix** $W$ of shape $V \times d$ is just a **row lookup** — it selects row $c$ of $W$, which *is* the center word's vector $v_c \in \mathbb{R}^d$. That $v_c$ is then scored against an **output matrix** $W'$ of shape $d \times V$, whose columns $u_w$ are the *context* vectors; the dot products $u_w^\top v_c$ become logits, and a [softmax](ch14.html) turns them into a distribution over which word sits in the context.
+
+The crucial structural fact: **every word owns two vectors** — a center (input) vector in $W$ and a context (output) vector in $W'$. The same word "dog" has one row in $W$ (used when "dog" is the center) and one column in $W'$ (used when "dog" is a context word). After training you throw $W'$ away and keep $W$ as your embeddings (or, commonly, average the two).
+
+<svg viewBox="0 0 560 230" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif" font-size="11">
+  <text x="10" y="18" fill="currentColor" font-size="13">Skip-gram: one-hot → row-lookup v_c → context logits</text>
+  <!-- one-hot input -->
+  <text x="50" y="44" fill="currentColor" text-anchor="middle">one-hot (V)</text>
+  <g>
+    <rect x="30" y="52" width="40" height="18" fill="#6366f1" fill-opacity="0.25" stroke="currentColor" stroke-opacity="0.4"/>
+    <rect x="30" y="70" width="40" height="18" fill="#22c55e" fill-opacity="0.8" stroke="currentColor" stroke-opacity="0.4"/>
+    <text x="50" y="84" fill="currentColor" text-anchor="middle">1</text>
+    <rect x="30" y="88" width="40" height="18" fill="#6366f1" fill-opacity="0.25" stroke="currentColor" stroke-opacity="0.4"/>
+    <rect x="30" y="106" width="40" height="18" fill="#6366f1" fill-opacity="0.25" stroke="currentColor" stroke-opacity="0.4"/>
+  </g>
+  <text x="50" y="142" fill="currentColor" text-anchor="middle" font-size="10" opacity="0.7">word = "king"</text>
+  <!-- W matrix -->
+  <line x1="75" y1="80" x2="120" y2="80" stroke="currentColor" stroke-opacity="0.5" marker-end="url(#w2v-arr)"/>
+  <rect x="125" y="55" width="80" height="70" fill="#38bdf8" fill-opacity="0.3" stroke="currentColor" stroke-opacity="0.4"/>
+  <text x="165" y="92" fill="currentColor" text-anchor="middle">W (V×d)</text>
+  <rect x="125" y="73" width="80" height="16" fill="#22c55e" fill-opacity="0.55"/>
+  <text x="165" y="142" fill="currentColor" text-anchor="middle" font-size="10" opacity="0.7">row lookup</text>
+  <!-- v_c -->
+  <line x1="210" y1="80" x2="250" y2="80" stroke="currentColor" stroke-opacity="0.5" marker-end="url(#w2v-arr)"/>
+  <rect x="255" y="68" width="60" height="24" fill="#a855f7" fill-opacity="0.6" stroke="currentColor" stroke-opacity="0.4"/>
+  <text x="285" y="84" fill="currentColor" text-anchor="middle">v_c (d)</text>
+  <text x="285" y="142" fill="currentColor" text-anchor="middle" font-size="10" opacity="0.7">center vector</text>
+  <!-- W' matrix -->
+  <line x1="320" y1="80" x2="360" y2="80" stroke="currentColor" stroke-opacity="0.5" marker-end="url(#w2v-arr)"/>
+  <rect x="365" y="55" width="80" height="70" fill="#f59e0b" fill-opacity="0.3" stroke="currentColor" stroke-opacity="0.4"/>
+  <text x="405" y="92" fill="currentColor" text-anchor="middle">W' (d×V)</text>
+  <text x="405" y="142" fill="currentColor" text-anchor="middle" font-size="10" opacity="0.7">context vectors u_w</text>
+  <!-- softmax out -->
+  <line x1="450" y1="80" x2="490" y2="80" stroke="currentColor" stroke-opacity="0.5" marker-end="url(#w2v-arr)"/>
+  <g>
+    <rect x="495" y="52" width="40" height="14" fill="#ec4899" fill-opacity="0.4"/>
+    <rect x="495" y="66" width="40" height="14" fill="#ec4899" fill-opacity="0.8"/>
+    <rect x="495" y="80" width="40" height="14" fill="#ec4899" fill-opacity="0.3"/>
+    <rect x="495" y="94" width="40" height="14" fill="#ec4899" fill-opacity="0.5"/>
+  </g>
+  <text x="515" y="125" fill="currentColor" text-anchor="middle" font-size="10" opacity="0.7">P(context)</text>
+  <text x="40" y="185" fill="currentColor" font-size="11" opacity="0.8">Two tables: W gives each word a center vector, W' a context vector. Keep W.</text>
+  <defs><marker id="w2v-arr" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6 z" fill="currentColor"/></marker></defs>
+</svg>
+
+### Negative sampling, in detail
+
+The honest skip-gram softmax of Section 20.3 has a denominator that sums over the *entire* vocabulary — hundreds of thousands of dot products per training word. **Negative sampling** sidesteps that sum entirely. Instead of asking "which of all $V$ words is the context?", it asks a much cheaper yes/no question: for the true pair $(c, o)$, push their vectors together; for a few random "negative" words $w_1,\dots,w_k$, push their vectors apart. Each training step is then just $k+1$ tiny logistic regressions. The objective to **maximize** for one center–context pair is
+
+$$
+J = \log \sigma(u_o^\top v_c) + \sum_{i=1}^{k} \log \sigma(-u_{w_i}^\top v_c),
+$$
+
+where $\sigma(x) = 1/(1+e^{-x})$ is the logistic sigmoid and the $w_i$ are the sampled negatives.
+
+**In words:** make the real context word's vector align with the center vector (drive $\sigma(u_o^\top v_c)$ toward 1, so its log toward 0), and make each random negative word's vector *anti*-align (drive $\sigma(-u_{w_i}^\top v_c)$ toward 1, i.e. $u_{w_i}^\top v_c$ toward $-\infty$). One "yes" and $k$ "no"s per step.
+**Also written:** using $\sigma(-x) = 1 - \sigma(x)$, the equivalent **minimized loss** is $\mathcal{L} = -\log \sigma(u_o^\top v_c) - \sum_{i=1}^{k} \log\big(1 - \sigma(u_{w_i}^\top v_c)\big)$ — a binary cross-entropy with label 1 on the true pair and label 0 on each negative.
+
+Where do the negatives come from? Not uniformly, and not from the raw word frequencies — but from the **unigram distribution raised to the 3/4 power**:
+
+$$
+P_n(w) = \frac{f(w)^{3/4}}{\sum_{w'} f(w')^{3/4}}.
+$$
+
+The $3/4$ exponent is a deliberate compromise found empirically by the word2vec authors. Sampling proportional to raw frequency $f(w)$ would drown training in ultra-common words like "the"; sampling uniformly would waste updates on rare junk. The $3/4$ power flattens the distribution part-way — it pulls down the towering frequent words and lifts the rare ones, so negatives are drawn from a healthier mix that still respects frequency but is not dominated by it.
+
+### Subsampling and the dynamic window
+
+Two more tricks sharpen the vectors, both targeting the same problem: frequent words are loud but uninformative.
+
+**Subsampling of frequent words** randomly *discards* word occurrences during training, with a drop probability that rises for common words:
+
+$$
+P_{\text{drop}}(w) = 1 - \sqrt{\frac{t}{f(w)}},
+$$
+
+where $f(w)$ is the word's frequency and $t$ is a small threshold (typically $\sim 10^{-5}$). A word rarer than $t$ is essentially never dropped; "the" is dropped most of the time. This thins out the billions of near-useless "the … the … the" co-occurrences, which both speeds training and — counter-intuitively — *improves* the vectors, because the rare, meaning-bearing words now dominate the gradient.
+
+The **dynamic context window** does something similar on the other axis. Rather than always using a fixed window of size $m$, word2vec samples a window size *uniformly* between 1 and $m$ for each center word. The effect is a soft distance weighting: nearby words land in the window on almost every sample, while words at the far edge of the maximum window only count when a large size happens to be drawn. Closer context — which is more syntactically and semantically relevant — therefore gets weighted more heavily, for free, without any explicit decay term.
+
+Both tricks point the same direction: spend the model's capacity on the informative, nearby, rarer words and stop letting frequent or distant words blur the vectors.
+
+### Hierarchical softmax (the alternative)
+
+Negative sampling is the usual choice, but word2vec ships a second way to dodge the $V$-way softmax: **hierarchical softmax**. It arranges the vocabulary as the leaves of a binary **Huffman tree** (frequent words near the root, rare words deep). The probability of a word becomes the product of left/right branching decisions along its root-to-leaf path, each decision a single logistic unit. A word's probability then costs $O(\log V)$ dot products instead of $O(V)$, and crucially the probabilities are still normalized for free by the tree structure. Rule of thumb from practice: hierarchical softmax tends to do better on **rare** words (their short Huffman-coded paths share parameters), while negative sampling is simpler, often faster, and usually better on **frequent** words — which is why negative sampling became the default.
+
+### Hyperparameters that matter
+
+| Hyperparameter | Typical range | Intuition |
+|----------------|---------------|-----------|
+| Vector dim $d$ | 100–300 | More dimensions hold finer distinctions but cost memory and risk overfitting small corpora |
+| Window size | 2–10 | **Larger → topical** ("doctor"≈"hospital"); **smaller → syntactic** ("doctor"≈"dentist") |
+| #negatives $k$ | 5–20 | Small corpora want more (5–20); huge corpora do fine with 2–5 |
+| Epochs | 5–15 | More passes help small data; large corpora converge in a few |
+| min-count | 5–100 | Drop words rarer than this — too-rare words never get enough context to learn a good vector |
+
+The window size is the lever worth remembering: widen it and the vectors capture *what topic a word belongs to*; narrow it and they capture *what grammatical slot a word fills*.
+
+### Framework code
+
+In practice you train word2vec with `gensim` in a few lines — feed it tokenized sentences and ask for neighbors or analogies:
+
+```python
+from gensim.models import Word2Vec
+
+sentences = [["the", "king", "ruled", "the", "land"],
+             ["the", "queen", "ruled", "wisely"]]            # real corpora: millions of these
+model = Word2Vec(sentences, vector_size=100, window=5,
+                 negative=10, min_count=1, sg=1, epochs=10)   # sg=1 → skip-gram
+print(model.wv.most_similar("king", topn=3))
+# analogy: king - man + woman ≈ ?
+print(model.wv.most_similar(positive=["king", "woman"], negative=["man"], topn=1))
+```
+
+To see what `negative=10` is really doing, here is the same skip-gram-with-negative-sampling forward pass and loss from scratch in PyTorch — two embedding tables, a sigmoid, nothing else:
+
+```python
+import torch, torch.nn as nn, torch.nn.functional as F
+
+class SkipGramNS(nn.Module):
+    def __init__(self, vocab, dim):
+        super().__init__()
+        self.center  = nn.Embedding(vocab, dim)   # W  : center vectors v_c
+        self.context = nn.Embedding(vocab, dim)    # W' : context vectors u_w
+
+    def forward(self, c, pos, neg):                # c:(B,) pos:(B,) neg:(B,k)
+        v_c  = self.center(c)                      # (B, d)
+        u_o  = self.context(pos)                   # (B, d)
+        u_n  = self.context(neg)                   # (B, k, d)
+        pos_score = (u_o * v_c).sum(-1)            # u_o · v_c        -> (B,)
+        neg_score = torch.bmm(u_n, v_c.unsqueeze(-1)).squeeze(-1)  # (B, k)
+        # maximize log σ(pos) + Σ log σ(-neg)  ==  minimize the negative
+        loss = -(F.logsigmoid(pos_score) + F.logsigmoid(-neg_score).sum(-1))
+        return loss.mean()
+```
+
+The `F.logsigmoid(-neg_score)` term is exactly the $\sum \log \sigma(-u_{w_i}^\top v_c)$ from the objective above — the model's "say *no* to the fakes" half.
+
+### Evaluating the vectors
+
+Embeddings are judged two ways. **Intrinsic** evaluation tests the vectors directly: the **word-analogy** task (does $\vec{king}-\vec{man}+\vec{woman}$ land nearest "queen"?) and **word-similarity** benchmarks like **WordSim-353** or SimLex-999, which compare cosine similarities against human-rated word-pair similarity scores. **Extrinsic** evaluation ignores the geometry and asks the only question that ultimately matters: do these vectors *help a downstream task*? — feed them into an NER tagger, a sentiment classifier, or a retrieval system and measure that system's accuracy. Intrinsic tests are fast and diagnostic; extrinsic tests are slow but decisive, and the two do not always agree, so good practice reports both.
+
+### The limitation that defined what came next
+
+word2vec's vectors are **static**: each word gets exactly one vector, fixed after training. That single vector must average over *all* the word's senses. "bank" by the river and "bank" holding your money collapse into one blurred point that is neither — and "apple" the fruit and "Apple" the company are forced to share an address. There is no mechanism for the vector to change based on the sentence it appears in.
+
+This is precisely the gap that **contextual** models closed. By reading the whole sentence, [Attention & Transformers](ch17.html) give each *occurrence* of a word its own vector — "bank" near "river" and "bank" near "loan" come out different — and that contextual representation is the foundation the modern [Large Language Models](ch23.html) are built on. word2vec is where the embedding idea was made practical; contextual embeddings are where it was made dynamic. (For the geometry-of-vectors ideas underlying all of this, see [dimensionality reduction](ch07.html); for the same skip-gram trick applied to graphs rather than text, see [node2vec](ch40.html).)
+
+## 20.5 — Language models (n-gram to neural; perplexity)
 
 A **language model (LM)** assigns probabilities to sequences of words — equivalently, it predicts the next word given the previous ones. Intuitively it is a very well-read autocomplete: having seen oceans of text, it knows that after "I poured myself a cup of" the word "coffee" is far likelier than "concrete". This single capability powers autocomplete, speech recognition, translation, and ChatGPT. By the chain rule, the probability of a sentence factorizes as
 
@@ -515,7 +671,7 @@ print(round(ppl, 2))                          # 1.59
 Perplexity is only comparable across models that share the *same tokenization and vocabulary*. A subword model and a word model can't be ranked by raw PPL. And low perplexity ≠ useful output — it measures prediction, not truthfulness or helpfulness.
 :::
 
-## 20.5 — Named Entity Recognition & POS tagging (sequence labeling)
+## 20.6 — Named Entity Recognition & POS tagging (sequence labeling)
 
 Many NLP tasks are **sequence labeling**: assign a label to *every* token in a sentence, where the labels depend on each other. Think of a highlighter pass over a page — you color each word according to its job, but the colors follow rules (a "middle-of-a-name" color can't appear unless a "start-of-a-name" color came just before it). Two staples:
 
@@ -569,7 +725,7 @@ for ent in doc.ents:
 The transition matrix is doing real work: even a mediocre per-token classifier improves sharply once a CRF forbids impossible label sequences like `O → I-ORG`.
 :::
 
-## 20.6 — Sentiment analysis & text classification
+## 20.7 — Sentiment analysis & text classification
 
 **Text classification** assigns a whole document to one of a fixed set of categories: spam vs. ham, topic = {sports, politics, tech}, or — the canonical example — **sentiment analysis**, labeling text as positive, negative, or neutral. It is the workhorse of applied NLP: review monitoring, content moderation, support-ticket routing.
 
@@ -638,7 +794,7 @@ The trap in sentiment is **negation and sarcasm**: "not great" flips polarity bu
 Multiplying many small probabilities underflows to zero on real documents. Always work in **log space**: sum $\log P(w\mid c)$ instead of multiplying. The toy example above is short enough to skip it, but production code must not.
 :::
 
-## 20.7 — Topic modeling (LDA)
+## 20.8 — Topic modeling (LDA)
 
 Sometimes you have a pile of documents and *no labels*, and you want to discover the hidden themes running through them. Imagine inheriting ten thousand unsorted news clippings and wanting to know, without reading them all, "what topics is this stack actually about?" — that is exactly the job. **Topic modeling** is this unsupervised task, and **Latent Dirichlet Allocation (LDA)** is its classic engine. The core idea is a **generative story**: pretend each document was written by a simple random process, then run it backward to infer the hidden structure.
 
@@ -689,7 +845,7 @@ LDA needs you to choose the number of topics $K$ up front, ignores word order (i
 LDA topics are *discovered*, not defined — there's no guarantee they match the categories you care about. Treat the top-words list as a starting point for human naming, and try a few values of $K$.
 :::
 
-## 20.8 — Machine translation (statistical to neural seq2seq, BLEU)
+## 20.9 — Machine translation (statistical to neural seq2seq, BLEU)
 
 **Machine translation (MT)** converts text from a source language to a target language. Its history is a clean illustration of NLP's broader shift from hand-engineered statistics to end-to-end neural learning.
 
@@ -745,7 +901,7 @@ BLEU is cheap and correlates with human judgment in aggregate, but it is surface
 BLEU is meaningful only as a *corpus-level* average against the *same* reference set. A single-sentence BLEU is noisy, and scores aren't comparable across datasets or different numbers of references.
 :::
 
-## 20.9 — Text generation & decoding (summarization, sampling)
+## 20.10 — Text generation & decoding (summarization, sampling)
 
 Translation is one instance of a much broader family: **conditional text generation** ([Generative Models](ch18.html)), where a model produces an output sequence from some input. **Summarization** is the other everyday member — condensing a long document into a short one — and it splits into two styles. **Extractive** summarization *copies* the most important sentences verbatim (safe, never hallucinates, but choppy); **abstractive** summarization *rewrites* the gist in new words with a seq2seq or LLM (fluent, but can invent facts). The same encoder–decoder machinery from translation powers abstractive summarization; only the training data changes (document → summary instead of source → target).
 
@@ -830,7 +986,7 @@ gen("Once upon a time", do_sample=True, temperature=0.8, top_p=0.9, max_new_toke
 Match the decoder to the task: **beam search** when there is essentially one correct output (translation, summarization, code), **sampling with temperature/top-p** when you want diversity and voice (dialogue, story writing, brainstorming).
 :::
 
-## 20.10 — Chatbots & dialogue (retrieval vs generative, intent/slot)
+## 20.11 — Chatbots & dialogue (retrieval vs generative, intent/slot)
 
 A **dialogue system** (chatbot) carries on a conversation with a user. Two architectural families, and a spectrum between them — think of it as a help-desk worker reading from a binder of pre-approved answers (retrieval) versus one improvising replies on the spot (generative):
 
@@ -887,7 +1043,7 @@ For the LLM techniques behind modern chatbots — instruction tuning, RAG, funct
 Choose by risk tolerance: retrieval (or RAG) when wrong answers are costly and must stay on-brand; pure generation when open-ended fluency matters more than guaranteed correctness.
 :::
 
-## 20.11 — Evaluation metrics
+## 20.12 — Evaluation metrics
 
 NLP spans classification, sequence labeling, generation, and ranking, and each needs its own yardstick. Choosing the wrong metric is one of the most common ways an NLP project quietly fails. Here is the map.
 
@@ -920,7 +1076,7 @@ The deepest caution: **all automatic generation metrics are proxies.** A fluent,
 Never report a single metric on an imbalanced task. A spam classifier that labels everything "ham" can hit 95% accuracy while catching zero spam — its recall is 0. Always pair accuracy with precision/recall or F1, and report on a held-out test set (Model Evaluation & Tuning).
 :::
 
-## 20.12 — Semantic search & vector databases
+## 20.13 — Semantic search & vector databases
 
 TF-IDF (Section 20.2) finds documents that share the *exact words* of your query — search "automobile" and a page that only says "car" is invisible to it. **Semantic search** fixes this by matching on *meaning* instead of surface words: embed the query and every document into the same vector space (Section 20.3), then return the documents whose vectors point most nearly in the query's direction. The intuition: instead of matching keywords, you place every document as a pin on a map of meaning and grab the pins nearest to where the query lands — synonyms and paraphrases sit close together, so "how do I reset my password" finds a doc titled "account recovery steps."
 
@@ -969,7 +1125,7 @@ print(docs[ids[0][0]])     # -> 'how to reset your password'  (no shared keyword
 Hybrid search — combining keyword (BM25/TF-IDF) and semantic (vector) retrieval, then merging the rankings — usually beats either alone: keywords nail exact terms and rare names, embeddings catch paraphrases and synonyms.
 :::
 
-## 20.13 — Bias, fairness & safety in NLP
+## 20.14 — Bias, fairness & safety in NLP
 
 It is tempting to treat a model's output as neutral arithmetic, but a language model is a mirror of its training text — and that text carries every prejudice, stereotype, and gap of the people who wrote it. Garbage in, garbage out has a social edge here: bias in, bias out. Before deploying any NLP system that touches people, you have to ask not just "is it accurate?" but "is it fair, and is it safe?"
 
@@ -1011,7 +1167,7 @@ Beyond fairness sit two more safety concerns that any generative deployment must
 A model that is *accurate on average* can still be *unfair to a subgroup*. Fairness is not a single number — slice every evaluation by the protected groups your system will affect, and look at error *types* (false positives vs. false negatives), not just overall accuracy.
 :::
 
-## 20.14 — Evaluation metrics in code
+## 20.15 — Evaluation metrics in code
 
 Having mapped the metrics conceptually (Section 20.11), it helps to see them computed with real tooling rather than by hand — in practice you never re-derive precision or BLEU from scratch.
 
@@ -1038,7 +1194,7 @@ print(s["rougeL"].fmeasure)   # longest-common-subsequence F-measure
 
 The point is reflexive metric hygiene: pick the metric that matches the task (Section 20.11), compute it with a trusted library, slice it by subgroup (Section 20.13), and only then trust the number.
 
-## 20.15 — Quick reference
+## 20.16 — Quick reference
 
 | Term / formula | One-line meaning | When / why |
 |----------------|------------------|------------|
@@ -1063,7 +1219,7 @@ The point is reflexive metric hygiene: pick the metric that matches the task (Se
 | **Semantic search** | Embed query + corpus, rank by cosine | Matches meaning, not keywords; scale with vector DBs / ANN |
 | **F1** $\frac{2PR}{P+R}$ | Harmonic mean of precision and recall | Default labeling/classification metric on imbalanced data |
 
-## 20.16 — Key takeaways
+## 20.17 — Key takeaways
 
 - **Text must become numbers first.** Tokenization (increasingly **subword** BPE/WordPiece) plus optional stemming/lemmatization/stop-word handling is the unavoidable front door of every NLP pipeline.
 - **Representations climbed a ladder of meaning:** raw counts (BoW) → frequency-weighted counts (TF-IDF) → dense semantic vectors (**word2vec/GloVe**) → contextual vectors (transformers); **n-grams** add a little local word-order back to the order-blind models.
@@ -1075,7 +1231,7 @@ The point is reflexive metric hygiene: pick the metric that matches the task (Se
 - **Dialogue** spans retrieval (safe, fixed) to generative (fluent, risky), with **RAG** blending them; task bots decompose into **intent + slots**.
 - **Match the metric to the task**: F1 for labeling, BLEU for translation, ROUGE for summarization, and human/LLM judgment as the real ground truth — and always slice metrics by **subgroup** to catch fairness failures aggregate numbers hide.
 
-## 20.17 — See also
+## 20.18 — See also
 
 - **Recurrent & Sequence Models** — the RNN/LSTM backbone behind seq2seq, BiLSTM tagging, and neural LMs.
 - **Attention & Transformers** — contextual embeddings and the architecture that now dominates NLP.
