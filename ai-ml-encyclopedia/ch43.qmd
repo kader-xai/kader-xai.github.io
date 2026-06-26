@@ -117,6 +117,43 @@ The naive way to search a corpus is to scan every document for the query terms. 
 
 Think of the index at the back of a textbook. You do not read every page looking for "entropy"; you flip to the index, find "entropy → 142, 197, 301", and jump straight there. The inverted index is exactly this, built for every term in the vocabulary.
 
+Here is the forward-to-inverted flip as a picture — documents fan out into words, then the arrows reverse so each word gathers its documents:
+
+<style>
+@keyframes c43-flip-fade { 0%,40% { opacity: 0.25; } 60%,100% { opacity: 1; } }
+.c43-flip-inv { animation: c43-flip-fade 5s ease-in-out infinite; }
+@media (prefers-reduced-motion: reduce) { .c43-flip-inv { animation: none; opacity: 1; } }
+</style>
+<svg viewBox="0 0 380 180" xmlns="http://www.w3.org/2000/svg">
+  <text x="55" y="16" font-size="11" fill="currentColor" text-anchor="middle">forward</text>
+  <text x="325" y="16" font-size="11" fill="currentColor" text-anchor="middle">inverted</text>
+  <g font-size="11" fill="currentColor" text-anchor="middle">
+    <rect x="30" y="30" width="50" height="22" rx="4" fill="#6366f1" fill-opacity="0.18" stroke="currentColor"/><text x="55" y="45">doc 1</text>
+    <rect x="30" y="80" width="50" height="22" rx="4" fill="#6366f1" fill-opacity="0.18" stroke="currentColor"/><text x="55" y="95">doc 2</text>
+    <rect x="30" y="130" width="50" height="22" rx="4" fill="#6366f1" fill-opacity="0.18" stroke="currentColor"/><text x="55" y="145">doc 3</text>
+  </g>
+  <g font-size="11" text-anchor="middle" fill="currentColor">
+    <text x="180" y="45">cat</text><text x="180" y="95">sat</text><text x="180" y="145">dog</text>
+  </g>
+  <g stroke="#6366f1" stroke-opacity="0.5" stroke-width="1.5" fill="none">
+    <path d="M82,41 L160,43"/><path d="M82,45 L160,91"/>
+    <path d="M82,91 L160,93"/><path d="M82,87 L160,45"/>
+    <path d="M82,141 L160,143"/>
+  </g>
+  <g class="c43-flip-inv" font-size="11" text-anchor="middle" fill="currentColor">
+    <text x="220" y="45">cat</text><text x="220" y="95">sat</text><text x="220" y="145">dog</text>
+    <g stroke="#22c55e" stroke-width="1.8" fill="none">
+      <path d="M232,42 L296,38" marker-end="url(#c43h)"/><path d="M232,46 L296,90" marker-end="url(#c43h)"/>
+      <path d="M232,92 L296,42" marker-end="url(#c43h)"/><path d="M232,94 L296,90" marker-end="url(#c43h)"/>
+      <path d="M232,142 L296,138" marker-end="url(#c43h)"/>
+    </g>
+    <rect x="300" y="28" width="56" height="20" rx="4" fill="#22c55e" fill-opacity="0.2" stroke="currentColor"/><text x="328" y="42">1, 3</text>
+    <rect x="300" y="80" width="56" height="20" rx="4" fill="#22c55e" fill-opacity="0.2" stroke="currentColor"/><text x="328" y="94">1, 2</text>
+    <rect x="300" y="130" width="56" height="20" rx="4" fill="#22c55e" fill-opacity="0.2" stroke="currentColor"/><text x="328" y="144">2</text>
+  </g>
+  <defs><marker id="c43h" markerWidth="7" markerHeight="7" refX="5" refY="3" orient="auto"><path d="M0,0 L5,3 L0,6 Z" fill="#22c55e"/></marker></defs>
+</svg>
+
 **Tiny worked example.** Three documents:
 
 | docID | text |
@@ -171,6 +208,10 @@ assert intersect([1,3], [1,2]) == [1]     # cat AND sat -> doc 1
 In words: the formula for the cost of intersection, $O(|A|+|B|)$, says *we touch each posting in each list at most once* — there is no nested loop comparing every pair.
 **Also written:** $O(n)$ where $n = |A| + |B|$ is the total length of both postings lists.
 
+::: {.callout-tip}
+When intersecting many terms, start with the **shortest** postings list (the rarest term) and intersect against it. The result can only shrink, so each later merge runs over a smaller list — the rare term does the pruning for free.
+:::
+
 ### Postings compression
 
 Postings lists are huge, so we compress them. Two ideas do most of the work. First, store **gaps** (delta encoding) instead of absolute docIDs: a postings list `824, 829, 1001` becomes `824, 5, 172`. Gaps are small for frequent terms, and small numbers compress well. Second, encode those gaps with a **variable-byte** or bit-level code (Elias-gamma, or modern SIMD-friendly schemes like PForDelta) so a gap of 5 costs one byte, not four.
@@ -197,6 +238,24 @@ A phrase query "new york" intersects the docID lists as before, then for each sh
 Boolean retrieval returns a *set* — a document either matches or it does not — with no notion of which match is best. Real search needs **ranking**. The **vector-space model** treats each document and the query as a vector in a space with one dimension per vocabulary term, then ranks documents by how close their vector points to the query's.
 
 The everyday picture: imagine every document as an arrow in a giant space where each axis is a word. Two documents about the same topic point in nearly the same direction, even if one is a paragraph and the other a book. Ranking is just measuring the angle between the query's arrow and each document's arrow.
+
+Here are three documents as arrows on two word-axes — same topic means same direction, no matter the length:
+
+<svg viewBox="0 0 320 220" xmlns="http://www.w3.org/2000/svg">
+  <line x1="40" y1="190" x2="300" y2="190" stroke="#888" stroke-width="1"/>
+  <line x1="40" y1="190" x2="40" y2="20" stroke="#888" stroke-width="1"/>
+  <text x="305" y="194" font-size="11" fill="currentColor">"cat"</text>
+  <text x="40" y="14" font-size="11" text-anchor="middle" fill="currentColor">"dog"</text>
+  <defs><marker id="c43vah" markerWidth="9" markerHeight="9" refX="6" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6 Z" fill="currentColor"/></marker></defs>
+  <line x1="40" y1="190" x2="250" y2="60" stroke="#22c55e" stroke-width="2.5" marker-end="url(#c43vah)"/>
+  <text x="200" y="80" font-size="10" fill="#22c55e">doc A (cat-heavy)</text>
+  <line x1="40" y1="190" x2="160" y2="115" stroke="#38bdf8" stroke-width="2.5" marker-end="url(#c43vah)"/>
+  <text x="120" y="135" font-size="10" fill="#38bdf8">doc B (same mix, shorter)</text>
+  <line x1="40" y1="190" x2="90" y2="50" stroke="#a855f7" stroke-width="2.5" marker-end="url(#c43vah)"/>
+  <text x="92" y="48" font-size="10" fill="#a855f7">doc C (dog-heavy)</text>
+  <path d="M85,170 A24 24 0 0 1 73 153" fill="none" stroke="#f59e0b" stroke-width="1.5"/>
+  <text x="100" y="165" font-size="9" fill="#f59e0b">small angle = similar</text>
+</svg>
 
 The weight on each term needs to capture two intuitions:
 
@@ -270,6 +329,21 @@ Two intuitions live in the formula:
 
 - **Saturation via $k_1$** (typically 1.2–2.0): the fraction approaches the ceiling $k_1+1$ as tf grows, so the 20th occurrence of a term barely beats the 5th. Raw TF-IDF would keep rewarding it linearly.
 - **Length normalization via $b$** (typically 0.75): the $b\cdot|d|/\text{avgdl}$ term penalizes long documents, because a long document accumulates term occurrences just by being long. $b=0$ disables it; $b=1$ fully normalizes.
+
+Here is saturation as a picture — BM25's curve climbs fast, then flattens at its ceiling, while raw TF-IDF keeps rising forever:
+
+<svg viewBox="0 0 360 210" xmlns="http://www.w3.org/2000/svg">
+  <line x1="40" y1="180" x2="340" y2="180" stroke="#888" stroke-width="1"/>
+  <line x1="40" y1="180" x2="40" y2="20" stroke="#888" stroke-width="1"/>
+  <text x="335" y="198" font-size="11" fill="currentColor">tf →</text>
+  <text x="40" y="14" font-size="11" text-anchor="middle" fill="currentColor">score</text>
+  <line x1="40" y1="55" x2="340" y2="55" stroke="#f59e0b" stroke-width="1" stroke-dasharray="3 3"/>
+  <text x="250" y="50" font-size="9" fill="#f59e0b">ceiling k₁+1</text>
+  <path d="M40,180 C70,90 130,62 200,58 C270,56 320,56 340,56" fill="none" stroke="#22c55e" stroke-width="2.5"/>
+  <text x="120" y="110" font-size="10" fill="#22c55e">BM25 — saturates</text>
+  <path d="M40,180 L330,30" fill="none" stroke="#ec4899" stroke-width="1.8" stroke-dasharray="4 3"/>
+  <text x="245" y="95" font-size="10" fill="#ec4899">raw tf — unbounded</text>
+</svg>
 
 The idf in BM25 is the probabilistic form $\log\frac{N - \text{df}_t + 0.5}{\text{df}_t + 0.5}$.
 
@@ -395,6 +469,30 @@ $$
 
 The ranking is nearly ideal — it only swapped the 2nd and 3rd results, which the log discount makes cheap.
 
+The position discount is what makes "great result early" pay off. Here is the discount curve $1/\log_2(i+1)$ — steep at the top, nearly flat by the bottom of the page:
+
+<svg viewBox="0 0 360 180" xmlns="http://www.w3.org/2000/svg">
+  <line x1="40" y1="150" x2="340" y2="150" stroke="#888" stroke-width="1"/>
+  <line x1="40" y1="150" x2="40" y2="20" stroke="#888" stroke-width="1"/>
+  <text x="190" y="173" font-size="10" text-anchor="middle" fill="currentColor">rank position i</text>
+  <text x="14" y="90" font-size="10" text-anchor="middle" transform="rotate(-90 14 90)" fill="currentColor">discount</text>
+  <g fill="#6366f1">
+    <rect x="55" y="30" width="22" height="120" rx="2" fill-opacity="0.7"/>
+    <rect x="90" y="74" width="22" height="76" rx="2" fill-opacity="0.7"/>
+    <rect x="125" y="90" width="22" height="60" rx="2" fill-opacity="0.7"/>
+    <rect x="160" y="100" width="22" height="50" rx="2" fill-opacity="0.7"/>
+    <rect x="195" y="106" width="22" height="44" rx="2" fill-opacity="0.7"/>
+    <rect x="230" y="111" width="22" height="39" rx="2" fill-opacity="0.7"/>
+    <rect x="265" y="115" width="22" height="35" rx="2" fill-opacity="0.7"/>
+    <rect x="300" y="118" width="22" height="32" rx="2" fill-opacity="0.7"/>
+  </g>
+  <g font-size="9" fill="currentColor" text-anchor="middle" opacity="0.8">
+    <text x="66" y="163">1</text><text x="101" y="163">2</text><text x="136" y="163">3</text><text x="171" y="163">4</text>
+    <text x="206" y="163">5</text><text x="241" y="163">6</text><text x="276" y="163">7</text><text x="311" y="163">8</text>
+  </g>
+  <text x="200" y="48" font-size="9" fill="#f59e0b">rank 1 worth ~2× rank 3</text>
+</svg>
+
 ```python
 import numpy as np
 def dcg(rels):
@@ -456,6 +554,10 @@ ranker = lgb.train(
 # ranker.predict(X_new) -> scores; sort within each query group to rank.
 ```
 
+::: {.callout-warning}
+The `group` array is the part everyone gets wrong. If you forget it (or pass the wrong basket sizes), LightGBM treats *all* rows as one giant query and the lambdas compare documents across unrelated searches — the model trains without error and ranks badly. The group sizes must sum to `len(X)`, in the same row order.
+:::
+
 ## 43.7 Neural IR: dense retrieval, late interaction, learned sparse
 
 BM25 matches **exact terms**. It cannot tell that "car" and "automobile" mean the same thing — this is the **vocabulary mismatch** problem. Neural IR uses learned representations (Ch. 14, Ch. 18) to match on **meaning**. Three architectures dominate, trading off quality against cost.
@@ -488,6 +590,39 @@ $$
 **In words:** every query word finds its single best-matching word in the document and contributes that match score; add those best matches up.
 **Also written:** $S(q,d) = \sum_{i \in q} \max_{j \in d} \langle \mathbf{v}_i^q, \mathbf{v}_j^d \rangle$, the sum over query tokens of the row-maxima of the query-by-document token similarity matrix.
 
+Here is MaxSim on a tiny grid — each query row lights up its single brightest document cell, and those winners are summed:
+
+<style>
+@keyframes c43-maxsim-glow { 0%,100% { fill-opacity: 0.35; } 50% { fill-opacity: 0.85; } }
+.c43-ms-win { animation: c43-maxsim-glow 3.5s ease-in-out infinite; }
+@media (prefers-reduced-motion: reduce) { .c43-ms-win { animation: none; fill-opacity: 0.8; } }
+</style>
+<svg viewBox="0 0 320 180" xmlns="http://www.w3.org/2000/svg">
+  <text x="160" y="14" font-size="10" text-anchor="middle" fill="currentColor">document tokens →</text>
+  <text x="14" y="95" font-size="10" text-anchor="middle" transform="rotate(-90 14 95)" fill="currentColor">query tokens</text>
+  <g stroke="currentColor" stroke-opacity="0.4">
+    <!-- row q1 -->
+    <rect x="40" y="30" width="44" height="32" fill="#6366f1" fill-opacity="0.15"/>
+    <rect x="84" y="30" width="44" height="32" class="c43-ms-win" fill="#22c55e"/>
+    <rect x="128" y="30" width="44" height="32" fill="#6366f1" fill-opacity="0.2"/>
+    <rect x="172" y="30" width="44" height="32" fill="#6366f1" fill-opacity="0.1"/>
+    <!-- row q2 -->
+    <rect x="40" y="62" width="44" height="32" fill="#6366f1" fill-opacity="0.2"/>
+    <rect x="84" y="62" width="44" height="32" fill="#6366f1" fill-opacity="0.12"/>
+    <rect x="128" y="62" width="44" height="32" fill="#6366f1" fill-opacity="0.18"/>
+    <rect x="172" y="62" width="44" height="32" class="c43-ms-win" fill="#22c55e"/>
+    <!-- row q3 -->
+    <rect x="40" y="94" width="44" height="32" class="c43-ms-win" fill="#22c55e"/>
+    <rect x="84" y="94" width="44" height="32" fill="#6366f1" fill-opacity="0.18"/>
+    <rect x="128" y="94" width="44" height="32" fill="#6366f1" fill-opacity="0.12"/>
+    <rect x="172" y="94" width="44" height="32" fill="#6366f1" fill-opacity="0.2"/>
+  </g>
+  <text x="248" y="50" font-size="9" fill="#22c55e">row-max</text>
+  <text x="248" y="82" font-size="9" fill="#22c55e">row-max</text>
+  <text x="248" y="114" font-size="9" fill="#22c55e">row-max</text>
+  <text x="160" y="150" font-size="10" text-anchor="middle" fill="currentColor">S(q,d) = sum of the three green winners</text>
+</svg>
+
 This recovers token-level matching (so "car" can find "automobile" *and* still reward exact overlaps) while keeping encoding independent enough to precompute document tokens. The cost is storage — many vectors per document.
 
 **Learned sparse (SPLADE).** Predict a **sparse** vector over the vocabulary: each document is expanded into a weighted bag of terms, including terms it does not literally contain (learned expansion fixes vocabulary mismatch), with most weights zero. Because the output is sparse and term-indexed, you can serve it on a **classic inverted index** — getting neural semantics with the mature, fast infrastructure of §43.1.
@@ -515,6 +650,38 @@ In practice the strongest systems are **hybrid**: BM25 (exact, cheap, great on r
 When documents link to each other — web pages, citations, social follows — the **link graph** itself carries a query-independent signal of importance, on top of the textual match. The founding idea of web search: a page is important if important pages link to it.
 
 The everyday picture: imagine a bored web surfer clicking links at random forever. Pages they end up visiting most often are the "important" ones. **PageRank** is exactly the long-run fraction of time this random surfer spends on each page.
+
+Here is the random surfer in motion — a token drifting along links, pooling where many arrows point:
+
+<style>
+@keyframes c43-surf-move {
+  0%   { cx: 70px;  cy: 50px; }
+  25%  { cx: 250px; cy: 50px; }
+  50%  { cx: 250px; cy: 140px; }
+  75%  { cx: 70px;  cy: 140px; }
+  100% { cx: 70px;  cy: 50px; }
+}
+.c43-surfer { animation: c43-surf-move 6s ease-in-out infinite; }
+@media (prefers-reduced-motion: reduce) { .c43-surfer { animation: none; } }
+</style>
+<svg viewBox="0 0 320 190" xmlns="http://www.w3.org/2000/svg">
+  <defs><marker id="c43pr" markerWidth="8" markerHeight="8" refX="7" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6 Z" fill="currentColor" fill-opacity="0.6"/></marker></defs>
+  <g stroke="currentColor" stroke-opacity="0.5" stroke-width="1.5" fill="none">
+    <path d="M82,50 L238,50" marker-end="url(#c43pr)"/>
+    <path d="M250,62 L250,128" marker-end="url(#c43pr)"/>
+    <path d="M238,140 L82,140" marker-end="url(#c43pr)"/>
+    <path d="M70,128 L70,62" marker-end="url(#c43pr)"/>
+    <path d="M82,58 L238,132" marker-end="url(#c43pr)"/>
+  </g>
+  <g font-size="11" fill="currentColor" text-anchor="middle">
+    <circle cx="70" cy="50" r="16" fill="#6366f1" fill-opacity="0.2" stroke="currentColor"/><text x="70" y="54">A</text>
+    <circle cx="250" cy="50" r="16" fill="#6366f1" fill-opacity="0.2" stroke="currentColor"/><text x="250" y="54">B</text>
+    <circle cx="250" cy="140" r="22" fill="#22c55e" fill-opacity="0.3" stroke="currentColor"/><text x="250" y="144">C</text>
+    <circle cx="70" cy="140" r="16" fill="#6366f1" fill-opacity="0.2" stroke="currentColor"/><text x="70" y="144">D</text>
+  </g>
+  <circle class="c43-surfer" cx="70" cy="50" r="6" fill="#f59e0b"/>
+  <text x="250" y="178" font-size="9" text-anchor="middle" fill="#22c55e">C is biggest: most arrows land here</text>
+</svg>
 
 $$
 \text{PR}(p) = \frac{1-d}{N} + d \sum_{q \to p} \frac{\text{PR}(q)}{L(q)}
@@ -560,7 +727,7 @@ $$
 **In words:** under a random shuffle of all possible shingles, the chance that the two sets' smallest elements coincide is exactly their Jaccard overlap.
 **Also written:** $\mathbb{E}\big[\frac{1}{n}\sum_{k=1}^{n}\mathbb{1}[h^{(k)}_{\min}(A) = h^{(k)}_{\min}(B)]\big] = J(A,B)$ — averaging agreement over $n$ independent hashes is an unbiased estimator of Jaccard.
 
-Why? Apply a random permutation to the universe of shingles; $h_{\min}$ is the smallest element under that permutation. The minimum coincides exactly when the overall-smallest element lies in $A\cap B$, which happens with probability $|A\cap B| / |A\cup B|$. Use $n$ independent hashes and the **fraction of matching signature slots** estimates $J$.
+Here is the simpler way to see why it works. Shuffle every possible shingle into a random order. For each set, look only at *which of its shingles came out first* in that shuffle. The two sets pick the **same** first shingle exactly when the overall-first shingle (out of everything in either set) happens to sit in their overlap — and the overlap is a $|A\cap B| / |A\cup B|$ slice of that combined pool. So "do the two first-picks match?" is a coin flip weighted by the Jaccard. Repeat with $n$ independent shuffles and the **fraction of matching signature slots** estimates $J$.
 
 **Worked MinHash.** Universe of shingles $\{a,b,c,d,e\}$, two sets $A=\{a,c,d\}$, $B=\{a,d,e\}$. True Jaccard: $|A\cap B|=|\{a,d\}|=2$, $|A\cup B|=|\{a,c,d,e\}|=4$, so $J=2/4=0.5$.
 
@@ -652,6 +819,15 @@ Here is the Bloom filter as a doodle — three hash functions lighting up three 
 **In words:** the estimate is the smallest of the $d$ counters the item hashes to, because every collision can only inflate a counter, never deflate it — so the minimum is the least-contaminated guess.
 **Also written:** $\hat{f}(x) = \min_{r=1}^{d} C[r,\,h_r(x)]$, with the guarantee $f(x) \le \hat{f}(x) \le f(x) + \varepsilon\|f\|_1$ holding with probability $1-\delta$ when $w = \lceil e/\varepsilon\rceil$, $d = \lceil\ln(1/\delta)\rceil$.
 
+**Worked Count–Min.** Two rows, four columns. Insert "a" three times and "b" once. Suppose row 1 sends both "a" and "b" to column 2 (a collision), while row 2 sends "a" to column 0 and "b" to column 3 (no collision). The counters end up:
+
+| | col 0 | col 1 | col 2 | col 3 |
+|---|---|---|---|---|
+| row 1 | 0 | 0 | 4 | 0 |
+| row 2 | 3 | 0 | 0 | 1 |
+
+Querying "a": row 1 gives 4 (polluted by "b"), row 2 gives 3. The **minimum is 3** — the true count. The collision inflated one row, but taking the min reads past it. Querying "b": $\min(4,1)=1$, also exact. The min rescues the estimate whenever *some* row avoided a collision.
+
 **DGIM — count 1s in a sliding window.** Over the last $N$ bits of a 0/1 stream, how many are 1? Storing $N$ bits is too much. **DGIM** keeps **buckets** of exponentially increasing size ($1,1,2,2,4,4,\dots$ ones each), at most two of each size, storing only each bucket's **end timestamp**. Drop buckets that fall out of the window; estimate the count by summing bucket sizes and halving the oldest (still-partially-in-window) bucket. This needs only $O(\log^2 N)$ bits and answers within a guaranteed 50% relative error (tightenable by keeping more buckets per size).
 
 | question | algorithm | memory |
@@ -672,6 +848,10 @@ for visitor_id in stream:                # one pass, no per-id storage
 print(int(hll.count()))                  # estimated distinct visitors
 # datasketch also ships MinHash + MinHashLSH for the §43.9 dedup pipeline.
 ```
+
+::: {.callout-tip}
+These sketches are **mergeable**: build one per shard or per hour, then combine them (OR the Bloom bits, max the HLL registers, add the Count–Min cells) to get the sketch of the union — exactly, with no re-scan. That is what makes them the backbone of distributed analytics; each worker summarizes its slice independently and you fold the summaries at the end.
+:::
 
 ## 43.11 Frequent itemsets and the PCY refinement
 
@@ -719,6 +899,27 @@ $$
 **Also written:** defining the marginal gain $\Delta_f(x \mid S) = f(S \cup \{x\}) - f(S)$, submodularity is $\Delta_f(x \mid A) \ge \Delta_f(x \mid B)$ for all $A \subseteq B$.
 
 It is **monotone** if adding elements never hurts ($f(A) \le f(B)$ when $A \subseteq B$). Coverage is the canonical example: the first document you pick covers many topics; once you have ten, an eleventh covers little new ground — exactly diminishing returns.
+
+Here is diminishing returns as a picture — each new pick adds a smaller fresh slice of coverage than the last:
+
+<svg viewBox="0 0 360 180" xmlns="http://www.w3.org/2000/svg">
+  <line x1="40" y1="150" x2="340" y2="150" stroke="#888" stroke-width="1"/>
+  <line x1="40" y1="150" x2="40" y2="20" stroke="#888" stroke-width="1"/>
+  <text x="190" y="172" font-size="10" text-anchor="middle" fill="currentColor"># items selected</text>
+  <text x="14" y="90" font-size="10" text-anchor="middle" transform="rotate(-90 14 90)" fill="currentColor">coverage</text>
+  <g fill="#a855f7" fill-opacity="0.75">
+    <rect x="55" y="62" width="34" height="88" rx="2"/>
+    <rect x="100" y="38" width="34" height="112" rx="2"/>
+    <rect x="145" y="28" width="34" height="122" rx="2"/>
+    <rect x="190" y="24" width="34" height="126" rx="2"/>
+    <rect x="235" y="22" width="34" height="128" rx="2"/>
+  </g>
+  <g stroke="#f59e0b" stroke-width="1.5" fill="none">
+    <path d="M72,62 L72,42" marker-end="url(#c43dr)"/><text x="72" y="36" font-size="9" fill="#f59e0b" text-anchor="middle">+big</text>
+    <path d="M252,22 L252,12"/><text x="285" y="20" font-size="9" fill="#f59e0b">+tiny</text>
+  </g>
+  <defs><marker id="c43dr" markerWidth="7" markerHeight="7" refX="3" refY="5" orient="auto"><path d="M0,5 L3,0 L6,5 Z" fill="#f59e0b"/></marker></defs>
+</svg>
 
 The remarkable result: for a **monotone submodular** $f$ with a cardinality constraint, the **greedy** algorithm — repeatedly add the element with the largest **marginal gain** — achieves at least
 
@@ -847,7 +1048,7 @@ print(rrf([bm25_list, dense_list]))       # d1 and d3 rise via agreement
 - **Neural IR** beats vocabulary mismatch: **dense/DPR** (one vector, ANN search), **ColBERT** (per-token MaxSim), **SPLADE** (learned sparse on an inverted index). Hybrid + rerank wins; these feed **RAG** (Ch. 23).
 - **Link analysis**: **PageRank** (query-independent random-surfer importance) and **HITS** (hubs and authorities) rank by graph structure, not just text.
 - Near-duplicate detection: **shingling → MinHash** (match probability = Jaccard) **→ LSH banding** (S-curve threshold $\approx (1/b)^{1/r}$); tune to avoid false negatives.
-- **Streaming** with sublinear memory: **reservoir sampling** (uniform sample), **Bloom filters** (membership, no false negatives), **HyperLogLog** (distinct counts), **Count–Min sketch** (per-item frequency), **DGIM** (window counts).
+- **Streaming** with sublinear memory: **reservoir sampling** (uniform sample), **Bloom filters** (membership, no false negatives), **HyperLogLog** (distinct counts), **Count–Min sketch** (per-item frequency), **DGIM** (window counts) — and all of these **merge** across shards.
 - **PCY** prunes Apriori's pair candidates with a free pass-1 bucket bitmap. **Submodular greedy** gets $1-1/e$ of optimal for coverage/influence. **CUR** is interpretable, sparsity-preserving low-rank approximation when SVD's abstract factors won't do.
 
 ## 43.3 — See also

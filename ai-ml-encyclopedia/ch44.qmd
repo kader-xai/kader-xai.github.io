@@ -119,6 +119,29 @@ The dominant algorithm is **Byte-Pair Encoding (BPE)**. The idea is borrowed fro
 
 **Intuition first:** think of how a child learns to read. They don't memorize every word as a whole picture, nor do they sound out every single letter forever. They learn chunks — `-ing`, `-tion`, `un-`, `the` — and snap new words together from familiar pieces. BPE discovers exactly those chunks automatically, just by counting which pairs of symbols show up next to each other most often.
 
+Each merge step glues the most common neighboring pair into a single new symbol — watch `l·o·w` collapse into one token:
+
+<style>
+@keyframes c44-bpe-merge { 0%, 18% { opacity: 0; transform: scaleX(0); } 30%, 100% { opacity: 1; transform: scaleX(1); } }
+@keyframes c44-bpe-fade  { 0%, 30% { opacity: 1; } 45%, 100% { opacity: 0.2; } }
+.c44-bpe svg { max-width: 460px; }
+@media (prefers-reduced-motion: reduce) { .c44-bpe rect, .c44-bpe line { animation: none !important; } }
+</style>
+<div class="c44-bpe">
+<svg viewBox="0 0 460 120" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif" font-size="13">
+  <rect x="40"  y="30" width="50" height="34" rx="5" fill="rgba(99,102,241,0.18)" stroke="#6366f1"/>
+  <text x="65"  y="52" text-anchor="middle" fill="currentColor">l</text>
+  <rect x="100" y="30" width="50" height="34" rx="5" fill="rgba(99,102,241,0.18)" stroke="#6366f1"/>
+  <text x="125" y="52" text-anchor="middle" fill="currentColor">o</text>
+  <rect x="160" y="30" width="50" height="34" rx="5" fill="rgba(99,102,241,0.18)" stroke="#6366f1"/>
+  <text x="185" y="52" text-anchor="middle" fill="currentColor">w</text>
+  <!-- merged "lo" token sweeping in over l+o -->
+  <rect x="40" y="30" width="110" height="34" rx="5" fill="rgba(34,197,94,0.32)" stroke="#22c55e" style="transform-origin:40px 47px; animation: c44-bpe-merge 5s ease-in-out infinite;"/>
+  <text x="95" y="52" text-anchor="middle" fill="currentColor" font-weight="bold" style="animation: c44-bpe-merge 5s ease-in-out infinite;">lo</text>
+  <text x="230" y="98" text-anchor="middle" fill="#777" font-size="11">most frequent pair "l·o" → one new token "lo"</text>
+</svg>
+</div>
+
 ### A worked merge example
 
 Take a tiny corpus where word counts are: `low` ×5, `lower` ×2, `newest` ×6, `widest` ×3. We start from characters (a special `·` marks a word boundary so the tokenizer can later glue words back together). Count every adjacent pair across the corpus, weighted by word frequency:
@@ -289,7 +312,35 @@ flowchart LR
     F -->|no| G["Write final output to HBM once"]
 ```
 
-The mathematical enabler is the **online softmax**: softmax can be computed incrementally over blocks if you carry a running maximum $m$ and a running normalizer $\ell$, rescaling the partial result each time you see a larger value. So the algorithm never needs all scores at once. Concretely, when a new block has max $m_2$ and you held running max $m_1$, the new global max is $m = \max(m_1, m_2)$ and you rescale the old accumulator by $e^{m_1 - m}$ and the new block's contribution by $e^{m_2 - m}$ before adding — this keeps every exponential numerically safe and the final result bit-for-bit equal to a full softmax.
+The mathematical enabler is the **online softmax**, and the plain-English version is short: keep a running answer, and whenever a new block contains a bigger score than anything you've seen, gently shrink the old running total to match the new scale before adding the block in. That's it. You carry two running numbers — the biggest score so far ($m$) and the sum of the weights so far ($\ell$) — and each block does one rescale-then-add. Because you only ever rescale *down* (you subtract the largest score before exponentiating), no exponential ever blows up, and the final answer is bit-for-bit identical to running softmax over the whole row at once. The whole pile of scores never has to exist at the same time.
+
+The block-by-block sweep, with each pass keeping only a tile in fast SRAM:
+
+<style>
+@keyframes c44-flash-scan { 0% { transform: translateX(0); } 100% { transform: translateX(330px); } }
+@keyframes c44-flash-fill  { 0%, 100% { opacity: 0.25; } 50% { opacity: 0.85; } }
+.c44-flash svg { max-width: 480px; }
+@media (prefers-reduced-motion: reduce) { .c44-flash rect { animation: none !important; } }
+</style>
+<div class="c44-flash">
+<svg viewBox="0 0 480 150" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif" font-size="11">
+  <text x="20" y="22" fill="#777">K,V blocks streamed through SRAM (the full N×N is never stored):</text>
+  <g>
+    <rect x="30"  y="40" width="64" height="44" rx="4" fill="rgba(56,189,248,0.25)" stroke="#38bdf8"/>
+    <rect x="104" y="40" width="64" height="44" rx="4" fill="rgba(56,189,248,0.25)" stroke="#38bdf8"/>
+    <rect x="178" y="40" width="64" height="44" rx="4" fill="rgba(56,189,248,0.25)" stroke="#38bdf8"/>
+    <rect x="252" y="40" width="64" height="44" rx="4" fill="rgba(56,189,248,0.25)" stroke="#38bdf8"/>
+    <rect x="326" y="40" width="64" height="44" rx="4" fill="rgba(56,189,248,0.25)" stroke="#38bdf8"/>
+  </g>
+  <!-- moving "active tile in SRAM" highlight -->
+  <rect x="30" y="40" width="64" height="44" rx="4" fill="rgba(245,158,11,0.45)" stroke="#f59e0b" stroke-width="2"
+        style="animation: c44-flash-scan 5s steps(5) infinite, c44-flash-fill 1s ease-in-out infinite;"/>
+  <text x="62"  y="106" text-anchor="middle" fill="#777">block 1</text>
+  <text x="210" y="106" text-anchor="middle" fill="#777">…</text>
+  <text x="358" y="106" text-anchor="middle" fill="#777">block 5</text>
+  <text x="30" y="135" fill="#22c55e">running max m ↑   running sum ℓ ↑   → one HBM write at the end</text>
+</svg>
+</div>
 
 The softmax itself, written in the numerically stable shifted form FlashAttention uses block-by-block:
 
@@ -510,6 +561,8 @@ Every dense model pays the same price for every token: all parameters fire on ev
 **Everyday analogy:** a hospital does not send every patient to every doctor. A triage nurse (the router) glances at each patient and routes them to the two most relevant specialists. The hospital can employ a hundred specialists (huge total capacity) while any single patient only ever consumes two consultations (small per-patient cost). MoE gives a model a large staff of specialists but only "consults" a couple per token.
 
 The consequence is the headline property: you grow *total* parameters (knowledge capacity) without growing the *active* compute per token. A model with 8 experts of which 2 fire has ~4× the parameters of its dense FFN but only ~2× the FFN compute. Mixtral 8×7B, for example, has ~47B total parameters but activates only ~13B per token.
+
+**Where this is used:** MoE is no longer exotic — it is how several frontier and open models hit their quality-per-FLOP. Mixtral 8×7B (8 experts, top-2) runs at the cost of a ~13B dense model while carrying ~47B parameters' worth of knowledge; DeepSeek and Qwen ship MoE variants with dozens to hundreds of fine-grained experts. The pattern is always the same trade: pay in *memory and routing complexity* to buy *capacity without latency*.
 
 ```{mermaid}
 flowchart LR
@@ -766,6 +819,34 @@ This pairs naturally with PEFT (44.9): SFT and DPO are very often done with LoRA
 Training happens once; inference happens billions of times, so its economics dominate the lifetime cost of a model. LLM inference has a peculiar structure: it runs in two distinct phases. **Prefill** ingests the whole prompt in one parallel forward pass — this is compute-bound and fast per token. **Decode** then emits one token at a time, and each step re-reads the entire model from HBM to produce a single token — this is **memory-bound** and is where the latency lives. Recognizing that decode is memory-bound is the key that unlocks almost every trick below. (These are introduced in Ch 23/Ch 31; here is how they fit the systems picture.)
 
 **Everyday analogy for the two phases:** prefill is like *reading* a whole letter at a glance — your eyes take in the page in parallel. Decode is like *writing* the reply by hand, one word at a time, where each word depends on all the words before it. Reading is fast and parallel; writing is serial and slow, and that is where you spend your afternoon.
+
+Here is the decode bottleneck made visible: to emit each single token, the *entire* model has to be hauled out of HBM again — the whole weight matrix pulses across the bus for one word of output.
+
+<style>
+@keyframes c44-decode-pulse { 0%, 100% { opacity: 0.3; } 50% { opacity: 0.85; } }
+@keyframes c44-decode-flow  { 0% { offset-distance: 0%; opacity: 0; } 10% { opacity: 1; } 90% { opacity: 1; } 100% { offset-distance: 100%; opacity: 0; } }
+@keyframes c44-decode-tok   { 0%, 60% { opacity: 0; transform: scale(0.6); } 75%, 100% { opacity: 1; transform: scale(1); } }
+.c44-dec svg { max-width: 480px; }
+@media (prefers-reduced-motion: reduce) { .c44-dec * { animation: none !important; opacity: 1 !important; } }
+</style>
+<div class="c44-dec">
+<svg viewBox="0 0 480 130" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif" font-size="12">
+  <rect x="20" y="35" width="120" height="60" rx="6" fill="rgba(244,67,53,0.18)" stroke="#ec4899"
+        style="animation: c44-decode-pulse 1.6s ease-in-out infinite;"/>
+  <text x="80" y="60" text-anchor="middle" fill="currentColor" font-weight="bold">HBM</text>
+  <text x="80" y="78" text-anchor="middle" fill="#777" font-size="10">14 GB of weights</text>
+  <!-- bus -->
+  <line x1="140" y1="65" x2="320" y2="65" stroke="#6366f1" stroke-width="2" stroke-dasharray="3 4"/>
+  <circle r="5" fill="#f59e0b" style="offset-path: path('M140,65 L320,65'); animation: c44-decode-flow 1.6s linear infinite;"/>
+  <text x="230" y="52" text-anchor="middle" fill="#777" font-size="10">~2 TB/s bus</text>
+  <rect x="320" y="35" width="90" height="60" rx="6" fill="rgba(99,102,241,0.18)" stroke="#6366f1"/>
+  <text x="365" y="60" text-anchor="middle" fill="currentColor" font-weight="bold">compute</text>
+  <text x="365" y="78" text-anchor="middle" fill="#777" font-size="10">mostly idle</text>
+  <text x="440" y="68" text-anchor="middle" fill="#22c55e" font-size="22" font-weight="bold"
+        style="transform-origin:440px 65px; animation: c44-decode-tok 1.6s ease-out infinite;">▸</text>
+  <text x="230" y="118" text-anchor="middle" fill="#777" font-size="10">one full sweep of the model = one output token</text>
+</svg>
+</div>
 
 **KV cache.** Generating token $t$ requires attending to all previous tokens' keys and values. Recomputing them every step would be quadratic; instead you **cache** the K and V tensors for every past token and reuse them. This is the single most important inference optimization — but the cache grows linearly with sequence length and batch size and quickly becomes the dominant memory consumer, larger than the model itself for long contexts. Its size is concrete and worth being able to estimate:
 

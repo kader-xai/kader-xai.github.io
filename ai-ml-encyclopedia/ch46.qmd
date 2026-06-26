@@ -137,6 +137,25 @@ flowchart TD
 
 The dashed line to evaluation is the point of the whole chapter: every stage is only as trustworthy as the evals that measure it.
 
+The whole pipeline is really a relay race — each stage hands the baton to the next, and a clean handoff matters more than any single sprinter:
+
+<style>
+@keyframes c46-baton { 0%,100% { offset-distance: 0%; } 50% { offset-distance: 100%; } }
+@keyframes c46-glow { 0%,100% { opacity: .35; } 50% { opacity: 1; } }
+@media (prefers-reduced-motion: reduce) { .c46-runner { animation: none !important; } }
+</style>
+<svg viewBox="0 0 640 90" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif" font-size="11" fill="currentColor">
+  <line x1="40" y1="55" x2="600" y2="55" stroke="currentColor" stroke-dasharray="3 4" opacity="0.5"/>
+  <g>
+    <circle cx="60"  cy="55" r="11" fill="rgba(99,102,241,0.35)" stroke="currentColor"/><text x="60"  y="80" text-anchor="middle">Base</text>
+    <circle cx="200" cy="55" r="11" fill="rgba(56,189,248,0.4)"  stroke="currentColor"/><text x="200" y="80" text-anchor="middle">SFT</text>
+    <circle cx="360" cy="55" r="11" fill="rgba(34,197,94,0.4)"   stroke="currentColor"/><text x="360" y="80" text-anchor="middle">Preference</text>
+    <circle cx="520" cy="55" r="11" fill="rgba(168,85,247,0.4)"  stroke="currentColor"/><text x="520" y="80" text-anchor="middle">Reasoning RL</text>
+  </g>
+  <circle class="c46-runner" r="6" fill="#f59e0b" style="offset-path: path('M60,55 L520,55'); animation: c46-baton 6s ease-in-out infinite;"/>
+  <text x="320" y="22" text-anchor="middle" font-weight="bold">the baton: a model getting steadily more aligned</text>
+</svg>
+
 ### Why SFT alone is not enough — a one-line intuition
 
 Imagine teaching someone to cook only by showing them finished dishes (SFT demonstrations). They learn to plate food that *looks* right. But they never learn that *this* risotto tasted better than *that* one — there's no signal about relative quality, and no way to discover a better recipe than the ones they were shown. Preference optimization adds exactly that missing taste-test. This is why the modern recipe is almost never SFT-only: SFT clones the *style* of good answers; preferences teach the *judgment* of which answer is better.
@@ -339,7 +358,9 @@ For math, code, and logic, the breakthrough was almost embarrassingly simple: le
 
 RLVR is a choice of reward, not a choice of optimizer. The optimizer most associated with it is **GRPO** (Group Relative Policy Optimization), the method behind DeepSeek-R1 — but GRPO is independent of where the reward comes from. It was introduced in DeepSeekMath against a *learned* reward model and works fine with one; pairing it with a verifier (RLVR) is what removes the hackable-proxy problem. Keep the two ideas separate: **GRPO = how you update; RLVR = what you reward.**
 
-GRPO's trick is to drop PPO's separate value network. The intuition: instead of training a whole second model to predict "how good should this answer be" (the baseline), just sample several answers to the *same* prompt and use their average score as the bar to clear. An answer that beats its siblings gets pushed up; one that lags gets pushed down. For each prompt it samples a **group** of $G$ completions, scores them all, and uses the group's *mean* reward as the baseline. Each completion gets a single **group-relative advantage** — how much better than its peers it scored — and that scalar is then **broadcast to every token** in the completion. The objective still keeps a **KL penalty to the reference model** (it is not dropped — only the *critic* is):
+GRPO's trick is to drop PPO's separate value network. Here is the plainest version of the whole idea: **grade on a curve.** Sample a handful of answers to the same prompt, score them, and compute the class average. Beat the average and your answer gets reinforced; fall below it and it gets discouraged. That class average is the "baseline" PPO normally trains an entire extra network to guess — GRPO just reads it off the group for free.
+
+Spelled out: for each prompt it samples a **group** of $G$ completions, scores them all, and uses the group's *mean* reward as the bar to clear. Each completion gets a single **group-relative advantage** — how far above or below the group average it landed — and that one number is then **broadcast to every token** in the completion. The objective still keeps a **KL penalty to the reference model** (it is not dropped — only the *critic* is):
 
 $$A_i = \frac{r_i - \mathrm{mean}(r_1,\dots,r_G)}{\mathrm{std}(r_1,\dots,r_G)}\qquad
 \mathcal{L}_{GRPO} = -\,\mathbb{E}\Big[\tfrac{1}{G}\sum_i A_i \cdot (\text{token ratios})_i\Big] + \beta\,\mathrm{KL}\big(\pi_\theta\,\|\,\pi_{ref}\big)$$
@@ -373,6 +394,24 @@ A key design choice is **outcome vs process** reward models. An **ORM** scores o
 
 The payoff is **test-time compute**: a reasoning model trades more tokens of "thinking" for higher accuracy. o1- and R1-style models learn to spend hundreds or thousands of reasoning tokens on hard problems, and accuracy climbs roughly with the log of thinking budget — a genuinely new scaling axis. See **Chapter 23** for how this reshapes inference-time behavior and decoding.
 
+The shape of that trade is the headline result — accuracy rising as the thinking budget grows, with diminishing returns once the curve flattens:
+
+<style>
+@keyframes c46-think { 0% { offset-distance: 0%; } 100% { offset-distance: 100%; } }
+@keyframes c46-pulse { 0%,100% { r: 5; opacity: .7; } 50% { r: 7; opacity: 1; } }
+@media (prefers-reduced-motion: reduce) { .c46-dot { animation: none !important; } }
+</style>
+<svg viewBox="0 0 640 200" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif" font-size="12" fill="currentColor">
+  <text x="10" y="18" font-weight="bold">Test-time compute: more thinking → higher accuracy (log scale)</text>
+  <line x1="50" y1="160" x2="610" y2="160" stroke="currentColor"/>
+  <line x1="50" y1="160" x2="50"  y2="40"  stroke="currentColor"/>
+  <text x="330" y="190" text-anchor="middle" font-style="italic">reasoning tokens (log budget) →</text>
+  <text x="22" y="100" text-anchor="middle" font-style="italic" transform="rotate(-90 22 100)">accuracy →</text>
+  <path id="c46-curve" d="M50,150 C180,150 250,70 360,60 C470,52 540,48 610,46" fill="none" stroke="#a855f7" stroke-width="2.5"/>
+  <circle class="c46-dot" r="6" fill="#22c55e" stroke="currentColor" style="offset-path: path('M50,150 C180,150 250,70 360,60 C470,52 540,48 610,46'); animation: c46-think 7s ease-in-out infinite, c46-pulse 2s ease-in-out infinite;"/>
+  <text x="470" y="40" fill="#a855f7">diminishing returns</text>
+</svg>
+
 ### GRPO with TRL and a verifiable reward
 
 The verifier is just a Python function returning a number; TRL's `GRPOTrainer` handles the group sampling and the z-score advantage. Here a reward of 1.0 for a correct boxed answer, plus a small bonus for showing reasoning:
@@ -402,6 +441,10 @@ trainer.train()
 ```
 
 The reward function is where most of the engineering goes: too sparse (only final-answer 0/1) and learning is slow; add too many shaping bonuses and you reintroduce the reward-hacking you were trying to escape. Keep verifiable signals dominant and shaping bonuses small.
+
+::: {.callout-tip}
+GRPO's group baseline silently dies when every completion in a group gets the *same* reward — then $r_i - \mathrm{mean}=0$, every advantage is zero, and the batch contributes no gradient. If a prompt is too easy (all $G$ correct) or too hard (all wrong), it teaches nothing. Curate training prompts toward the model's current *edge* of competence, where the group splits into some right and some wrong, so the z-score actually has signal.
+:::
 
 ## 46.6 — LLM evaluation & benchmarks
 
@@ -440,6 +483,25 @@ The two failure modes you must measure *together*, because fixing one inflames t
 | **Over-refusal rate** | benign requests wrongly refused | too high → uselessly cautious model |
 
 A model that refuses everything has a perfect attack-success rate of 0% and is also worthless — which is why benchmarks like **XSTest** (benign prompts that *look* unsafe, e.g. "how do I kill a Python process") exist specifically to catch over-refusal. Datasets like **AdvBench** and **HarmBench** measure the other side. The honest summary metric is the *pair*: low attack success **and** low over-refusal.
+
+The two metrics sit on a see-saw — push the refusal threshold one way and the other rises. The goal is not to bottom out either side but to find the level seat:
+
+<style>
+@keyframes c46-tilt { 0%,100% { transform: rotate(-9deg); } 50% { transform: rotate(9deg); } }
+@media (prefers-reduced-motion: reduce) { .c46-beam { animation: none !important; } }
+</style>
+<svg viewBox="0 0 640 170" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif" font-size="12" fill="currentColor">
+  <text x="320" y="20" text-anchor="middle" font-weight="bold">The safety see-saw — you cannot floor both ends</text>
+  <polygon points="320,140 300,150 340,150" fill="rgba(168,85,247,0.4)" stroke="currentColor"/>
+  <g class="c46-beam" style="transform-origin: 320px 100px; animation: c46-tilt 6s ease-in-out infinite;">
+    <line x1="120" y1="100" x2="520" y2="100" stroke="currentColor" stroke-width="3"/>
+    <rect x="90"  y="78" width="120" height="24" rx="5" fill="rgba(236,72,153,0.35)" stroke="currentColor"/>
+    <text x="150" y="95" text-anchor="middle">attack success</text>
+    <rect x="430" y="78" width="120" height="24" rx="5" fill="rgba(245,158,11,0.4)" stroke="currentColor"/>
+    <text x="490" y="95" text-anchor="middle">over-refusal</text>
+  </g>
+  <text x="320" y="165" text-anchor="middle" font-style="italic">tighten guardrails → safer but more false refusals; loosen → more helpful but more jailbreaks</text>
+</svg>
 
 ```{mermaid}
 flowchart LR

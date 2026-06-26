@@ -111,6 +111,34 @@ A trained model sitting in a notebook is a science experiment; a model answering
 🧭 **In context:** Production ML serving · taking a checkpoint to a monitored, autoscaling endpoint · the work that turns a model into a reliable, observable, cost-bounded service.
 :::
 
+<style>
+@keyframes c47-flow { 0% { stroke-dashoffset: 44; } 100% { stroke-dashoffset: 0; } }
+@keyframes c47-pulse { 0%,100% { opacity: 0.45; } 50% { opacity: 1; } }
+.c47-pipe-dot { animation: c47-flow 2.2s linear infinite; }
+.c47-pipe-box { animation: c47-pulse 4s ease-in-out infinite; }
+.c47-pipe-box:nth-of-type(2) { animation-delay: 0.5s; }
+.c47-pipe-box:nth-of-type(3) { animation-delay: 1.0s; }
+.c47-pipe-box:nth-of-type(4) { animation-delay: 1.5s; }
+.c47-pipe-box:nth-of-type(5) { animation-delay: 2.0s; }
+@media (prefers-reduced-motion: reduce) { .c47-pipe-dot, .c47-pipe-box { animation: none; } }
+</style>
+<svg viewBox="0 0 640 120" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif" font-size="11" role="img" aria-label="Animated serving pipeline: package, serve, orchestrate, monitor, looping back to retrain">
+  <text x="10" y="16" fill="currentColor" font-weight="bold">The serving loop — a checkpoint flowing to a live, watched service</text>
+  <!-- connecting line with flowing dashes -->
+  <line x1="70" y1="60" x2="570" y2="60" stroke="currentColor" stroke-width="2" opacity="0.25"/>
+  <line class="c47-pipe-dot" x1="70" y1="60" x2="570" y2="60" stroke="#38bdf8" stroke-width="2" stroke-dasharray="6 38"/>
+  <g text-anchor="middle">
+    <g class="c47-pipe-box"><rect x="22"  y="44" width="96" height="32" rx="6" fill="#6366f1" opacity="0.85"/><text x="70"  y="64" fill="#fff">package</text></g>
+    <g class="c47-pipe-box"><rect x="142" y="44" width="96" height="32" rx="6" fill="#38bdf8" opacity="0.85"/><text x="190" y="64" fill="#fff">serve</text></g>
+    <g class="c47-pipe-box"><rect x="262" y="44" width="116" height="32" rx="6" fill="#22c55e" opacity="0.85"/><text x="320" y="64" fill="#fff">orchestrate</text></g>
+    <g class="c47-pipe-box"><rect x="402" y="44" width="96" height="32" rx="6" fill="#f59e0b" opacity="0.85"/><text x="450" y="64" fill="#fff">monitor</text></g>
+    <g class="c47-pipe-box"><rect x="522" y="44" width="96" height="32" rx="6" fill="#ec4899" opacity="0.85"/><text x="570" y="64" fill="#fff">retrain</text></g>
+  </g>
+  <!-- feedback arc back to package -->
+  <path d="M 570 78 Q 320 112 70 78" fill="none" stroke="#ec4899" stroke-width="1.5" stroke-dasharray="4 4" opacity="0.7"/>
+  <text x="320" y="108" text-anchor="middle" fill="#ec4899" opacity="0.8">drift / decay triggers retrain</text>
+</svg>
+
 ## 47.1 — From notebook to production: the deployment gap
 
 **Intuition first:** think of a trained model as a brilliant recipe written by a chef who cooked it once, alone, in a quiet test kitchen. Production is a restaurant on a Friday night: hundreds of orders at once, a fixed time before food gets cold (the SLA), ingredients that quietly change suppliers (dependency drift), and customers whose tastes shift over the seasons (the world moving on). The recipe being good is necessary but nowhere near sufficient — running the restaurant is a different job.
@@ -210,7 +238,30 @@ The payoff: serving code references `models:/churn-classifier@champion`, never a
 
 "Works on my machine" is the oldest bug in deployment, and for ML it's worse: a model depends not just on your code but on exact versions of CUDA, the framework, tokenizers, and a dozen numerical libraries where a minor bump silently changes outputs. **Packaging** is the discipline of freezing all of that into one immovable artifact.
 
-Two layers freeze independently. First the **model format** — how the weights and compute graph are serialized:
+Two layers freeze independently — the **model format** (how the weights are serialized) and the **runtime** (everything around them, frozen by Docker):
+
+<svg viewBox="0 0 640 180" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif" font-size="11" role="img" aria-label="Two nested layers: a model-format box inside a Docker runtime box, sealed into one immutable image">
+  <text x="10" y="16" fill="currentColor" font-weight="bold">Two layers freeze independently → one sealed artifact</text>
+  <!-- outer: Docker runtime -->
+  <rect x="40" y="30" width="380" height="120" rx="10" fill="#38bdf8" opacity="0.12" stroke="#38bdf8"/>
+  <text x="56" y="50" fill="#38bdf8" font-weight="bold">Docker image — runtime layer</text>
+  <text x="56" y="138" fill="currentColor" opacity="0.7" font-size="10">pinned base · CUDA contract · locked deps · serve.py</text>
+  <!-- inner: model format -->
+  <rect x="64" y="60" width="200" height="62" rx="8" fill="#6366f1" opacity="0.22" stroke="#6366f1"/>
+  <text x="80" y="80" fill="#6366f1" font-weight="bold">model format</text>
+  <text x="80" y="98" fill="currentColor" opacity="0.8" font-size="10">ONNX · safetensors ·</text>
+  <text x="80" y="112" fill="currentColor" opacity="0.8" font-size="10">TorchScript · SavedModel</text>
+  <!-- arrow to sealed unit -->
+  <text x="438" y="86" fill="currentColor" font-size="22">→</text>
+  <g>
+    <rect x="470" y="55" width="150" height="70" rx="8" fill="#22c55e" opacity="0.18" stroke="#22c55e"/>
+    <text x="545" y="82" text-anchor="middle" fill="#22c55e" font-weight="bold">one immutable</text>
+    <text x="545" y="100" text-anchor="middle" fill="#22c55e" font-weight="bold">unit of deploy</text>
+    <text x="545" y="116" text-anchor="middle" fill="currentColor" opacity="0.7" font-size="10">laptop = CI = cluster</text>
+  </g>
+</svg>
+
+First the **model format** — how the weights and compute graph are serialized:
 
 | Format | Produced by | Notes |
 |---|---|---|
@@ -273,6 +324,34 @@ Don't bake large model weights into the image if they change often — a multi-G
 You *could* wrap a model in a Flask route and call it a server — and for a low-traffic internal tool, do exactly that. But a purpose-built serving framework hands you the things a naive wrapper lacks: **dynamic batching** (coalescing concurrent requests into one GPU call for throughput), **multi-model serving** on shared hardware, model versioning, health/metrics endpoints, and efficient zero-copy I/O.
 
 **Intuition for dynamic batching:** it's a hotel elevator. Sending the car up for each guest the instant they press the button is responsive but wastes trips. Waiting a couple of seconds to gather everyone heading up does one efficient trip — slightly slower for the first person, far more throughput overall. A serving framework opens a tiny time window (a few milliseconds), gathers whatever requests arrive, and runs them as one GPU call.
+
+<style>
+@keyframes c47-elev-door { 0%,15% { width: 0; } 45%,60% { width: 56px; } 90%,100% { width: 0; } }
+@keyframes c47-elev-rise { 0%,60% { transform: translateY(0); } 80%,100% { transform: translateY(-58px); } }
+@keyframes c47-rider { 0%,40% { opacity: 1; } 70%,100% { opacity: 0; } }
+@media (prefers-reduced-motion: reduce) { .c47-elev-car, .c47-door, .c47-rider { animation: none; } }
+</style>
+<svg viewBox="0 0 640 150" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif" font-size="11" role="img" aria-label="Dynamic batching as an elevator: requests gather in a small window, then ride up together as one batch">
+  <text x="10" y="16" fill="currentColor" font-weight="bold">Dynamic batching = the elevator: gather requests in a tiny window, ride up as one</text>
+  <!-- waiting requests -->
+  <g class="c47-rider"><circle cx="120" cy="110" r="9" fill="#f59e0b" opacity="0.9"/><circle cx="145" cy="110" r="9" fill="#ec4899" opacity="0.9"/><circle cx="170" cy="110" r="9" fill="#a855f7" opacity="0.9"/></g>
+  <text x="120" y="135" fill="currentColor" opacity="0.7">concurrent requests waiting</text>
+  <!-- shaft -->
+  <rect x="300" y="34" width="80" height="96" fill="none" stroke="currentColor" opacity="0.4"/>
+  <!-- car rising with riders inside -->
+  <g class="c47-elev-car" style="animation: c47-elev-rise 4.5s ease-in-out infinite">
+    <rect x="304" y="92" width="72" height="36" rx="4" fill="#6366f1" opacity="0.85"/>
+    <circle cx="320" cy="110" r="6" fill="#f59e0b"/><circle cx="340" cy="110" r="6" fill="#ec4899"/><circle cx="360" cy="110" r="6" fill="#a855f7"/>
+  </g>
+  <!-- opening door -->
+  <rect class="c47-door" x="304" y="92" height="36" fill="#38bdf8" opacity="0.5" style="animation: c47-elev-door 4.5s ease-in-out infinite"/>
+  <text x="340" y="26" text-anchor="middle" fill="currentColor" opacity="0">.</text>
+  <!-- one GPU call -->
+  <text x="430" y="80" fill="currentColor" font-size="20">→</text>
+  <rect x="470" y="56" width="150" height="48" rx="8" fill="#22c55e" opacity="0.2" stroke="#22c55e"/>
+  <text x="545" y="78" text-anchor="middle" fill="#22c55e" font-weight="bold">one GPU call</text>
+  <text x="545" y="94" text-anchor="middle" fill="currentColor" opacity="0.7" font-size="10">3 requests, 1 forward pass</text>
+</svg>
 
 The protocol choice is **REST vs gRPC**. REST/JSON is human-readable, trivially debuggable with `curl`, and fine for most traffic. gRPC uses HTTP/2 + protobuf — lower latency and far less serialization overhead for big tensors or high QPS, at the cost of debuggability. Many servers expose both; default to REST and reach for gRPC when the wire becomes the bottleneck.
 
@@ -376,6 +455,31 @@ $$\text{latency} = \text{TTFT} + (N_{\text{out}} - 1)\times \text{TPOT}$$
 
 **In words:** the user waits one prefill to see the first token, then one decode step for each remaining token they read.
 **Also written:** $\text{latency} = T_{\text{prefill}} + \sum_{i=2}^{N_{\text{out}}} t_{\text{decode},i}$ (the per-token sum, before assuming each decode step costs the same TPOT).
+
+<style>
+@keyframes c47-tok { 0% { opacity: 0; transform: translateY(3px); } 12%,100% { opacity: 1; transform: translateY(0); } }
+@media (prefers-reduced-motion: reduce) { .c47-tok { animation: none; opacity: 1; } }
+.c47-tok { animation: c47-tok 4s ease-out infinite; }
+</style>
+<svg viewBox="0 0 640 96" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif" font-size="11" role="img" aria-label="Timeline: a long prefill bar before the first token, then evenly spaced decode tokens">
+  <text x="10" y="16" fill="currentColor" font-weight="bold">TTFT then TPOT — one prefill, then a steady drip of tokens</text>
+  <line x1="20" y1="62" x2="620" y2="62" stroke="currentColor" opacity="0.3"/>
+  <!-- prefill block -->
+  <rect x="20" y="44" width="150" height="20" rx="3" fill="#6366f1" opacity="0.85"/>
+  <text x="95" y="58" text-anchor="middle" fill="#fff" font-size="10">prefill (TTFT)</text>
+  <!-- decode tokens, staggered -->
+  <g fill="#22c55e">
+    <rect class="c47-tok" x="180" y="44" width="22" height="20" rx="3" style="animation-delay:0s"/>
+    <rect class="c47-tok" x="208" y="44" width="22" height="20" rx="3" style="animation-delay:0.3s"/>
+    <rect class="c47-tok" x="236" y="44" width="22" height="20" rx="3" style="animation-delay:0.6s"/>
+    <rect class="c47-tok" x="264" y="44" width="22" height="20" rx="3" style="animation-delay:0.9s"/>
+    <rect class="c47-tok" x="292" y="44" width="22" height="20" rx="3" style="animation-delay:1.2s"/>
+    <rect class="c47-tok" x="320" y="44" width="22" height="20" rx="3" style="animation-delay:1.5s"/>
+    <rect class="c47-tok" x="348" y="44" width="22" height="20" rx="3" style="animation-delay:1.8s"/>
+  </g>
+  <text x="280" y="34" text-anchor="middle" fill="#22c55e" font-size="10">each gap = TPOT (per output token)</text>
+  <text x="20" y="86" fill="currentColor" opacity="0.7" font-size="10">chat UIs stream → user reads after TTFT; bulk jobs ignore TPOT-felt latency</text>
+</svg>
 
 *Worked example:* with TTFT = 200 ms and TPOT = 20 ms, a 100-token answer takes $200 + 99\times 20 = 2180$ ms. Doubling batch size might cut your per-GPU cost in half but push TPOT to 30 ms, making the same answer $200 + 99\times 30 = 3170$ ms — which is why chat UIs stream tokens (the user starts reading after TTFT) while bulk jobs maximize batch size and ignore TPOT-felt latency entirely.
 
@@ -513,6 +617,25 @@ What gets tested is also broader. The **ML test pyramid** layers cheap-and-frequ
 - **Model tests** (middle): does the retrained model beat a baseline / the current champion on a held-out and a *behavioral* slice set? Fairness and regression checks live here.
 - **Infra/integration tests** (top): does the artifact load in the serving container, answer a request, and meet the latency budget?
 
+<svg viewBox="0 0 640 180" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif" font-size="11" role="img" aria-label="ML test pyramid: wide cheap data tests at the base, model tests in the middle, narrow infra tests at the top">
+  <text x="10" y="16" fill="currentColor" font-weight="bold">The ML test pyramid — cheap &amp; frequent at the base, slow &amp; rare at the top</text>
+  <!-- top: infra -->
+  <polygon points="320,30 250,76 390,76" fill="#ec4899" opacity="0.7"/>
+  <text x="320" y="62" text-anchor="middle" fill="#fff" font-size="10">infra / integration</text>
+  <!-- middle: model -->
+  <polygon points="250,80 390,80 425,126 215,126" fill="#f59e0b" opacity="0.75"/>
+  <text x="320" y="110" text-anchor="middle" fill="#fff" font-size="10">model tests (vs champion · behavioral)</text>
+  <!-- base: data -->
+  <polygon points="215,130 425,130 470,176 170,176" fill="#22c55e" opacity="0.8"/>
+  <text x="320" y="160" text-anchor="middle" fill="#fff" font-size="10">data tests (schema · ranges · drift)</text>
+  <!-- frequency arrow -->
+  <line x1="540" y1="40" x2="540" y2="170" stroke="currentColor" opacity="0.4" marker-end="url(#c47-arr)"/>
+  <defs><marker id="c47-arr" markerWidth="8" markerHeight="8" refX="4" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 z" fill="currentColor" opacity="0.5"/></marker></defs>
+  <text x="556" y="50" fill="currentColor" opacity="0.7" font-size="10">rare</text>
+  <text x="556" y="168" fill="currentColor" opacity="0.7" font-size="10">runs</text>
+  <text x="556" y="180" fill="currentColor" opacity="0.7" font-size="10">most</text>
+</svg>
+
 ```{mermaid}
 flowchart LR
     subgraph CI
@@ -560,6 +683,29 @@ Once the model is live, the question shifts from "is it accurate?" to "is it *st
 
 **Why the mean lies — a tiny worked example.** Suppose 100 requests: 99 take 50 ms and one takes 5000 ms (a GC pause or a cold replica). The mean is $(99\times 50 + 5000)/100 = 99.5$ ms — innocuous. But the p99 is 5000 ms: one in a hundred users waits five seconds. The mean *averages the outlier away*; the percentile *surfaces it*. This is why SLAs are written on p95/p99, not the mean — the tail is what users actually feel and what pages you at 3am.
 
+<svg viewBox="0 0 640 130" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif" font-size="11" role="img" aria-label="Latency histogram with a long tail: most requests fast, one slow outlier the mean hides but p99 catches">
+  <text x="10" y="16" fill="currentColor" font-weight="bold">The mean averages the tail away; the percentile surfaces it</text>
+  <line x1="40" y1="100" x2="620" y2="100" stroke="currentColor" opacity="0.4"/>
+  <!-- bulk of fast requests -->
+  <g fill="#22c55e" opacity="0.8">
+    <rect x="50" y="40" width="26" height="60"/>
+    <rect x="80" y="32" width="26" height="68"/>
+    <rect x="110" y="50" width="26" height="50"/>
+    <rect x="140" y="70" width="26" height="30"/>
+    <rect x="170" y="84" width="26" height="16"/>
+  </g>
+  <!-- the lone slow outlier -->
+  <rect x="560" y="78" width="22" height="22" fill="#ec4899" opacity="0.9"/>
+  <text x="571" y="74" text-anchor="middle" fill="#ec4899" font-size="10">1 slow</text>
+  <!-- mean marker (near the bulk, misleading) -->
+  <line x1="120" y1="26" x2="120" y2="106" stroke="#38bdf8" stroke-width="2" stroke-dasharray="4 3"/>
+  <text x="120" y="122" text-anchor="middle" fill="#38bdf8" font-size="10">mean ≈ 99 ms</text>
+  <!-- p99 marker (out at the tail) -->
+  <line x1="571" y1="26" x2="571" y2="72" stroke="#f59e0b" stroke-width="2" stroke-dasharray="4 3"/>
+  <text x="540" y="40" text-anchor="end" fill="#f59e0b" font-size="10">p99 = 5000 ms ⚠</text>
+  <text x="300" y="122" fill="currentColor" opacity="0.6" font-size="10">latency →</text>
+</svg>
+
 **ML metrics** are what makes ML monitoring special — the model can be perfectly *up* and perfectly *wrong*:
 
 | Drift / decay type | What moved | Catch it with |
@@ -572,7 +718,7 @@ Once the model is live, the question shifts from "is it accurate?" to "is it *st
 
 The hard part is **label delay**: you often don't learn the true outcome (did the user churn? was it fraud?) for days or weeks, so you can't measure accuracy in real time. That's *why* drift detection matters — input/prediction drift is an early proxy you can compute *now*, before labels arrive.
 
-**The drift workhorse: Population Stability Index (PSI).** PSI measures how far a feature's *current* distribution has slid from a *reference* (training) distribution, by binning both and summing the difference:
+**The drift workhorse: Population Stability Index (PSI).** PSI answers one plain question: *how much has this feature's shape changed since training?* You chop the feature into bins (say, 10 buckets), and for each bin compare what fraction of data lands there now versus what fraction landed there in training. If the two match, every bin contributes ~0 and the total is near zero. If a bin gained or lost a lot of mass, it contributes a positive amount, and the bigger the move the more it adds. Sum across bins and you get one number for "how far the distribution drifted." The formula just makes that precise:
 
 $$\text{PSI} = \sum_{i} (a_i - e_i)\,\ln\!\frac{a_i}{e_i}$$
 
@@ -589,6 +735,8 @@ def psi(ref, cur, bins=10):
     a = np.histogram(cur, edges)[0] / len(cur) + 1e-6   # actual shares
     return float(np.sum((a - e) * np.log(a / e)))
 ```
+
+*Tiny worked example:* take 3 bins. Training shares were `[0.33, 0.33, 0.34]`; this week they read `[0.20, 0.30, 0.50]` — the top bin ballooned. Bin by bin: $(0.20-0.33)\ln\frac{0.20}{0.33} = (-0.13)(-0.50) = 0.065$; $(0.30-0.33)\ln\frac{0.30}{0.33} \approx (-0.03)(-0.095) = 0.003$; $(0.50-0.34)\ln\frac{0.50}{0.34} = (0.16)(0.385) = 0.062$. Total PSI $\approx 0.13$ — into the "moderate shift, investigate" band, driven almost entirely by the two bins that moved.
 
 Tools: **Evidently** (open-source drift reports/tests) and **WhyLabs** for the ML plane.
 
@@ -627,11 +775,26 @@ flowchart TD
 
 Tools: **Feast** is the popular open-source feature store (define features in code, materialize to offline + online); **Tecton** is the enterprise managed offering with streaming feature pipelines. The point isn't the tool — it's the *single source of truth* for feature logic. A feature store is overkill for a single model with simple features (just share a Python function and a test that pins both paths to it); reach for one when many models share features or you have real-time features that must match between train and serve.
 
+::: {.callout-warning}
+The sneakiest skew bug isn't a different formula — it's a different *time*. At serving you naturally grab the *latest* feature value; at training you must grab the value *as it was when the label happened*. Join training features on the present instead of the label's timestamp and you leak the future into the model — offline AUC looks fantastic, production collapses. Point-in-time-correct joins exist precisely to prevent this.
+:::
+
 ## 47.11 — Edge & on-device deployment
 
 **Intuition first:** everything so far assumed the model lives in a data center and the user reaches it over the network. Sometimes the right move is the opposite — ship the model *to* the user: into a phone, a browser tab, a camera, a car, a factory sensor. The deciding questions are about the round trip, not the model: can you tolerate the network latency, the privacy of sending raw data off-device, the cloud bill per call, and offline outages? When any of those is a hard "no," the model has to run where the data is.
 
 The trade is stark. Edge inference wins on **latency** (no network hop — a keyboard's next-word model must answer in single-digit milliseconds), **privacy** (raw audio/photos never leave the device — the basis of on-device dictation and face unlock), **offline operation**, and **per-call cost** (the user's silicon is free to you). It loses on **compute** (a phone NPU is a rounding error next to an A100), **memory** (you fight for a few hundred MB, not 80 GB of VRAM), and **fleet management** (you can't `kubectl rollout` a model that's already on a million phones — updates ship like app updates, slowly and unevenly).
+
+<div style="display:flex;gap:14px;font-family:sans-serif;margin:10px 0">
+  <div style="flex:1;border:1px solid currentColor;border-radius:8px;padding:10px;background:rgba(34,197,94,0.10)">
+    <div style="font-weight:bold;color:#22c55e;margin-bottom:6px">Edge wins ↑</div>
+    <div style="font-size:11px;line-height:1.7">⚡ latency — no network hop<br/>🔒 privacy — data never leaves<br/>📴 offline operation<br/>💸 per-call cost ≈ 0 (their silicon)</div>
+  </div>
+  <div style="flex:1;border:1px solid currentColor;border-radius:8px;padding:10px;background:rgba(245,158,11,0.10)">
+    <div style="font-weight:bold;color:#f59e0b;margin-bottom:6px">Edge pays ↓</div>
+    <div style="font-size:11px;line-height:1.7">🧮 compute — NPU ≪ A100<br/>📦 memory — MBs, not 80 GB<br/>🚚 fleet updates — slow, uneven<br/>🔧 quantize to fit (Ch 30)</div>
+  </div>
+</div>
 
 That compute gap is why the packaging is different. Edge runtimes are stripped-down and hardware-specialized, and the weights are almost always **quantized** (Ch 30) — int8 or 4-bit — to fit memory and hit the latency budget:
 
@@ -674,6 +837,31 @@ Four patterns do almost all the work, and they compose:
 - **Retries with backoff + jitter** — retry transient failures, but with exponentially growing, randomized delays so a thousand clients don't retry in lockstep and create a self-inflicted **thundering herd**. Only retry *idempotent* calls.
 - **Circuit breaker** — after N consecutive failures, *stop calling* the sick dependency for a cooldown window and fail immediately. This lets the dependency recover instead of being hammered while down, and keeps your latency bounded.
 - **Fallback / graceful degradation** — when the model is unavailable, return a sane default: a cached prediction, a cheaper backup model, a rules-based heuristic, or an honest "try again." A degraded answer beats a spinner.
+
+<style>
+@keyframes c47-cb-flip { 0%,40% { fill: #22c55e; } 55%,95% { fill: #ec4899; } 100% { fill: #22c55e; } }
+@keyframes c47-cb-label { 0%,40% { opacity: 1; } 55%,100% { opacity: 0; } }
+@keyframes c47-cb-label2 { 0%,45% { opacity: 0; } 60%,95% { opacity: 1; } 100% { opacity: 0; } }
+@media (prefers-reduced-motion: reduce) { .c47-cb-sw, .c47-cb-l1, .c47-cb-l2 { animation: none; } }
+</style>
+<svg viewBox="0 0 640 130" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif" font-size="11" role="img" aria-label="A circuit breaker toggling from closed-and-healthy to open-and-fast-failing to the fallback">
+  <text x="10" y="16" fill="currentColor" font-weight="bold">The circuit breaker: after repeated failures, trip open and fail fast to the fallback</text>
+  <rect x="30" y="50" width="90" height="40" rx="6" fill="#6366f1" opacity="0.85"/>
+  <text x="75" y="74" text-anchor="middle" fill="#fff">request</text>
+  <!-- breaker switch -->
+  <circle class="c47-cb-sw" cx="320" cy="70" r="26" style="animation: c47-cb-flip 4.5s ease-in-out infinite" opacity="0.9"/>
+  <text class="c47-cb-l1" x="320" y="74" text-anchor="middle" fill="#fff" font-size="10" style="animation: c47-cb-label 4.5s ease-in-out infinite">closed</text>
+  <text class="c47-cb-l2" x="320" y="74" text-anchor="middle" fill="#fff" font-size="10" style="animation: c47-cb-label2 4.5s ease-in-out infinite">OPEN</text>
+  <line x1="120" y1="70" x2="290" y2="70" stroke="currentColor" opacity="0.4" stroke-width="2"/>
+  <!-- healthy path -->
+  <rect x="500" y="28" width="110" height="34" rx="6" fill="#22c55e" opacity="0.75"/>
+  <text x="555" y="50" text-anchor="middle" fill="#fff" font-size="10">model (closed)</text>
+  <line x1="346" y1="60" x2="500" y2="45" stroke="#22c55e" opacity="0.5" stroke-width="2"/>
+  <!-- fallback path -->
+  <rect x="500" y="78" width="110" height="34" rx="6" fill="#f59e0b" opacity="0.75"/>
+  <text x="555" y="100" text-anchor="middle" fill="#fff" font-size="10">fallback (open)</text>
+  <line x1="346" y1="80" x2="500" y2="95" stroke="#f59e0b" opacity="0.5" stroke-width="2" stroke-dasharray="4 3"/>
+</svg>
 
 ```{mermaid}
 flowchart TD
@@ -796,6 +984,22 @@ $$\text{cost} = \underbrace{0.40 \times \$0}_{\text{cache hits}} + \underbrace{0
 **Also written:** per-request expected cost $= \sum_k p_k\,c_k$ over the routing tiers $k$ (hit/small/big) with probabilities $p_k$ and unit costs $c_k$.
 
 Per request that's $0 + 0.000126 + 0.00036 = \$0.000486$, or about \$486/day — a **76% cut** from \$2,000, with zero quality loss on the cached and big-model paths. The arithmetic is why caching + routing are pulled first.
+
+<div style="font-family:sans-serif;margin:10px 0">
+  <div style="font-weight:bold;margin-bottom:8px">Where the \$2,000/day goes — before vs after caching + routing</div>
+  <div style="font-size:11px;opacity:0.7;margin-bottom:3px">Before — every call hits the big model</div>
+  <div style="display:flex;height:26px;border-radius:5px;overflow:hidden;margin-bottom:10px">
+    <div style="flex:100;background:#ec4899;color:#fff;display:flex;align-items:center;justify-content:center;font-size:10px">big model · \$2,000</div>
+  </div>
+  <div style="font-size:11px;opacity:0.7;margin-bottom:3px">After — cache eats 40%, router sends most of the rest cheap</div>
+  <div style="display:flex;height:26px;border-radius:5px;overflow:hidden">
+    <div style="flex:40;background:#22c55e;color:#fff;display:flex;align-items:center;justify-content:center;font-size:10px">cache \$0</div>
+    <div style="flex:6;background:#38bdf8;color:#fff;display:flex;align-items:center;justify-content:center;font-size:9px">small \$126</div>
+    <div style="flex:18;background:#ec4899;color:#fff;display:flex;align-items:center;justify-content:center;font-size:10px">big \$360</div>
+    <div style="flex:36;background:transparent;border:1px dashed currentColor;opacity:0.4;display:flex;align-items:center;justify-content:center;font-size:10px">saved \$1,514</div>
+  </div>
+  <div style="opacity:0.7;font-size:11px;margin-top:8px">\$486/day total — a 76% cut, zero quality loss on the cached and big-model paths.</div>
+</div>
 
 ::: {.callout-tip}
 Sequence the levers by effort-to-savings: turn on **continuous batching** and **caching** first (large savings, no quality cost), then **right-size** the model/GPU to the SLA, then **quantize** and add **routing** if you still need headroom. Speculative decoding and spot capacity are later optimizations once the easy wins are banked. Measure cost-per-1k-requests before and after each — intuition about LLM cost is usually wrong.
