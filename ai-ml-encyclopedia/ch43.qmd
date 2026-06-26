@@ -111,6 +111,8 @@ How do you find a handful of relevant documents among billions, or count distinc
 🧭 **In context:** search & large-scale mining · find relevant documents and summarize massive streams · build an index once, then rank candidates cheaply and approximate what you cannot store exactly
 :::
 
+> 💡 **Remember this:** retrieval and mining at scale are the same trick — build a cheap index or sketch offline so that online you only ever touch a tiny, relevant slice of the data, never the whole thing.
+
 ## 43.1 The inverted index and Boolean retrieval
 
 The naive way to search a corpus is to scan every document for the query terms. At web scale that is hopeless. The fix is an **inverted index**: instead of mapping documents to their words (the *forward* index), you map each word to the list of documents that contain it. That per-term list is called a **postings list**.
@@ -235,7 +237,7 @@ A phrase query "new york" intersects the docID lists as before, then for each sh
 
 ## 43.2 The vector-space model and TF-IDF
 
-Boolean retrieval returns a *set* — a document either matches or it does not — with no notion of which match is best. Real search needs **ranking**. The **vector-space model** treats each document and the query as a vector in a space with one dimension per vocabulary term, then ranks documents by how close their vector points to the query's.
+Boolean retrieval returns a *set* — a document either matches or it does not — with no notion of which match is best. Real search needs **ranking**. The **vector-space model** treats each document and the query as a [vector](ch01.html) in a space with one dimension per vocabulary term, then ranks documents by how close their vector points to the query's.
 
 The everyday picture: imagine every document as an arrow in a giant space where each axis is a word. Two documents about the same topic point in nearly the same direction, even if one is a paragraph and the other a book. Ranking is just measuring the angle between the query's arrow and each document's arrow.
 
@@ -427,7 +429,7 @@ $$
 **In words:** precision is *how clean was what I showed*; recall is *how much of the good stuff did I catch*.
 **Also written:** with true positives $tp$, false positives $fp$, false negatives $fn$: $\text{Precision} = tp/(tp+fp)$, $\text{Recall} = tp/(tp+fn)$.
 
-Precision asks "of what I showed, how much was good?"; recall asks "of all the good stuff, how much did I find?". (See Ch. 06 for the classification view.) But ranking quality is about **order**, so we need order-aware metrics.
+Precision asks "of what I showed, how much was good?"; recall asks "of all the good stuff, how much did I find?". (See [Model Evaluation](ch12.html) for the classification view.) But ranking quality is about **order**, so we need order-aware metrics.
 
 **Average Precision (AP)** rewards putting relevant documents early. Compute precision at each rank where a relevant document appears, then average. **MAP** is the mean of AP across queries.
 
@@ -528,7 +530,7 @@ flowchart LR
 - **Pairwise** learns from preferences: for two documents under the same query, predict which should rank higher. RankNet's loss is the cross-entropy on the probability that doc $i$ beats doc $j$. This matches what we care about (order) much better.
 - **Listwise** optimizes a loss tied to the whole list and ideally the target metric (nDCG) directly. Hardest, usually best.
 
-**LambdaMART** is the workhorse that won many LTR competitions and still anchors production rankers. It is **gradient-boosted regression trees** (MART, see Ch. 11) trained with **lambda gradients**. The trick solves a real problem: nDCG is flat or discontinuous in the model scores (swapping two docs changes nDCG in a step), so you cannot take its gradient directly.
+**LambdaMART** is the workhorse that won many LTR competitions and still anchors production rankers. It is **gradient-boosted regression trees** ([MART, see Ensemble Methods](ch10.html)) trained with **lambda gradients**. The trick solves a real problem: nDCG is flat or discontinuous in the model scores (swapping two docs changes nDCG in a step), so you cannot take its gradient directly.
 
 LambdaMART sidesteps this. For each pair of documents $(i,j)$ where $i$ should outrank $j$, it defines a "force" — the **lambda** — that pulls $i$ up and $j$ down, *scaled by how much swapping them would change nDCG*:
 
@@ -560,7 +562,7 @@ The `group` array is the part everyone gets wrong. If you forget it (or pass the
 
 ## 43.7 Neural IR: dense retrieval, late interaction, learned sparse
 
-BM25 matches **exact terms**. It cannot tell that "car" and "automobile" mean the same thing — this is the **vocabulary mismatch** problem. Neural IR uses learned representations (Ch. 14, Ch. 18) to match on **meaning**. Three architectures dominate, trading off quality against cost.
+BM25 matches **exact terms**. It cannot tell that "car" and "automobile" mean the same thing — this is the **vocabulary mismatch** problem. Neural IR uses learned representations ([neural networks](ch14.html), [generative models](ch18.html)) to match on **meaning**. Three architectures dominate, trading off quality against cost.
 
 ```{mermaid}
 flowchart TB
@@ -579,7 +581,7 @@ flowchart TB
     end
 ```
 
-**Dense retrieval / two-tower (DPR).** Encode the query and each document into a **single dense vector** (e.g. 768-d) with a BERT-style encoder, and score by dot product. The two towers are independent, so **document vectors are precomputed offline** and indexed for **approximate nearest-neighbor** search (HNSW, IVF-PQ — see Ch. 23). At query time you encode the query once and do an ANN lookup. Fast and semantic, but compressing a whole document to one vector loses fine-grained term matching.
+**Dense retrieval / two-tower (DPR).** Encode the query and each document into a **single dense vector** (e.g. 768-d) with a BERT-style encoder, and score by dot product. The two towers are independent, so **document vectors are precomputed offline** and indexed for **approximate nearest-neighbor** search ([HNSW, IVF-PQ — see LLMs & RAG](ch23.html)). At query time you encode the query once and do an ANN lookup. Fast and semantic, but compressing a whole document to one vector loses fine-grained term matching.
 
 **Late interaction (ColBERT).** Keep **one vector per token** for both query and document. Score with **MaxSim**: for each query token, take its maximum similarity over all document tokens, then sum:
 
@@ -703,7 +705,7 @@ for _ in range(50):
 print(r.round(3))                               # C > A > B
 ```
 
-**HITS** (Hyperlink-Induced Topic Search) splits importance into two roles: **hubs** (pages that link to many good pages — a directory) and **authorities** (pages many hubs link to — the canonical source). Each reinforces the other: a good hub points to good authorities, a good authority is pointed to by good hubs. Where PageRank is one global query-independent score, HITS is computed on a query-focused subgraph. The same eigenvector machinery underlies both, and both connect to the graph-centrality ideas in Ch. 40.
+**HITS** (Hyperlink-Induced Topic Search) splits importance into two roles: **hubs** (pages that link to many good pages — a directory) and **authorities** (pages many hubs link to — the canonical source). Each reinforces the other: a good hub points to good authorities, a good authority is pointed to by good hubs. Where PageRank is one global query-independent score, HITS is computed on a query-focused subgraph. The same eigenvector machinery underlies both, and both connect to the [graph-centrality ideas in Graph ML](ch40.html).
 
 ## 43.9 Near-duplicate detection: shingling, MinHash, LSH
 
@@ -855,7 +857,7 @@ These sketches are **mergeable**: build one per shard or per hour, then combine 
 
 ## 43.11 Frequent itemsets and the PCY refinement
 
-A staple of data mining: find sets of items that **co-occur** frequently in transactions — "customers who buy bread and butter also buy jam". An itemset is **frequent** if it appears in at least a *support* threshold $s$ of baskets. The classic **Apriori** algorithm (covered in **Ch. 11**) exploits the **downward-closure** property: a $k$-itemset can be frequent only if *all* its $(k\!-\!1)$-subsets are frequent, so it builds up level by level, pruning aggressively.
+A staple of data mining: find sets of items that **co-occur** frequently in transactions — "customers who buy bread and butter also buy jam". An itemset is **frequent** if it appears in at least a *support* threshold $s$ of baskets. The classic **Apriori** algorithm (covered in [Clustering & Unsupervised Learning](ch11.html)) exploits the **downward-closure** property: a $k$-itemset can be frequent only if *all* its $(k\!-\!1)$-subsets are frequent, so it builds up level by level, pruning aggressively.
 
 Apriori's bottleneck is the **first pass into pairs**: counting all candidate pairs needs a count for every pair of frequent items, which can blow up memory. **PCY (Park–Chen–Yu)** refines pass 1 to shrink the pair candidates.
 
@@ -964,7 +966,7 @@ For huge ground sets, **lazy greedy** (CELF) exploits submodularity: a marginal 
 
 ## 43.13 CUR decomposition: interpretable low-rank approximation
 
-Low-rank approximation compresses a big matrix into a small one. **SVD** (Ch. 03) gives the *optimal* rank-$k$ approximation $A \approx U_k \Sigma_k V_k^\top$ — but its factors are **dense linear combinations** of all rows and columns. The 3rd singular vector of a customer-by-product matrix is a blend of every product with positive and negative weights: mathematically optimal, humanly meaningless.
+Low-rank approximation compresses a big matrix into a small one. **SVD** ([Linear Algebra](ch01.html)) gives the *optimal* rank-$k$ approximation $A \approx U_k \Sigma_k V_k^\top$ — but its factors are **dense linear combinations** of all rows and columns. The 3rd singular vector of a customer-by-product matrix is a blend of every product with positive and negative weights: mathematically optimal, humanly meaningless.
 
 **CUR** trades a little accuracy for **interpretability** by building the factorization from **actual rows and columns** of the matrix:
 
@@ -1038,7 +1040,33 @@ dense_list = ["d1", "d3", "d9"]
 print(rrf([bm25_list, dense_list]))       # d1 and d3 rise via agreement
 ```
 
-## 43.2 — Key takeaways
+## 43.2 — Quick reference
+
+| Term / method | What it is | When / why |
+|---|---|---|
+| Inverted index | term → sorted postings list of docIDs | the backbone of all keyword search; sorted postings give $O(\|A\|+\|B\|)$ merge-intersection |
+| Gap + VByte compression | store deltas, encode small ints cheaply | shrink huge postings; frequent terms compress best |
+| Positional index | postings store term positions, not just docID | phrase ("new york") and proximity (NEAR/$k$) queries |
+| TF-IDF | $(1+\log\text{tf})\cdot\log(N/\text{df})$, ranked by cosine | first ranking baseline; down-weights common terms |
+| BM25 | tf-saturating, length-normalized score ($k_1,b$) | production default for 20 years; use over raw TF-IDF |
+| BM25F | pool fielded tf *then* saturate | structured docs (title/body/anchor); never sum per-field BM25 |
+| Rocchio / PRF / HyDE | move query toward relevant docs / expand terms | bridge vocabulary mismatch before retrieval runs |
+| MAP | mean of average precision over queries | binary-relevance ranking metric, rewards early hits |
+| nDCG@k | $\sum (2^{\text{rel}_i}-1)/\log_2(i+1)$, normalized | graded relevance + position discount; compare across queries |
+| LambdaMART | boosted trees, gradient $=$ RankNet $\times\,\|\Delta\text{nDCG}\|$ | strong learning-to-rank; remember the `group` array |
+| Dense / DPR | one vector per query & doc, ANN dot-product | fast semantic recall; loses fine-grained term match |
+| ColBERT (MaxSim) | per-token vectors, sum of row-maxima | token-level semantics; costs storage (many vectors/doc) |
+| SPLADE | learned sparse term weights on inverted index | neural semantics on classic, fast infrastructure |
+| PageRank | stationary dist. of random surfer, $d\approx0.85$ | query-independent importance from the link graph |
+| MinHash | $\Pr[\text{collision}]=$ Jaccard | compress shingle sets; estimate similarity cheaply |
+| LSH banding | candidate if any band collides; S-curve at $(1/b)^{1/r}$ | sub-quadratic near-duplicate detection |
+| Bloom filter | $h$ bits per item, no false negatives | "have I seen $x$?" with bits, not stored elements |
+| HyperLogLog | max-leading-zeros across registers, harmonic mean | count distinct in KBs; mergeable across shards |
+| Count–Min sketch | $\min$ over $d$ hashed counters | per-item frequency; never underestimates |
+| Submodular greedy | add largest marginal gain each round | $1-1/e$ of optimal for coverage / influence |
+| CUR | $A\approx CUR$ from real rows/columns | interpretable, sparsity-preserving low-rank approx |
+
+## 43.3 — Key takeaways
 
 - The **inverted index** (term → sorted postings, gap-compressed) makes Boolean and ranked retrieval fast; sorted postings turn intersection into a linear merge. **Positional indexes** add phrase and proximity search.
 - **TF-IDF** ranks by term importance; **BM25** fixes its flaws with tf **saturation** ($k_1$) and length **normalization** ($b$); **BM25F** pools fielded frequencies before saturating.
@@ -1051,7 +1079,7 @@ print(rrf([bm25_list, dense_list]))       # d1 and d3 rise via agreement
 - **Streaming** with sublinear memory: **reservoir sampling** (uniform sample), **Bloom filters** (membership, no false negatives), **HyperLogLog** (distinct counts), **Count–Min sketch** (per-item frequency), **DGIM** (window counts) — and all of these **merge** across shards.
 - **PCY** prunes Apriori's pair candidates with a free pass-1 bucket bitmap. **Submodular greedy** gets $1-1/e$ of optimal for coverage/influence. **CUR** is interpretable, sparsity-preserving low-rank approximation when SVD's abstract factors won't do.
 
-## 43.3 — See also
+## 43.4 — See also
 
 - **Ch. 03 — Linear algebra:** SVD, leverage scores, the low-rank approximation CUR approximates; eigenvectors behind PageRank/HITS.
 - **Ch. 06 — Evaluation:** precision/recall and the classification view of relevance.

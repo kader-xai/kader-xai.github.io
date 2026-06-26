@@ -111,13 +111,15 @@ Neural networks are the workhorse of modern AI: layered functions that learn, fr
 🧭 **In context:** Deep Learning · how to build and train a function that learns arbitrary input→output mappings from data · the one key idea is *compose linear layers with nonlinear activations, then fit the weights by gradient descent on a loss*.
 :::
 
+> 💡 **Remember this:** A neural network is just linear layers stacked with nonlinear activations, trained by computing the gradient of a loss with backpropagation and stepping the weights downhill.
+
 ## 14.1 — Multilayer perceptron / feedforward networks
 
 A **multilayer perceptron (MLP)**, also called a **feedforward network**, is the simplest deep network: data flows in one direction, input → hidden layers → output, with no loops. Think of it as a stack of logistic-regression-like units where each layer's outputs become the next layer's inputs.
 
 Each **layer** is a set of **neurons** (units). A neuron computes a **weighted sum** of its inputs plus a **bias**, then passes that through a nonlinear **activation function**. The reason we need many layers is *representation*: early layers learn simple features (edges, word fragments), later layers combine them into abstract concepts (faces, sentiment). One layer alone is just a linear model; stacking with nonlinearity is what gives the network its expressive power. The **universal approximation theorem** makes this precise: a single hidden layer with enough units can approximate any continuous function to arbitrary accuracy — but "enough" can mean astronomically many units, which is why in practice depth is far more efficient than width. Deep networks reuse features across layers; a shallow one would have to enumerate every combination.
 
-A single neuron, opened up, is just a dot product followed by a squashing function — the same shape as logistic regression. Picture it as a little voting machine: each input arrives weighted, the votes are summed, a bias tips the scale, and the activation decides how loudly the neuron fires. The doodle below pulses to show a neuron gathering its inputs and "firing":
+A single neuron, opened up, is just a dot product followed by a squashing function — the same shape as [logistic regression](ch09.html). Picture it as a little voting machine: each input arrives weighted, the votes are summed, a bias tips the scale, and the activation decides how loudly the neuron fires. The doodle below pulses to show a neuron gathering its inputs and "firing":
 
 <style>
 @keyframes c14-pulse { 0%,100% { r: 16; opacity: .55; } 50% { r: 21; opacity: .95; } }
@@ -158,7 +160,7 @@ A single neuron, opened up, is just a dot product followed by a squashing functi
   <text x="268" y="110" text-anchor="middle" fill="currentColor" font-size="9">activation</text>
 </svg>
 
-A layer is fully described by a weight matrix $W$ and bias vector $b$. If layer $\ell$ has $n_\ell$ neurons and the previous layer has $n_{\ell-1}$ outputs, then $W^{[\ell]}$ has shape $n_\ell \times n_{\ell-1}$ and $b^{[\ell]}$ has length $n_\ell$.
+A layer is fully described by a weight [matrix](ch01.html) $W$ and bias vector $b$. If layer $\ell$ has $n_\ell$ neurons and the previous layer has $n_{\ell-1}$ outputs, then $W^{[\ell]}$ has shape $n_\ell \times n_{\ell-1}$ and $b^{[\ell]}$ has length $n_\ell$.
 
 A single neuron computes $a = g\!\left(\sum_{j} w_j x_j + b\right)$.
 
@@ -264,7 +266,7 @@ yhat = mlp[:2](x)                 # Linear(3,4)? — re-declare a 2→… net to
 
 ## 14.3 — Backpropagation
 
-Training means adjusting the weights to reduce the loss. To do that we need the **gradient** of the loss with respect to every weight. **Backpropagation** is the algorithm that computes those gradients efficiently by applying the **chain rule** of calculus, working *backward* from the output to the input. The intuition: each weight's influence on the loss flows through the layers above it, so we compute the error at the output, then pass it back layer by layer, multiplying by local derivatives.
+Training means adjusting the weights to reduce the loss. To do that we need the **gradient** of the loss with respect to every weight. **Backpropagation** is the algorithm that computes those gradients efficiently by applying the [**chain rule** of calculus](ch02.html), working *backward* from the output to the input. The intuition: each weight's influence on the loss flows through the layers above it, so we compute the error at the output, then pass it back layer by layer, multiplying by local derivatives.
 
 A useful mental picture: think of blame flowing backward. The output made an error; each layer asks "how much of that error is *my* fault?" and answers by multiplying the blame coming from above by its own local sensitivity. Backprop is just bookkeeping that reuses the blame already computed at higher layers instead of recomputing it for every weight from scratch.
 
@@ -446,7 +448,7 @@ gelu    = lambda z: 0.5*z*(1+np.tanh(np.sqrt(2/np.pi)*(z+0.044715*z**3)))
 ```
 
 ::: {.callout-tip}
-Default to ReLU for hidden layers in plain MLPs and CNNs; reach for GELU in Transformers. Save sigmoid for a single output that must be a probability, not for hidden layers.
+Default to ReLU for hidden layers in plain MLPs and CNNs; reach for GELU in [Transformers](ch17.html). Save sigmoid for a single output that must be a probability, not for hidden layers.
 :::
 
 ### 14.5.1 — Why ReLU "dies," and the modern menu
@@ -484,7 +486,7 @@ $$\text{softmax}(z)_i = \frac{e^{z_i}}{\sum_{j=1}^{K} e^{z_j}}.$$
 
 **Worked example.** Logits $z = [2.0,\ 1.0,\ 0.1]$. Exponentiate: $[7.39,\ 2.72,\ 1.11]$, sum $= 11.22$. Divide: $[0.659,\ 0.242,\ 0.099]$ — a valid distribution, peaked on class 0.
 
-**Where it shows up:** every time a language model picks the next word, a softmax over the whole vocabulary turns the model's raw scores into "probability of each possible next token" — and the *temperature* knob you see in chat APIs simply divides the logits before this softmax, flattening or sharpening that distribution to make outputs more random or more focused.
+**Where it shows up:** every time a [language model](ch23.html) picks the next word, a softmax over the whole vocabulary turns the model's raw scores into "probability of each possible next token" — and the *temperature* knob you see in chat APIs simply divides the logits before this softmax, flattening or sharpening that distribution to make outputs more random or more focused.
 
 ```python
 def softmax(z):
@@ -539,12 +541,12 @@ nn.init.zeros_(layer.bias)                                  # biases at 0
 
 The **loss function** measures how wrong a single prediction is; the **cost function** is the loss averaged over the dataset. Training minimizes it. The right loss depends on the task.
 
-For **regression** (predicting a number), use **mean squared error (MSE)**: $L = \tfrac1N\sum (\hat y - y)^2$. It penalizes large errors quadratically and pairs naturally with a linear output.
+For [**regression**](ch08.html) (predicting a number), use **mean squared error (MSE)**: $L = \tfrac1N\sum (\hat y - y)^2$. It penalizes large errors quadratically and pairs naturally with a linear output.
 
 **In words:** average the squared gap between prediction and truth, so being off by 2 hurts four times as much as being off by 1.
 **Also written:** $L = \tfrac1N\,\lVert \hat{\mathbf y} - \mathbf y \rVert_2^2$ — the squared Euclidean distance between the prediction and target vectors, divided by $N$.
 
-For **classification**, use **cross-entropy**, which measures the distance between the predicted probability distribution and the true one. For $K$ classes with one-hot target $y$: $L = -\sum_{i} y_i \log \hat y_i$. Because the truth is one-hot, this reduces to $-\log \hat y_{\text{correct}}$ — the loss is just the negative log-probability the model assigned to the right answer.
+For **classification**, use **cross-entropy**, which measures the distance between the predicted [probability distribution](ch04.html) and the true one. For $K$ classes with one-hot target $y$: $L = -\sum_{i} y_i \log \hat y_i$. Because the truth is one-hot, this reduces to $-\log \hat y_{\text{correct}}$ — the loss is just the negative log-probability the model assigned to the right answer.
 
 **In words:** the loss is how surprised the model is by the true label — the lower the probability it gave the correct class, the bigger the penalty.
 **Also written:** $L = -\log \hat y_{c}$ where $c$ is the true class index — the sum collapses because only the correct class has $y_i = 1$.
@@ -642,7 +644,7 @@ for step in range(6):
     print(round(w, 4))                   # 3.6 → 3.24 → 2.916 → ... → toward 0
 ```
 
-In a framework the optimizer owns this update; you only supply gradients (via `backward()`) and call `step()`. Plain SGD *is* the rule above; momentum and Adam (next chapter) refine *which direction and how far* using the history of gradients, but the skeleton is identical:
+In a framework the optimizer owns this update; you only supply gradients (via `backward()`) and call `step()`. Plain SGD *is* the rule above; momentum and Adam (covered in [Optimization](ch03.html)) refine *which direction and how far* using the history of gradients, but the skeleton is identical:
 
 ```python
 import torch
@@ -667,7 +669,7 @@ The mechanism: compute mean $\mu$ and variance $\sigma^2$ of the activations, no
 **Also written:** $y = \gamma\,\dfrac{x-\mu}{\sqrt{\sigma^2+\epsilon}} + \beta$ — one elementwise affine map applied to the standardized activations.
 
 - **Batch normalization** computes $\mu,\sigma^2$ across the **batch dimension** (per feature, over all examples in the mini-batch). Great for CNNs, but it depends on batch size and behaves differently at train vs. test time (it uses running averages at inference).
-- **Layer normalization** computes $\mu,\sigma^2$ across the **feature dimension** (per example, over its own activations). It's independent of batch size and identical at train and test time, which is why Transformers and RNNs use it.
+- **Layer normalization** computes $\mu,\sigma^2$ across the **feature dimension** (per example, over its own activations). It's independent of batch size and identical at train and test time, which is why Transformers and [RNNs](ch16.html) use it.
 
 <svg viewBox="0 0 360 150" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif" font-size="11">
   <text x="80" y="14" text-anchor="middle" font-weight="bold">BatchNorm</text>
@@ -732,7 +734,7 @@ flowchart TD
   E -->|yes| G2[lower learning rate]
 ```
 
-**Gradient clipping** caps the gradient's norm at a threshold (e.g. rescale so $\|g\| \le 5$) — the standard cure for exploding gradients, especially in RNNs. **Residual connections** (covered with CNNs and Transformers) add a shortcut $x + f(x)$ so gradients have an unobstructed path back, which is what makes 100-layer networks trainable at all.
+**Gradient clipping** caps the gradient's norm at a threshold (e.g. rescale so $\|g\| \le 5$) — the standard cure for exploding gradients, especially in RNNs. **Residual connections** (covered with [CNNs](ch15.html) and Transformers) add a shortcut $x + f(x)$ so gradients have an unobstructed path back, which is what makes 100-layer networks trainable at all.
 
 In practice, gradient clipping is one line, inserted between the backward pass and the optimizer step:
 
@@ -860,7 +862,31 @@ model.fit(                                        # §14.13 epochs/batches loop
 
 That single `fit` call runs forward propagation (§14.2), backpropagation (§14.3) over the computational graph (§14.4), and mini-batch gradient descent (§14.9, §14.13) under the hood — the entire chapter, executed on every batch.
 
-## 14.15 — Key takeaways
+## 14.15 — Quick reference
+
+| Term / formula | Meaning | When / why |
+|----------------|---------|------------|
+| Neuron $a = g(\mathbf{w}^\top\mathbf{x}+b)$ | weighted sum, bias, then nonlinearity | the atomic unit of every layer |
+| MLP / feedforward net | layers of neurons, data flows one way | baseline deep model; no loops |
+| Forward pass $a^{[\ell]}=g(W^{[\ell]}a^{[\ell-1]}+b^{[\ell]})$ | chain of matmul + activation | turns input into prediction |
+| Backprop $\delta^{[\ell]}=(W^{[\ell+1]\top}\delta^{[\ell+1]})\odot g'(z^{[\ell]})$ | chain rule, error flows backward | all gradients in one backward sweep |
+| Computational graph | ops as nodes, tensors as edges | how autodiff knows the chain rule |
+| Reverse-mode autodiff | one backward sweep from scalar loss | cheap gradients for millions of weights |
+| ReLU $\max(0,z)$ | cheap hinge nonlinearity | default hidden activation (MLP/CNN) |
+| GELU $z\,\Phi(z)$ | smooth, probabilistic ReLU | default in Transformers / modern NLP |
+| Softmax $e^{z_i}/\sum_j e^{z_j}$ | logits → probability distribution | multi-class output layer |
+| Cross-entropy $-\log\hat y_c$ | negative log-prob of true class | classification loss (with softmax) |
+| MSE $\tfrac1N\sum(\hat y-y)^2$ | mean squared gap | regression loss (with linear output) |
+| He init $\sigma=\sqrt{2/n_{in}}$ | scale weights by fan-in | keeps ReLU signal steady; Xavier for tanh |
+| Gradient descent $w\leftarrow w-\eta\nabla_w L$ | step weights downhill | the core update; $\eta$ is the key dial |
+| BatchNorm / LayerNorm $\gamma\hat x+\beta$ | standardize then re-scale activations | stabilize & speed training (LN for Transformers) |
+| Dropout $\tfrac{1}{1-p}(\mathbf m\odot\mathbf a)$ | randomly zero units in training | regularizer; off at inference (`eval()`) |
+| Weight decay $\tfrac{\lambda}{2}\lVert W\rVert^2$ | penalize large weights | L2 regularizer; smoother function |
+| Gradient clipping $\lVert g\rVert\le\tau$ | cap gradient norm | cure for exploding gradients (RNNs) |
+| Epoch / batch / iteration | full pass / group / one update | mini-batch (32–512) is the practical default |
+| Early stopping | halt when val loss plateaus | cheap regularizer; keeps best checkpoint |
+
+## 14.16 — Key takeaways
 
 - An **MLP** stacks layers of (weighted sum + bias + nonlinear activation); depth + nonlinearity is what gives expressive power.
 - **Forward propagation** is repeated $z=Wa+b$, $a=g(z)$; **backpropagation** reuses the chain rule to get all gradients in one backward pass.
@@ -874,14 +900,14 @@ That single `fit` call runs forward propagation (§14.2), backpropagation (§14.
 - **Vanishing/exploding gradients** come from multiplying many derivatives; fix with non-saturating activations, good init, normalization, residuals, and gradient clipping.
 - Train in **mini-batches** over multiple **epochs**; the **learning rate** is the knob that most often makes or breaks training.
 
-## 14.16 — See also
+## 14.17 — See also
 
-- **Calculus & Differentiation** — the chain rule that backpropagation is built on.
-- **Optimization** — SGD, momentum, Adam, and learning-rate schedules that drive the update step.
-- **Convolutional Neural Networks** — feedforward networks specialized for images, where BatchNorm shines.
-- **Recurrent & Sequence Models** — where vanishing gradients and gradient clipping matter most.
-- **Attention & Transformers** — built from these layers plus LayerNorm, GELU, and residual connections.
-- **Model Evaluation & Tuning** — how to choose batch size, learning rate, and stopping via validation.
+- [**Calculus & Differentiation**](ch02.html) — the chain rule that backpropagation is built on.
+- [**Optimization**](ch03.html) — SGD, momentum, Adam, and learning-rate schedules that drive the update step.
+- [**Convolutional Neural Networks**](ch15.html) — feedforward networks specialized for images, where BatchNorm shines.
+- [**Recurrent & Sequence Models**](ch16.html) — where vanishing gradients and gradient clipping matter most.
+- [**Attention & Transformers**](ch17.html) — built from these layers plus LayerNorm, GELU, and residual connections.
+- [**Model Evaluation & Tuning**](ch12.html) — how to choose batch size, learning rate, and stopping via validation.
 
 ------------------------------------------------------------------------
 

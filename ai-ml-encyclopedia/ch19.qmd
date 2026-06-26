@@ -105,11 +105,13 @@ toc-expand: true
 
 ------------------------------------------------------------------------
 
-Computer vision is the subfield of applied AI that teaches machines to extract meaning from pixels — to answer *what* is in an image, *where* it is, and *which exact pixels* belong to it. It sits at the intersection of deep learning (Chapters 14–18) and a specific data type: the 2-D grid of brightness values that is a digital image. This chapter walks the ladder of vision tasks from easiest to hardest — classification, then detection, then segmentation — and then the practical workhorses (OCR, pose, tracking, augmentation) that turn those models into real systems.
+Computer vision is the subfield of applied AI that teaches machines to extract meaning from pixels — to answer *what* is in an image, *where* it is, and *which exact pixels* belong to it. It sits at the intersection of deep learning ([Neural Networks](ch14.html), [CNNs](ch15.html), [sequence models](ch16.html), [Transformers](ch17.html), [generative models](ch18.html)) and a specific data type: the 2-D grid of brightness values that is a digital image. This chapter walks the ladder of vision tasks from easiest to hardest — classification, then detection, then segmentation — and then the practical workhorses (OCR, pose, tracking, augmentation) that turn those models into real systems.
 
 ::: {.callout-note appearance="simple"}
 🧭 **In context:** Applied AI built on CNNs and Transformers · used to recognize, locate, and trace objects in images and video · the one key idea — vision tasks form a ladder of *spatial precision*, from one label per image to one label per pixel.
 :::
+
+> 💡 **Remember this:** Every vision model is a function from a grid of pixel numbers to a structured answer, and the tasks form a ladder of spatial precision — pick the lowest rung (classify → detect → segment) that solves your problem.
 
 Before any of these tasks, it helps to be concrete about what a "pixel" actually is. A grayscale image is a 2-D grid of numbers, each from 0 (black) to 255 (white). A color image is three such grids stacked — red, green, blue — so a $224 \times 224$ color photo is really a $224 \times 224 \times 3$ block of numbers, about 150,000 of them. Every vision model, no matter how fancy, is ultimately a function from that block of numbers to some structured answer. Here is the same tiny image as a grid and as what we "see":
 
@@ -196,9 +198,9 @@ Two architectures dominate, and the difference is easiest to feel as a contrast 
   </g>
 </svg>
 
-The dominant tool for two decades has been the **convolutional neural network (CNN)** — a stack of learned filters that slide across the image detecting local patterns, getting more abstract with depth (Chapter 15 owns the mechanics). More recently the **Vision Transformer (ViT)** chops the image into a grid of patches, treats each patch like a word token, and runs self-attention over them (Chapter 17 owns attention). CNNs bake in the assumption that nearby pixels matter most (a strong, data-efficient *inductive bias*); ViTs drop that assumption and instead learn relationships from large data, winning when data is plentiful.
+The dominant tool for two decades has been the **convolutional neural network (CNN)** — a stack of learned filters that slide across the image detecting local patterns, getting more abstract with depth (Chapter 15 owns the mechanics). More recently the **Vision Transformer (ViT)** chops the image into a grid of patches, treats each patch like a word token, and runs self-attention over them (Chapter 17 owns attention). CNNs bake in the assumption that nearby pixels matter most (a strong, data-efficient *inductive bias*); ViTs drop that assumption and instead learn relationships from large data via [self-attention](ch17.html), winning when data is plentiful.
 
-**How the output works.** The final layer produces one **logit** (raw score) per class. A **softmax** turns the logits into probabilities that sum to 1:
+**How the output works.** The final layer produces one **logit** (raw score) per class. A [softmax](ch14.html) turns the logits into probabilities that sum to 1:
 
 $$p_i = \frac{e^{z_i}}{\sum_j e^{z_j}}$$
 
@@ -285,7 +287,7 @@ print("same person" if sim > 0.6 else "different")   # 0.6 = tuned threshold
 
 ### Transfer learning and fine-tuning
 
-Think of a pretrained network as someone who already knows how to *see* — edges, textures, shapes — and only needs to be told which categories *you* care about. **Transfer learning** reuses a model trained on a huge dataset (ImageNet) as the starting point for your own, much smaller, problem. This is the single most important practical technique in vision: it routinely turns "I have 500 labelled images" from hopeless into a working model.
+Think of a pretrained network as someone who already knows how to *see* — edges, textures, shapes — and only needs to be told which categories *you* care about. [Transfer learning](ch45.html) reuses a model trained on a huge dataset (ImageNet) as the starting point for your own, much smaller, problem. This is the single most important practical technique in vision: it routinely turns "I have 500 labelled images" from hopeless into a working model.
 
 There are two common modes. **Feature extraction** freezes the pretrained backbone and trains only a fresh classifier head on top — cheap, fast, and a strong baseline when your data is scarce or very similar to ImageNet. **Fine-tuning** unfreezes some or all of the backbone and continues training at a *small* learning rate, letting the features adapt to your domain — better when you have more data or a domain far from natural photos (medical scans, satellite imagery).
 
@@ -392,7 +394,7 @@ for box in results[0].boxes:
     print(cls, box.conf.item(), box.xywh.tolist())   # label, confidence, (x,y,w,h)
 ```
 
-We evaluate detectors with **mAP (mean Average Precision)**: for each class you sweep the confidence threshold, trace a precision–recall curve, take the area under it (the **Average Precision**), then average over classes. A detection counts as correct only if its box overlaps the true box enough — which brings us to IoU.
+We evaluate detectors with **mAP (mean Average Precision)**: for each class you sweep the confidence threshold, trace a [precision–recall curve](ch12.html), take the area under it (the **Average Precision**), then average over classes. A detection counts as correct only if its box overlaps the true box enough — which brings us to IoU.
 
 The **mAP** formula is just an average of averages:
 
@@ -566,7 +568,7 @@ In medical and other imbalanced segmentation, Dice loss (often combined with cro
 
 Three workhorse tasks turn the core three into real applications.
 
-**OCR (Optical Character Recognition)** converts text in an image — a scanned page, a street sign, a receipt — into machine-readable characters. Modern OCR is a two-step pipeline: a **text-detection** stage (often a segmentation/detection model) finds *where* the text regions are, then a **text-recognition** stage reads each region into a string, usually with a CNN that extracts features followed by a sequence model decoding characters left-to-right (Chapter 16 owns sequence models). The standard training loss for the unsegmented "image strip → string" mapping is **CTC (Connectionist Temporal Classification)**, which handles the fact that you don't know in advance which pixel column produced which character — it lets the model emit a character at any column, then collapses repeats and blanks into the final string.
+**OCR (Optical Character Recognition)** converts text in an image — a scanned page, a street sign, a receipt — into machine-readable characters. Modern OCR is a two-step pipeline: a **text-detection** stage (often a segmentation/detection model) finds *where* the text regions are, then a **text-recognition** stage reads each region into a string, usually with a CNN that extracts features followed by a [sequence model](ch16.html) decoding characters left-to-right. The standard training loss for the unsegmented "image strip → string" mapping is **CTC (Connectionist Temporal Classification)**, which handles the fact that you don't know in advance which pixel column produced which character — it lets the model emit a character at any column, then collapses repeats and blanks into the final string.
 
 The CTC idea in one line: the loss sums the probability of *every* alignment that collapses to the target string.
 
@@ -1139,7 +1141,7 @@ $$\mathcal{L} = -\frac{1}{N}\sum_{i=1}^{N} \log \frac{e^{\,\text{sim}(I_i, T_i)/
 
 **A tiny worked example of the contrastive idea.** Say a batch has 2 pairs and the model's image-to-text similarities (after temperature scaling) are: image 1 scores $[3.0, 0.5]$ against [its own caption, the other caption], and image 2 scores $[0.2, 2.4]$. For image 1 the softmax over $[3.0, 0.5]$ puts $\approx 0.92$ on the correct caption, so its loss is $-\log 0.92 \approx 0.08$ — small, because the right pairing already wins. If image 2 had instead scored $[2.0, 1.9]$ (correct caption barely ahead), its softmax would give only $\approx 0.48$ to the wrong-but-tied answer and push a much larger loss, dragging that true pair closer together on the next step. The loss is large exactly when the matching pair is *not* clearly the most similar.
 
-CLIP embeddings underpin much of modern multimodal AI (Chapter on Multimodal owns the full story) and are the text-grounding behind open-vocabulary detectors and segmenters.
+CLIP embeddings underpin much of modern [multimodal AI](ch24.html) (that chapter owns the full story) and are the text-grounding behind open-vocabulary detectors and segmenters.
 
 ### Promptable segmentation with SAM
 
@@ -1272,12 +1274,12 @@ def fgsm(model, x, y, eps=0.03):
 The standard defense is **adversarial training**: generate adversarial examples on the fly during training and include them in the loss, so the model learns boundaries that don't bend under small shoves. It is the most reliable defense, at the cost of more compute and usually a small drop in clean accuracy. For safety-critical vision (autonomous driving, medical, security), assume an adversary exists and test against one.
 
 ::: {.callout-warning}
-Adversarial examples are not a lab curiosity. Printed stickers on a stop sign, patterned glasses that fool face recognition, and subtle audio noise have all been demonstrated in the physical world. Robustness is a *security* property, not just an accuracy one — and high clean accuracy tells you nothing about it.
+Adversarial examples are not a lab curiosity. Printed stickers on a stop sign, patterned glasses that fool face recognition, and subtle audio noise have all been demonstrated in the physical world. Robustness is a *security* property (see [AI Ethics, Fairness & Safety](ch38.html)), not just an accuracy one — and high clean accuracy tells you nothing about it.
 :::
 
 ### Explainability: seeing what the model looked at
 
-When a model says "tumor" or "stop sign," you often need to know *which pixels* drove that call — for trust, for debugging, and for catching the classic failure where a model "detects boats" by actually detecting water. **Saliency** and **class-activation** methods produce a heatmap over the image showing where the evidence for a class came from.
+When a model says "tumor" or "stop sign," you often need to know *which pixels* drove that call — for trust, for debugging, and for catching the classic failure where a model "detects boats" by actually detecting water. **Saliency** and **class-activation** methods (part of the broader toolkit in [Explainable AI](ch36.html)) produce a heatmap over the image showing where the evidence for a class came from.
 
 **Grad-CAM (Gradient-weighted Class Activation Mapping)** is the workhorse. The intuition: the last convolutional layer holds feature maps that still have spatial layout ("there's fur here, an ear there"). Grad-CAM asks how much each feature map *raised the score* for the target class, then sums the feature maps weighted by that importance — producing a coarse heatmap that lights up the regions the class relied on.
 
@@ -1309,7 +1311,49 @@ Overlaying `cam` on the input shows, in warm colors, the pixels that justified t
 Run Grad-CAM (or a saliency map) on a handful of correct *and* incorrect predictions before trusting any classifier in production. Right answers for the wrong reasons are the bugs that pass every accuracy check and then fail catastrophically on data that lacks the spurious cue.
 :::
 
-## 19.13 — Key takeaways
+## 19.13 — Quick reference
+
+**Which vision task should I use?** — start from what you actually need out of the model:
+
+```{mermaid}
+flowchart TD
+  A[What do you need?] --> B{Just whether/which<br/>category is present?}
+  B -->|yes| C[Classification<br/>top-1/top-5]
+  B -->|no| D{Need to count or<br/>locate objects?}
+  D -->|box is enough| E[Detection<br/>YOLO / Faster R-CNN / DETR]
+  D -->|need exact pixels| F{Separate touching<br/>instances?}
+  F -->|no, class per pixel| G[Semantic seg<br/>U-Net]
+  F -->|yes, per object| H[Instance seg<br/>Mask R-CNN]
+  F -->|things + stuff| I[Panoptic seg<br/>Mask2Former]
+  A --> J{New task, no labels yet?}
+  J -->|yes| K[Try a foundation model<br/>CLIP / SAM zero-shot first]
+```
+
+| Term / formula | Meaning | When / why it matters |
+|---|---|---|
+| Softmax $p_i = e^{z_i}/\sum_j e^{z_j}$ | Turns logits into a probability distribution | Final layer of any classifier; top-1/top-5 read off it |
+| Top-1 / Top-5 accuracy | Top guess correct / true label in top 5 | Top-5 forgives fine-grained classes (ImageNet) |
+| Transfer learning | Reuse a pretrained backbone, retrain the head | The default when you have few labels |
+| Triplet loss $[\,d(a,p)-d(a,n)+\alpha\,]_+$ | Pull same-identity close, push others apart | Face recognition, image retrieval embeddings |
+| Bounding box $(x,y,w,h)$ | Rectangle + class + score per object | Output unit of detection |
+| Anchors | Pre-set box templates the model nudges | Lets a grid predict variably-shaped objects |
+| IoU $=\lvert A\cap B\rvert/\lvert A\cup B\rvert$ | Overlap / union of two boxes or masks | TP if ≥ 0.5; clamp negative overlap to 0 |
+| GIoU | IoU minus wasted-gap penalty | Gives a gradient even for non-overlapping boxes |
+| NMS | Drop duplicate overlapping boxes by IoU | Cleanup step for anchor/grid detectors |
+| mAP $=\frac{1}{C}\sum_c \text{AP}_c$ | Mean area under precision–recall curve | The standard detection metric |
+| Semantic / Instance / Panoptic | Class-per-pixel / per-object / both | Pick by whether you must separate instances + stuff |
+| Dice loss $1-\frac{2\lvert P\cap G\rvert}{\lvert P\rvert+\lvert G\rvert}$ | Optimize overlap directly | Beats accuracy/CE under class imbalance |
+| CTC loss | Sum over all alignments to the target string | OCR text recognition without per-char alignment |
+| Pinhole $x=fX/Z$ | World point scaled by inverse depth | Why a flat image loses depth |
+| Stereo $Z=fB/d$ | Depth from disparity between two views | Closer objects shift more; error grows with range |
+| Bipartite matching | Hungarian assignment of preds ↔ ground truth | DETR/Mask2Former: replaces anchors + NMS |
+| CLIP contrastive loss | Match image to its caption in a batch | Zero-shot, open-vocabulary recognition |
+| SAM | Promptable, class-agnostic mask from a click/box | Segment any object without a fixed class list |
+| NT-Xent (SimCLR) | Pull two augmented views of one image together | Self-supervised pretraining, no labels |
+| FGSM $x+\epsilon\,\text{sign}(\nabla_x\mathcal{L})$ | One-step gradient-sign adversarial nudge | Tests robustness; defend with adversarial training |
+| Grad-CAM | Heatmap of pixels that raised the class score | Catch "right answer, wrong reason" before deploy |
+
+## 19.14 — Key takeaways
 
 - A digital image is just a grid of numbers (color = three stacked grids); every vision model is a function from that grid to a structured answer.
 - Vision tasks form a ladder of spatial precision: **classification** (one label/image) → **detection** (box + label/object) → **segmentation** (label/pixel). Pick the lightest one that solves your problem.
@@ -1328,7 +1372,7 @@ Run Grad-CAM (or a saliency map) on a handful of correct *and* incorrect predict
 - **Adversarial examples** flip predictions with imperceptible, gradient-aligned noise (FGSM/PGD); high clean accuracy implies nothing about robustness — defend with **adversarial training** for safety-critical use.
 - **Explainability** with **Grad-CAM** heatmaps reveals which pixels drove a decision — the fastest way to catch "right answer, wrong reason" before deployment.
 
-## 19.14 — See also
+## 19.15 — See also
 
 - **Convolutional Neural Networks** — the backbone mechanics (filters, pooling, receptive fields) behind every model here.
 - **Attention & Transformers** — how Vision Transformers tokenize and attend over image patches.

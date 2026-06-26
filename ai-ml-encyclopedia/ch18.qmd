@@ -111,6 +111,8 @@ Most of the models in this encyclopedia learn to *discriminate* — given an inp
 🧭 **In context:** Deep Learning · used to synthesize new images, audio, and text by modeling the data distribution · the one key idea: instead of mapping input → label, learn $p(x)$ (or a way to sample from it) so you can generate fresh $x$.
 :::
 
+> 💡 **Remember this:** Every generative model in this chapter is one answer to the same question — how do you learn $p(x)$ well enough to draw new samples from it — and they differ only in how they trade off sample quality, sampling speed, and whether you get an exact likelihood.
+
 One picture is worth keeping in your head for the whole chapter: a **discriminative** model draws a fence between classes, while a **generative** model learns to *re-draw the animals*. The fence only needs to know where cats end and dogs begin; the painter needs to know what a cat actually looks like.
 
 <svg viewBox="0 0 560 180" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif" font-size="11">
@@ -142,7 +144,7 @@ $$\mathcal{L}(x) = \lVert x - g(f(x)) \rVert^2$$
 **In words:** push the input through the squeeze and back out, then measure how far the output drifted from the original — that gap is what training shrinks.
 **Also written:** $\mathcal{L}(x) = \sum_{i=1}^{d} (x_i - \hat{x}_i)^2$ with $\hat{x} = g(f(x))$ — the same squared error spelled out coordinate by coordinate.
 
-Because there are no labels — the target *is* the input — autoencoders are a form of self-supervised, unsupervised learning. The latent code is a learned, nonlinear compression; with linear layers and squared loss, an autoencoder in fact recovers the same subspace as PCA (see Chapter 7).
+Because there are no labels — the target *is* the input — autoencoders are a form of self-supervised, unsupervised learning. The latent code is a learned, nonlinear compression; with linear layers and squared loss, an autoencoder in fact recovers the same subspace as PCA (see Chapter 7). The encoder, decoder, generator, and discriminator throughout this chapter are all ordinary [neural networks](ch14.html) trained by gradient descent.
 
 ```{mermaid}
 flowchart LR
@@ -248,7 +250,7 @@ The intuition for *why* this fills the holes: a plain autoencoder is allowed to 
   <text x="390" y="172" text-anchor="middle" fill="#22c55e">any point → something sensible</text>
 </svg>
 
-The training objective is the **ELBO** (evidence lower bound), which has two terms pulling in tension:
+The training objective is the **ELBO** (evidence lower bound), which leans on [probability and statistics](ch04.html) — KL divergence, Gaussian priors, and expectations — and has two terms pulling in tension:
 
 $$\mathcal{L} = \underbrace{\mathbb{E}_{q(z|x)}[\log p(x|z)]}_{\text{reconstruction}} - \underbrace{D_{\mathrm{KL}}\big(q(z|x)\,\Vert\,p(z)\big)}_{\text{regularizer}}$$
 
@@ -257,7 +259,7 @@ $$\mathcal{L} = \underbrace{\mathbb{E}_{q(z|x)}[\log p(x|z)]}_{\text{reconstruct
 
 The first term is the familiar reconstruction quality: decode the sampled $z$ and check it matches $x$. The second term, the **KL divergence**, measures how far the encoder's distribution $q(z|x)$ has drifted from a standard normal **prior** $p(z) = \mathcal{N}(0, I)$, and penalizes the drift. Reconstruction wants each input to grab its own private corner of latent space; the KL term pushes every code back toward the same unit Gaussian. The balance is what packs the codes together smoothly with no holes.
 
-There is one obstacle: you cannot backpropagate through a random sampling step. The **reparameterization trick** sidesteps it by moving the randomness outside the gradient path. Instead of sampling $z \sim \mathcal{N}(\mu, \sigma^2)$ directly, write
+There is one obstacle: you cannot backpropagate through a random sampling step (see [optimization](ch03.html) for why gradients need a differentiable path). The **reparameterization trick** sidesteps it by moving the randomness outside the gradient path. Instead of sampling $z \sim \mathcal{N}(\mu, \sigma^2)$ directly, write
 
 $$z = \mu + \sigma \odot \epsilon, \qquad \epsilon \sim \mathcal{N}(0, I)$$
 
@@ -427,7 +429,7 @@ print("FID:", fid.compute().item())    # lower is better
 
 The original GAN used fully-connected layers and was finicky on images. A cascade of architectural variants made GANs practical and gave them controllable, useful behavior. Three landmarks tell the story.
 
-**DCGAN** (Deep Convolutional GAN) swapped the dense layers for convolutions and a few stabilizing recipes that became standard: strided convolutions instead of pooling, batch normalization in both networks, ReLU in the generator and LeakyReLU in the discriminator, and no fully-connected hidden layers. The generator builds an image by *upsampling* noise through transposed convolutions — from a vector, to a coarse 4×4 feature map, to a full image. DCGAN is the architecture most people mean by "a basic image GAN."
+**DCGAN** (Deep Convolutional GAN) swapped the dense layers for [convolutions](ch15.html) and a few stabilizing recipes that became standard: strided convolutions instead of pooling, batch normalization in both networks, ReLU in the generator and LeakyReLU in the discriminator, and no fully-connected hidden layers. The generator builds an image by *upsampling* noise through transposed convolutions — from a vector, to a coarse 4×4 feature map, to a full image. DCGAN is the architecture most people mean by "a basic image GAN."
 
 **CycleGAN** solves **unpaired image-to-image translation** — turning horses into zebras or summer photos into winter ones *without* matched before/after pairs, which are usually impossible to collect. It trains two generators ($G: A \to B$ and $F: B \to A$) and adds a **cycle-consistency loss**: if you translate an image to the other domain and back, you should recover the original, $F(G(a)) \approx a$. That round-trip constraint is what keeps the translation faithful instead of producing an arbitrary realistic-looking image of the target domain.
 
@@ -460,7 +462,7 @@ The pattern across all four variants is the same lever: **where you inject extra
 
 ## 18.5 — Diffusion Models
 
-**Diffusion models** generate by learning to *reverse* a gradual destruction of data, and they are the reason GANs lost their crown for image synthesis. The intuition: take a clean image and add a tiny bit of Gaussian noise, repeat hundreds of times until it is pure static — that is easy and needs no learning. Now train a network to undo *one* step of that process. Chain those learned denoising steps and you can start from pure noise and walk all the way back to a clean image.
+**Diffusion models** generate by learning to *reverse* a gradual destruction of data, and they are the reason GANs lost their crown for image synthesis (the central task of [computer vision](ch19.html)). The intuition: take a clean image and add a tiny bit of Gaussian noise, repeat hundreds of times until it is pure static — that is easy and needs no learning. Now train a network to undo *one* step of that process. Chain those learned denoising steps and you can start from pure noise and walk all the way back to a clean image.
 
 A homely analogy: imagine slowly stirring a drop of ink into a glass of water until the water is uniformly gray — that mixing is the easy forward process. The astonishing claim of diffusion is that if you learn, at each instant, exactly which way the ink was drifting, you can run the film backward and watch the uniform gray *un-mix* itself back into the original sharp drop.
 
@@ -566,7 +568,7 @@ $$p(x) = \prod_{i=1}^{n} p(x_i \mid x_1, \dots, x_{i-1})$$
 **In words:** the probability of the whole thing is the chance of the first piece, times the chance of the second given the first, times the third given the first two, and so on to the end.
 **Also written:** $\log p(x) = \sum_{i=1}^{n} \log p(x_i \mid x_{<i})$ — taking logs turns the product into a sum, which is the form actually optimized.
 
-For text this means predicting the next token given the previous ones — exactly how large language models work (Chapter 20). For images, PixelRNN and PixelCNN predict each pixel given the pixels above and to the left. The payoff is a tractable, exact likelihood and very high sample quality; the price is **slow sequential sampling** — an $n$-pixel image needs $n$ forward passes, because each step depends on the last.
+For text this means predicting the next token given the previous ones — exactly how [large language models](ch23.html) work. For images, PixelRNN and PixelCNN predict each pixel given the pixels above and to the left. The payoff is a tractable, exact likelihood and very high sample quality; the price is **slow sequential sampling** — an $n$-pixel image needs $n$ forward passes, because each step depends on the last.
 
 ```{mermaid}
 flowchart LR
@@ -609,9 +611,21 @@ You train by directly maximizing this exact log-likelihood — no lower bound li
 Pick by what you need: exact likelihood and density estimation → flows or autoregressive; sharp images fast → GAN; best quality and stable training → diffusion; a smooth, useful latent space → VAE.
 :::
 
+The same choice as a decision tree — start from what you need most and follow the branch:
+
+```{mermaid}
+flowchart TD
+  Q["What matters most?"]
+  Q -->|"exact likelihood /<br/>density estimation"| L["autoregressive<br/>(slow, top quality)<br/>or normalizing flow<br/>(fast inverse, less expressive)"]
+  Q -->|"best sample quality,<br/>stable training"| DF["diffusion<br/>(slow sampling →<br/>distill for speed)"]
+  Q -->|"one-pass speed<br/>above all"| G["GAN<br/>(sharp, watch for<br/>mode collapse)"]
+  Q -->|"smooth, navigable<br/>latent space"| V["VAE<br/>(slightly blurry,<br/>great for interpolation)"]
+  Q -->|"discrete tokens for a<br/>Transformer to model"| VQ["VQ-VAE / VQGAN<br/>(tokenize, then<br/>autoregress)"]
+```
+
 ## 18.7 — Boltzmann Machines & Restricted Boltzmann Machines
 
-Before VAEs and GANs, the dominant idea in generative modeling was **energy-based**: define an energy function over configurations of the data, declare that low-energy configurations are probable and high-energy ones rare, and learn the energy so that real data sits in the valleys. A **Boltzmann machine** is exactly this — a network of binary units (some visible, some hidden) where every unit connects to every other, and the probability of a joint configuration follows the Boltzmann distribution:
+Before VAEs and GANs, the dominant idea in generative modeling was **energy-based**: define an energy function over configurations of the data, declare that low-energy configurations are probable and high-energy ones rare, and learn the energy so that real data sits in the valleys. A **Boltzmann machine** is exactly this — an undirected [probabilistic graphical model](ch13.html) of binary units (some visible, some hidden) where every unit connects to every other, and the probability of a joint configuration follows the Boltzmann distribution:
 
 $$p(v, h) = \frac{1}{Z} e^{-E(v, h)}, \qquad E(v,h) = -\sum_{i<j} w_{ij}\, s_i s_j - \sum_i b_i s_i$$
 
@@ -1040,7 +1054,7 @@ class VectorQuantizer(nn.Module):
 
 The line `z_q = z_e + (z_q - z_e).detach()` is the straight-through trick in one expression: the forward value equals `z_q`, but the gradient flows as if it were `z_e`.
 
-The real power shows up in **two-stage generation**. Stage one trains the VQ-VAE to turn images into grids of codebook indices and back. Stage two throws away the pixels and trains a powerful *autoregressive* model (a PixelCNN or a Transformer, §18.6) over those index grids — learning $p(\text{indices})$ exactly the way a language model learns $p(\text{tokens})$. To generate, you sample a fresh grid of indices from the prior, look them up in the codebook, and decode to a full image. This factorization — a learned discrete tokenizer plus a sequence model over the tokens — is the blueprint behind **VQ-VAE-2**, **VQGAN** (which adds an adversarial loss for crisper textures), **DALL·E** (a Transformer over image tokens conditioned on text), and the neural audio codecs (SoundStream, EnCodec) that tokenize sound for speech and music models.
+The real power shows up in **two-stage generation**. Stage one trains the VQ-VAE to turn images into grids of codebook indices and back. Stage two throws away the pixels and trains a powerful *autoregressive* model (a PixelCNN or a [Transformer](ch17.html), §18.6) over those index grids — learning $p(\text{indices})$ exactly the way a language model learns $p(\text{tokens})$. To generate, you sample a fresh grid of indices from the prior, look them up in the codebook, and decode to a full image. This factorization — a learned discrete tokenizer plus a sequence model over the tokens — is the blueprint behind **VQ-VAE-2**, **VQGAN** (which adds an adversarial loss for crisper textures), **DALL·E** (a Transformer over image tokens conditioned on text), and the neural audio codecs (SoundStream, EnCodec) that tokenize sound for speech and music models.
 
 | Model | Latent | What it adds over VQ-VAE |
 |-------|--------|--------------------------|
@@ -1124,7 +1138,31 @@ img = pipe("a red fox in snow, photorealistic",
 The speed ladder, cheapest first: swap in a better ODE sampler (free, no training) → distill to a few-step student → distill or train a one-step consistency model. Each rung buys speed; the lower rungs cost a little quality, so stop at the first one fast enough for your use case.
 :::
 
-## 18.15 — Key takeaways
+## 18.15 — Quick reference
+
+| Model / term | What it is | When / why to reach for it |
+|---|---|---|
+| Autoencoder | Encoder–bottleneck–decoder trained to reconstruct its input | Compression, denoising, anomaly detection; baseline for learned representations |
+| Denoising / sparse AE | Autoencoder fed corrupted input or penalized for dense codes | Force structure-aware or interpretable features instead of a memorized copy |
+| VAE | Encodes a *distribution* per input; trained on the ELBO | Need a smooth latent space to sample, interpolate, or optimize over |
+| Reparameterization trick | Write $z=\mu+\sigma\odot\epsilon$ so gradients flow past sampling | The reason a VAE can be trained by backprop at all |
+| GAN | Generator vs. discriminator in a minimax game | Sharp images in one forward pass when you don't need a likelihood |
+| DCGAN | GAN with convolutional generator/discriminator | The default "basic image GAN" architecture |
+| cGAN | GAN conditioned on a label in $G$ and $D$ | Class-controlled generation ("make a 7"); basis of pix2pix |
+| CycleGAN | Two generators + cycle-consistency loss | Unpaired image-to-image translation (horse↔zebra) |
+| StyleGAN | Style vector injected at every resolution | Controllable, photorealistic faces; style mixing |
+| Diffusion model | Learn to reverse a fixed noising process via MSE on a U-Net | Best quality, stable training; today's state of the art for images |
+| Classifier-free guidance | Extrapolate from unconditional toward conditional score | Steer diffusion with a prompt; trade diversity for prompt adherence |
+| Latent diffusion | Run diffusion in a compressed latent grid | Make text-to-image fast enough to be practical (Stable Diffusion) |
+| Autoregressive model | Factor $p(x)=\prod_i p(x_i\mid x_{<i})$, one element at a time | Exact likelihood + top quality; accept slow sequential sampling |
+| Normalizing flow | Invertible net + change-of-variables | Exact density and fast sampling; limited expressiveness |
+| RBM | Bipartite energy-based model trained with contrastive divergence | Historical: layer-wise pretraining; cleanest energy-based example |
+| Score matching | Learn $\nabla_x\log p(x)$, which has no partition function | Train energy-based models without computing $Z$ |
+| Langevin dynamics | Drift along the score + calibrated noise | Turn a learned score field into a sampler |
+| VQ-VAE / VQGAN | Autoencoder with a discrete codebook latent | Tokenize images/audio so a Transformer can generate them |
+| Consistency model | Maps any noise level straight to the clean sample | One- to few-step generation when diffusion is too slow |
+
+## 18.16 — Key takeaways
 
 - **Generative models learn the data distribution** so they can synthesize new samples, rather than mapping inputs to labels.
 - **Autoencoders** compress through a bottleneck and reconstruct; denoising and sparse variants force more useful codes, but the plain latent space has holes you can't sample from.
@@ -1139,7 +1177,7 @@ The speed ladder, cheapest first: swap in a better ODE sampler (free, no trainin
 - **Vector-quantized models (VQ-VAE/VQGAN)** turn data into grids of discrete codebook tokens, so a Transformer can generate by next-token prediction — the recipe behind DALL·E and neural audio codecs.
 - **Fast sampling** closes diffusion's speed gap: better ODE solvers need no retraining, distillation collapses the chain to a few steps, and consistency models map any noise level straight to the final sample for one-step generation.
 
-## 18.16 — See also
+## 18.17 — See also
 
 - **Neural Networks (Core)** — the encoder, decoder, generator, and discriminator are all standard nets; backprop and activations underpin everything here.
 - **Convolutional Neural Networks** — the backbone of DCGAN, StyleGAN, and the U-Net inside diffusion models.

@@ -111,6 +111,8 @@ Most data in the world arrives as a sequence: words in a sentence, samples of au
 🧭 **In context:** Deep Learning · models for ordered/variable-length data (text, audio, time series) · the one key idea: **a recurring hidden state that summarizes the past so the same weights can be applied at every time step.**
 :::
 
+> 💡 **Remember this:** a recurrent net is a `for` loop with shared weights — one hidden state carries the past forward — and every advance (gating, attention, Transformers) exists to fix how that single thread of memory fails over long sequences.
+
 <style>
 @keyframes c16-flow { 0% { stroke-dashoffset: 40; } 100% { stroke-dashoffset: 0; } }
 @keyframes c16-pulse { 0%,100% { r: 13; opacity: .55; } 50% { r: 16; opacity: .95; } }
@@ -151,7 +153,7 @@ $$h_t = \tanh(W_{xh}\,x_t + W_{hh}\,h_{t-1} + b_h), \qquad y_t = W_{hy}\,h_t + b
 **In words:** the new memory is a squashed mix of *this step's input* and *last step's memory*; the output is a linear read-out of that memory.
 **Also written:** $h_t = \tanh\!\big(W_{xh} x_t + W_{hh} h_{t-1} + b_h\big)$ is often compressed to $h_t = \tanh\!\big(W[h_{t-1}, x_t] + b\big)$, where $W = [\,W_{hh}\;\;W_{xh}\,]$ is the two matrices stacked side by side and $[h_{t-1}, x_t]$ is the two vectors concatenated.
 
-The crucial detail is that the **same weight matrices** $W_{xh}, W_{hh}, W_{hy}$ are reused at every time step. This **weight sharing** is what lets an RNN handle sequences of *any* length with a fixed number of parameters — exactly the way a convolutional filter (Chapter 15) shares weights across space, an RNN shares weights across time.
+The crucial detail is that the **same weight matrices** $W_{xh}, W_{hh}, W_{hy}$ are reused at every time step. This **weight sharing** is what lets an RNN handle sequences of *any* length with a fixed number of parameters — exactly the way a [convolutional filter](ch15.html) (Chapter 15) shares weights across space, an RNN shares weights across time.
 
 Think of reading a sentence. Your understanding after word 5 ($h_5$) depends on word 5 plus your understanding after word 4 ($h_4$). You apply the same "reading process" to every word; the running interpretation is the hidden state.
 
@@ -199,7 +201,7 @@ x = torch.randn(4, 10, 8)           # (batch, time, features)
 outputs, h_n = rnn(x)               # outputs: (4, 10, 16); h_n: last hidden state
 ```
 
-**Backpropagation through time (BPTT).** To train, we unroll the network across the whole sequence and run ordinary backpropagation on that deep graph. Because $W_{hh}$ is shared, its gradient is the *sum* of the contributions from every time step:
+**Backpropagation through time (BPTT).** To train, we unroll the network across the whole sequence and run [ordinary backpropagation](ch14.html) on that deep graph. Because $W_{hh}$ is shared, its gradient is the *sum* of the contributions from every time step:
 
 $$\frac{\partial L}{\partial W_{hh}} = \sum_{t=1}^{T} \frac{\partial L_t}{\partial W_{hh}}$$
 
@@ -563,7 +565,7 @@ flowchart LR
     f3 & b3 --> o3["y₃"]
 ```
 
-The catch: a BiRNN needs the entire sequence before it can emit *any* output, so it cannot be used for real-time/streaming tasks (live transcription, next-token generation). It shines in offline labeling — named-entity recognition, part-of-speech tagging — where the full input is available.
+The catch: a BiRNN needs the entire sequence before it can emit *any* output, so it cannot be used for real-time/streaming tasks (live transcription, next-token generation). It shines in offline labeling — [named-entity recognition, part-of-speech tagging](ch20.html) — where the full input is available.
 
 **Deep (stacked) RNNs** add representational depth by **stacking** layers: the hidden-state sequence from layer 1 becomes the input sequence to layer 2, and so on. Lower layers tend to capture short, local patterns; higher layers capture longer, more abstract structure — the temporal analog of stacking convolutions for spatial hierarchy. Two or three layers is typical; beyond that, gains shrink and training gets fragile.
 
@@ -675,7 +677,7 @@ logits_t = out_head(out)            # compared against target[:, t] in the loss
   <text x="350" y="20" fill="#444">decoder</text>
 </svg>
 
-As sentences grow, this single vector becomes a crippling information funnel — the decoder, especially when producing early output words, can no longer "see" the relevant parts of a long input, and translation quality collapses on long sentences. The fix was to let the decoder look back at *all* encoder hidden states and learn which to focus on at each step. That mechanism is **attention**, and removing the recurrence entirely while keeping attention gives the **Transformer** — the subject of the next chapter, and the architecture that made RNNs largely optional.
+As sentences grow, this single vector becomes a crippling information funnel — the decoder, especially when producing early output words, can no longer "see" the relevant parts of a long input, and translation quality collapses on long sentences. The fix was to let the decoder look back at *all* encoder hidden states and learn which to focus on at each step. That mechanism is [**attention**](ch17.html), and removing the recurrence entirely while keeping attention gives the **Transformer** — the subject of the next chapter, and the architecture that made RNNs largely optional.
 
 ::: {.callout-warning}
 **Common mistake:** scaling a vanilla seq2seq to long documents and blaming the RNN cell. The limiter is usually the fixed-size context vector, not the LSTM/GRU inside it. The cure is attention (Chapter 17), not a bigger hidden state.
@@ -708,7 +710,7 @@ flowchart LR
 
 **Sampling** is the alternative when you want *variety* rather than the single most likely answer — chatbots, story generation, brainstorming. Instead of always taking the top token, you draw from the distribution. Two knobs tame it:
 
-- **Temperature** $T$ rescales the logits before the softmax: $T<1$ sharpens toward the top token (safer, more repetitive), $T>1$ flattens the distribution (more surprising, more error-prone).
+- **Temperature** $T$ rescales the logits before the [softmax](ch14.html): $T<1$ sharpens toward the top token (safer, more repetitive), $T>1$ flattens the distribution (more surprising, more error-prone).
 - **Top-k** / **nucleus (top-p)** sampling restrict the draw to only the most probable tokens — top-k to a fixed count, top-p to the smallest set whose probabilities sum to $p$ — so you keep variety without ever sampling an absurd word from the long tail.
 
 $$p_i = \frac{\exp(z_i / T)}{\sum_j \exp(z_j / T)}$$
@@ -811,7 +813,7 @@ Recurrence is not the only way to handle order. Its defining weakness is that it
 
 **Temporal (1D) convolutions.** A 1D convolution slides a small filter along the time axis, just as a 2D convolution slides over an image (Chapter 15). It reads a fixed *window* of recent steps in parallel — no hidden state threaded through time — so the whole sequence is processed at once. The intuition: instead of one reader passing notes forward, imagine many readers, each assigned a short window, all working simultaneously.
 
-To reach far back without an enormous filter, **dilated convolutions** insert gaps between the filter taps, so each layer skips ahead and the *receptive field* grows exponentially with depth. Stacking dilations $1, 2, 4, 8, \dots$ lets a modest stack of layers see thousands of steps back — the core idea behind **WaveNet** for raw-audio generation and **Temporal Convolutional Networks (TCNs)** for forecasting.
+To reach far back without an enormous filter, **dilated convolutions** insert gaps between the filter taps, so each layer skips ahead and the *receptive field* grows exponentially with depth. Stacking dilations $1, 2, 4, 8, \dots$ lets a modest stack of layers see thousands of steps back — the core idea behind **WaveNet** for [raw-audio generation](ch21.html) and **Temporal Convolutional Networks (TCNs)** for [forecasting](ch22.html).
 
 $$\text{receptive field} = 1 + (k - 1)\sum_{\ell} d_\ell$$
 
@@ -916,10 +918,33 @@ def generate(model, start_ids, steps=200, temperature=0.8):
 Three things to notice, each a callback to the chapter. Training uses **teacher forcing** for free — the target sequence is just the input shifted by one, so the loss at step $t$ always conditions on the *true* prefix. Generation, by contrast, feeds the model's **own** samples back in (the exposure-bias gap of §16.6), which is exactly why temperature matters there and not in training. And the hidden `state` is threaded out of `generate` and back in on every call — the same running memory of §16.1, now used at inference time to keep the model coherent across hundreds of characters.
 
 ::: {.callout-note}
-**Why this still teaches the field:** scale this exact recipe up — bigger hidden size, more data, and (the one architectural swap) self-attention in place of the LSTM — and you have the skeleton of a modern language model. The training loop, the shifted targets, the sampling-with-temperature at generation time are unchanged. RNNs are where every one of those ideas was first made to work.
+**Why this still teaches the field:** scale this exact recipe up — bigger hidden size, more data, and (the one architectural swap) self-attention in place of the LSTM — and you have the skeleton of a modern [language model](ch23.html). The training loop, the shifted targets, the sampling-with-temperature at generation time are unchanged. RNNs are where every one of those ideas was first made to work.
 :::
 
-## 16.11 — Key takeaways
+## 16.11 — Quick reference
+
+| Term / formula | Meaning in one line | When / why it matters |
+|---|---|---|
+| Hidden state $h_t = \tanh(W_{xh}x_t + W_{hh}h_{t-1} + b)$ | running memory updated by shared weights each step | the core RNN recurrence; same weights at every $t$ |
+| BPTT, $\nabla_{W_{hh}}L = \sum_t \nabla_{W_{hh}}L_t$ | unroll, then sum the shared weight's gradient over all steps | how RNNs train; source of vanishing/exploding gradients |
+| Vanishing / exploding gradient | factor $\approx w^T$ shrinks to 0 or blows up over $T$ steps | why plain RNNs forget past ~10–20 steps |
+| Truncated BPTT($k$) | carry $h$ forward (detached), backprop only $k$ steps | train on long streams without exploding memory |
+| Gradient clipping $g \leftarrow g\cdot\tfrac{\tau}{\max(\|g\|,\tau)}$ | cap the gradient norm at $\tau$, keep direction | the standard fix for *exploding* gradients |
+| LSTM cell $c_t = f_t\odot c_{t-1} + i_t\odot\tilde c_t$ | additive memory with forget/input/output gates | long-range memory; $f_t{=}1,i_t{=}0$ copies a fact verbatim |
+| Forget-gate bias $b_f \approx 1$–$2$ | start gates near "remember" | faster convergence on long-dependency tasks |
+| GRU $h_t = (1-z_t)h_{t-1} + z_t\tilde h_t$ | one update gate $z_t$ toggles keep vs. overwrite | lighter LSTM; strong default, fewer params |
+| Bidirectional $h_t = [\overrightarrow{h_t}; \overleftarrow{h_t}]$ | concatenate forward + backward readers | offline tasks (NER, POS) where future helps |
+| Stacked (deep) RNN | layer $\ell$'s output sequence feeds layer $\ell{+}1$ | builds temporal hierarchy; 2–3 layers typical |
+| Seq2seq + context vector $c$ | encoder compresses input → decoder unpacks output | variable-length mapping (translation); $c$ is the bottleneck |
+| Teacher forcing | feed ground-truth previous token while training | fast training; mind the exposure-bias gap at test |
+| Beam search, $\sum_i \log p(y_i\mid y_{<i},x)$ | keep top-$k$ partial sequences by log-prob | one-right-answer decoding (translation, ASR) |
+| Temperature / nucleus, $p_i = \tfrac{e^{z_i/T}}{\sum_j e^{z_j/T}}$ | reshape distribution before sampling | open-ended generation (dialogue, stories) |
+| Variational (locked) dropout | one dropout mask reused across all steps | safe regularizer for the recurrent path |
+| Layer norm | normalize across features of one step | RNN/Transformer default; batch-size independent |
+| Dilated 1D conv, field $=1+(k-1)\sum_\ell d_\ell$ | gaps in the filter grow reach exponentially | parallel, long-reach alternative (WaveNet, TCN) |
+| Self-attention | every position attends to every other in parallel | removes the bottleneck; the Transformer ([Ch. 17](ch17.html)) |
+
+## 16.12 — Key takeaways
 
 - An **RNN** carries a **hidden state** updated by the *same* weights at every step; unrolled, it is a deep weight-shared network trained by **backpropagation through time**.
 - Vanilla RNNs suffer **vanishing/exploding gradients** — in the scalar case the recurrent factor raised to the sequence length — so they forget dependencies beyond ~10–20 steps. Vanishing is fixed by *architecture* (gated cells); exploding is fixed by *training* (**gradient clipping**).
@@ -932,15 +957,15 @@ Three things to notice, each a callback to the chapter. Training uses **teacher 
 - **Regularize** recurrent nets with *variational/locked* dropout on the recurrent path (or plain dropout between stacked layers) and **layer norm** rather than batch norm.
 - Recurrence is sequential and slow; **dilated 1D convolutions** (WaveNet, TCN) and **self-attention** (Transformers) parallelize over time and reach further, leaving RNNs a specialist tool for streaming, very long, or small-data settings.
 
-## 16.12 — See also
+## 16.13 — See also
 
-- **Neural Networks (Core)** — backpropagation, activations, and the feedforward machinery RNNs unroll into.
-- **Convolutional Neural Networks** — the spatial counterpart to weight sharing across time, and the source of the 1D/dilated convolutions used for sequences.
-- **Attention & Transformers** — how attention removes the fixed-context bottleneck and supersedes recurrence.
-- **Natural Language Processing** — tagging, translation, and the tasks RNNs and seq2seq were built for.
-- **Large Language Models** — where the Transformer successors to these models now live.
-- **Time Series & Forecasting** — applying recurrent and sequence models to numeric temporal data.
-- **Speech & Audio Processing** — streaming vs. offline recognition, a classic BiRNN/seq2seq domain.
+- [**Neural Networks (Core)**](ch14.html) — backpropagation, activations, and the feedforward machinery RNNs unroll into.
+- [**Convolutional Neural Networks**](ch15.html) — the spatial counterpart to weight sharing across time, and the source of the 1D/dilated convolutions used for sequences.
+- [**Attention & Transformers**](ch17.html) — how attention removes the fixed-context bottleneck and supersedes recurrence.
+- [**Natural Language Processing**](ch20.html) — tagging, translation, and the tasks RNNs and seq2seq were built for.
+- [**Large Language Models**](ch23.html) — where the Transformer successors to these models now live.
+- [**Time Series & Forecasting**](ch22.html) — applying recurrent and sequence models to numeric temporal data.
+- [**Speech & Audio Processing**](ch21.html) — streaming vs. offline recognition, a classic BiRNN/seq2seq domain.
 
 ------------------------------------------------------------------------
 

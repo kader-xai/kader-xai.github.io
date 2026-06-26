@@ -105,11 +105,13 @@ toc-expand: true
 
 ------------------------------------------------------------------------
 
-Convolutional Neural Networks (CNNs) are the family of deep models built to understand data laid out on a grid — above all, images. They replace the dense "everything connects to everything" wiring of ordinary neural networks with small sliding filters that look for local patterns, which makes them dramatically more efficient and far better at vision. CNNs sit squarely inside Deep Learning and are the workhorse behind most computer vision systems.
+Convolutional Neural Networks (CNNs) are the family of deep models built to understand data laid out on a grid — above all, images. They replace the dense "everything connects to everything" wiring of ordinary [neural networks](ch14.html) with small sliding filters that look for local patterns, which makes them dramatically more efficient and far better at vision. CNNs sit squarely inside Deep Learning and are the workhorse behind most [computer vision](ch19.html) systems.
 
 ::: {.callout-note appearance="simple"}
 🧭 **In context:** Deep Learning · used for images, video, audio spectrograms, and any grid-structured signal · the one key idea is *learning small reusable filters that slide across the input to detect local patterns*.
 :::
+
+> 💡 **Remember this:** a CNN learns one small filter and slides it across the whole image, so the same pattern is detected everywhere using far fewer weights than a dense network.
 
 ## 15.1 — Convolution & filters
 
@@ -398,7 +400,7 @@ CNN design history is a story of going deeper while keeping training stable. Fou
 
 **LeNet-5** (1998) was the original — a tiny network for reading handwritten digits, with two conv layers, pooling, and a couple of dense layers. It proved the convolution-then-pool recipe worked.
 
-**AlexNet** (2012) was the same recipe scaled up and run on GPUs, and it crushed the ImageNet competition, kicking off the deep-learning boom. Its contributions were practical: **ReLU** activations (faster training than tanh), **dropout** for regularisation, and data augmentation.
+**AlexNet** (2012) was the same recipe scaled up and run on GPUs, and it crushed the ImageNet competition, kicking off the deep-learning boom. Its contributions were practical: **ReLU** [activations](ch14.html) (faster training than tanh), **dropout** for regularisation, and data augmentation.
 
 **VGG** (2014) made the design uniform: stack many 3×3 convolutions, double the channel count after each pooling step. Its insight — two stacked 3×3 filters see the same region as one 5×5 filter but with fewer parameters and an extra non-linearity — is why 3×3 became the standard.
 
@@ -428,7 +430,7 @@ The depth jump over those 17 years is hard to feel from a table, so here it is t
   <text x="20" y="80" fill="currentColor" transform="rotate(-90 20 80)" font-size="11">depth →</text>
 </svg>
 
-**Residual connections.** Naively stacking more layers made networks *worse* — gradients vanished and very deep nets were hard to optimise. ResNet adds a **skip connection** that lets the input bypass a block and be added to its output:
+**Residual connections.** Naively stacking more layers made networks *worse* — gradients vanished and very deep nets were hard to [optimise](ch03.html). ResNet adds a **skip connection** that lets the input bypass a block and be added to its output:
 
 $$
 y = F(x) + x
@@ -445,6 +447,19 @@ flowchart LR
     x(["x"]) --> C1["3×3 conv → ReLU"] --> C2["3×3 conv"] --> add((+))
     x -- "skip / identity" --> add
     add --> R["ReLU"] --> y(["y = F(x) + x"])
+```
+
+**Which backbone should I reach for?**
+
+```{mermaid}
+flowchart TD
+    A["Need a CNN backbone?"] --> B{"Deep net,<br/>top accuracy?"}
+    B -- yes --> R["ResNet (residual blocks)<br/>— the safe default"]
+    B -- no --> C{"Tight compute /<br/>mobile?"}
+    C -- yes --> M["MobileNet / 1×1 bottlenecks"]
+    C -- no --> D{"Just learning<br/>or tiny task?"}
+    D -- yes --> L["LeNet / small VGG"]
+    D -- no --> V["VGG-style 3×3 stacks"]
 ```
 
 ## 15.6 — Batch normalization
@@ -494,7 +509,7 @@ block = nn.Sequential(
 
 ## 15.7 — Convolutional neural networks in general
 
-Step back and look at the whole pipeline. A CNN processes an image in two phases: a **feature extractor** of stacked conv + activation + pooling blocks that turns raw pixels into increasingly abstract feature maps, followed by a **classifier head** (a global pool plus one or two dense layers) that maps those features to class scores.
+Step back and look at the whole pipeline. A CNN processes an image in two phases: a **feature extractor** of stacked conv + activation + pooling blocks that turns raw pixels into increasingly abstract feature maps, followed by a **classifier head** (a global pool plus one or two dense layers) that maps those features to class scores, usually finished with a [softmax](ch14.html).
 
 The key bookkeeping is **channels**, and the one idea that trips people up is this: *a convolution filter is not flat.* A colour image has 3 stacked sheets — red, green, blue. A "3×3 filter" on it is really a little 3×3×3 cube of weights: it covers a 3×3 patch on *all three* sheets at once, multiplies, and adds everything into **one** number. So each filter, wherever it lands, outputs a single value — collapsing every input channel into one.
 
@@ -521,7 +536,7 @@ $$
 
 Note this is independent of image size — the same filter handles a 32×32 or a 512×512 input. That is the parameter-sharing payoff from §15.1, made concrete.
 
-**The 1×1 convolution.** A filter of size 1×1 looks at a single pixel but *all* its channels — it is a tiny dense layer applied identically at every spatial location. Its job is to mix and **re-project channels**: turn 256 channels into 64 (cheap dimensionality reduction) or 64 into 256, without touching spatial size. This "bottleneck" trick is what lets ResNet-50 stay affordable, and it underpins the Inception and MobileNet families.
+**The 1×1 convolution.** A filter of size 1×1 looks at a single pixel but *all* its channels — it is a tiny dense layer applied identically at every spatial location. Its job is to mix and **re-project channels**: turn 256 channels into 64 (cheap dimensionality reduction) or 64 into 256, without touching spatial size. This "bottleneck" trick is what lets ResNet-50 stay affordable, and it underpins the Inception and MobileNet families — and the same channel-reprojection idea reappears inside [Vision Transformers](ch17.html).
 
 ```python
 import torch.nn as nn
@@ -534,7 +549,7 @@ Training a deep CNN from scratch needs millions of labelled images and a lot of 
 
 **The everyday analogy.** Hiring someone who already speaks the language and just needs to learn your company's jargon beats training a newborn from scratch. A pretrained backbone already "speaks vision"; you only teach it your handful of labels.
 
-The recipe: take a network already trained on a huge dataset (ImageNet, 1.2M images), call its feature extractor the **backbone**, discard its original classifier head, and attach a fresh small head for your task. Then either **freeze** the backbone and train only the head (fast, needs little data), or **fine-tune** — unfreeze some top layers and train them too at a small learning rate, for a bit more accuracy when you have more data.
+The recipe: take a network already trained on a huge dataset (ImageNet, 1.2M images), call its feature extractor the **backbone**, discard its original classifier head, and attach a fresh small head for your task. (This same backbone-and-head pattern is the basis of [post-training and fine-tuning](ch45.html) for large models.) Then either **freeze** the backbone and train only the head (fast, needs little data), or **fine-tune** — unfreeze some top layers and train them too at a small learning rate, for a bit more accuracy when you have more data.
 
 <svg viewBox="0 0 520 140" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif" font-size="11">
   <text x="20" y="18" fill="currentColor">reuse the frozen backbone, swap only the head</text>
@@ -628,7 +643,28 @@ print(net(torch.randn(1, 3, 32, 32)).shape)   # torch.Size([1, 10])
 **Common mistake:** mismatching the flattened length when you change image size or padding. If you swap Conv1 to "valid" padding, every downstream shape shifts and the Dense layer's input dimension breaks. Re-run the size formula end-to-end after *any* change to K, P, S, or input size.
 :::
 
-## 15.10 — Key takeaways
+## 15.10 — Quick reference
+
+| Term / formula | Meaning | When / why it matters |
+|---|---|---|
+| Convolution | Slide a small kernel over the input, dot-product each patch | Core layer; local connectivity + parameter sharing cut weights massively |
+| Kernel / filter | Tiny grid of learnable weights (3×3, 5×5) | One filter = one pattern detector reused everywhere |
+| Feature (activation) map | Output grid of one filter across the input | Each filter produces one channel of output |
+| Max pooling | Take the largest value in each window | Default downsampler; keeps "is the feature present?" |
+| Average / global pooling | Mean of a window; or collapse a whole map to one number | Smoothing; global-avg head in ResNet-style nets |
+| Stride $S$ | Step size of the sliding window | $S{=}2$ roughly halves output size and compute |
+| Padding $P$ | Border (usually zeros) added around input | "Same" keeps size, "valid" shrinks; protects edge pixels |
+| Output size | $O = \lfloor (W - K + 2P)/S \rfloor + 1$ | Compute every layer's shape; the floor silently drops pixels |
+| "Same" pad (stride 1) | $P = (K-1)/2$ | Why odd kernel sizes are preferred (clean centre) |
+| Receptive field | Input patch one neuron can "see" | Must cover the object; grows with depth, dilation enlarges cheaply |
+| Dilated (atrous) conv | Insert gaps between kernel taps | Big receptive field, no extra weights — segmentation, audio |
+| Residual block | $y = F(x) + x$ | Skip connection; makes very deep nets trainable |
+| Batch normalization | $\hat{x}=(x-\mu_{\mathcal B})/\sqrt{\sigma_{\mathcal B}^2+\epsilon}$, then $\gamma\hat x+\beta$ | Higher LRs, steadier training; use `eval()` at inference |
+| Conv params | $(K_h K_w C_{in}+1)\,C_{out}$ | Independent of image size — the scaling payoff |
+| 1×1 convolution | Per-pixel dense layer mixing channels | Cheap channel re-projection (bottlenecks) |
+| Transfer learning | Reuse a pretrained backbone, swap the head | Standard practice; freeze for small data, fine-tune for large |
+
+## 15.11 — Key takeaways
 
 - A **convolution** slides a small **filter** over the input; **local connectivity** + **parameter sharing** make it efficient and translation-aware — one pattern learned once, detected everywhere.
 - **Pooling** downsamples feature maps; **max** keeps the strongest activation (default), **average** smooths (used for global pooling heads). No learnable parameters.
@@ -639,14 +675,14 @@ print(net(torch.randn(1, 3, 32, 32)).shape)   # torch.Size([1, 10])
 - A CNN = **feature extractor** (conv/pool blocks, spatial size shrinks while **channels** grow) + **classifier head**; filters span all input channels, and **1×1 convs** re-project channels cheaply.
 - **Transfer learning** reuses a pretrained **backbone**: freeze for small/similar data, fine-tune for large/different data — the standard way to build vision models.
 
-## 15.11 — See also
+## 15.12 — See also
 
-- **Neural Networks (Core)** — activations, backprop, dropout, and the dense layers CNNs build on.
-- **Computer Vision** — detection, segmentation, and the tasks CNNs power.
-- **Generative Models** — convolutional GANs and autoencoders that run convolutions in reverse.
-- **Attention & Transformers** — Vision Transformers, the modern alternative to convolutional backbones.
-- **Optimization** — SGD, learning-rate schedules, and the gradient flow residual connections protect.
-- **MLOps & Deployment** — serving and compressing trained CNN backbones in production.
+- [**Neural Networks (Core)**](ch14.html) — activations, backprop, dropout, and the dense layers CNNs build on.
+- [**Computer Vision**](ch19.html) — detection, segmentation, and the tasks CNNs power.
+- [**Generative Models**](ch18.html) — convolutional GANs and autoencoders that run convolutions in reverse.
+- [**Attention & Transformers**](ch17.html) — Vision Transformers, the modern alternative to convolutional backbones.
+- [**Optimization**](ch03.html) — SGD, learning-rate schedules, and the gradient flow residual connections protect.
+- [**MLOps & Deployment**](ch29.html) — serving and compressing trained CNN backbones in production.
 
 ------------------------------------------------------------------------
 

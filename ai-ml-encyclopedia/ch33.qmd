@@ -105,11 +105,13 @@ toc-expand: true
 
 ------------------------------------------------------------------------
 
-Knowledge Representation and Reasoning (KRR) is the branch of AI that asks how to store what a system *knows* in a form a machine can manipulate, and how to derive new facts from that store by rule rather than by statistics. It is the symbolic heart of "Good Old-Fashioned AI": instead of learning patterns from data, you write down truths and let a logical engine grind out consequences. It matters because it gives something deep learning struggles with — answers you can *explain*, *audit*, and *guarantee* — and the modern frontier is stitching the two traditions back together.
+Knowledge Representation and Reasoning (KRR) is the branch of AI that asks how to store what a system *knows* in a form a machine can manipulate, and how to derive new facts from that store by rule rather than by statistics. It is the symbolic heart of "Good Old-Fashioned AI": instead of learning patterns from data, you write down truths and let a logical engine grind out consequences. It matters because it gives something [deep learning](ch14.html) struggles with — answers you can *explain*, *audit*, and *guarantee* — and the modern frontier is stitching the two traditions back together.
 
 ::: {.callout-note appearance="simple"}
 🧭 **In context:** Classical & Symbolic AI · used to encode facts and rules so machines can deduce, explain, and prove answers · the one key idea — *represent knowledge explicitly as symbols, then reason over it with sound inference rules*.
 :::
+
+> 💡 **Remember this:** write knowledge down as explicit symbols and let a sound inference engine derive guaranteed, auditable conclusions — the exact thing statistical learning cannot promise.
 
 ## 33.1 — Propositional & First-Order Logic (Syntax, Inference, Resolution)
 
@@ -505,7 +507,7 @@ print([str(r.x) for r in g.query(q)])   # -> ['http://ex.org/Socrates']  (derive
 
 Pure logic is brittle in a specific way: it assumes facts are certainly true or certainly false. The real world is full of "probably," "usually," and "I'm 80% sure." **Reasoning under uncertainty** extends KRR to handle degrees of belief, and it is where the symbolic and probabilistic traditions meet.
 
-The cleanest framework is **probability**: replace "$P$ is true" with "$P$ holds with probability $0.8$," and replace logical implication with conditional probability. The early expert system MYCIN used ad-hoc **certainty factors** (numbers in $[-1, 1]$ combined by hand-tuned formulas); these worked but lacked a rigorous semantics, and the field moved to **Bayesian networks**, which represent variables as graph nodes and use the laws of probability to propagate evidence soundly. (Certainty factors here are a *numeric layer on top of* the same backward-chaining rule engine from §33.2 — the engine still fires rules; the factors just attach a confidence to each conclusion.)
+The cleanest framework is **probability**: replace "$P$ is true" with "$P$ holds with probability $0.8$," and replace logical implication with conditional probability. The early expert system MYCIN used ad-hoc **certainty factors** (numbers in $[-1, 1]$ combined by hand-tuned formulas); these worked but lacked a rigorous semantics, and the field moved to [**Bayesian networks**](ch13.html), which represent variables as graph nodes and use the [laws of probability](ch04.html) to propagate evidence soundly. (Certainty factors here are a *numeric layer on top of* the same backward-chaining rule engine from §33.2 — the engine still fires rules; the factors just attach a confidence to each conclusion.)
 
 Worked example — one step of **Bayes' rule**. A medical test is 90% sensitive ($P(\text{pos}\mid\text{disease})=0.9$) and has a 10% false-positive rate ($P(\text{pos}\mid\neg\text{disease})=0.1$); the disease affects 1% of people ($P(\text{disease})=0.01$). A patient tests positive — how worried should they be?
 
@@ -684,7 +686,7 @@ $$\text{Holds}(f, s) \wedge \neg \text{Affects}(a, f) \;\rightarrow\; \text{Hold
 **In words:** a fact $f$ that held in situation $s$ still holds after doing action $a$, as long as $a$ does not affect $f$.
 **Also written:** in event-calculus style, $\text{HoldsAt}(f, t) \wedge \neg\exists e\,[\text{Happens}(e,t) \wedge \text{Terminates}(e,f,t)] \rightarrow \text{HoldsAt}(f, t{+}1)$ — a fluent persists unless some event terminates it.
 
-This single idea — *inertia by default, change only when forced* — is exactly what underlies the STRIPS action representation used by planners (Chapter on Planning) and is why frame, closed-world, and non-monotonic reasoning all show up together: they are the machinery for reasoning sensibly about an incompletely-specified, changing world.
+This single idea — *inertia by default, change only when forced* — is exactly what underlies the STRIPS action representation used by [planners](ch34.html) and is why frame, closed-world, and non-monotonic reasoning all show up together: they are the machinery for reasoning sensibly about an incompletely-specified, changing world.
 
 ::: {.callout-warning}
 **Common mistake:** silently importing a database's closed-world habit into an ontology. Asking an OWL reasoner "is Bob *not* a doctor?" returns *unknown*, not *yes* — and code that treats "not returned" as "false" will quietly fabricate conclusions the KB never licensed.
@@ -761,7 +763,7 @@ flowchart TB
 
 If symbolic systems are interpretable but brittle, and neural networks are robust but opaque, the obvious move is to combine them — and that is exactly what **neurosymbolic AI** sets out to do. The goal is a system that *perceives* with neural networks and *reasons* with symbolic logic, getting data-driven robustness and rule-based guarantees in one pipeline.
 
-The patterns vary. In a common **perceive-then-reason** arrangement, a neural network maps raw input (pixels, text) into symbols, and a logic engine reasons over those symbols. A **neuro-symbolic question answerer**, for instance, uses a vision network to detect objects in an image, then runs a symbolic program over the detections to answer "are there more red cubes than blue spheres?" — perception where neural nets shine, counting and comparison where logic shines. Other approaches push logic *into* the network: **differentiable reasoning** relaxes hard logical operations into smooth functions so that rules can be trained by gradient descent; **knowledge-graph embeddings** turn symbolic entities into vectors so a network can reason approximately over a graph; and **logic-as-regularisation** penalises a model during training whenever it violates known constraints.
+The patterns vary. In a common **perceive-then-reason** arrangement, a neural network maps raw input (pixels, text) into symbols, and a logic engine reasons over those symbols. A **neuro-symbolic question answerer**, for instance, uses a [vision network](ch19.html) to detect objects in an image, then runs a symbolic program over the detections to answer "are there more red cubes than blue spheres?" — perception where neural nets shine, counting and comparison where logic shines. Other approaches push logic *into* the network: **differentiable reasoning** relaxes hard logical operations into smooth functions so that rules can be trained by [gradient descent](ch03.html); [**knowledge-graph embeddings**](ch40.html) turn symbolic entities into vectors so a network can reason approximately over a graph; and **logic-as-regularisation** penalises a model during training whenever it violates known constraints.
 
 ```{mermaid}
 flowchart LR
@@ -773,9 +775,9 @@ flowchart LR
     KB -. "regularise" .-> NN
 ```
 
-This is also where KRR meets today's frontier. **Large language models** absorb vast knowledge statistically but **hallucinate** — they have no guarantee of factual correctness. Pairing an LLM with a knowledge graph or a symbolic verifier (the spirit of **retrieval-augmented generation** and tool-use) grounds its fluent output in checkable facts, a direct modern echo of the old logical guarantee. The pendulum that swung from symbolic to neural is swinging back toward the middle.
+This is also where KRR meets today's frontier. [**Large language models**](ch23.html) absorb vast knowledge statistically but **hallucinate** — they have no guarantee of factual correctness. Pairing an LLM with a knowledge graph or a symbolic verifier (the spirit of [**retrieval-augmented generation**](ch43.html) and tool-use) grounds its fluent output in checkable facts, a direct modern echo of the old logical guarantee. The pendulum that swung from symbolic to neural is swinging back toward the middle.
 
-Worked illustration — **logic as a constraint on a classifier**. Suppose a network outputs probabilities for *is-cat* and *is-dog*, and we know the rule "an animal cannot be both." We turn that rule into a penalty — $p_{cat}\cdot p_{dog}$ — which is *positive whenever both fire* and *zero* as soon as either drops to zero. Adding it to the training loss therefore pushes the model away from the impossible "both" corner:
+Worked illustration — **logic as a constraint on a [classifier](ch09.html)**. Suppose a network outputs probabilities for *is-cat* and *is-dog*, and we know the rule "an animal cannot be both." We turn that rule into a penalty — $p_{cat}\cdot p_{dog}$ — which is *positive whenever both fire* and *zero* as soon as either drops to zero. Adding it to the training loss therefore pushes the model away from the impossible "both" corner:
 
 $$\mathcal{L} = \mathcal{L}_{\text{data}} + \lambda\, p_{cat}\, p_{dog}$$
 
@@ -1228,7 +1230,32 @@ assert s.check() != sat   # no counterexample exists
 The throughline of this whole topic: you rarely build a bespoke reasoner. You translate your question — a plan, an invariant, a proof obligation — into clauses, and ride the enormous engineering investment poured into SAT/SMT solvers and model checkers over the last thirty years. Knowing *how to encode* is now more valuable than knowing how to search.
 :::
 
-## 33.16 — Key Takeaways
+## 33.16 — Quick reference
+
+| Term / method | One-line meaning | When / why you reach for it |
+|---|---|---|
+| Entailment $KB \models \alpha$ | $\alpha$ is true in *every* world the KB allows | The gold standard of "follows logically" — what every sound reasoner must respect |
+| Modus ponens | From $\alpha\!\to\!\beta$ and $\alpha$, conclude $\beta$ | The atomic forward step in chaining and proofs |
+| Resolution + refutation | Assume $\neg$goal, derive the empty clause $\square$ | The one mechanical rule behind theorem provers (§33.1, §33.11) |
+| CNF (conjunctive normal form) | AND of clauses, each an OR of literals | The input format every resolver and SAT solver expects |
+| Unification / MGU | Substitution making two FOL terms identical | Lets resolution cancel literals with variables; the engine inside Prolog |
+| Forward chaining | Facts → all conclusions (data-driven) | Monitoring, alarms, deriving everything implied |
+| Backward chaining | Goal → needed facts (goal-driven) | Diagnosis, answering one specific query |
+| Horn clause | Rule with ≤1 positive literal, `head :- body` | The efficient sweet spot powering Prolog/Datalog/ASP |
+| Negation as failure | Unproven ⇒ false (closed-world) | Defaults and exceptions in Prolog/ASP — beware: not classical $\neg$ |
+| RDF triple $(s,p,o)$ | Atomic fact in a knowledge graph | Web-scale knowledge; reasoners derive unstated triples |
+| Description logic (TBox/ABox) | Decidable FOL fragment: schema + data | OWL ontologies; guaranteed-terminating subsumption/instance checks |
+| Bayes' rule + base rate | $P(D\mid+)=\frac{P(+\mid D)P(D)}{P(+)}$ | Reasoning under uncertainty; exposes rare-disease false-positive traps |
+| Open vs closed world | Silence ⇒ unknown vs silence ⇒ false | OWL/web use OWA; databases/Prolog use CWA — picking wrong fabricates facts |
+| Frame axiom (inertia) | A fact persists unless an action changes it | Reasoning about change without listing every non-effect |
+| Non-monotonic reasoning | New facts can *retract* old conclusions | "Birds fly, except penguins" — acting on incomplete info |
+| DPLL | Backtracking + unit propagation + pure-literal | The classic SAT search skeleton |
+| CDCL | DPLL + learned clauses + backjumping | Industrial SAT: millions of variables, never repeat a conflict |
+| SMT (Z3, CVC5) | CDCL core + theory solvers (arithmetic, arrays) | Verifying real programs mixing logic and arithmetic |
+| Model checking (G, F, X, U) | Exhaustively check a temporal property over all states | Hardware/protocol verification; returns a counterexample trace |
+| Neurosymbolic AI | Neural perception feeds symbolic reasoning | Robustness + guarantees in one pipeline; grounds LLMs against hallucination |
+
+## 33.17 — Key Takeaways
 
 - **Logic is the foundation:** propositional logic reasons over whole statements; **first-order logic** adds objects, relations, and quantifiers. **Resolution** mechanises proof by refutation — assume the negation of the goal and derive a contradiction (the empty clause). For FOL, **unification** (e.g. $\{x/socrates\}$) finds the substitution that lets a complementary pair cancel.
 - **Expert systems** separate a rule **knowledge base**, **working memory**, and an **inference engine**. **Forward chaining** is data-driven (facts → conclusions); **backward chaining** is goal-driven (goal → needed facts). They prove the same things, differing only in efficiency.
@@ -1242,7 +1269,7 @@ The throughline of this whole topic: you rarely build a bespoke reasoner. You tr
 - **Mechanised reasoning scales via reduction:** resolution, **DPLL/CDCL SAT solvers**, **SMT**, and **model checking** turn proofs, plans, and verification into satisfiability or reachability queries you hand to a decades-optimised engine.
 - **Neurosymbolic AI** fuses the two: neural perception feeds symbolic reasoning, and logic constrains or grounds neural models — the modern antidote to LLM hallucination.
 
-## 33.17 — See Also
+## 33.18 — See Also
 
 - **Probabilistic Graphical Models** — Bayesian networks and the rigorous treatment of reasoning under uncertainty referenced in §33.5.
 - **Search & Problem Solving** — the state-space search machinery underlying chaining and theorem proving.

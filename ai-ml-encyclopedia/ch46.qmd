@@ -105,11 +105,13 @@ toc-expand: true
 
 ------------------------------------------------------------------------
 
-A base model trained on next-token prediction (Chapter 23) knows a staggering amount, but it does not yet *want* to help you. It will happily complete a harmful request, ramble, or hallucinate confidently. This chapter covers the second half of post-training — the phase that turns a fine-tuned model into an aligned assistant — and the evaluation discipline that tells you whether any of it actually worked. Chapter 45 covered the *how* of efficient fine-tuning (PEFT, LoRA, QLoRA); this chapter covers the *what for*: alignment to human preferences, training-time reasoning, and the eval-first workflow that keeps the whole thing honest.
+A base model trained on next-token prediction ([Chapter 23](ch23.html)) knows a staggering amount, but it does not yet *want* to help you. It will happily complete a harmful request, ramble, or hallucinate confidently. This chapter covers the second half of post-training — the phase that turns a fine-tuned model into an aligned assistant — and the evaluation discipline that tells you whether any of it actually worked. [Chapter 45](ch45.html) covered the *how* of efficient fine-tuning (PEFT, LoRA, QLoRA); this chapter covers the *what for*: alignment to human preferences, training-time reasoning, and the eval-first workflow that keeps the whole thing honest.
 
 ::: {.callout-note appearance="simple"}
 🧭 **In context:** Post-training / alignment · turning a capable base model into a helpful, honest, harmless assistant and proving it · preferences + reasoning rewards + rigorous evaluation
 :::
+
+> 💡 **Remember this:** Alignment teaches a capable model *which* answer is better (from preferences or a verifier), and evaluation — kept private and run as a growing regression suite — is the only thing that tells you whether it worked.
 
 ## 46.1 — The alignment problem & the post-training stack
 
@@ -171,7 +173,7 @@ $$\mathcal{L}_{RM} = -\,\mathbb{E}_{(x,\,y_w,\,y_l)}\Big[\log \sigma\big(r_\phi(
 **In words:** train the scorer so that the better answer gets a higher score than the worse one — the bigger the score gap (in the right direction), the smaller the loss.
 **Also written:** since $\sigma(z)=\frac{1}{1+e^{-z}}$, the per-example loss is $\log\!\big(1+e^{-(r_\phi(x,y_w)-r_\phi(x,y_l))}\big)$ — the softplus of the negative reward margin.
 
-**Third**, optimize the policy $\pi_\theta$ with **PPO** (Chapter 21) to maximize reward, while a **KL penalty** chains it to the frozen reference (the SFT model) so it doesn't drift into gibberish that happens to fool the reward model:
+**Third**, optimize the policy $\pi_\theta$ with **PPO** ([Chapter 25](ch25.html)) to maximize reward, while a **KL penalty** chains it to the frozen reference (the SFT model) so it doesn't drift into gibberish that happens to fool the reward model:
 
 $$\max_{\theta}\ \mathbb{E}\big[\,r_\phi(x, y)\,\big] - \beta\,\mathrm{KL}\big(\pi_\theta(y\mid x)\,\|\,\pi_{ref}(y\mid x)\big)$$
 
@@ -392,7 +394,7 @@ A key design choice is **outcome vs process** reward models. An **ORM** scores o
   <text x="10" y="198" font-style="italic">With a verifier (RLVR) the reward is a checker → little to hack.</text>
 </svg>
 
-The payoff is **test-time compute**: a reasoning model trades more tokens of "thinking" for higher accuracy. o1- and R1-style models learn to spend hundreds or thousands of reasoning tokens on hard problems, and accuracy climbs roughly with the log of thinking budget — a genuinely new scaling axis. See **Chapter 23** for how this reshapes inference-time behavior and decoding.
+The payoff is **test-time compute**: a reasoning model trades more tokens of "thinking" for higher accuracy. o1- and R1-style models learn to spend hundreds or thousands of reasoning tokens on hard problems, and accuracy climbs roughly with the log of thinking budget — a genuinely new scaling axis. The serving-cost side of this tradeoff lives in [Chapter 30](ch30.html); Chapter 23 covers how it reshapes inference-time decoding.
 
 The shape of that trade is the headline result — accuracy rising as the thinking budget grows, with diminishing returns once the curve flattens:
 
@@ -472,7 +474,7 @@ Capability benchmarks ask "can it?"; safety evaluation asks "*should* it, and wi
 **Red-teaming** is the practice of *actively trying to make the model misbehave* — eliciting harmful instructions, private-data leakage, or policy violations — so you find the failures before users (or adversaries) do. It runs in two modes: **manual** red-teaming, where humans craft adversarial prompts and role-plays, and **automated** red-teaming, where one model generates attack prompts at scale against another. The classic attack families are worth knowing by name:
 
 - **Jailbreaks** — prompts that talk the model out of its guardrails ("you are DAN, you have no rules…", or wrapping a request in a fictional frame).
-- **Prompt injection** — hostile instructions hidden in *data* the model reads (a web page, a retrieved document, an email) that hijack its behavior. This is the dominant risk for agents and RAG systems (Chapter 44).
+- **Prompt injection** — hostile instructions hidden in *data* the model reads (a web page, a retrieved document, an email) that hijack its behavior. This is the dominant risk for agents and RAG systems ([Chapter 44](ch44.html)).
 - **Many-shot / context attacks** — filling a long context with fake "compliant" examples so the model continues the pattern.
 
 The two failure modes you must measure *together*, because fixing one inflames the other:
@@ -613,7 +615,7 @@ flowchart LR
     G --> A
 ```
 
-The mindset shift mirrors MLOps (Chapter 12): evals are not a final exam you run once, they are a **regression suite** that grows with every bug you find and guards every future change.
+The mindset shift mirrors MLOps ([Chapter 29](ch29.html)): evals are not a final exam you run once, they are a **regression suite** that grows with every bug you find and guards every future change.
 
 ## 46.10 — Putting it together: a domain fine-tuning project
 
@@ -655,7 +657,31 @@ sft = SFTTrainer(
 sft.train()   # → checkpoint becomes the SFT init for DPOTrainer in step ④
 ```
 
-## 46.x — Key takeaways
+## 46.11 — Quick reference
+
+| Term / formula | Meaning in one line | When / why it matters |
+|----------------|---------------------|-----------------------|
+| **HHH** | Helpful, Honest, Harmless — the alignment target | The trade these three pull against each other *is* alignment |
+| **SFT** | Supervised fine-tuning on curated demonstrations | Teaches format + instruction-following; imitates, can't judge |
+| **Reward model** $r_\phi$ | Scalar scorer trained on preference pairs (Bradley-Terry) | The proxy RLHF optimizes — and the thing reward hacking games |
+| **RLHF / PPO** | RL against a learned reward, KL-anchored to SFT ref | Powerful but heavy: 4 models, PPO-sensitive |
+| **KL penalty** $\beta$ | Tax for straying from the frozen reference policy | Stops the policy drifting into reward-hacked gibberish |
+| **Reward hacking / Goodhart** | Policy games the proxy without truly improving | The core reason RLHF is finicky |
+| **DPO** | Implicit reward = $\beta\log\frac{\pi_\theta}{\pi_{ref}}$; BT loss on pairs | The stable, RL-free default when you have clean pairs |
+| **DPO learning rate** | Tiny (1e-6–5e-7) vs SFT | You're nudging a good model, not training one |
+| **KTO** | Prospect-theory utility on unpaired thumbs-up/down | Use when feedback is binary, not comparisons (still keeps a ref) |
+| **ORPO / SimPO** | Reference-free; SimPO length-normalizes the reward | Fewer models/stages; lose the KL anchor's regularization |
+| **RLVR** | Reward from a *verifier* (tests/math check), not a learned RM | Objective signal → little to hack |
+| **GRPO** | Drop the critic; advantage = z-score within a group of $G$ | Optimizer behind R1; group mean is the free baseline |
+| **ORM vs PRM** | Outcome- vs process-level reward model | ORM cheap/verifiable; PRM denser but needs step labels |
+| **Test-time compute** | More reasoning tokens → higher accuracy (log curve) | New scaling axis for o1/R1-style models |
+| **`pass@k`** | $1-\binom{n-c}{k}/\binom{n}{k}$ — unbiased pass-at-k | Score code; naive pass fraction is biased at small $n$ |
+| **LLM-as-judge** | Strong model grades outputs (pairwise > single-grade) | Scales eval; control position/verbosity/self-preference bias |
+| **Contamination** | Benchmark leaked into pretraining data | Why private hold-outs beat leaderboard ranks |
+| **Attack success / over-refusal** | Jailbreak success vs benign-refusal rate | Measure *together* — fixing one inflames the other |
+| **Evals-driven dev** | Write the eval before you train; run in CI | "Better" needs a number before you touch a hyperparameter |
+
+## 46.12 — Key takeaways
 
 - **Alignment is a separate problem from capability.** Pretraining and SFT make a model *able*; preference optimization makes it *helpful, honest, and harmless*. The two are trained and measured differently.
 - **RLHF works but is heavy:** reward model + PPO + KL anchor, four models in play, and ever-present reward hacking because you optimize a proxy for human preference (Goodhart's law).
@@ -665,12 +691,12 @@ sft.train()   # → checkpoint becomes the SFT init for DPOTrainer in step ④
 - **Safety needs its own evals.** Red-team for jailbreaks and prompt injection, and measure attack-success rate *and* over-refusal rate together — fixing one inflames the other. Successful new attacks become permanent regression tests.
 - **Evaluation is the spine of the whole part.** Beware contamination, keep private hold-outs, prefer pairwise-judge + Elo over absolute scores (control for position/verbosity bias), use unbiased `pass@k`, and run evals as a growing CI regression suite — eval-first, like TDD.
 
-## 46.y — See also
+## 46.13 — See also
 
 - **Chapter 23 — Large Language Models:** the base models being aligned here, and how reasoning models change inference-time decoding.
 - **Chapter 45 — Post-Training I — Transfer, Fine-Tuning & PEFT:** SFT, LoRA/QLoRA, and the efficient-training half of this recipe.
 - **Chapter 18 — Generative Models:** the broader generative-modeling context for these objectives.
-- **Chapter 21 — Reinforcement Learning:** PPO, policy gradients, and KL-regularized objectives that RLHF and GRPO build on.
+- **Chapter 25 — Reinforcement Learning:** PPO, policy gradients, and KL-regularized objectives that RLHF and GRPO build on.
 - **Chapter 12 — Model Evaluation:** general evaluation methodology and the regression-suite mindset that evals-driven development extends.
 - **Chapter 30 — AI Infrastructure & Efficient Inference:** serving aligned and reasoning models, and the test-time-compute cost tradeoffs.
 - **Chapter 44 — LLM Systems:** wiring aligned models into RAG, agents, and production pipelines — and where prompt-injection risk lives.

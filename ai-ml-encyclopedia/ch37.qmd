@@ -111,6 +111,8 @@ Most of machine learning is a magnificent engine for finding patterns — but a 
 🧭 **In context:** Responsible AI & Frontier · used to estimate the *effect of acting*, not just predict outcomes · the one key idea: $P(Y\mid X)$ (seeing) is not $P(Y\mid do(X))$ (doing).
 :::
 
+> 💡 **Remember this:** Predicting an outcome ($P(Y\mid X)$) and estimating what an action *does* to it ($P(Y\mid do(X))$) are different problems — to act safely you must adjust for confounders, not just fit the data.
+
 A useful mental picture before we start: think of a doctor versus a detective. A predictor is a detective who reads the clues already on the table and guesses what happened. A causal model is a doctor who must decide *what to do next* — and a treatment that merely *correlates* with recovery can still kill the patient if a hidden cause is pulling the strings. This chapter is about earning the right to act.
 
 ```{=html}
@@ -147,7 +149,7 @@ Higher rungs answer questions lower rungs literally cannot. Most of ML is stuck 
 
 ## 37.1 — Why ML patterns are not causal
 
-A standard supervised model learns $P(Y \mid X)$: the distribution of the target given the features *as they naturally occur*. That is exactly the right object when you only want to **observe and predict** — you see someone's features and guess their outcome. It is the wrong object the moment you want to **act**, because acting changes the world in a way that the observed correlation may not survive.
+A standard [supervised model](ch05.html) learns $P(Y \mid X)$: the distribution of the target given the features *as they naturally occur*. That is exactly the right object when you only want to **observe and predict** — you see someone's features and guess their outcome. It is the wrong object the moment you want to **act**, because acting changes the world in a way that the observed correlation may not survive.
 
 The canonical analogy: a model trained on a city's data finds that ice-cream sales strongly predict drownings. It is a *great* predictor — on more ice cream days, more people drown. But banning ice cream will not save a single swimmer, because a hidden common cause, summer heat, drives both. The arrow the model "sees" between ice cream and drowning is real as a correlation and fictitious as a mechanism.
 
@@ -383,7 +385,7 @@ Why does a coin flip work where careful adjustment struggles? Because the coin d
 </svg>
 ```
 
-**Worked example.** Show variant B of a checkout page to a random 50% of visitors. Conversions: control 1,000/20,000 = 5.00%, variant 1,120/20,000 = 5.60%. Lift = 0.60 percentage points. Because assignment was random, no confounder can explain the gap — heavy buyers, mobile users, time-of-day all split evenly across arms in expectation. The only remaining question is whether 0.6 points is signal or noise, which a significance test answers:
+**Worked example.** Show variant B of a checkout page to a random 50% of visitors. Conversions: control 1,000/20,000 = 5.00%, variant 1,120/20,000 = 5.60%. Lift = 0.60 percentage points. Because assignment was random, no confounder can explain the gap — heavy buyers, mobile users, time-of-day all split evenly across arms in expectation. The only remaining question is whether 0.6 points is signal or noise, which a [significance test](ch04.html) answers:
 
 ```python
 import numpy as np
@@ -419,7 +421,7 @@ RCTs fail quietly: broken randomization (users self-selecting the variant), **in
 
 ## 37.6 — Pearl's causal graphs (DAGs) and the do-operator
 
-Judea Pearl's framework draws assumptions as a **directed acyclic graph** (DAG): nodes are variables, an arrow $X \to Y$ means $X$ is a *direct cause* of $Y$, and "acyclic" forbids a variable causing itself through a loop. The graph is not learned from data — it *encodes your causal assumptions* so they can be inspected and argued with.
+Judea Pearl's framework draws assumptions as a **directed acyclic graph** (DAG) — the same graph machinery behind [Bayesian networks](ch13.html): nodes are variables, an arrow $X \to Y$ means $X$ is a *direct cause* of $Y$, and "acyclic" forbids a variable causing itself through a loop. The graph is not learned from data — it *encodes your causal assumptions* so they can be inspected and argued with.
 
 The graph defines three elementary wirings that govern how information flows:
 
@@ -538,7 +540,7 @@ When you cannot randomize, you exploit structure in observational data to *appro
 
 **Matching.** Pair each treated unit with an untreated unit that has near-identical covariates, so within a pair the only difference is treatment. Average the within-pair outcome gaps to estimate the effect. Intuition: build a synthetic control group that looks like the treated group on everything you measured. For example, match a 45-year-old male smoker who took the drug to a 45-year-old male smoker who did not, and the difference in their outcomes is an estimate stripped of age, sex, and smoking confounding.
 
-**Propensity scores.** Matching on many covariates is hard (the curse of dimensionality). The **propensity score** $e(x)=P(T{=}1\mid X{=}x)$ — the modeled probability of being treated — collapses all confounders into one number. Rosenbaum and Rubin proved that adjusting for $e(x)$ alone removes the same bias as adjusting for all of $X$. You then match, stratify, or **inverse-propensity weight** (re-weight each unit by $1/e(x)$ for treated, $1/(1-e(x))$ for control) to build a pseudo-population where treatment is independent of confounders.
+**Propensity scores.** Matching on many covariates is hard (the [curse of dimensionality](ch07.html)). The **propensity score** $e(x)=P(T{=}1\mid X{=}x)$ — the modeled probability of being treated — collapses all confounders into one number. Rosenbaum and Rubin proved that adjusting for $e(x)$ alone removes the same bias as adjusting for all of $X$. You then match, stratify, or **inverse-propensity weight** (re-weight each unit by $1/e(x)$ for treated, $1/(1-e(x))$ for control) to build a pseudo-population where treatment is independent of confounders.
 
 The IPW estimator written out:
 
@@ -599,7 +601,7 @@ $$\widehat{\text{ATT}} = \big(\bar Y^{\text{treat}}_{\text{after}}-\bar Y^{\text
 
 **In words:** measure how much the treated group changed, subtract how much the control group changed over the very same window, and what's left is the part of the change only the treatment can explain.
 
-**Also written:** as the interaction coefficient $\beta_3$ in the regression $Y = \beta_0 + \beta_1\,\text{Treat} + \beta_2\,\text{Post} + \beta_3\,(\text{Treat}\times\text{Post}) + \varepsilon$ — the "double difference" is exactly that interaction term.
+**Also written:** as the interaction coefficient $\beta_3$ in the [regression](ch08.html) $Y = \beta_0 + \beta_1\,\text{Treat} + \beta_2\,\text{Post} + \beta_3\,(\text{Treat}\times\text{Post}) + \varepsilon$ — the "double difference" is exactly that interaction term.
 
 Concretely, if a state raises its minimum wage and employment there moves from 20 to 19 (down 1) while a neighboring control state moves from 18 to 16 (down 2), DiD estimates the policy *raised* employment by $(-1) - (-2) = +1$ relative to the trend both states shared.
 
@@ -773,7 +775,7 @@ m0 = GBR().fit(X[T==0], Y[T==0])         # outcome model | control
 uplift = m1.predict(X) - m0.predict(X)   # per-unit CATE; target uplift > 0
 ```
 
-The T-learner is the warm-up, not the state of the art. The **S-learner** (one model with $T$ as a feature), **X-learner** (better under treatment-imbalance), and **doubly-robust / DR-learner** are stronger meta-learners; and the **Causal Forest** estimates $\tau(x)$ with honest, tree-based splitting plus confidence intervals. The `EconML` and `causalml` libraries package these:
+The T-learner is the warm-up, not the state of the art. The **S-learner** (one model with $T$ as a feature), **X-learner** (better under treatment-imbalance), and **doubly-robust / DR-learner** are stronger meta-learners; and the **Causal Forest** estimates $\tau(x)$ with honest, [tree-based](ch10.html) splitting plus confidence intervals. The `EconML` and `causalml` libraries package these:
 
 ```python
 from econml.dml import CausalForestDML
@@ -827,11 +829,11 @@ Discovered graphs are *hypotheses*, not facts. They rest on assumptions (faithfu
 
 Causal reasoning is not an academic luxury bolted onto ML — it is what makes a model survive contact with the real world.
 
-**Robustness / generalization.** Correlations are tied to the environment that produced them; causal mechanisms are stable across environments. A model leaning on a spurious correlation (cows appear on grass, so "grass" predicts "cow") shatters under distribution shift — show it a cow on a beach and it fails. Learning *causal* features is the path to out-of-distribution robustness — a deep link to invariance and domain generalization.
+**Robustness / generalization.** Correlations are tied to the environment that produced them; causal mechanisms are stable across environments. A model leaning on a spurious correlation (cows appear on grass, so "grass" predicts "cow") shatters under [distribution shift](ch29.html) — show it a cow on a beach and it fails. Learning *causal* features is the path to out-of-distribution robustness — a deep link to invariance and domain generalization.
 
-**Fairness.** Many fairness questions are inherently counterfactual: "would this decision have changed had the applicant been a different gender, all else equal?" **Counterfactual fairness** answers it with the causal graph, separating a protected attribute's *legitimate* pathways from its discriminatory ones — something no correlation-based metric can do.
+**Fairness.** Many fairness questions are inherently counterfactual: "would this decision have changed had the applicant been a different gender, all else equal?" **Counterfactual fairness** ([AI ethics & fairness](ch38.html)) answers it with the causal graph, separating a protected attribute's *legitimate* pathways from its discriminatory ones — something no correlation-based metric can do.
 
-**Actionability.** A loan model that says "denied because your balance is low" is only useful if lowering-the-cause-actually-changes-the-outcome. **Recourse** — telling someone what to *change* to flip the decision — is a do-query, not a prediction. Likewise, every policy, pricing, and treatment decision is a $do(\cdot)$ question; answering it with $P(Y\mid X)$ is the original sin this chapter exists to prevent.
+**Actionability.** A loan model that says "denied because your balance is low" is only useful if lowering-the-cause-actually-changes-the-outcome. **Recourse** — telling someone what to *change* to flip the decision, a staple of [explainable AI](ch36.html) — is a do-query, not a prediction. Likewise, every policy, pricing, and treatment decision is a $do(\cdot)$ question; answering it with $P(Y\mid X)$ is the original sin this chapter exists to prevent.
 
 ```{mermaid}
 flowchart LR
@@ -844,7 +846,32 @@ flowchart LR
 The one-line test before deploying any model to *drive a decision*: "Am I asking what *is*, or what *would happen if I act*?" If it's the second, you need a causal estimand and the assumptions to identify it — predictive accuracy alone will not save you.
 :::
 
-## 37.14 — Key takeaways
+## 37.14 — Quick reference
+
+| Term / formula | Meaning in one line | When / why it matters |
+|---|---|---|
+| $P(Y\mid X)$ vs $P(Y\mid do(X))$ | Seeing vs doing — observe a value vs *set* it | The whole chapter: predictions are not interventions |
+| Confounder | Variable causing *both* treatment and outcome | Fakes a non-causal association; must be adjusted away |
+| Simpson's paradox | Subgroup trend reverses on aggregation | Warns you to disaggregate by the confounder |
+| Potential outcomes $Y(1),Y(0)$ | The two parallel outcomes per unit | Defines the effect $\tau_i = Y(1)-Y(0)$; only one is seen |
+| $\text{ATE}=\mathbb{E}[Y(1)-Y(0)]$ | Average effect over the whole population | The headline target of most causal questions |
+| ATT / CATE | Effect on the treated / for profile $x$ | Targeting subgroups or individuals, not the average |
+| Ignorability + positivity | Treatment as-good-as-random given $X$; every unit could go either way | The two assumptions that license adjustment |
+| Randomization (RCT / A/B) | Coin-flip assignment | Gold standard — neutralizes *unmeasured* confounders |
+| DAG + $do$-operator | Graph of assumptions; intervention cuts arrows into $X$ | Turns identification into graph-reading (graph surgery) |
+| Fork / chain / collider | Confounder / mediator / collision wiring | Tells you what to adjust — and what *not* to (colliders) |
+| Backdoor adjustment | $\sum_z P(Y\mid t,z)P(z)$ | Identify the effect when confounders are measured |
+| Frontdoor criterion | Route effect through a clean mediator $M$ | Identify even with an *unmeasured* confounder |
+| Propensity score $e(x)$ | $P(T{=}1\mid X)$ — confounders in one number | Match / stratify / IPW without high-dim matching |
+| IPW / doubly-robust (AIPW) | Re-weight by $1/e(x)$; two-model safety net | Observational ATE; AIPW needs only one model right |
+| Instrumental variable | Nudge $Z$ affecting $Y$ only through $T$ | Unmeasured confounding but a natural experiment exists |
+| Difference-in-differences | Treated change minus control change | Policy hits one group at a known time (parallel trends) |
+| Regression discontinuity | Compare units just above/below a cutoff | Treatment assigned by a sharp threshold rule |
+| E-value $=\text{RR}+\sqrt{\text{RR}(\text{RR}-1)}$ | Confounder strength needed to erase the effect | Sensitivity — how robust an observational finding is |
+| Mediation NDE + NIE | Split total effect into direct + through-$M$ | Answers *how* a treatment works, not just whether |
+| Uplift / CATE (T/S/X-learner) | Per-unit effect estimate | Target persuadables, avoid sleeping dogs; evaluate via Qini |
+
+## 37.15 — Key takeaways
 
 - $P(Y\mid X)$ (observing) and $P(Y\mid do(X))$ (acting) are different objects; ML learns the first, decisions need the second. Pearl's ladder — seeing, doing, imagining — names the climb.
 - A **confounder** drives both treatment and outcome and fakes an effect; **Simpson's paradox** is confounding so strong the trend reverses on aggregation.
@@ -858,14 +885,14 @@ The one-line test before deploying any model to *drive a decision*: "Am I asking
 - **Causal discovery** can propose a graph from data, but only up to a Markov equivalence class — treat the output as a hypothesis.
 - Causal thinking is what makes AI **robust** (stable under shift), **fair** (counterfactual fairness), and **actionable** (recourse and policy are $do$-queries).
 
-## 37.15 — See also
+## 37.16 — See also
 
-- **Probability & Statistics** — distributions, expectation, hypothesis testing, the foundation for ATE estimation and A/B significance.
-- **Probabilistic Graphical Models** — Bayesian networks and d-separation, the machinery behind DAGs and the backdoor criterion.
-- **Model Evaluation & Tuning** — experimental design, cross-validation, and the testing logic that A/B tests build on.
-- **Explainable AI & Interpretability** — counterfactual explanations and recourse, the applied cousins of causal queries.
-- **AI Ethics, Fairness & Safety** — counterfactual fairness and the harms of acting on spurious correlation.
-- **Frontier & Emerging Directions** — causal representation learning and invariance for out-of-distribution robustness.
+- [**Probability & Statistics**](ch04.html) — distributions, expectation, hypothesis testing, the foundation for ATE estimation and A/B significance.
+- [**Probabilistic Graphical Models**](ch13.html) — Bayesian networks and d-separation, the machinery behind DAGs and the backdoor criterion.
+- [**Model Evaluation & Tuning**](ch12.html) — experimental design, cross-validation, and the testing logic that A/B tests build on.
+- [**Explainable AI & Interpretability**](ch36.html) — counterfactual explanations and recourse, the applied cousins of causal queries.
+- [**AI Ethics, Fairness & Safety**](ch38.html) — counterfactual fairness and the harms of acting on spurious correlation.
+- [**Frontier & Emerging Directions**](ch39.html) — causal representation learning and invariance for out-of-distribution robustness.
 
 ------------------------------------------------------------------------
 

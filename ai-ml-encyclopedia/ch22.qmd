@@ -105,11 +105,13 @@ toc-expand: true
 
 ------------------------------------------------------------------------
 
-A **time series** is data indexed by time: a sequence of observations $y_1, y_2, \dots, y_T$ recorded at successive, usually evenly spaced, instants. Forecasting asks the natural next question — given the past, what comes next? This subfield sits inside Applied AI but borrows heavily from statistics: its defining feature is that order matters and observations are *not* independent, which breaks almost every assumption that ordinary supervised learning relies on. Sales, electricity demand, server load, heart rate, stock prices, weather — anything that unfolds over time lives here.
+A **time series** is data indexed by time: a sequence of observations $y_1, y_2, \dots, y_T$ recorded at successive, usually evenly spaced, instants. Forecasting asks the natural next question — given the past, what comes next? This subfield sits inside Applied AI but borrows heavily from [statistics](ch04.html): its defining feature is that order matters and observations are *not* independent, which breaks almost every assumption that ordinary supervised learning relies on. Sales, electricity demand, server load, heart rate, stock prices, weather — anything that unfolds over time lives here.
 
 ::: {.callout-note appearance="simple"}
 🧭 **In context:** Applied AI built on probability & statistics · used to predict future values from ordered past observations · the one key idea: *exploit temporal structure (trend, season, autocorrelation) and never let the future leak into the past.*
 :::
+
+> 💡 **Remember this:** Exploit the temporal structure (trend, season, autocorrelation) but never let any information from after time $t$ touch a forecast made at $t$ — and always make your model beat a naive baseline before you trust it.
 
 ## 22.1 — What forecasting is (horizons, baselines, the golden rule)
 
@@ -555,7 +557,7 @@ print(lb.round(3))    # large lb_pvalue -> residuals look like noise -> model is
 
 ## 22.5 — Feature-based ML for time series (lag/window features with gradient boosting)
 
-A different philosophy: stop using a special time-series model and instead *reshape* the forecasting problem into ordinary tabular supervised learning, then throw a strong regressor — usually **gradient-boosted trees** (XGBoost, LightGBM; see *Ensemble Methods*) — at it. This is often the pragmatic winner on real business data with calendars, promotions, and many related series.
+A different philosophy: stop using a special time-series model and instead *reshape* the forecasting problem into ordinary tabular supervised learning, then throw a strong regressor — usually **gradient-boosted trees** (XGBoost, LightGBM; see [Ensemble Methods](ch10.html)) — at it. This is often the pragmatic winner on real business data with calendars, promotions, and many related series.
 
 The trick is **feature engineering** the temporal structure into columns. The mental model: each row of a spreadsheet is "a moment in time," and you fill its columns with everything you'd have known *just before* that moment — what the value was yesterday, last week, its recent average, whether it's a holiday — then let an ordinary regressor learn the mapping.
 
@@ -652,7 +654,7 @@ The number-one bug in feature-based forecasting is **lookahead leakage**: a roll
 
 When you have *many* related series and lots of history, deep models can learn shared patterns no single classical fit would find. The intuition for "global" models: instead of fitting one curve per product, you train a single network on *thousands* of products at once, so the rare product with three months of history borrows the seasonal shape learned from its better-observed cousins. The major families:
 
-**RNNs / LSTMs** process the sequence step by step, carrying a hidden state that summarizes the past (see *Recurrent & Sequence Models*). The **LSTM** gating mechanism lets it remember long-range structure — useful for long seasonal lags — at the cost of slow sequential training.
+**RNNs / LSTMs** process the sequence step by step, carrying a hidden state that summarizes the past (see [Recurrent & Sequence Models](ch16.html)). The **LSTM** gating mechanism lets it remember long-range structure — useful for long seasonal lags — at the cost of slow sequential training.
 
 **Temporal Convolutional Networks (TCNs)** apply **causal convolutions** (filters that only look backward, never at future timesteps) stacked with **dilations** so the receptive field grows exponentially with depth — a few layers can see thousands of steps back, and unlike RNNs they train in parallel.
 
@@ -672,7 +674,7 @@ When you have *many* related series and lots of history, deep models can learn s
   <text x="500" y="164" fill="#2563eb">input</text>
 </svg>
 
-**Transformers** replace recurrence with **self-attention** (see *Attention & Transformers*), letting every timestep attend to every other in one shot — strong at long horizons. Time-series-specific variants (Informer, Autoformer, PatchTST, TFT) add tricks to tame attention's quadratic cost and inject seasonality. A surprising research finding is that a well-tuned **linear** model (DLinear) sometimes matches these — a standing reminder to always benchmark fancy against simple.
+**Transformers** replace recurrence with **self-attention** (see [Attention & Transformers](ch17.html)), letting every timestep attend to every other in one shot — strong at long horizons. Time-series-specific variants (Informer, Autoformer, PatchTST, TFT) add tricks to tame attention's quadratic cost and inject seasonality. A surprising research finding is that a well-tuned **linear** model (DLinear) sometimes matches these — a standing reminder to always benchmark fancy against simple.
 
 **Prophet** (from Meta) is the friendly outlier — not deep at all, but a decomposable curve-fitting model: $y_t = g(t) + s(t) + h(t) + \varepsilon_t$, an explicit trend $g$ (with changepoints), Fourier-series seasonality $s$, and holiday effects $h$. It is robust, handles missing data, needs little tuning, and gives interpretable components — the go-to for "good enough, fast, with business calendars."
 
@@ -888,7 +890,7 @@ Even when you only report a point forecast, fit a probabilistic model and report
 
 ## 22.9 — Proper time-series cross-validation (no shuffling)
 
-Here is the cardinal rule, and the one most often broken: **you may never shuffle a time series for validation.** Picture studying for tomorrow's exam by peeking at tomorrow's answer key — that is exactly what random shuffling does when it lets a fold train on data from *after* the test point. Standard k-fold cross-validation randomly assigns rows to folds, so the model peeks at the future. The resulting score is fantastically optimistic and collapses in production. In forecasting, validation must always train on the past and test on the future.
+Here is the cardinal rule, and the one most often broken: **you may never shuffle a time series for validation.** Picture studying for tomorrow's exam by peeking at tomorrow's answer key — that is exactly what random shuffling does when it lets a fold train on data from *after* the test point. Standard [k-fold cross-validation](ch12.html) randomly assigns rows to folds, so the model peeks at the future. The resulting score is fantastically optimistic and collapses in production. In forecasting, validation must always train on the past and test on the future.
 
 The correct scheme is **rolling-origin** (also called **walk-forward** or **time-series split**) cross-validation: pick an origin, train on everything up to it, test on the next block, then roll the origin forward and repeat. Two flavors: **expanding window** (training set grows each fold, keeping all history) and **sliding window** (training set is a fixed-width window that moves, useful when old data goes stale after a regime change).
 
@@ -1072,7 +1074,7 @@ filled = y.interpolate(method="time")        # respects timestamp spacing, not r
 print(filled.round(1).tolist())              # [10.0, 12.0, 14.0, 16.0, 18.0, 20.0, 22.0, 25.0]
 ```
 
-**Anomalies and outliers.** A one-off spike (a data-entry error, a flash sale) can wreck a fitted trend or seasonal estimate. The intuition: fit a quick model, look at the residuals, and flag points whose residual is implausibly large (say beyond 3 robust standard deviations). Decide deliberately whether each is *signal* to keep (a real promotion you'll see again) or *noise* to clip before fitting. Anomaly detection in temporal data gets its own treatment in *Anomaly & Fraud Detection*.
+**Anomalies and outliers.** A one-off spike (a data-entry error, a flash sale) can wreck a fitted trend or seasonal estimate. The intuition: fit a quick model, look at the residuals, and flag points whose residual is implausibly large (say beyond 3 robust standard deviations). Decide deliberately whether each is *signal* to keep (a real promotion you'll see again) or *noise* to clip before fitting. Anomaly detection in temporal data gets its own treatment in [Anomaly & Fraud Detection](ch27.html).
 
 ```python
 import numpy as np
@@ -1104,7 +1106,7 @@ For intermittent series, never grade with MAPE (division by zero) and be wary of
 
 ## 22.13 — Foundation models for time series
 
-The newest shift mirrors what happened in language: instead of fitting a fresh model on *your* series, you reach for a **pretrained foundation model** that has already seen billions of timestamps across electricity, traffic, finance, weather, and retail, and ask it to forecast yours — often **zero-shot**, with no training on your data at all. The intuition is transfer learning: just as a language model that read the whole web can answer a question about a topic it never saw labeled, a time-series model that absorbed enough series learns the universal grammar of trends, seasonalities, and spikes, then applies it to a series it has never met.
+The newest shift mirrors what happened in [language](ch23.html): instead of fitting a fresh model on *your* series, you reach for a **pretrained foundation model** that has already seen billions of timestamps across electricity, traffic, finance, weather, and retail, and ask it to forecast yours — often **zero-shot**, with no training on your data at all. The intuition is transfer learning: just as a language model that read the whole web can answer a question about a topic it never saw labeled, a time-series model that absorbed enough series learns the universal grammar of trends, seasonalities, and spikes, then applies it to a series it has never met.
 
 A few notable families (as of the mid-2020s): **TimesFM** (Google), **Chronos** (Amazon, which *tokenizes* numeric values and reuses a language-model backbone), **Moirai** (Salesforce), and **Lag-Llama**. They differ in architecture but share the recipe: a large Transformer pretrained on a huge, diverse corpus of series, then served for forecasting via a context window of your recent history.
 
@@ -1137,7 +1139,31 @@ When do these win? They shine for **cold-start** series with little history, for
 Foundation forecasters are heavy and can hallucinate spurious seasonality on series unlike anything in their training mix. Always benchmark them against the naive baseline and a classical model on *your* held-out tail before trusting them — the golden rule of Section 22.1 does not bend for big models.
 :::
 
-## 22.14 — Key takeaways
+## 22.14 — Quick reference
+
+| Term / formula | Meaning in one line | When / why it matters |
+|---|---|---|
+| Golden rule | No info from time $> t$ in a forecast made at $t$ | Every leakage bug and too-good CV score traces here |
+| Naive / seasonal naive | $\hat y_{t+1}=y_t$ / $\hat y_{t+h}=y_{t+h-m}$ | The bar every model must clear; denominator of MASE |
+| Recursive vs. direct | Feed forecasts back vs. one model per horizon | Recursive is simple but compounds error; direct avoids it |
+| Decomposition | $y_t = T_t + S_t + \varepsilon_t$ (or $\times$) | Split trend/season/noise (STL) before modeling |
+| Stationarity | Mean, variance, autocorrelation constant over time | Classical models assume it; transform until it holds |
+| Differencing | $\nabla y_t = y_t - y_{t-1}$; seasonal $\nabla_m = y_t - y_{t-m}$ | Removes trend / season; difference once, re-check |
+| ADF / KPSS | Tests with opposite nulls for a unit root | Both flag non-stationary → you must difference |
+| ACF / PACF | Self-correlation; direct self-correlation | Fingerprint AR$(p)$/MA$(q)$ order; need stationarity first |
+| SES | $\ell_t = \alpha y_t + (1-\alpha)\ell_{t-1}$ | Flat, noisy series; weights decay exponentially |
+| Holt-Winters / ETS | Level + trend + season smoothing | Clear seasonal pattern, fast few-parameter fit |
+| ARIMA$(p,d,q)$ / SARIMA | AR + differencing + MA (+ seasonal copy) | Stationary-after-differencing series; classic baseline |
+| Lag / window / Fourier features | Past values, rolling stats, $(\sin,\cos)$ cycles | Reshape forecasting into tabular ML; `.shift()` to avoid leak |
+| State-space + Kalman | Hidden state + noisy reading; predict→update | Missing / streaming / multi-sensor data, free uncertainty |
+| Pinball loss | $L_\tau = \max(\tau e,(\tau-1)e)$ | Train quantiles for probabilistic intervals |
+| Walk-forward CV | Train past, test future, roll origin | The only valid time-series CV; never shuffle |
+| MAE / RMSE / MAPE / MASE | Mean abs / RMS / % / naive-scaled error | RMSE→mean, MAE→median; MASE $<1$ beats naive |
+| Reconciliation (MinT) | Adjust all levels to be coherent | Hierarchical forecasts must sum up across levels |
+| Croston's method | Forecast demand size and gap separately | Intermittent / mostly-zero count series |
+| Foundation model | Pretrained Transformer, zero-shot forecast | Cold-start series, fast prototyping baseline |
+
+## 22.15 — Key takeaways
 
 - Forecasting lives by one **golden rule**: never let information from after time $t$ touch a forecast made at $t$. Fix the **horizon**, expect error to grow with it, and always start from a **naive baseline**.
 - Decompose every series into **trend, seasonality, cyclic, noise** (STL in practice); most classical models need **stationarity**, achieved by **differencing** (and logs / Box-Cox for growing variance), checked with **ADF/KPSS**.
@@ -1153,7 +1179,7 @@ Foundation forecasters are heavy and can hallucinate spurious seasonality on ser
 - Grade with **MAE / RMSE / MAPE** chosen for the use case (RMSE→mean, MAE→median), always against a **naive baseline** (MASE).
 - **Foundation models** (Chronos, TimesFM, Moirai) give strong zero-shot forecasts for cold-start series — benchmark them against naive and classical before trusting.
 
-## 22.15 — See also
+## 22.16 — See also
 
 - **[Probability & Statistics]** — distributions, hypothesis tests (ADF), and the foundations of stationarity and uncertainty.
 - **[Recurrent & Sequence Models]** — RNN/LSTM/GRU internals that power deep forecasters.

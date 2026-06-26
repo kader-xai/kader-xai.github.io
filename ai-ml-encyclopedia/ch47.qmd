@@ -105,11 +105,13 @@ toc-expand: true
 
 ------------------------------------------------------------------------
 
-A trained model sitting in a notebook is a science experiment; a model answering live requests under a latency budget, scaling with traffic, and being watched for decay is a *product*. This chapter is the hands-on bridge between the two. It assumes you already know the theory — MLOps culture (Ch 29), inference efficiency and GPU internals (Ch 30), and the framework landscape (Ch 31) — and focuses on the concrete tools, configs, and patterns that get a model into production and keep it healthy there.
+A trained model sitting in a notebook is a science experiment; a model answering live requests under a latency budget, scaling with traffic, and being watched for decay is a *product*. This chapter is the hands-on bridge between the two. It assumes you already know the theory — [MLOps culture (Ch 29)](ch29.html), [inference efficiency and GPU internals (Ch 30)](ch30.html), and [the framework landscape (Ch 31)](ch31.html) — and focuses on the concrete tools, configs, and patterns that get a model into production and keep it healthy there.
 
 ::: {.callout-note appearance="simple"}
 🧭 **In context:** Production ML serving · taking a checkpoint to a monitored, autoscaling endpoint · the work that turns a model into a reliable, observable, cost-bounded service.
 :::
+
+> 💡 **Remember this:** A trained model is only 10% of the job — the value comes from the loop that packages, serves, scales, monitors, and retrains it as a reliable service.
 
 <style>
 @keyframes c47-flow { 0% { stroke-dashoffset: 44; } 100% { stroke-dashoffset: 0; } }
@@ -149,9 +151,9 @@ The first design decision is the **serving modality**, because it dictates every
 
 | Modality | Pattern | Latency budget | Typical use |
 |---|---|---|---|
-| **Batch** | Score a big dataset on a schedule, write to a table/store | Minutes–hours | Nightly churn scores, recommendations precompute, ETL enrichment |
+| **Batch** | Score a big dataset on a schedule, write to a table/store | Minutes–hours | Nightly churn scores, [recommendations](ch26.html) precompute, ETL enrichment |
 | **Online (request/response)** | Synchronous API call, one prediction per request | ms–seconds | Fraud check at checkout, search ranking, chatbot turn |
-| **Streaming** | React to an event stream continuously | sub-second–seconds | Clickstream personalization, anomaly detection on telemetry |
+| **Streaming** | React to an event stream continuously | sub-second–seconds | Clickstream personalization, [anomaly detection](ch27.html) on telemetry |
 
 Batch is the easiest and cheapest — it's just a job; if you can tolerate stale predictions, prefer it. Online serving is where most of the engineering pain lives (this chapter's center of gravity). Streaming adds a message bus (Kafka, Pulsar) and stateful processing on top.
 
@@ -751,7 +753,7 @@ Tools: **Evidently** (open-source drift reports/tests) and **WhyLabs** for the M
   <div style="opacity:0.7;font-size:11px;margin-top:10px">ops plane all-green, but drift is amber — the model is up *and* degrading. Watch both planes.</div>
 </div>
 
-**For LLMs**, observability gains a third dimension: there's rarely an immediate "correct" label, so you instrument **traces** (the full prompt → tool calls → completion chain), **token and cost accounting** per request, and quality proxies (LLM-as-judge scores, user feedback, refusal/error rates). Dedicated platforms — **Langfuse** (open-source), **LangSmith**, **Helicone** — capture these traces and costs out of the box. See Ch 29 for monitoring as part of the broader MLOps loop, and Ch 46 for the evaluation methods these dashboards surface.
+**For LLMs**, observability gains a third dimension: there's rarely an immediate "correct" label, so you instrument **traces** (the full prompt → tool calls → completion chain), **token and cost accounting** per request, and quality proxies (LLM-as-judge scores, user feedback, refusal/error rates). Dedicated platforms — **Langfuse** (open-source), **LangSmith**, **Helicone** — capture these traces and costs out of the box. See Ch 29 for monitoring as part of the broader MLOps loop, and [Ch 46](ch46.html) for the evaluation methods these dashboards surface.
 
 ## 47.10 — Feature stores & training-serving skew
 
@@ -953,7 +955,7 @@ flowchart LR
     GW -. reject / 401 / 429 .-> C
 ```
 
-The pragmatic ordering: put authentication, rate limiting, and TLS at the **gateway** layer (the same controls as any API — reuse them), then add ML-specific **guardrails** (input/output filtering, PII redaction, prompt-injection defenses for LLMs) as a thin layer around the model server. The generic controls stop 90% of trouble; the ML-specific ones cover the rest. See Ch 44 for LLM guardrail patterns in depth.
+The pragmatic ordering: put authentication, rate limiting, and TLS at the **gateway** layer (the same controls as any API — reuse them), then add ML-specific **guardrails** (input/output filtering, PII redaction, prompt-injection defenses for LLMs) as a thin layer around the model server. The generic controls stop 90% of trouble; the ML-specific ones cover the rest. See [Ch 44](ch44.html) for LLM guardrail patterns in depth.
 
 ::: {.callout-note appearance="simple"}
 **The cost-as-attack-surface angle is unique to ML serving.** A SQL endpoint that's hammered gets slow; an unmetered LLM endpoint that's hammered generates a *bill*. Rate limits and per-key token quotas aren't just abuse controls — they're the primary defense on your cloud invoice. Always set them before going public.
@@ -1005,7 +1007,32 @@ Per request that's $0 + 0.000126 + 0.00036 = \$0.000486$, or about \$486/day —
 Sequence the levers by effort-to-savings: turn on **continuous batching** and **caching** first (large savings, no quality cost), then **right-size** the model/GPU to the SLA, then **quantize** and add **routing** if you still need headroom. Speculative decoding and spot capacity are later optimizations once the easy wins are banked. Measure cost-per-1k-requests before and after each — intuition about LLM cost is usually wrong.
 :::
 
-## 47.x — Key takeaways
+## 47.15 — Quick reference
+
+| Term / formula | Meaning in one line | When / why it matters |
+|---|---|---|
+| **Serving modality** (batch / online / streaming) | How predictions are produced: scheduled job, sync request, or event stream | Pick first — it dictates latency budget and every downstream choice |
+| **Buy vs build** | Hosted API vs self-hosted serving | Buy until cost/latency/residency/custom-model forces building |
+| **Model registry** (`models:/name@champion`) | System of record: versions + aliases + lineage | Promote/rollback becomes a one-line alias change |
+| **pyfunc flavor** | MLflow's universal model interface | Serve any framework's model without knowing its internals |
+| **Graph format** (ONNX/TorchScript) | Weights + compute graph, decoupled from training code | Unlocks optimized runtimes; safer than pickle |
+| **safetensors** | Code-free, zero-copy tensor serialization | Modern default for transformer weights; no RCE on load |
+| **Dynamic batching** | Coalesce concurrent requests into one GPU call | Throughput win for generic servers (the elevator) |
+| **PagedAttention** | KV cache as paged virtual memory | Near-zero fragmentation → far higher LLM batch sizes |
+| **Continuous batching** | Schedule at iteration level; refill freed slots mid-flight | vLLM's core throughput win over static batching |
+| **TTFT / TPOT** | Time to first token / time per output token | $\text{latency}=\text{TTFT}+(N_{\text{out}}{-}1)\text{TPOT}$; stream chat, batch bulk |
+| **Little's Law** $L=\lambda W$ | Concurrency = arrival rate × service time | Gives the replica floor before autoscaler headroom |
+| **Scale-to-zero** (KEDA) | Drop idle GPU replicas to zero, cold-start on demand | Essential for spiky/low-traffic GPU cost |
+| **Progressive delivery** | Shadow → canary → blue-green / A/B | Never flip 100% at once; gate on metrics, fast rollback |
+| **CT (Continuous Training)** | Retrain+redeploy triggered by data/drift/schedule | The third C; only safe behind a champion gate |
+| **PSI** $\sum_i (a_i-e_i)\ln\frac{a_i}{e_i}$ | One number for how far a feature drifted | <0.1 stable · 0.1–0.25 investigate · >0.25 drift |
+| **p95/p99 latency** | Tail latency percentiles | SLAs live on the tail — the mean averages outliers away |
+| **Training-serving skew** | Feature computed differently in train vs serve | Kill with one feature definition (feature store) |
+| **Point-in-time join** | Fetch features as of the label's timestamp | Prevents future leakage in training data |
+| **Resilience four** | Timeouts · retries+backoff+jitter · circuit breaker · fallback | Fail fast/bounded/graceful; retries need a breaker |
+| **Cost levers (in order)** | Batching+caching → right-size → quantize/route | Pull free wins before quality-costing ones |
+
+## 47.16 — Key takeaways
 
 - **The model is 10%; the system is 90%.** Production serving is package → serve → orchestrate → monitor → (retrain). Pick the modality first — **batch** if you can tolerate staleness (cheapest), **online** for interactive SLAs, **streaming** for event-driven — and **buy** a hosted API until cost/latency/customization forces you to build.
 - **Tracking + registry is the backbone.** MLflow's Tracking, Models (pyfunc flavors), and Registry (versions + **aliases** + lineage) let serving reference `models:/name@champion` so promote/rollback is one line. W&B is the common tracking alternative.
@@ -1021,7 +1048,7 @@ Sequence the levers by effort-to-savings: turn on **continuous batching** and **
 - **Secure the endpoint:** authN/Z, rate limits + token quotas (your cloud-bill defense), input validation, TLS, plus ML-specific guardrails (prompt injection, PII redaction, extraction).
 - **Cut cost in order of effort:** batching + caching first (free), then right-size, then quantize/route; speculative decoding and spot GPUs last.
 
-## 47.y — See also
+## 47.17 — See also
 
 - **Ch 29 — MLOps & Deployment:** the principles, culture, and lifecycle behind this chapter's tooling; CI/CD/CT and monitoring as organizational practice.
 - **Ch 30 — AI Infrastructure & Efficient Inference:** GPU internals, KV cache, quantization, and speculative decoding — the theory under vLLM, packaging, and the cost levers.

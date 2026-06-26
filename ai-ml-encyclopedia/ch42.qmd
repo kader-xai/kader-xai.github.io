@@ -111,13 +111,15 @@ Empirical curves tell you a model *did* well on the data you happened to test. L
 🧭 **In context:** statistical learning theory · use it to bound generalization error and reason about *why* learning is possible · key idea: with enough data, empirical performance provably tracks true performance across an entire hypothesis class at once.
 :::
 
+> 💡 **Remember this:** generalization is provable — with enough data, the gap between training error and true error shrinks at a rate set by the *effective complexity* of your model class, not its raw parameter count.
+
 ## 42.1 Why theory: from empirical curves to provable guarantees
 
-Suppose you train a classifier, measure 3% error on a held-out test set, and ship it. Two questions should nag you. First, how close is that 3% to the *true* error on the full distribution of inputs the model will face? Second, you tried fifty model configurations and picked the best — did you find a genuinely good model, or did you just get lucky on this particular test set? Learning theory answers both, and the answers are quantitative.
+Suppose you train a [classifier](ch09.html), measure 3% error on a held-out test set, and ship it. Two questions should nag you. First, how close is that 3% to the *true* error on the full distribution of inputs the model will face? Second, you tried fifty model configurations and picked the best — did you find a genuinely good model, or did you just get lucky on this particular test set? Learning theory answers both, and the answers are quantitative.
 
 **The intuition first.** Think of a chef tasting one spoonful from a giant pot of soup. The spoonful (your test set) tells you something about the whole pot (the true distribution) — but only if the soup is stirred (i.i.d. sampling) and the spoon is big enough (large $n$). Learning theory is the recipe for how big the spoon must be, and how confident you can be that the spoonful matches the pot, *especially* when you taste many pots and report the best one you found.
 
-The setup throughout this chapter: data points $(x, y)$ are drawn independently from some fixed but unknown distribution $\mathcal{D}$. A **hypothesis** $h$ maps inputs to predictions, and a **loss** $\ell(h(x), y)$ scores how wrong it is. We care about two quantities:
+The setup throughout this chapter: data points $(x, y)$ are drawn independently from some fixed but unknown [distribution](ch04.html) $\mathcal{D}$. A **hypothesis** $h$ maps inputs to predictions, and a **loss** $\ell(h(x), y)$ scores how wrong it is. We care about two quantities:
 
 $$
 \underbrace{R(h) = \mathbb{E}_{(x,y)\sim\mathcal{D}}[\ell(h(x), y)]}_{\text{true / population risk}}
@@ -131,7 +133,7 @@ $$
 We can only *measure* $\hat R$; we *care* about $R$. The entire field is the study of the gap $R(h) - \hat R(h)$, the **generalization gap**. Theory gives us statements of the form: with probability at least $1-\delta$ over the random training sample, this gap is at most some bound that shrinks with $n$ and grows with the "richness" of the models we allowed ourselves to consider.
 
 ::: {.callout-tip}
-**Intuition.** $\hat R$ is a coin-flip estimate of $R$ from $n$ flips. For *one fixed* hypothesis, the law of large numbers already says $\hat R \to R$. The subtlety — and the reason this chapter exists — is that we *choose* $h$ after seeing the data, so $h$ depends on the sample. We need the estimate to be good *simultaneously for every $h$ we might pick*. That is uniform convergence, and it costs extra.
+**Intuition.** $\hat R$ is a coin-flip estimate of $R$ from $n$ flips. For *one fixed* hypothesis, the [law of large numbers](ch04.html) already says $\hat R \to R$. The subtlety — and the reason this chapter exists — is that we *choose* $h$ after seeing the data, so $h$ depends on the sample. We need the estimate to be good *simultaneously for every $h$ we might pick*. That is uniform convergence, and it costs extra.
 :::
 
 ## 42.2 The PAC framework
@@ -142,7 +144,7 @@ We can only *measure* $\hat R$; we *care* about $R$. The entire field is the stu
 
 The ingredients:
 
-- A **hypothesis class** $\mathcal{H}$ — the set of functions the learner is allowed to output (all linear classifiers, all depth-$d$ trees, a fixed neural architecture's weight space).
+- A **hypothesis class** $\mathcal{H}$ — the set of functions the learner is allowed to output (all linear classifiers, all depth-$d$ [decision trees](ch09.html), a fixed [neural architecture](ch14.html)'s weight space).
 - A **sample complexity** $m(\varepsilon, \delta)$ — how many examples suffice to guarantee error $\le\varepsilon$ with probability $\ge 1-\delta$.
 
 A class is **PAC-learnable** if there is an algorithm that, for any $\varepsilon, \delta > 0$, returns such an $h$ using only $m(\varepsilon,\delta)$ samples (polynomial in $1/\varepsilon$ and $1/\delta$).
@@ -377,7 +379,7 @@ $$
 **In words:** true error is at most training error, plus twice how much the class can fit noise, plus a small confidence cushion.
 **Also written:** $R(h) - \hat R(h) \le 2\hat{\mathfrak R}_S(\mathcal H) + 3\sqrt{\ln(2/\delta)/(2n)}$ — the data-dependent analogue of the VC gap, with $\hat{\mathfrak R}_S$ replacing $\sqrt{d_{VC}/n}$.
 
-**The margin connection (SVMs).** For linear classifiers, the relevant quantity is not the dimension but the **margin** $\gamma$ — the distance from the decision boundary to the nearest point. The Rademacher complexity of the class of unit-norm linear separators scales like $\frac{R}{\gamma\sqrt n}$, where $R$ bounds the data norm. Crucially this is **independent of the ambient dimension**. A wide-margin classifier generalizes well *even in infinite-dimensional feature spaces* (kernels!), because margin, not coordinate count, controls effective complexity. This is the theoretical heart of why **maximizing the margin** (Chapter on SVMs) is the right objective.
+**The margin connection (SVMs).** For linear classifiers, the relevant quantity is not the dimension but the **margin** $\gamma$ — the distance from the decision boundary to the nearest point. The Rademacher complexity of the class of unit-norm linear separators scales like $\frac{R}{\gamma\sqrt n}$, where $R$ bounds the data norm. Crucially this is **independent of the ambient dimension**. A wide-margin classifier generalizes well *even in infinite-dimensional feature spaces* (kernels!), because margin, not coordinate count, controls effective complexity. This is the theoretical heart of why **maximizing the margin** ([SVMs are covered under Classification](ch09.html)) is the right objective.
 
 <svg viewBox="0 0 480 200" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif" font-size="13" fill="currentColor">
   <text x="10" y="18" font-weight="bold">Margin γ controls complexity, not dimension</text>
@@ -445,7 +447,7 @@ This is the bias–complexity tradeoff in its sharpest form: enlarging $\mathcal
 
 ## 42.8 Stability, regularization, and the bias–variance bound
 
-There is a second, complementary lens on generalization that does not look at the hypothesis class at all — it looks at the *algorithm*. The intuition is wonderfully simple: **a trustworthy learner shouldn't change its mind much if you swap out one training example.** If deleting or replacing a single data point barely moves the learned model, then the model can't be memorizing individual points, so its training error must track its true error.
+There is a second, complementary lens on generalization that does not look at the hypothesis class at all — it looks at the *algorithm* (the [optimization](ch03.html) procedure itself). The intuition is wonderfully simple: **a trustworthy learner shouldn't change its mind much if you swap out one training example.** If deleting or replacing a single data point barely moves the learned model, then the model can't be memorizing individual points, so its training error must track its true error.
 
 This is **algorithmic stability**. Formally, an algorithm $A$ is *uniform-stability* $\beta$ if for any two training sets $S, S'$ differing in one example, the loss on any point changes by at most $\beta$:
 $$
@@ -455,7 +457,7 @@ $$
 **In words:** retrain on a dataset with one point swapped, and no individual prediction's loss can wobble by more than $\beta$.
 **Also written:** for all neighboring $S\simeq S'$ and all $z$, $\ell(A_S,z)\le \ell(A_{S'},z)+\beta$ — a Lipschitz-in-the-dataset condition on the trained predictor.
 
-The payoff: a $\beta$-stable algorithm has expected generalization gap bounded by $\beta$ (typically $O(1/n)$ for regularized methods). This is exactly *why regularization generalizes* — adding a $\frac{\lambda}{2}\|w\|^2$ penalty makes the minimizer move less when data changes (larger $\lambda$ → more stable → smaller gap, at the cost of higher bias). Ridge regression, SVMs, and weight decay all earn their generalization guarantees through stability, not VC counting. Stochastic gradient descent run for few enough steps is stable too, which is one modern explanation for why early stopping helps.
+The payoff: a $\beta$-stable algorithm has expected generalization gap bounded by $\beta$ (typically $O(1/n)$ for regularized methods). This is exactly *why regularization generalizes* — adding a $\frac{\lambda}{2}\|w\|^2$ penalty makes the minimizer move less when data changes (larger $\lambda$ → more stable → smaller gap, at the cost of higher bias). [Ridge regression](ch08.html), SVMs, and weight decay all earn their generalization guarantees through stability, not VC counting. Stochastic gradient descent run for few enough steps is stable too, which is one modern explanation for why early stopping helps.
 
 The picture below contrasts the two regimes: swap one data point in and out, and watch how much the fitted line jumps. The lightly-regularized model lurches (unstable, big gap); the heavily-regularized one barely flinches (stable, small gap).
 
@@ -536,7 +538,7 @@ $$
 **In words:** at every round, pick the decision that would have been best on *everything seen so far*, but nudged by a regularizer that stops you from over-reacting to the latest data.
 **Also written:** equivalently $w_{t+1}=\arg\min_w \big\langle \sum_{s\le t}\nabla\ell_s(w_s),\,w\big\rangle + \tfrac1\eta r(w)$ in its linearized form; with $r(w)=\tfrac12\|w\|^2$ this unrolls to the gradient step $w_{t+1}=w_t-\eta\nabla\ell_t(w_t)$.
 
-The regularizer $r$ prevents the wild swings that "follow the leader" alone would suffer. Plainly: if you always jump to whatever was best so far, a single noisy day flips your whole strategy and you thrash. The regularizer is a bit of inertia — it keeps you near your previous choice so you only drift when the *accumulated* evidence is strong. With a strongly convex $r$, FTRL achieves $O(\sqrt T)$ regret; online gradient descent is the special case $r(w)=\tfrac12\|w\|^2$. FTRL is not a toy — it is the workhorse behind large-scale ad click-through prediction systems.
+The regularizer $r$ prevents the wild swings that "follow the leader" alone would suffer. Plainly: if you always jump to whatever was best so far, a single noisy day flips your whole strategy and you thrash. The regularizer is a bit of inertia — it keeps you near your previous choice so you only drift when the *accumulated* evidence is strong. With a strongly convex $r$, FTRL achieves $O(\sqrt T)$ regret; online gradient descent is the special case $r(w)=\tfrac12\|w\|^2$. FTRL is not a toy — it is the workhorse behind large-scale ad click-through [recommender systems](ch26.html).
 
 ::: {.callout-tip}
 **Rule of thumb.** "Follow the *regularized* leader, never the bare leader." Any online rule that reacts to the single most recent loss with no inertia (plain follow-the-leader, an unclipped learning rate) will oscillate and rack up linear regret on adversarial sequences. The cure is always the same shape: add a strongly-convex regularizer (or equivalently, a small-enough step size) so each update is a *nudge*, not a *leap*.
@@ -556,7 +558,7 @@ Classical theory predicts disaster for modern nets: with more parameters than da
 
 **Overparameterization helps optimization.** When $p \gg n$, the loss landscape changes character: the set of global minima becomes a high-dimensional connected manifold, and (S)GD reliably finds one. More parameters make the *optimization* easier, not just the fit.
 
-**The Neural Tangent Kernel (NTK).** In the infinite-width limit, a network's training dynamics linearize around initialization: it behaves like kernel regression with a fixed kernel, the NTK, determined by the architecture. This gives the first regime where wide-net training is *provably* analyzable — gradient descent converges to a global minimum and the function it learns is characterized in closed form. The limitation: real finite nets move away from initialization and *learn features*, which the fixed-kernel NTK cannot capture. NTK explains trainability, not the full power of deep learning.
+**The Neural Tangent Kernel (NTK).** In the infinite-width limit, a network's training dynamics linearize around initialization: it behaves like kernel regression with a fixed kernel, the NTK, determined by the architecture (the [eigenstructure](ch01.html) of this kernel governs which functions are learned fastest). This gives the first regime where wide-net training is *provably* analyzable — gradient descent converges to a global minimum and the function it learns is characterized in closed form. The limitation: real finite nets move away from initialization and *learn features*, which the fixed-kernel NTK cannot capture. NTK explains trainability, not the full power of deep learning.
 
 **Implicit regularization of (S)GD.** Among the infinitely many weight settings that fit the data exactly, GD does not pick an arbitrary one — it is *biased* toward simple, low-norm, large-margin solutions. For separable logistic regression, gradient descent provably converges to the **max-margin** solution (connecting straight back to Section 42.6). The optimizer itself is a regularizer; no explicit penalty needed.
 
@@ -609,7 +611,7 @@ The key structural property is **strict saddle**: every critical point is either
 
 Several canonical problems provably have this benign structure:
 
-- **PCA / matrix factorization.** Finding the top-$k$ subspace is nonconvex in the factored parameterization, yet *all* local minima are global; the only other critical points are strict saddles.
+- **[PCA](ch07.html) / matrix factorization.** Finding the top-$k$ subspace is nonconvex in the factored parameterization, yet *all* local minima are global; the only other critical points are strict saddles.
 - **Matrix completion** (the Netflix-style problem) under standard incoherence assumptions: no spurious local minima.
 - **Phase retrieval** and certain **shallow neural networks**: similar landscape guarantees.
 
@@ -624,7 +626,30 @@ Several canonical problems provably have this benign structure:
 
 The lesson: nonconvexity alone is not the enemy. *Structured* nonconvex problems can be as solvable as convex ones, and characterizing which losses have the strict-saddle / no-spurious-minima property is an active bridge between optimization theory and the empirical success of deep learning.
 
-## 42.1 — Key takeaways
+## 42.1 — Quick reference
+
+| Term / formula | One-line meaning | When / why it matters |
+|---|---|---|
+| Generalization gap $R(h)-\hat R(h)$ | True error minus measured (training) error | The single quantity all of learning theory bounds |
+| PAC learnability | Probably ($\ge 1{-}\delta$) approximately ($\le\varepsilon$) correct with poly samples | Defines what "learnable" even means |
+| Realizable sample complexity $\tfrac1\varepsilon(\ln\lvert\mathcal H\rvert+\ln\tfrac1\delta)$ | Examples needed when a perfect $h^\star$ exists | Noise-free case; scales as $1/\varepsilon$ |
+| Agnostic sample complexity $\tfrac1{2\varepsilon^2}(\ln\lvert\mathcal H\rvert+\ln\tfrac1\delta)$ | Examples needed when no perfect $h$ exists | Noisy case; the $1/\varepsilon^2$ penalty for noise |
+| Hoeffding $\Pr[\lvert\bar X-\mathbb E\bar X\rvert\ge t]\le 2e^{-2nt^2}$ | Bounded averages concentrate exponentially in $n$ | The workhorse behind every uniform bound |
+| Union bound | $\Pr[\text{any of }\lvert\mathcal H\rvert\text{ fail}]\le\lvert\mathcal H\rvert\,\delta'$ | Pays the price of searching a finite class |
+| VC dimension $d_{VC}$ | Largest point set the class can shatter (all $2^k$ labelings) | Effective capacity of an *infinite* class |
+| VC gap $O(\sqrt{d_{VC}/n})$ | True-vs-train gap scales as $\sqrt{\text{capacity}/\text{data}}$ | "Need several times more rows than columns" |
+| Rademacher complexity $\hat{\mathfrak R}_S(\mathcal H)$ | How well the class fits random $\pm1$ noise | Data-dependent, tighter than VC; gives margin bounds |
+| Margin $\gamma$ | Distance from boundary to nearest point ($\mathfrak R\sim R/(\gamma\sqrt n)$) | Why wide-margin SVMs generalize regardless of dimension |
+| Approximation–estimation split | Excess risk = bias term + variance term | The U-shaped test-error curve decomposed |
+| Algorithmic stability $\beta$ | Loss changes $\le\beta$ when one example is swapped | Why regularization & early stopping generalize |
+| Regret $_T=\sum_t\ell_t(w_t)-\min_w\sum_t\ell_t(w)$ | Loss vs. best fixed action in hindsight | Goal in online (no-distribution) learning |
+| FTRL / multiplicative weights | Follow the *regularized* leader; $O(\sqrt T)$ regret | No-regret online learning; ad-prediction systems |
+| NTK | Infinite-width nets $\approx$ kernel regression | First provably analyzable wide-net training regime |
+| Double descent | Test error falls again past the interpolation threshold | Why "just make it bigger" works; $p\approx n$ is the danger zone |
+| PAC-Bayes $\sqrt{(\mathrm{KL}(Q\Vert P)+\ln\frac n\delta)/2(n{-}1)}$ | Bound the noised-weight average; complexity = drift from prior | Only *non-vacuous* bounds for real deep nets; flat minima |
+| Strict saddle | Every critical point is global min or escapable saddle | Why nonconvex PCA / matrix completion still solve globally |
+
+## 42.2 — Key takeaways
 
 - **Generalization is the gap $R(h)-\hat R(h)$.** All of learning theory bounds it with high probability, trading sample size $n$ against hypothesis-class complexity.
 - **PAC** asks for *probably* (confidence $1-\delta$) *approximately correct* (error $\le\varepsilon$) learning; sample complexity scales as $1/\varepsilon$ (realizable) or $1/\varepsilon^2$ (agnostic), and only *logarithmically* in $\lvert\mathcal{H}\rvert$.
@@ -637,14 +662,14 @@ The lesson: nonconvexity alone is not the enemy. *Structured* nonconvex problems
 - **PAC-Bayes** delivers the only non-vacuous bounds for real nets: complexity is *distance moved from the prior* (flat minima), not parameter count.
 - **Strict-saddle** structure (PCA, matrix completion) explains when nonconvex problems still reach global optima.
 
-## 42.2 — See also
+## 42.3 — See also
 
 - **Chapter on Probability & Statistics** — expectations, variance, and the law of large numbers underlying every concentration bound.
 - **Chapter on Optimization** — convexity, gradient descent, and SGD, generalized here by online convex optimization and FTRL.
 - **Chapter on SVMs & Kernels** — the margin-maximization objective whose generalization is justified by Rademacher/margin bounds (42.6).
 - **Chapter on Deep Learning Foundations** — the architectures whose surprising generalization motivates NTK, implicit regularization, and double descent (42.10).
 - **Chapter on Regularization & Model Selection** — bias–variance in practice, cross-validation, and capacity control (42.7, 42.8).
-- **Chapter on Frontier & Open Problems** — where the gap between classical theory and deep-learning practice is still being closed.
+- **[Chapter on Frontier & Emerging Directions](ch39.html)** — where the gap between classical theory and deep-learning practice is still being closed.
 
 ------------------------------------------------------------------------
 

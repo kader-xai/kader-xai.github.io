@@ -111,11 +111,13 @@ The previous chapters mapped what AI can already do reliably. This one looks at 
 🧭 **In context:** the leading edge of ML research · used to build and adapt foundation models that learn with little labeled data, retain skills over time, and act in the world · the one key idea: learn structure from the data itself, then transfer and adapt cheaply instead of training from scratch.
 :::
 
+> 💡 **Remember this:** almost every frontier idea is the same move — learn structure from cheap, unlabeled data once, then transfer and adapt it cheaply rather than retraining from scratch.
+
 ## 39.1 — Self-supervised and contrastive learning
 
 The bottleneck in classical supervised learning is labels: humans must tag every example, which is slow and expensive. **Self-supervised learning (SSL)** sidesteps this by inventing a label *from the data itself*. You hide part of the input and ask the model to predict it. No human annotation is needed, so you can train on the entire internet.
 
-The hidden-prediction task is called a **pretext task**. Mask a word in a sentence and predict it (this is exactly how BERT and GPT-style models are pretrained — see Chapters 17 and 23). Mask a patch of an image and reconstruct it. Predict whether two video frames are in the right order. The model can only solve these puzzles by learning genuine structure — grammar, object shapes, physics — and that learned structure is what we actually want. SSL is the engine behind every **foundation model**: a single large model pretrained on broad data, then reused for many tasks.
+The hidden-prediction task is called a **pretext task**. Mask a word in a sentence and predict it (this is exactly how BERT and GPT-style models are pretrained — see [Attention & Transformers](ch17.html) and [Large Language Models](ch23.html)). Mask a patch of an image and reconstruct it. Predict whether two video frames are in the right order. The model can only solve these puzzles by learning genuine structure — grammar, object shapes, physics — and that learned structure is what we actually want. SSL is the engine behind every **foundation model**: a single large model pretrained on broad data, then reused for many tasks.
 
 **Contrastive learning** is one especially powerful flavor of SSL. The intuition: pull together things that are "the same" and push apart things that are "different," without ever naming what they are. Take an image, make two random augmentations of it (a crop, a color shift) — these form a **positive pair**, two views of the same underlying thing. Every other image in the batch is a **negative**. Train the encoder so the two positive views land close in embedding space and negatives land far.
 
@@ -307,7 +309,7 @@ print("A" if np.linalg.norm(q-cA) < np.linalg.norm(q-cB) else "B")  # -> B
   <text x="160" y="78" font-size="9" fill="#181">query → nearest = B</text>
 </svg>
 
-**Zero-shot** learning needs a bridge between classes and a shared semantic space. Modern systems use *text*. **CLIP** (Chapter 24) trains an image encoder and a text encoder contrastively so that an image and its caption land nearby. To classify into never-seen classes, you embed the candidate label strings ("a photo of a zebra", "a photo of an okapi") and pick the label whose text embedding is closest to the image. The model recognizes an okapi it never trained on because the *word* sits in a meaningful place in the joint space.
+**Zero-shot** learning needs a bridge between classes and a shared semantic space. Modern systems use *text*. **CLIP** ([Multimodal AI](ch24.html)) trains an image encoder and a text encoder contrastively so that an image and its caption land nearby. To classify into never-seen classes, you embed the candidate label strings ("a photo of a zebra", "a photo of an okapi") and pick the label whose text embedding is closest to the image. The model recognizes an okapi it never trained on because the *word* sits in a meaningful place in the joint space.
 
 **Zero-shot with CLIP in three lines.** Hugging Face exposes exactly this as a pipeline — no training, just text prompts as the "classes":
 
@@ -459,7 +461,7 @@ FL is not automatically private. Sending gradients instead of data feels safe bu
 
 ## 39.6 — AutoML and neural architecture search
 
-Designing a model is full of choices: which architecture, how many layers, which learning rate, what regularization. **AutoML** automates these choices so that good models can be built without an expert hand-tuning every knob. At its simplest, AutoML is automated **hyperparameter optimization** (Chapter 12) plus automated feature engineering and model selection — searching the space of pipelines for the best validation score.
+Designing a model is full of choices: which architecture, how many layers, which learning rate, what regularization. **AutoML** automates these choices so that good models can be built without an expert hand-tuning every knob. At its simplest, AutoML is automated **hyperparameter optimization** ([Model Evaluation & Tuning](ch12.html)) plus automated feature engineering and model selection — searching the space of pipelines for the best validation score.
 
 The ambitious end is **Neural Architecture Search (NAS)**: letting an algorithm *design the network itself*. You define a search space of possible building blocks and connections, a search strategy to explore it, and a way to estimate how good each candidate is.
 
@@ -591,7 +593,7 @@ The rank $r$ is the main dial: bigger $r$ = more capacity to adapt but more para
 
 ## 39.8 — Neurosymbolic AI
 
-Neural networks are brilliant at perception and terrible at guarantees. They recognize a cat instantly but can't reliably tell you that 17 is prime or that "all men are mortal, Socrates is a man" entails Socrates is mortal. Symbolic systems (Chapters 32–34) are the mirror image: rigorous logic and exact reasoning, but brittle and unable to handle raw pixels. **Neurosymbolic AI** tries to fuse the two — neural perception feeding symbolic reasoning — to get the best of both.
+Neural networks are brilliant at perception and terrible at guarantees. They recognize a cat instantly but can't reliably tell you that 17 is prime or that "all men are mortal, Socrates is a man" entails Socrates is mortal. Symbolic systems ([Search & Problem Solving](ch32.html) through [Planning, CSP & Game Playing](ch34.html)) are the mirror image: rigorous logic and exact reasoning, but brittle and unable to handle raw pixels. **Neurosymbolic AI** tries to fuse the two — neural perception feeding symbolic reasoning — to get the best of both.
 
 The recurring pattern: a neural network turns messy input into discrete symbols, and a symbolic engine reasons over those symbols with rules and constraints.
 
@@ -630,7 +632,7 @@ The modern, lightweight version of neurosymbolic AI is an **LLM that writes code
 
 An agent that learns purely by trial and error in the real world is dangerous and slow — every mistake costs a real crash. Humans avoid this by *imagining*: we run a mental simulation of "if I do this, what happens next?" before acting. A **world model** gives an agent that ability — a learned internal model of environment dynamics that predicts the next state (and reward) given the current state and an action.
 
-This is the heart of **model-based reinforcement learning** (Chapter 25). A **model-free** agent learns a policy directly from experience; a **model-based** agent first learns the dynamics, then *plans* or trains a policy inside its own learned simulator — "dreaming" thousands of rollouts cheaply instead of acting them out for real.
+This is the heart of **model-based reinforcement learning** ([Reinforcement Learning](ch25.html)). A **model-free** agent learns a policy directly from experience; a **model-based** agent first learns the dynamics, then *plans* or trains a policy inside its own learned simulator — "dreaming" thousands of rollouts cheaply instead of acting them out for real.
 
 ```{mermaid}
 flowchart LR
@@ -774,7 +776,7 @@ for n in [1, 5, 21]:
 Even when any single chain is only moderately reliable, agreement across independent chains concentrates probability on the correct answer — which is why self-consistency reliably lifts accuracy at the cost of generating several chains instead of one. **Tree-of-thoughts** goes further, exploring a branching tree of partial reasoning steps with evaluation and backtracking, turning inference into a search (echoing Chapter 32). The common thread: a **compute–accuracy tradeoff** at inference. More thinking — more samples, deeper search — buys more accuracy, and for the first time you can dial that knob *after* the model is trained.
 
 ::: {.callout-warning}
-A written chain of thought is not a faithful window into the model's actual computation — models can reach the right answer for reasons their stated reasoning doesn't reflect, and can produce plausible-but-wrong rationalizations. Treat CoT as a performance technique, not a guaranteed explanation (see Chapter 36 on interpretability).
+A written chain of thought is not a faithful window into the model's actual computation — models can reach the right answer for reasons their stated reasoning doesn't reflect, and can produce plausible-but-wrong rationalizations. Treat CoT as a performance technique, not a guaranteed explanation (see [Explainable AI & Interpretability](ch36.html)).
 :::
 
 ## 39.12 — Open questions on the road toward general intelligence
@@ -800,7 +802,7 @@ flowchart LR
   AL --> AL2[Safety at scale]
 ```
 
-Several stand out. **Generalization beyond the training distribution** — models still break on inputs unlike anything they've seen, where humans adapt gracefully. **Genuine reasoning and causality** — fluent text can mask shallow pattern-matching; distinguishing cause from correlation (Chapter 37) remains shaky. **Data and energy efficiency** — a child learns language from a few million words; frontier models need trillions of tokens and megawatts. **Continual learning** — humans learn for a lifetime without catastrophic forgetting (39.4); deployed models are essentially frozen after training. And **alignment** (Chapter 38) — as systems grow more capable, reliably specifying and verifying that they do what we intend becomes the defining safety challenge.
+Several stand out. **Generalization beyond the training distribution** — models still break on inputs unlike anything they've seen, where humans adapt gracefully. **Genuine reasoning and causality** — fluent text can mask shallow pattern-matching; distinguishing cause from correlation ([Causal Inference](ch37.html)) remains shaky. **Data and energy efficiency** — a child learns language from a few million words; frontier models need trillions of tokens and megawatts. **Continual learning** — humans learn for a lifetime without catastrophic forgetting (39.4); deployed models are essentially frozen after training. And **alignment** ([AI Ethics, Fairness & Safety](ch38.html)) — as systems grow more capable, reliably specifying and verifying that they do what we intend becomes the defining safety challenge.
 
 ::: {.callout-tip}
 A useful frame: progress in AI has come less from one master algorithm than from removing bottlenecks — first compute, then data, then labels (via self-supervision), now reasoning depth (via test-time compute). The next leap likely comes from removing whichever bottleneck binds hardest next: probably data efficiency, continual learning, or grounding in the world.
@@ -1137,7 +1139,28 @@ JEPA sits at an interesting crossroads of everything above: it predicts like mas
 | MAE | Masked | No | Pixels | Reconstruction target |
 | JEPA | Masked / joint | No | Embedding | EMA target + stop-grad |
 
-## 39.15 — Key takeaways
+## 39.15 — Quick reference
+
+| Term / method | One-line meaning | When / why it matters |
+|---|---|---|
+| Self-supervised learning (SSL) | Invent a label from the data itself (predict a hidden part) | Train on unlabeled data at internet scale; the engine of foundation models |
+| InfoNCE / contrastive | Softmax CE that pulls positive pairs close, pushes negatives far | Learn embeddings without labels; watch the temperature $\tau$ and collapse |
+| Transfer learning | Reuse a pretrained model; retrain only the head | Strong classifier from tiny labeled data (e.g. 500 X-rays) |
+| Multi-task learning | One shared backbone, many per-task heads | Tasks regularize each other; mind gradient conflict (PCGrad / GradNorm) |
+| MAML / Reptile | Learn an initialization one step away from good on any task | Few-shot adaptation; Reptile skips MAML's second-order cost |
+| Prototypical networks | Classify by nearest class-mean in embedding space | Few-shot, no weight updates — just arithmetic |
+| Zero-shot (CLIP) | Classify via closeness to label *text* embeddings | Recognize never-seen classes from a description alone |
+| EWC | Quadratic penalty pinning high-Fisher weights to old values | Continual learning without catastrophic forgetting |
+| FedAvg | Data-weighted average of clients' local models | Train where data can't move; add DP + secure aggregation for privacy |
+| $(\varepsilon,\delta)$-DP | Output barely changes if any one record is added/removed | Provable privacy; smaller $\varepsilon$ = more noise = less accuracy |
+| DARTS (NAS) | Softmax mixture over candidate ops, trained by gradient descent | Differentiable architecture search; still beat it with random-search baselines |
+| LoRA / PEFT | Freeze base, train a rank-$r$ update $\frac{\alpha}{r}BA$ (<1% of weights) | Cheap fine-tuning; hot-swap many task adapters onto one base |
+| Neurosymbolic | Neural perception → symbols → exact symbolic reasoning | Data efficiency, interpretability, hard-constraint guarantees |
+| World model | Learned dynamics $s,a\to s',r$ to plan in imagination | Sample-efficient model-based RL; beware model exploitation |
+| Domain randomization | Train across a range of sim parameters, not one guess | Robust sim-to-real transfer when the true value is unknown |
+| Chain-of-thought / self-consistency | Think step by step; sample many chains and majority-vote | Test-time compute buys accuracy; CoT isn't a faithful explanation |
+
+## 39.16 — Key takeaways
 
 - **Self-supervised learning** removes the label bottleneck by predicting hidden parts of the data; it is the engine behind every foundation model. **Contrastive learning** (InfoNCE) pulls positive pairs together and pushes negatives apart, with the denominator running over the positive plus all negatives — watch for collapse.
 - **Transfer, multi-task, and meta-learning** form a ladder: reuse one model, train on many tasks at once, or learn an initialization that adapts fast (MAML lands at the point equidistant from all task optima).
@@ -1151,7 +1174,7 @@ JEPA sits at an interesting crossroads of everything above: it predicts like mas
 - **Reasoning models** scale **test-time compute** (chain-of-thought, self-consistency voting, tree-of-thoughts), trading inference compute for accuracy — but CoT is not a faithful explanation.
 - The road to **general intelligence** is gated by open problems: out-of-distribution robustness, genuine reasoning and causality, data/energy efficiency, continual learning, and alignment.
 
-## 39.16 — See also
+## 39.17 — See also
 
 - **Attention & Transformers** — the architecture underlying self-supervised foundation models.
 - **Large Language Models** — in-context learning, chain-of-thought, and the scaling story in depth.

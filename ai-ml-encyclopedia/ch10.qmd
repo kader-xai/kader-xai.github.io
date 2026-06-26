@@ -105,11 +105,13 @@ toc-expand: true
 
 ------------------------------------------------------------------------
 
-A single decision tree is a weak student: it overfits, it's jumpy, and its answer can flip if you nudge the data. Ensemble methods are the trick that turns a crowd of mediocre models into one strong predictor — and they are still, in 2026, the algorithms that win most competitions and power most production systems on tabular data. This chapter sits in Classical Machine Learning and builds directly on decision trees: it is the bridge from "one model" to "many models that vote, average, or correct each other."
+A single decision tree is a weak student: it overfits, it's jumpy, and its answer can flip if you nudge the data. Ensemble methods are the trick that turns a crowd of mediocre models into one strong predictor — and they are still, in 2026, the algorithms that win most competitions and power most production systems on tabular data. This chapter sits in Classical Machine Learning and builds directly on [decision trees](ch09.html): it is the bridge from "one model" to "many models that vote, average, or correct each other."
 
 ::: {.callout-note appearance="simple"}
 🧭 **In context:** Classical ML, post-trees · used to squeeze maximum accuracy out of tabular/structured data · the one key idea: *many imperfect models combined beat one perfect-looking model, because their errors cancel.*
 :::
+
+> 💡 **Remember this:** combining many models works only when their mistakes are *uncorrelated* — bagging makes trees disagree to cancel variance, boosting chains them to cancel bias, and lowering correlation is the lever behind every method in this chapter.
 
 ## 10.1 — Base classifiers / weak learners (and why combining helps)
 
@@ -150,7 +152,7 @@ The picture below makes the crowd effect visible: as you add more independent 60
   <text x="120" y="138" font-size="9" fill="currentColor" opacity=".7">number of independent voters →</text>
 </svg>
 
-To make this precise we need the **bias–variance decomposition**. The expected prediction error of a model splits into three pieces:
+To make this precise we need the **bias–variance decomposition** (its full [probability and statistics](ch04.html) derivation lives elsewhere). The expected prediction error of a model splits into three pieces:
 
 $$\text{Error} = \underbrace{\text{Bias}^2}_{\text{wrong on average}} + \underbrace{\text{Variance}}_{\text{jumpy across datasets}} + \underbrace{\sigma^2}_{\text{irreducible noise}}$$
 
@@ -360,7 +362,7 @@ for i in r.importances_mean.argsort()[::-1][:3]:
 ```
 
 ::: {.callout-warning}
-Don't trust MDI importances blindly — they inflate the apparent importance of continuous and high-cardinality features and can even rank a pure-noise ID column highly. Prefer permutation importance for anything you'll act on, and never read forest importances as *causal* (a feature can score high just by correlating with the real driver — see Chapter 37).
+Don't trust MDI importances blindly — they inflate the apparent importance of continuous and high-cardinality features and can even rank a pure-noise ID column highly. Prefer permutation importance for anything you'll act on, and never read forest importances as *causal* (a feature can score high just by correlating with the real driver — see [Causal Inference](ch37.html)).
 :::
 
 ## 10.4 — Extra Trees (extremely randomized trees)
@@ -526,7 +528,7 @@ If AdaBoost is behaving erratically, suspect label noise first. A few wrong labe
 
 Here is the whole idea in one sentence: **each new tree is trained to predict the leftover error of all the trees so far.** Predict, see what you got wrong, fit a tree to *that* mistake, add a small slice of it, repeat. That leftover error has a name — the **residual** $y - \hat y$ — and chasing it round after round is gradient boosting.
 
-The fancier framing (skip it on a first read) is that this is gradient descent, but in an unusual place. Normal gradient descent nudges *numbers* (weights) downhill on the loss. Gradient boosting instead adds whole *functions* (trees) — it descends in "function space." The link is a small piece of calculus: for squared-error loss $\tfrac12(y-\hat y)^2$, the negative gradient with respect to the prediction works out to be exactly the residual $y-\hat y$. So "fit the next tree to the negative gradient" and "fit the next tree to the residual" are the same instruction whenever the loss is squared error.
+The fancier framing (skip it on a first read) is that this is [gradient descent](ch03.html), but in an unusual place. Normal gradient descent nudges *numbers* (weights) downhill on the loss. Gradient boosting instead adds whole *functions* (trees) — it descends in "function space." The link is a small piece of calculus: for squared-error loss $\tfrac12(y-\hat y)^2$, the negative gradient with respect to the prediction works out to be exactly the residual $y-\hat y$. So "fit the next tree to the negative gradient" and "fit the next tree to the residual" are the same instruction whenever the loss is squared error.
 
 The model grows additively:
 
@@ -805,7 +807,7 @@ p = cal.predict_proba(Xcal)[:, 1]
 ```
 
 ::: {.callout-warning}
-Always calibrate on data the base model did **not** train on — reusing training rows makes the scores look perfectly calibrated in-sample and silently wrong in production, the same leakage trap as stacking (§10.9). And remember calibration changes the *probabilities*, not the *ranking*: it leaves AUC untouched while fixing metrics like log-loss and Brier score that actually depend on the numbers.
+Always calibrate on data the base model did **not** train on — reusing training rows makes the scores look perfectly calibrated in-sample and silently wrong in production, the same leakage trap as stacking (§10.9). And remember calibration changes the *probabilities*, not the *ranking*: it leaves AUC untouched while fixing metrics like log-loss and Brier score (see [Model Evaluation & Tuning](ch12.html)) that actually depend on the numbers.
 :::
 
 ## 10.11 — Isolation forests (ensembles for anomaly detection)
@@ -854,7 +856,7 @@ score = iso.score_samples(X)       # lower = more anomalous
 print("flagged anomalies:", int((pred == -1).sum()))
 ```
 
-Because it only does a handful of random cuts per tree and never computes distances, an isolation forest is **fast and scales to high dimensions** — exactly where distance-based outlier methods (k-NN, LOF) bog down. It is a workhorse for fraud screening, network-intrusion detection, sensor fault-finding, and data-quality checks before training.
+Because it only does a handful of random cuts per tree and never computes distances, an isolation forest is **fast and scales to high dimensions** — exactly where distance-based outlier methods (k-NN, LOF) bog down. It is a workhorse for [fraud screening](ch27.html), network-intrusion detection, sensor fault-finding, and data-quality checks before training.
 
 ::: {.callout-tip}
 The one knob you must set honestly is `contamination` — your estimate of the fraction of rows that are anomalous — because it sets the cutoff between the −1 and +1 labels. If you only need a *ranking* of weirdness rather than a hard flag, ignore it and sort by `score_samples` instead.
@@ -902,7 +904,7 @@ It helps to ground all this theory in the places trees-of-trees actually run. Th
 
 And the honest flip side — where you should *not* reach for an ensemble of trees first:
 
-- **Images, audio, and raw text.** These have spatial or sequential structure that convolutional and transformer networks exploit; trees see only a flat vector and lose. Use deep learning (Chapters 14–18).
+- **Images, audio, and raw text.** These have spatial or sequential structure that [convolutional](ch15.html) and [transformer](ch17.html) networks exploit; trees see only a flat vector and lose. Use [deep learning](ch14.html) (Chapters 14–18).
 - **Smooth extrapolation.** Trees predict a constant outside the range they saw — they cannot extrapolate a trend. For a clean linear or periodic signal that must extend beyond the training range, a parametric model wins.
 - **Tiny data with a known functional form.** If you have 20 points and physics tells you it's a straight line, fit the line; an ensemble will just overfit the noise.
 
@@ -910,7 +912,31 @@ And the honest flip side — where you should *not* reach for an ensemble of tre
 The fast heuristic: **is your data a spreadsheet?** If rows-and-columns with meaningful, heterogeneous features — start with a gradient-boosting library and expect it to be hard to beat. If pixels, waveforms, or token sequences — start with a neural network.
 :::
 
-## 10.14 — Key takeaways
+## 10.14 — Quick reference
+
+| Term / formula | Meaning in one line | When / why it matters |
+|---|---|---|
+| Weak learner | Model only slightly better than chance (often a stump) | The building block every ensemble stacks into a strong learner |
+| Bias–variance split | Error = bias² + variance + noise | Tells you which knob an ensemble can move (bagging→variance, boosting→bias) |
+| Crowd-vote tail $\sum\binom{M}{k}(1-p)^k p^{M-k}$ | Chance a majority of independent voters errs | Shows why many weak voters beat one — *if* their errors are independent |
+| Bagging | Train on bootstrap resamples, then average/vote | Cuts variance of *unstable* (overfitting) base models only |
+| Bootstrap / OOB | Sample $n$ rows with replacement; ~37% left out | Left-out rows ($e^{-1}\approx0.368$) give a free validation score |
+| Var floor $\rho\sigma^2 + \frac{1-\rho}{M}\sigma^2$ | Averaging only kills the *uncorrelated* slice of variance | Past many trees, lower correlation $\rho$ — not more trees — is the only lever |
+| Random forest | Bagging + random $m$ features per split | Decorrelates trees ($m=\sqrt p$ clf, $p/3$ reg) to drop the variance floor |
+| MDI vs permutation importance | Impurity-sum (free, biased) vs shuffle-and-measure (honest) | Use permutation for anything you act on; neither is causal |
+| Extra Trees | Random forest + random split thresholds, no bootstrap | More disagreement, faster fit; shines on noisy features |
+| Boosting | Sequential learners, each fixes the last's errors | Cuts bias; needs learning rate + early stopping or it overfits |
+| AdaBoost $\alpha_t=\tfrac12\ln\frac{1-\varepsilon_t}{\varepsilon_t}$ | Reweight rows; trust each stump by its log-odds | First practical booster; fragile to label noise / outliers |
+| Gradient boosting $F_m=F_{m-1}+\nu h_m$ | Fit each tree to the residual (negative gradient) | The dominant tabular method; $\nu$ trades off vs number of trees |
+| Learning rate $\nu$ | Fraction of each correction tree that is added | Small $\nu$ + early stopping generalizes best (try 0.05) |
+| XGBoost / LightGBM / CatBoost | Regularized 2nd-order / histogram+GOSS / ordered-target boosters | Win most tabular tasks; pick by data size & categorical count |
+| Leaf-wise vs level-wise | Split best leaf anywhere vs whole level at a time | Leaf-wise (LGBM) lower loss but overfits faster than level-wise (XGB) |
+| Voting (hard/soft) | Majority label vs averaged probability | Soft usually wins — it uses each model's confidence |
+| Stacking | Meta-learner learns to blend base models | Powerful, but *must* use out-of-fold preds or it leaks |
+| Calibration (Platt / isotonic) | Map raw scores to honest probabilities | Forests under-confident, boosters over-confident; fixes log-loss/Brier, not AUC |
+| Isolation forest $s(x)=2^{-\bar h(x)/c(n)}$ | Short random-cut path = anomaly | Fast, high-dim unsupervised outlier detection, no labels needed |
+
+## 10.15 — Key takeaways
 
 - Ensembles combine many weak learners into one strong predictor; their power comes from the **bias–variance decomposition** — different ensemble families attack different error terms.
 - **Bagging** trains independent trees on bootstrap samples and averages them, cutting **variance**. It only helps for *unstable* (overfitting) base models. Random forests add **per-split feature randomness** to decorrelate trees — pushing past the $\rho\sigma^2$ variance floor — and throw in free **OOB error** and **feature importances**. **Extra Trees** randomize the split threshold too, dropping correlation further and training faster.
@@ -921,7 +947,7 @@ The fast heuristic: **is your data a spreadsheet?** If rows-and-columns with mea
 - Ensembles of trees dominate **tabular/structured** data (credit, fraud, ranking, science) but lose to neural networks on images, audio, and text, and cannot extrapolate beyond their training range.
 - Rule of thumb: bag what overfits, boost what underfits; control boosting with a small **learning rate + early stopping**.
 
-## 10.15 — See also
+## 10.16 — See also
 
 - **Chapter 09 — Classification Algorithms** — decision trees, the base learner every ensemble in this chapter is built from.
 - **Chapter 08 — Regression** — the residual-fitting view of gradient boosting builds directly on regression loss.

@@ -111,14 +111,16 @@ Large Language Models (LLMs) are neural networks trained on enormous text corpor
 🧭 **In context:** Applied AI, built on the Transformer (Ch. 17) · used for text generation, reasoning, coding, agents, and conversational assistants · the one key idea: *scale a next-token predictor far enough and general-purpose language ability emerges, then steer it with fine-tuning, prompting, retrieval, and alignment.*
 :::
 
+> 💡 **Remember this:** an LLM is just one architecture — a decoder-only Transformer trained to predict the next token — scaled up and then steered by a pipeline of pretraining, fine-tuning, prompting, retrieval, and alignment.
+
 ## 23.1 — Transformer-based LLMs
 
-An **LLM** is a Transformer (Chapter 17) with billions of parameters, trained on trillions of tokens. The architecture barely changes from the textbook Transformer; what changes is *scale* and *which half of the encoder-decoder you keep*. To understand any LLM, it helps to hold three ideas at once: the **shape** of the network (which attention pattern it uses), the **units** it reads and writes (tokens), and the **law** that governs how good it gets as you grow it (scaling).
+An **LLM** is a [Transformer](ch17.html) (Chapter 17) with billions of parameters, trained on trillions of tokens. The architecture barely changes from the textbook Transformer; what changes is *scale* and *which half of the encoder-decoder you keep*. To understand any LLM, it helps to hold three ideas at once: the **shape** of the network (which attention pattern it uses), the **units** it reads and writes (tokens), and the **law** that governs how good it gets as you grow it (scaling).
 
 **Decoder-only (GPT-style) vs encoder-only (BERT-style).** The original Transformer had an encoder (reads the whole input at once, bidirectional) and a decoder (generates left-to-right, causal). Modern LLMs split along this seam:
 
 - A **decoder-only** model (GPT, Llama, Claude, Mistral) uses **causal attention**: each token can attend only to tokens *before* it. This makes it a natural *generator* — feed it a prefix, it predicts the next token, append, repeat. Almost all chat and generation LLMs are decoder-only.
-- An **encoder-only** model (BERT, RoBERTa) uses **bidirectional attention**: every token sees every other token. It cannot generate fluently, but it produces excellent *representations* for classification, retrieval, and embeddings. It is trained by **masked language modeling** (hide 15% of tokens, predict them).
+- An **encoder-only** model (BERT, RoBERTa) uses **bidirectional attention**: every token sees every other token. It cannot generate fluently, but it produces excellent *representations* for classification, retrieval, and embeddings. It is trained by **masked language modeling** (hide 15% of tokens, predict them) — the embeddings it produces power most [classification](ch09.html) and [retrieval](ch43.html) pipelines.
 
 ```{mermaid}
 flowchart LR
@@ -181,7 +183,7 @@ The geometric difference is the **attention mask** — which token-to-token conn
   <text x="380" y="155" text-anchor="middle" fill="#555">token i sees only ≤ i</text>
 </svg>
 
-**Tokenization and token economics.** LLMs do not read characters or words — they read **tokens**, sub-word chunks produced by an algorithm like **Byte-Pair Encoding (BPE)**. BPE starts from individual bytes and greedily merges the most frequent adjacent pair, building a vocabulary of common fragments. The word "tokenization" might split into `token` + `ization`; a rare word like "Riyadh" might become `Ri` + `yad` + `h`. Common words become a single token; rare words shatter into several. As a rule of thumb, **1 token ≈ 4 characters ≈ 0.75 English words**.
+**Tokenization and token economics.** LLMs do not read characters or words — they read **tokens**, sub-word chunks produced by an algorithm like **Byte-Pair Encoding (BPE)** (the [tokenization lineage lives in NLP](ch20.html)). BPE starts from individual bytes and greedily merges the most frequent adjacent pair, building a vocabulary of common fragments. The word "tokenization" might split into `token` + `ization`; a rare word like "Riyadh" might become `Ri` + `yad` + `h`. Common words become a single token; rare words shatter into several. As a rule of thumb, **1 token ≈ 4 characters ≈ 0.75 English words**.
 
 This matters for money and limits. APIs bill per token (input and output separately), and the **context window** — how much the model can attend to at once — is measured in tokens (4K for old GPT-3, up to 200K–1M for current frontier models). A 500-word email is roughly 650 tokens; a 300-page book is roughly 120K tokens. So "can the model read my whole codebase?" and "how much will this prompt cost?" are the same question asked twice — both answers are token counts.
 
@@ -358,7 +360,7 @@ def route(x, W_g, k):                  # x: [tokens, d_model]
 
 **Load balancing — the failure mode.** Left alone, the router cheats. A few experts that happen to start slightly better get chosen more, train more, get better, get chosen even more — a rich-get-richer collapse where most experts are dead weight and the live ones become a bottleneck. The standard fix is an **auxiliary load-balancing loss** added during training: it penalizes the model when the fraction of tokens routed to each expert drifts away from uniform, gently pushing traffic to spread out. Implementations also impose an **expert capacity** — a per-expert token budget per batch; tokens overflowing a full expert are dropped (skipped) or sent to the next choice, which keeps the computation rectangular and hardware-friendly.
 
-**Modern refinements.** Two ideas now dominate. *Fine-grained experts* slice the FFN into many smaller experts so the router composes from a richer palette and each token's top-k mixture is more expressive for the same active FLOPs. *Shared experts* (the DeepSeek-MoE design) keep one or more experts that **every** token always uses, capturing common knowledge, while the routed experts specialize — this also relieves the balancing pressure. Sparse MoE is now mainstream in open models: **Mixtral** (8 experts, top-2), **DeepSeek-V3** (fine-grained + shared experts), **Qwen3-MoE**, and **GPT-OSS** all use it. For *where* the experts physically live across GPUs (expert parallelism, all-to-all routing), see Ch 30.
+**Modern refinements.** Two ideas now dominate. *Fine-grained experts* slice the FFN into many smaller experts so the router composes from a richer palette and each token's top-k mixture is more expressive for the same active FLOPs. *Shared experts* (the DeepSeek-MoE design) keep one or more experts that **every** token always uses, capturing common knowledge, while the routed experts specialize — this also relieves the balancing pressure. Sparse MoE is now mainstream in open models: **Mixtral** (8 experts, top-2), **DeepSeek-V3** (fine-grained + shared experts), **Qwen3-MoE**, and **GPT-OSS** all use it. For *where* the experts physically live across GPUs (expert parallelism, all-to-all routing), see [AI Infrastructure & Efficient Inference](ch30.html) (Ch 30).
 
 ## 23.3 — Anatomy of a modern LLM
 
@@ -366,7 +368,7 @@ Today's frontier open models are all the same animal: a **decoder-only transform
 
 **Pre-norm + RMSNorm.** The original transformer normalized *after* each sublayer (post-norm), which makes deep stacks fragile to train. Modern models use **pre-norm**: normalize the input *before* the sublayer and add the clean residual back, so gradients have an unobstructed path down the stack and training stays stable without warmup gymnastics. The normalizer itself shrank too — **RMSNorm** replaces LayerNorm, dropping the mean-centering and bias and just rescaling by the root-mean-square. Fewer operations, essentially the same quality.
 
-**RoPE for position.** Position is injected by **Rotary Position Embeddings** — rotating the query/key vectors by an angle proportional to their position, so attention scores depend on *relative* distance. This is the de-facto standard and is what makes context-length extension tricks possible. Covered in depth in §17.
+**RoPE for position.** Position is injected by **Rotary Position Embeddings** — rotating the query/key vectors by an angle proportional to their position, so attention scores depend on *relative* distance. This is the de-facto standard and is what makes context-length extension tricks possible. [Covered in depth in Attention & Transformers](ch17.html).
 
 **GQA / MQA — shrinking the KV cache.** At inference, every past token's keys and values are cached so they aren't recomputed. With full multi-head attention that KV cache is enormous and becomes the real memory bottleneck for long contexts. **Multi-Query Attention (MQA)** shares a single K/V head across all query heads; **Grouped-Query Attention (GQA)** is the practical middle ground — several query heads share each K/V head — cutting cache size manyfold with negligible quality loss. DeepSeek pushes further with **Multi-head Latent Attention (MLA)**, which stores a compressed low-rank latent for K/V and reconstructs on the fly, shrinking the cache even more. The memory math and serving impact live in Ch 30.
 
@@ -407,7 +409,7 @@ Read the table left to right and the pattern is unmistakable: the frame (pre-nor
 
 An LLM is built in stages, and the bulk of its knowledge comes from the first, unsupervised one. Think of it as raising a generalist and then giving it a job: pretraining grows a mind that has read the internet, and fine-tuning teaches that mind to be useful and well-behaved.
 
-**Self-supervised next-token pretraining.** During **pretraining** the model sees raw text and learns one objective: predict the next token. There are no human labels — the label of each position *is* the next word in the text, which is why it is called **self-supervised** (the data labels itself). The loss is **cross-entropy** averaged over every position:
+**Self-supervised next-token pretraining.** During **pretraining** the model sees raw text and learns one objective: predict the next token. There are no human labels — the label of each position *is* the next word in the text, which is why it is called **self-supervised** (the data labels itself). The loss is [**cross-entropy**](ch04.html) averaged over every position:
 
 $$\mathcal{L} = -\frac{1}{T}\sum_{t=1}^{T} \log p_\theta(x_t \mid x_{<t})$$
 
@@ -645,7 +647,7 @@ $$\mathcal{L}_{RM} = -\log \sigma\big(r_\phi(x, y_w) - r_\phi(x, y_l)\big)$$
 **In words:** train the scorer so the answer humans liked gets a higher number than the one they rejected — the more confidently it ranks them right, the smaller the loss.
 **Also written:** $\;\mathcal{L}_{RM} = -\log \dfrac{e^{r_\phi(x,y_w)}}{e^{r_\phi(x,y_w)}+e^{r_\phi(x,y_l)}}$ — the Bradley–Terry probability that $y_w$ beats $y_l$, i.e. a 2-class softmax / logistic loss on the score gap.
 
-When the preferred response already scores higher, the difference inside $\sigma$ is large and positive, $\sigma \to 1$, and the loss is near zero; when the model has it backwards, the loss is large and gradients flip the ranking. Third, use reinforcement learning — specifically **PPO** (Proximal Policy Optimization, Chapter 25) — to update the LLM so it generates responses the reward model scores highly, with a **KL penalty** that keeps the model from drifting too far from the SFT starting point and "gaming" the reward with degenerate text:
+When the preferred response already scores higher, the difference inside $\sigma$ is large and positive, $\sigma \to 1$, and the loss is near zero; when the model has it backwards, the loss is large and gradients flip the ranking. Third, use [reinforcement learning](ch25.html) — specifically **PPO** (Proximal Policy Optimization, Chapter 25) — to update the LLM so it generates responses the reward model scores highly, with a **KL penalty** that keeps the model from drifting too far from the SFT starting point and "gaming" the reward with degenerate text:
 
 $$\max_\theta\ \mathbb{E}\big[r_\phi(x,y)\big] - \beta\,\mathrm{KL}\big(\pi_\theta \,\Vert\, \pi_{\text{SFT}}\big)$$
 
@@ -1181,13 +1183,13 @@ A high refusal rate on a safety benchmark is necessary but not sufficient. Model
 
 ## 23.14 — Multimodal LLMs (vision-language models)
 
-Everything so far assumed the model reads and writes only text. But the frontier assistants — GPT-4o, Claude, Gemini — also *see*: you paste a screenshot, a chart, a photo of a whiteboard, and the model reasons about it. A **multimodal LLM** (often a **vision-language model**, VLM) is, at heart, the same decoder-only transformer, fed extra tokens that come from an image instead of from text.
+Everything so far assumed the model reads and writes only text. But the frontier assistants — GPT-4o, Claude, Gemini — also *see*: you paste a screenshot, a chart, a photo of a whiteboard, and the model reasons about it. A [**multimodal LLM**](ch24.html) (often a **vision-language model**, VLM) is, at heart, the same decoder-only transformer, fed extra tokens that come from an image instead of from text.
 
 The intuition is a translator at a border. The language model only speaks "token"; an image speaks pixels. So you hire a **vision encoder** to translate the picture into a handful of token-shaped vectors, and from then on the LLM treats them like any other tokens in the prompt — attending over the photo and the question together in one sequence.
 
 Concretely there are three pieces:
 
-- A **vision encoder** (usually a Vision Transformer, often the image half of a **CLIP** model) cuts the image into patches and turns each into a vector — *visual tokens*.
+- A **vision encoder** (usually a Vision Transformer, often the image half of a **CLIP** model — see [Computer Vision](ch19.html)) cuts the image into patches and turns each into a vector — *visual tokens*.
 - A small **projector** (a linear layer or tiny MLP) maps those visual vectors into the LLM's text-embedding space, so they live in the same room as word embeddings. This is the cheap part most fine-tunes train.
 - The **frozen (or lightly tuned) LLM** then attends over the concatenated sequence `[visual tokens] + [text tokens]` exactly as if the picture were a paragraph it had read.
 
@@ -1254,7 +1256,33 @@ The practical consequence: in a RAG prompt, put the *most relevant* retrieved ch
 **Common mistake:** equating a bigger context window with better answers. A longer prompt is slower (attention and KV-cache cost rise with length), more expensive (you pay per input token), and can actually *lower* accuracy by burying the key fact in the middle and adding distractors the model may latch onto. Retrieve-and-rank beats stuff-everything almost every time.
 :::
 
-## 23.16 — Key takeaways
+## 23.16 — Quick reference
+
+| Term / formula | Meaning in one line | When / why it matters |
+|---|---|---|
+| Decoder-only (causal) | Each token attends only to earlier tokens; generates left-to-right | Default for all chat/generation LLMs |
+| Encoder-only (BERT) | Bidirectional attention; great representations, can't generate | Embeddings, classification, retrieval at scale |
+| Token (~4 chars) | Sub-word unit (BPE) the model actually reads/writes | Drives API cost and context-window limits |
+| Scaling law $L(N)\approx L_\infty+(N_c/N)^\alpha$ | Loss falls as a power law in params/data/compute | Predicts payoff of scaling; Chinchilla = scale params & tokens together (~20:1) |
+| Sparse MoE $y=\sum_{i\in\mathcal{T}}g_iE_i(x)$ | Route each token to top-$k$ of $N$ experts | Grow total params while per-token FLOPs stay fixed |
+| GQA / MQA / MLA | Share or compress K/V heads to shrink the KV cache | Cuts inference memory for long contexts |
+| SwiGLU | Gated feed-forward (SiLU gate × linear) | Beats plain MLP at matched params; modern default FFN |
+| Next-token loss $-\frac1T\sum\log p_\theta(x_t\mid x_{<t})$ | Average surprise at the true next token (perplexity $=e^{\mathcal L}$) | The single pretraining objective |
+| LoRA $h=Wx+\tfrac{\alpha}{r}BAx$ | Freeze $W$, train thin low-rank $BA$ | ~256× fewer trainable weights; swappable adapters |
+| QLoRA | 4-bit (NF4) frozen base + LoRA on top | Fine-tune a 65B model on one GPU |
+| SFT / instruction tuning | Supervised fine-tune on (instruction, response) pairs | Turns a base completer into an assistant |
+| RLHF (reward model + PPO − β·KL) | Optimize toward human-preferred outputs, leashed to SFT | Aligns tone/honesty/harmlessness; max quality, fiddly |
+| DPO $-\log\sigma(\beta\Delta\log\tfrac{\pi_\theta}{\pi_{\text{ref}}})$ | Preference alignment with no reward model, no RL loop | Default first-line alignment; stable, offline |
+| Cosine similarity $\hat q\cdot\hat d$ | Direction-only match between query and doc vectors | Core of RAG semantic retrieval |
+| RAG | Retrieve relevant chunks, paste into prompt, then generate | Fresh, citable, private-data answers without retraining |
+| KV cache ($O(T^2)\to O(T)$) | Store past keys/values so each step encodes one new token | Biggest inference speedup; limits servable context length |
+| Quantization (int8 / NF4 / GPTQ / AWQ) | Store weights in fewer bits | Halve–quarter memory; fit big models on small hardware |
+| Temperature $p_i\propto e^{z_i/T}$ | Reshape logits before sampling | $T<1$ focused, $T>1$ creative; with top-k / top-p |
+| Speculative decoding | Draft model proposes, target verifies $k$ in parallel | 2–3× faster, output distribution unchanged |
+| Test-time compute (CoT, best-of-$n$, o1/R1) | Spend more inference compute to reason | Buys accuracy without a bigger pretraining run |
+| Calibration / ECE | Gap between stated confidence and actual accuracy | Alignment often breaks it; never trust verbalized confidence |
+
+## 23.17 — Key takeaways
 
 - An **LLM is a scaled-up Transformer**; almost all generative/chat models are **decoder-only** (causal attention, generates left-to-right), while **encoder-only** (BERT) models use bidirectional attention and excel at embeddings and classification.
 - Models read **tokens** (~4 chars each); token counts drive both **cost** and the **context window**. **Scaling laws** say quality improves as a smooth power law in parameters, data, and compute — and Chinchilla says scale them *together* (~20 tokens/param).
@@ -1268,7 +1296,7 @@ The practical consequence: in a RAG prompt, put the *most relevant* retrieved ch
 - **Multimodal LLMs** bolt a **vision encoder + projector** onto the same decoder, turning images into tokens the LLM attends over (LLaVA-style); for pure image labeling, a CLIP embedding still beats a full VLM.
 - **Long context** is two problems: *extending* the window (RoPE scaling — PI/NTK/YaRN) and *using* it well (the **lost-in-the-middle** sag). **Context engineering** — retrieve, rank, compress, cache — beats stuffing everything in.
 
-## 23.17 — See also
+## 23.18 — See also
 
 - **Attention & Transformers** — the architecture every LLM is built on (attention, masks, positional encoding).
 - **Natural Language Processing** — tokenization lineage, embeddings, and the language tasks LLMs subsume.

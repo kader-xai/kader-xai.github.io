@@ -111,11 +111,13 @@ Most of the models in this encyclopedia assume your data arrives in a tidy shape
 🧭 **In context:** representation learning on relational data · node/edge/graph prediction for molecules, social networks, knowledge bases, recommenders · learn from connectivity, not just features — by aggregating information along edges.
 :::
 
+> 💡 **Remember this:** A graph neural network learns by repeatedly passing each node a permutation-invariant summary of its neighbors and updating itself — so a node's vector ends up encoding its local connectivity, not just its own features.
+
 ## 40.1 Why graphs need their own models
 
 A graph $G = (V, E)$ is a set of nodes $V$ and edges $E$ connecting them. We usually summarize the edges with an **adjacency matrix** $A \in \{0,1\}^{n \times n}$, where $A_{ij}=1$ if there is an edge from $i$ to $j$, and attach a **feature matrix** $X \in \mathbb{R}^{n \times d}$ giving each node a $d$-dimensional feature vector.
 
-The trouble is that the grid and sequence models from earlier chapters (CNNs in Chapter 18, RNNs/Transformers in Chapters 19–22) lean on a regularity graphs do not have:
+The trouble is that the grid and sequence models from earlier chapters ([CNNs](ch15.html), [RNNs](ch16.html)/[Transformers](ch17.html)) lean on a regularity graphs do not have:
 
 - **No fixed neighbor count.** A pixel always has 8 neighbors; a word always has one predecessor. A graph node may have 1 neighbor or 10,000. A convolution kernel of fixed size has nothing to slide over.
 - **No canonical ordering.** Pixels have rows and columns; tokens have positions. Graph nodes have no inherent order. If you flatten $A$ into a vector and feed it to an MLP, then relabeling the same graph's nodes produces a totally different input — yet it is the *same graph*. We want **permutation invariance** (for graph-level outputs) and **permutation equivariance** (for node-level outputs): relabel the nodes, and the outputs relabel the same way, never change meaning.
@@ -170,7 +172,7 @@ This one equation is the design constraint behind every architecture in this cha
 
 ## 40.2 Node embeddings from random walks: DeepWalk and node2vec
 
-Before end-to-end graph networks took over, a beautifully simple idea dominated: **treat random walks on the graph like sentences, and apply word2vec.** If you stand on a node and wander to random neighbors, the sequence of nodes you visit is like a sentence whose "words" are nodes. Nodes that co-occur in many walks are "used in similar contexts," so — exactly as in the skip-gram model of Chapter 20 — they should get similar embeddings.
+Before end-to-end graph networks took over, a beautifully simple idea dominated: **treat random walks on the graph like sentences, and apply word2vec.** If you stand on a node and wander to random neighbors, the sequence of nodes you visit is like a sentence whose "words" are nodes. Nodes that co-occur in many walks are "used in similar contexts," so — exactly as in the [skip-gram model](ch20.html) — they should get similar embeddings.
 
 **DeepWalk** does precisely this. For each node, sample a few fixed-length uniform random walks; collect all walks as a corpus; run skip-gram to learn a vector $z_v \in \mathbb{R}^k$ per node. Skip-gram maximizes the probability of seeing a node's walk-neighbors given the node:
 
@@ -179,7 +181,7 @@ $$\max_{Z}\ \sum_{v \in V}\ \sum_{u \in N_{\text{walk}}(v)} \log \frac{\exp(z_u^
 **In words:** find a vector for every node so that nodes which keep showing up near each other on random walks have vectors pointing in similar directions, and everyone else's point away.
 **Also written:** since $\frac{\exp(z_u^\top z_v)}{\sum_w \exp(z_w^\top z_v)} = \operatorname{softmax}_u(Z z_v)$, the inner term is just $\log P(u \mid v)$ under a softmax over all nodes — maximize the log-likelihood of each observed walk-neighbor.
 
-The softmax denominator over all nodes is too expensive, so in practice it is approximated with **negative sampling** (Chapter 20): push $z_u^\top z_v$ up for real walk-neighbors, push it down for a handful of random "negative" nodes.
+The softmax denominator over all nodes is too expensive, so in practice it is approximated with **negative sampling** ([Chapter 20](ch20.html)): push $z_u^\top z_v$ up for real walk-neighbors, push it down for a handful of random "negative" nodes.
 
 The doodle makes the "walk = sentence" idea concrete: a token slides from node to node, and the path it traces is exactly the sequence handed to skip-gram.
 
@@ -440,7 +442,7 @@ Neighbor sampling adds variance: the same node gets slightly different embedding
 
 ## 40.6 Graph Attention Networks (GAT)
 
-GCN weights every neighbor by a fixed function of degree. But intuitively, not all neighbors are equally relevant — in a citation network, one cited paper might be central to yours and another only tangential. **GAT** (Veličković et al., 2018) lets the model *learn* how much to weight each neighbor, by importing the attention mechanism from Transformers (Chapter 22) onto the edges.
+GCN weights every neighbor by a fixed function of degree. But intuitively, not all neighbors are equally relevant — in a citation network, one cited paper might be central to yours and another only tangential. **GAT** (Veličković et al., 2018) lets the model *learn* how much to weight each neighbor, by importing the attention mechanism from [Transformers](ch17.html) onto the edges.
 
 For each edge $(v, u)$ the network computes an **attention coefficient**, then normalizes across $v$'s neighbors with a softmax:
 
@@ -492,6 +494,18 @@ conv2 = GATConv(hid * 8, n_classes, heads=1, concat=False, dropout=0.6)
 ```
 
 The first neighbor gets two-thirds of the weight — the model decided it matters most. Note the coefficients are computed *per node from features*, so GAT is naturally inductive like GraphSAGE, and it is more expressive than GCN whenever neighbor importance is uneven. The cost is more parameters and compute per edge, and attention can occasionally be unstable to train (multiple heads help).
+
+**Which message-passing layer should I use?**
+
+```{mermaid}
+flowchart TD
+  Q1{Graph fits in<br/>memory at once?} -- no --> SAGE[GraphSAGE<br/>sample neighbors, inductive, scales]
+  Q1 -- yes --> Q2{Do neighbors differ<br/>in importance?}
+  Q2 -- yes --> GAT[GAT<br/>learned attention per edge]
+  Q2 -- no --> Q3{Graph-level task<br/>needing max expressiveness?}
+  Q3 -- yes --> GIN["GIN (§40.8)<br/>sum aggregator, 1-WL power"]
+  Q3 -- no --> GCN[GCN<br/>fast normalized-mean baseline]
+```
 
 ## 40.7 Readout/pooling and the limits of depth
 
@@ -651,7 +665,7 @@ result.plot_losses()                                    # rank-based metrics (MR
 
 ## 40.10 Relational deep learning over databases
 
-Most enterprise data does not live in a single graph file — it lives in a **relational database**: a customer table, an orders table, a products table, joined by foreign keys. The traditional ML recipe is to *flatten* this by hand: write SQL to compute features like "number of orders in last 30 days," "average basket value," and dump them into one wide table for an XGBoost model (Chapter 14). This **feature engineering** is where most of the project time goes, and every hand-crafted aggregate throws away structure.
+Most enterprise data does not live in a single graph file — it lives in a **relational database**: a customer table, an orders table, a products table, joined by foreign keys. The traditional ML recipe is to *flatten* this by hand: write SQL to compute features like "number of orders in last 30 days," "average basket value," and dump them into one wide table for an [XGBoost model](ch10.html). This **feature engineering** is where most of the project time goes, and every hand-crafted aggregate throws away structure.
 
 **Relational deep learning** reframes the database itself as a graph and learns on it directly. The mapping is natural: each **row becomes a node**, columns become its features, and a **foreign-key reference becomes an edge** between two rows. A customer row links to its order rows, which link to product rows — exactly the heterogeneous graph a GNN can consume.
 
@@ -695,10 +709,10 @@ out = model(data.x_dict, data.edge_index_dict)   # dict of per-node-type predict
 Where graph ML genuinely earns its keep:
 
 - **Chemistry & drug discovery** — molecules are graphs (atoms/bonds); GNNs predict toxicity, solubility, binding, and screen huge compound libraries. This is the flagship success story.
-- **Recommenders** — the user–item interaction graph is enormous and sparse; GNNs (e.g. PinSAGE-style, building on Chapter 30) power web-scale recommendation by aggregating over the bipartite graph.
+- **Recommenders** — the user–item interaction graph is enormous and sparse; GNNs (e.g. PinSAGE-style, building on [recommender systems](ch26.html)) power web-scale recommendation by aggregating over the bipartite graph.
 - **Knowledge-graph completion** — search, question answering, and enterprise knowledge bases use the embedding models of §40.9 to infer missing facts.
 - **Traffic & logistics** — road networks are graphs; spatio-temporal GNNs forecast travel times (this powers real ETA systems).
-- **Fraud & security** — fraud rings show up as suspicious subgraph structure that node-feature models miss entirely.
+- **Fraud & security** — [fraud rings](ch27.html) show up as suspicious subgraph structure that node-feature models miss entirely.
 
 And the honest limitations:
 
@@ -713,7 +727,7 @@ Decision heuristic: reach for a GNN when (a) the connectivity itself is predicti
 
 ## 40.12 Graph Transformers and the global-attention alternative
 
-Message passing's two recurring headaches — over-smoothing and over-squashing (§40.7) — both come from the same root cause: information can only travel along edges, one hop per layer. **Graph Transformers** take a different bet, borrowed wholesale from Chapter 22: let *every* node attend to *every other* node directly, the way a Transformer token attends to all tokens in a sequence. Two faraway nodes can then exchange information in a single layer, with no bottleneck edge in between.
+Message passing's two recurring headaches — over-smoothing and over-squashing (§40.7) — both come from the same root cause: information can only travel along edges, one hop per layer. **Graph Transformers** take a different bet, borrowed wholesale from [attention & transformers](ch17.html): let *every* node attend to *every other* node directly, the way a Transformer token attends to all tokens in a sequence. Two faraway nodes can then exchange information in a single layer, with no bottleneck edge in between.
 
 **The intuition:** a message-passing GNN is like a rumor that has to physically pass person-to-person down a chain; a graph transformer is like a group video call where anyone can speak to anyone instantly. The catch is that a video call with $n$ people costs $O(n^2)$ attention — fine for a small molecule, ruinous for a million-node social graph.
 
@@ -736,7 +750,29 @@ h = conv(x, edge_index, edge_attr)   # multi-head attention messages, optionally
 **When to consider a graph transformer:** small-to-medium graphs (molecules, small circuits, scene graphs) where long-range interactions matter and you have ample training data. For web-scale node-classification graphs, sampled message passing (§40.5) usually remains the practical choice — full global attention over millions of nodes is rarely affordable.
 :::
 
-## 40.1 — Key takeaways
+## 40.1 — Quick reference
+
+| Term / method | Meaning in one line | When / why |
+|---|---|---|
+| Permutation equivariance | $f(PX, PAP^\top)=P f(X,A)$ — relabel nodes, outputs relabel too | The design constraint behind every GNN; node-level outputs |
+| Permutation invariance | $g(PX, PAP^\top)=g(X,A)$ — relabel nodes, output unchanged | Graph-level readout: the label can't depend on numbering |
+| DeepWalk / node2vec | Random walks as "sentences" → skip-gram embeddings | Quick node embeddings; transductive (no new nodes) |
+| Message passing | AGGREGATE neighbors → UPDATE node, repeat $L$ layers | The unifying recipe; receptive field grows 1 hop/layer |
+| GCN | $H'=\sigma(\tilde D^{-1/2}\tilde A\tilde D^{-1/2}HW)$ — normalized-mean | Fast strong baseline; whole graph in memory, fixed weights |
+| GraphSAGE | Sample $k$ neighbors, CONCAT(self, agg) | Scales to huge graphs; inductive (new nodes work) |
+| GAT | Attention weights $\alpha_{vu}=\mathrm{softmax}(e_{vu})$ over neighbors | When some neighbors matter more than others; inductive |
+| GIN | $\mathrm{MLP}((1+\epsilon)h_v+\sum_u h_u)$ — sum aggregator | Max expressiveness (1-WL); graph-level tasks needing it |
+| Readout | sum / mean / max pool of node vectors → graph vector | Collapse to one vector for graph-level prediction |
+| Over-smoothing | Deep layers drive all node vectors to one value | Why GNNs stay 2–4 layers; use skip / jumping-knowledge |
+| Over-squashing | Long-range messages crushed through bottleneck edges | Why long-range reasoning is hard; rewire or go global |
+| 1-WL test | Color-refinement isomorphism check; bounds GNN power | The ceiling: message passing can't beat it (no triangles) |
+| TransE | $-\lVert h+r-t\rVert$ — relation as translation | KG link prediction; misses symmetry, 1-to-many |
+| DistMult | $\sum_i h_i r_i t_i$ — bilinear diagonal | KG with symmetric relations only |
+| RotatE | $-\lVert h\circ r-t\rVert$ in complex space — rotation | KG capturing symmetry/antisymmetry/inversion/composition |
+| Relational deep learning | DB rows = nodes, foreign keys = edges; learn aggregates | Skip hand-engineered SQL features; heterogeneous GNN |
+| Graph transformer | Global attention + structural/positional encodings | Small/medium graphs, long-range; quadratic cost |
+
+## 40.2 — Key takeaways
 
 - Graphs break the assumptions of grid/sequence models — **variable degree, no canonical order** — so we need architectures that are **permutation-invariant/equivariant** by construction.
 - Tasks come at **node, edge, and graph** level; the architecture's body is shared, only the head (per-node, per-edge-pair, or pooled) changes.
@@ -749,14 +785,14 @@ h = conv(x, edge_index, edge_attr)   # multi-head attention messages, optionally
 - **Graph transformers** swap edge-bound message passing for global attention plus structural encodings, dodging over-smoothing/over-squashing at quadratic cost — strong on small/medium graphs, often used in hybrid form.
 - Always sanity-check that **the graph structure adds real signal** over node features alone before committing to a GNN.
 
-## 40.2 — See also
+## 40.3 — See also
 
-- **Chapter 20 (Word Embeddings / NLP)** — skip-gram and negative sampling, the engine behind DeepWalk/node2vec.
-- **Chapter 22 (Transformers & Attention)** — the attention mechanism GAT imports onto edges, and the global attention graph transformers (§40.12) generalize; Transformers are essentially GNNs on a fully connected graph.
-- **Chapter 18 (CNNs)** — the grid-convolution intuition GCN generalizes to irregular neighborhoods.
-- **Chapter 14 (Gradient Boosting / Trees)** — the strong tabular baseline relational deep learning competes with.
-- **Chapter 30 (Recommender Systems)** — the user–item graphs where web-scale GNNs (PinSAGE) shine.
-- **Chapter 39 / frontier chapters** — higher-order and geometric deep learning that push past the 1-WL expressiveness ceiling.
+- **[Chapter 20 (Natural Language Processing)](ch20.html)** — skip-gram and negative sampling, the engine behind DeepWalk/node2vec.
+- **[Chapter 17 (Attention & Transformers)](ch17.html)** — the attention mechanism GAT imports onto edges, and the global attention graph transformers (§40.12) generalize; Transformers are essentially GNNs on a fully connected graph.
+- **[Chapter 15 (Convolutional Neural Networks)](ch15.html)** — the grid-convolution intuition GCN generalizes to irregular neighborhoods.
+- **[Chapter 10 (Ensemble Methods)](ch10.html)** — the strong tabular baseline (gradient-boosted trees) relational deep learning competes with.
+- **[Chapter 26 (Recommender Systems)](ch26.html)** — the user–item graphs where web-scale GNNs (PinSAGE) shine.
+- **[Chapter 39 (Frontier & Emerging Directions)](ch39.html)** — higher-order and geometric deep learning that push past the 1-WL expressiveness ceiling.
 
 ------------------------------------------------------------------------
 

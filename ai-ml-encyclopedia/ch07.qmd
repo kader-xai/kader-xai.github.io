@@ -105,11 +105,13 @@ toc-expand: true
 
 ------------------------------------------------------------------------
 
-High-dimensional data is hard to store, slow to train on, noisy, and impossible to picture. **Dimensionality reduction** is the craft of squeezing many features down to a handful of well-chosen ones while throwing away as little useful structure as possible. It sits at the end of the ML workflow's data-shaping stage — after preprocessing, before modeling — and pays off in faster training, less overfitting, denoised signals, and 2-D pictures you can actually look at.
+High-dimensional data is hard to store, slow to train on, noisy, and impossible to picture. **Dimensionality reduction** is the craft of squeezing many features down to a handful of well-chosen ones while throwing away as little useful structure as possible. It sits at the end of the ML workflow's data-shaping stage — after [preprocessing](ch06.html), before modeling — and pays off in faster training, less [overfitting](ch12.html), denoised signals, and 2-D pictures you can actually look at.
 
 ::: {.callout-note appearance="simple"}
 🧭 **In context:** part of the ML Workflow (data shaping) · used to compress features, denoise, visualize, and fight the curse of dimensionality · the one key idea: most real data of dimension $D$ actually lives near a much lower-dimensional surface, and finding that surface is the whole game.
 :::
+
+> 💡 **Remember this:** real high-dimensional data almost always lives near a much lower-dimensional surface, so you can throw away most of the dimensions and keep nearly all the signal — the only question is which method finds that surface.
 
 Before any single method, fix the **curse of dimensionality** in your head: as $D$ grows, the volume of space explodes, so any fixed number of points becomes hopelessly sparse, all pairwise distances drift toward equal, and notions like "nearest neighbor" stop meaning much. Reduction fights back by finding the few directions that actually carry the signal.
 
@@ -150,7 +152,7 @@ flowchart TD
 
 PCA is the workhorse. The intuition: imagine a cloud of points shaped like a flattened, tilted cigar. There is one direction along which the cloud is most stretched out — that direction carries the most information about how points differ. PCA finds that direction, then the next-most-stretched direction at right angles to it, and so on. These directions are the **principal components**, and projecting onto the first few keeps most of the spread while killing the rest.
 
-**Variance maximization.** "Information" here means **variance** — how much the data spreads along a direction. Center the data (subtract the mean of each feature so the cloud sits at the origin). For a unit-length direction $w$, the variance of the projected points is $w^\top \Sigma\, w$, where $\Sigma$ is the **covariance matrix** of the data. PCA asks: which unit $w$ maximizes that?
+**Variance maximization.** "Information" here means **variance** — how much the data spreads along a direction. Center the data (subtract the mean of each feature so the cloud sits at the origin). For a unit-length direction $w$, the variance of the projected points is $w^\top \Sigma\, w$, where $\Sigma$ is the **[covariance matrix](ch04.html)** of the data. PCA asks: which unit $w$ maximizes that?
 
 $$\Sigma = \frac{1}{n}\sum_{i=1}^{n} x_i x_i^\top, \qquad \max_{\|w\|=1}\; w^\top \Sigma\, w.$$
 
@@ -159,7 +161,7 @@ $$\Sigma = \frac{1}{n}\sum_{i=1}^{n} x_i x_i^\top, \qquad \max_{\|w\|=1}\; w^\to
 
 Throughout this chapter we use the **$1/n$ convention** for the covariance (the maximum-likelihood estimate). Many libraries divide by $1/(n-1)$ (the unbiased estimate) instead; this scales every eigenvalue by the same constant, so it changes the eigenvalues but never the eigenvectors or the explained-variance *ratios* that we actually use.
 
-**Eigenvectors of the covariance.** Solving that constrained problem (Lagrange multipliers) gives the clean result $\Sigma w = \lambda w$ — the best direction is an **eigenvector** of $\Sigma$, and the variance it captures is its **eigenvalue** $\lambda$. So the recipe is: compute $\Sigma$, take its eigenvectors, sort by eigenvalue, keep the top $k$. The first component has the largest $\lambda$, the second the next-largest (and is automatically orthogonal to the first because $\Sigma$ is symmetric), and so on.
+**Eigenvectors of the covariance.** Solving that constrained problem (Lagrange multipliers) gives the clean result $\Sigma w = \lambda w$ — the best direction is an **[eigenvector](ch01.html)** of $\Sigma$, and the variance it captures is its **eigenvalue** $\lambda$. So the recipe is: compute $\Sigma$, take its eigenvectors, sort by eigenvalue, keep the top $k$. The first component has the largest $\lambda$, the second the next-largest (and is automatically orthogonal to the first because $\Sigma$ is symmetric), and so on.
 
 $$\Sigma w = \lambda w.$$
 
@@ -200,21 +202,21 @@ about **98%** of the variance. The top eigenvector points along roughly $(0.84, 
   <line x1="135" y1="70" x2="225" y2="180" stroke="#f59e0b" stroke-width="1.5" stroke-dasharray="4 3"/>
   <text x="120" y="68" fill="#f59e0b">PC2</text>
   <!-- data points -->
-  <circle cx="90" cy="150" r="4" fill="#111"/>
-  <circle cx="135" cy="150" r="4" fill="#111"/>
-  <circle cx="180" cy="120" r="4" fill="#111"/>
-  <circle cx="225" cy="90" r="4" fill="#111"/>
-  <circle cx="270" cy="90" r="4" fill="#111"/>
+  <circle cx="90" cy="150" r="4" fill="currentColor"/>
+  <circle cx="135" cy="150" r="4" fill="currentColor"/>
+  <circle cx="180" cy="120" r="4" fill="currentColor"/>
+  <circle cx="225" cy="90" r="4" fill="currentColor"/>
+  <circle cx="270" cy="90" r="4" fill="currentColor"/>
   <!-- projection ticks onto PC1 -->
   <circle cx="96" cy="146" r="2.5" fill="#3b82f6"/>
   <circle cx="138" cy="120" r="2.5" fill="#3b82f6"/>
   <circle cx="180" cy="98" r="2.5" fill="#3b82f6"/>
   <circle cx="222" cy="76" r="2.5" fill="#3b82f6"/>
   <circle cx="258" cy="65" r="2.5" fill="#3b82f6"/>
-  <text x="40" y="35" fill="#111">Black: data · Blue: projection onto PC1</text>
+  <text x="40" y="35" fill="currentColor">Dark: data · Blue: projection onto PC1</text>
 </svg>
 
-**Link to SVD.** In practice nobody forms $\Sigma$ explicitly — it is numerically wasteful and can lose precision. Instead use the **Singular Value Decomposition** of the centered data matrix $X$ (rows = samples):
+**Link to SVD.** In practice nobody forms $\Sigma$ explicitly — it is numerically wasteful and can lose precision. Instead use the **[Singular Value Decomposition](ch01.html)** of the centered data matrix $X$ (rows = samples):
 
 $$X = U S V^\top.$$
 
@@ -263,8 +265,8 @@ $$\text{cumulative}(k) = \frac{\sum_{j=1}^{k}\lambda_j}{\sum_{j=1}^{D}\lambda_j}
 <svg viewBox="0 0 360 180" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif" font-size="10">
   <line x1="40" y1="140" x2="330" y2="140" stroke="#888"/>
   <line x1="40" y1="20" x2="40" y2="140" stroke="#888"/>
-  <text x="150" y="165" fill="#111">component index</text>
-  <text x="8" y="80" fill="#111" transform="rotate(-90 8,80)">variance</text>
+  <text x="150" y="165" fill="currentColor">component index</text>
+  <text x="8" y="80" fill="currentColor" transform="rotate(-90 8,80)">variance</text>
   <!-- scree bars -->
   <rect x="60"  y="40"  width="22" height="100" fill="#3b82f6"/>
   <rect x="100" y="95"  width="22" height="45"  fill="#3b82f6"/>
@@ -347,7 +349,7 @@ Z_iso  = iso.fit_transform(X)    # preserve geodesic (along-surface) distances
 
 <svg viewBox="0 0 420 200" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif" font-size="11">
   <!-- rolled-up Swiss roll (left) -->
-  <text x="40" y="18" fill="#111">Swiss roll in 3-D (rolled)</text>
+  <text x="40" y="18" fill="currentColor">Swiss roll in 3-D (rolled)</text>
   <path d="M110,110 m0,0
            a8,8 0 1 1 0.1,0
            a18,18 0 1 1 0.1,0
@@ -358,13 +360,13 @@ Z_iso  = iso.fit_transform(X)    # preserve geodesic (along-surface) distances
   <circle cx="110" cy="80" r="4" fill="#10b981"/>
   <text x="118" y="60" fill="#ef4444">A</text>
   <text x="118" y="92" fill="#10b981">B</text>
-  <text x="60" y="180" fill="#888">A,B near in 3-D…</text>
+  <text x="60" y="180" fill="currentColor" opacity="0.6">A,B near in 3-D…</text>
   <!-- arrow -->
-  <line x1="195" y1="100" x2="245" y2="100" stroke="#111" stroke-width="1.5" marker-end="url(#ar)"/>
-  <defs><marker id="ar" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6 z" fill="#111"/></marker></defs>
-  <text x="198" y="92" fill="#111">unroll</text>
+  <line x1="195" y1="100" x2="245" y2="100" stroke="currentColor" stroke-width="1.5" marker-end="url(#ar)"/>
+  <defs><marker id="ar" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6 z" fill="currentColor"/></marker></defs>
+  <text x="198" y="92" fill="currentColor">unroll</text>
   <!-- unrolled flat sheet (right) -->
-  <text x="280" y="18" fill="#111">unrolled (2-D)</text>
+  <text x="280" y="18" fill="currentColor">unrolled (2-D)</text>
   <rect x="270" y="40" width="130" height="120" fill="none" stroke="#3b82f6" stroke-width="2"/>
   <!-- gradient ticks showing the sheet runs end to end -->
   <line x1="285" y1="40" x2="285" y2="160" stroke="#bfdbfe"/>
@@ -374,7 +376,7 @@ Z_iso  = iso.fit_transform(X)    # preserve geodesic (along-surface) distances
   <line x1="385" y1="40" x2="385" y2="160" stroke="#bfdbfe"/>
   <circle cx="290" cy="100" r="4" fill="#ef4444"/>
   <circle cx="380" cy="100" r="4" fill="#10b981"/>
-  <text x="285" y="180" fill="#888">…but far apart on the sheet</text>
+  <text x="285" y="180" fill="currentColor" opacity="0.6">…but far apart on the sheet</text>
 </svg>
 
 Methods differ in how they measure "nearby":
@@ -416,13 +418,13 @@ Maximizing this leads to the generalized eigenproblem $S_W^{-1} S_B\, w = \lambd
   <text x="262" y="160" fill="#10b981">LDA</text>
   <!-- PCA axis: along total spread -->
   <line x1="90" y1="150" x2="250" y2="50" stroke="#888" stroke-width="1.5" stroke-dasharray="5 3"/>
-  <text x="252" y="48" fill="#888">PCA</text>
-  <text x="40" y="185" fill="#111">LDA aims the axis to pull class means apart; PCA only follows total variance.</text>
+  <text x="252" y="48" fill="currentColor" opacity="0.6">PCA</text>
+  <text x="40" y="185" fill="currentColor">LDA aims the axis to pull class means apart; PCA only follows total variance.</text>
 </svg>
 
 **Worked example.** Class A means lie at feature-1 $\approx$ low, class B at feature-1 $\approx$ high, but both classes have huge spread along feature-2 (noise). PCA, chasing total variance, would pick feature-2 and smear the classes together. LDA divides by within-class scatter, so it discounts the noisy feature-2 and lines its axis up with feature-1 — projecting onto it leaves the two classes cleanly apart. That division by $S_W$ is the whole trick: it rewards directions where classes are tight, not just far.
 
-**Where this shows up.** LDA is a staple in face recognition (the "Fisherfaces" method beats raw eigenfaces by aligning axes to *identity* differences rather than lighting), in bankruptcy and credit-default scoring (project many financial ratios onto the one axis that best splits "defaults" from "survives"), and as a fast, label-aware front-end before a $k$-NN or logistic classifier.
+**Where this shows up.** LDA is a staple in face recognition (the "Fisherfaces" method beats raw eigenfaces by aligning axes to *identity* differences rather than lighting), in bankruptcy and credit-default scoring (project many financial ratios onto the one axis that best splits "defaults" from "survives"), and as a fast, label-aware front-end before a [$k$-NN or logistic classifier](ch09.html).
 
 **With scikit-learn.** LDA doubles as both a dimensionality reducer (`transform`) and a classifier (`predict`) — the same fitted object does both:
 
@@ -450,7 +452,7 @@ A common pipeline is **PCA then LDA**: PCA first to knock $D$ down and make $S_W
 
 PCA and LDA are about *modeling*; **t-SNE** and **UMAP** are about *seeing* — they exist to squash data into 2-D or 3-D so your eyes can spot clusters. Both are nonlinear and both prioritize keeping **neighbors together** over preserving global distances, which is exactly what makes a scatter plot readable.
 
-**t-SNE** (t-distributed Stochastic Neighbor Embedding) works in two steps. First, in the original space, it converts distances into **probabilities**: for each point, nearby points get high probability of being picked as a "neighbor," far points near zero — a soft notion of who is close, governed by a **perplexity** setting (roughly, the effective number of neighbors, typically 5–50). Second, it lays points out in 2-D and shuffles them until the neighbor-probabilities in the map match those in the original space, measured by **KL divergence**. The "t" comes from using a heavy-tailed Student-t distribution in the map, which gives crowded clusters room to breathe and prevents everything collapsing into a blob.
+**t-SNE** (t-distributed Stochastic Neighbor Embedding) works in two steps. First, in the original space, it converts distances into **probabilities**: for each point, nearby points get high probability of being picked as a "neighbor," far points near zero — a soft notion of who is close, governed by a **perplexity** setting (roughly, the effective number of neighbors, typically 5–50). Second, it lays points out in 2-D and shuffles them until the neighbor-probabilities in the map match those in the original space, measured by **[KL divergence](ch04.html)**. The "t" comes from using a heavy-tailed Student-t distribution in the map, which gives crowded clusters room to breathe and prevents everything collapsing into a blob.
 
 $$\mathrm{KL}(P\,\|\,Q) = \sum_{i\neq j} p_{ij}\,\log\frac{p_{ij}}{q_{ij}}.$$
 
@@ -530,14 +532,14 @@ $$x = A s, \qquad \text{recover } s = W x \ \text{with}\ W \approx A^{-1}.$$
 **In words:** the microphones record unknown blends ($A$) of the hidden voices; ICA hunts for an unmixing matrix $W$ that undoes the blend and hands back the separate voices.
 **Also written:** componentwise $x_i = \sum_j A_{ij}\, s_j$, recovered as $\hat s = W x$ where $W$ is the (approximate) inverse of the mixing matrix $A$.
 
-The deep insight that makes it solvable: a sum of independent signals is **more Gaussian** than the individual signals (Central Limit Theorem). So to *unmix*, ICA searches for directions that make the recovered signal **as non-Gaussian as possible** — maximizing non-Gaussianity (via measures like **kurtosis** or **negentropy**) pulls the mixtures apart back into the original independent sources. This is why ICA **cannot** separate genuinely Gaussian sources: there is no non-Gaussianity to chase.
+The deep insight that makes it solvable: a sum of independent signals is **more Gaussian** than the individual signals ([Central Limit Theorem](ch04.html)). So to *unmix*, ICA searches for directions that make the recovered signal **as non-Gaussian as possible** — maximizing non-Gaussianity (via measures like **kurtosis** or **negentropy**) pulls the mixtures apart back into the original independent sources. This is why ICA **cannot** separate genuinely Gaussian sources: there is no non-Gaussianity to chase.
 
 The picture below shows two sources (a sine and a sawtooth), two microphone signals that are genuine weighted blends of both, and ICA recovering the originals:
 
 <svg viewBox="0 0 380 200" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif" font-size="10">
-  <text x="20" y="18" fill="#111">2 sources</text>
-  <text x="150" y="18" fill="#111">mics: blends of both</text>
-  <text x="300" y="18" fill="#111">ICA recovers</text>
+  <text x="20" y="18" fill="currentColor">2 sources</text>
+  <text x="150" y="18" fill="currentColor">mics: blends of both</text>
+  <text x="300" y="18" fill="currentColor">ICA recovers</text>
   <!-- source 1: sine -->
   <path d="M20,50 q7.5,-18 15,0 t15,0 t15,0 t15,0" fill="none" stroke="#3b82f6" stroke-width="2"/>
   <!-- source 2: sawtooth -->
@@ -623,7 +625,7 @@ ICA has two built-in **ambiguities**: it cannot recover the original **scale** o
 
 ## 7.6 — Autoencoders: Learned Nonlinear Reduction
 
-Everything so far is a *fixed recipe* — given the data, the answer is computed in one shot. **Autoencoders** instead *learn* the reduction by training a neural network, which lets them capture nonlinear structure that PCA misses and scales to images, audio, and text. The intuition is a funnel: data flows into an **encoder** that squeezes it through a narrow middle layer (the **bottleneck**, or latent code), then a **decoder** tries to rebuild the original from that squeezed code. To rebuild well, the network is forced to pack the essential information into the bottleneck — which is exactly a learned low-dimensional representation.
+Everything so far is a *fixed recipe* — given the data, the answer is computed in one shot. **Autoencoders** instead *learn* the reduction by training a [neural network](ch14.html), which lets them capture nonlinear structure that PCA misses and scales to images, audio, and text. The intuition is a funnel: data flows into an **encoder** that squeezes it through a narrow middle layer (the **bottleneck**, or latent code), then a **decoder** tries to rebuild the original from that squeezed code. To rebuild well, the network is forced to pack the essential information into the bottleneck — which is exactly a learned low-dimensional representation.
 
 <svg viewBox="0 0 380 170" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif" font-size="10">
   <text x="10" y="14" fill="currentColor">encoder → bottleneck → decoder</text>
@@ -676,7 +678,7 @@ Watch the funnel in motion: a packet of data flows in wide, is squeezed through 
 
 **A tiny worked intuition.** Say each input is a 3-pixel patch that is *always* a flat gray ramp: $(a,\ a,\ a)$ for some brightness $a$. Three numbers, but only one truly varies. A bottleneck of width 1 can store $a$ and the decoder can rebuild $(a,a,a)$ with zero error — the autoencoder has discovered, on its own, that this data is secretly 1-dimensional. Give it patches that vary in two independent ways and a width-1 code can no longer reconstruct them; you would watch the reconstruction loss refuse to fall until you widen the bottleneck to 2. The narrowest bottleneck that still reconstructs well *is* the intrinsic dimension.
 
-The deep tie-in: a **linear** autoencoder with one bottleneck layer and squared-error loss recovers exactly the PCA subspace — same span as the top principal components. Autoencoders are therefore PCA's nonlinear generalization. Swap the linear layers for deep nonlinear ones and the bottleneck can bend around curved manifolds (the Swiss roll, handwritten digits) that linear PCA would crush. Two important variants you will meet: the **denoising autoencoder** (feed in corrupted input, ask it to reconstruct the clean original — learns robust features), and the **variational autoencoder (VAE)**, which makes the latent code a probability distribution so you can *sample* new data from it, bridging reduction and generative modeling.
+The deep tie-in: a **linear** autoencoder with one bottleneck layer and squared-error loss recovers exactly the PCA subspace — same span as the top principal components. Autoencoders are therefore PCA's nonlinear generalization. Swap the linear layers for deep nonlinear ones and the bottleneck can bend around curved manifolds (the Swiss roll, handwritten digits) that linear PCA would crush. Two important variants you will meet: the **denoising autoencoder** (feed in corrupted input, ask it to reconstruct the clean original — learns robust features), and the **variational autoencoder (VAE)**, which makes the latent code a probability distribution so you can *sample* new data from it, bridging reduction and [generative modeling](ch18.html).
 
 **With PyTorch.** A minimal autoencoder is a few lines — two small MLPs and an MSE loss:
 
@@ -855,7 +857,31 @@ $$\text{explained variance ratio} = \frac{\sum_{j\le k}\lambda_j}{\sum_j \lambda
 Always benchmark against the **no-reduction baseline**. If the full-feature model is already fast enough and accurate enough, the laziest correct answer is to skip reduction entirely — its main payoffs (speed, denoising, visualization) only matter when one of them is actually a bottleneck.
 :::
 
-## 7.9 — Key takeaways
+## 7.9 — Quick reference
+
+| Term / method | Meaning in one line | When / why |
+|---|---|---|
+| Curse of dimensionality | As $D$ grows, points get sparse and distances all look equal | The reason reduction exists at all |
+| PCA | Eigenvectors of the covariance = directions of max variance | Default reducer: compress, denoise, speed up |
+| Covariance $\Sigma = \frac1n X^\top X$ | How features co-vary, after centering | The matrix PCA diagonalizes |
+| SVD $X = USV^\top$ | Stable way to get PCA without forming $\Sigma$ | Always prefer over eigendecomposition of $\Sigma$ |
+| Explained-variance ratio | Share of total spread kept by top $k$ components | Picking $k$ (95% / 99% threshold or scree elbow) |
+| Standardize + center | Z-score and zero-mean each feature before PCA | Mandatory unless features share units |
+| Kernel PCA | PCA in an implicit high-D feature space via a kernel | Curved structure a straight projection flattens |
+| RBF bandwidth $\gamma$ | Sets how fast similarity decays with distance | Start from $1/\text{median pairwise sq. dist}$ |
+| Manifold learning (Isomap/LLE) | Unfold a low-D surface by along-sheet distances | Swiss-roll-style curved data |
+| LDA | Maximize between-class over within-class scatter | Supervised: when class separation is the goal |
+| $C-1$ rule | LDA yields at most (#classes $-1$) directions | Hard cap on LDA output dimensions |
+| t-SNE / UMAP | Neighbor-preserving 2-D/3-D layout | Visualization only — never as model features |
+| Perplexity / n_neighbors | Effective neighbor count knob | Tune and view several settings before trusting |
+| ICA | Find statistically independent (not just uncorrelated) sources | Unmix audio/EEG; needs non-Gaussian sources |
+| Non-Gaussianity (kurtosis/negentropy) | What ICA maximizes to unmix | Why Gaussian sources can't be separated |
+| Autoencoder | Neural bottleneck trained on reconstruction error | Curved manifold + enough data + reusable encoder |
+| Reconstruction error $\frac1n\sum\|x-\hat x\|^2$ | Average squared rebuild gap | Honest score for PCA / autoencoders |
+| Random projection (JL) | Random matrix multiply preserves pairwise distances | Huge $D$, streaming, cheap pre-reduction |
+| Fit on train only | Reducers learn parameters → fit inside a `Pipeline` | Avoid leaking test info, inflated scores |
+
+## 7.10 — Key takeaways
 
 - Dimensionality reduction trades a tolerable bit of information for speed, denoising, less overfitting, and the ability to visualize — fighting the curse of dimensionality (in high $D$, almost all of a region's volume hugs its boundary, so points grow sparse and equidistant).
 - **PCA**: unsupervised, finds orthogonal directions of maximum variance via eigenvectors of the covariance (best computed by SVD); standardize and center first; choose $k$ with a scree elbow or cumulative-variance threshold. Real covariance matrices are PSD, so every eigenvalue is non-negative.
@@ -867,7 +893,7 @@ Always benchmark against the **no-reduction baseline**. If the full-feature mode
 - **Random projection** ignores the data entirely — a random matrix multiply preserves all pairwise distances within $1\pm\varepsilon$ (Johnson–Lindenstrauss), with target dimension set by the point count, not $D$; the go-to cheap reducer for truly huge dimensions.
 - **Choosing a method** starts from the goal (compress, separate classes, unfold a manifold, visualize, or unmix); fit reducers on training data only (use a `Pipeline` to avoid leakage), and judge results by reconstruction error, downstream task score, or neighbor preservation — always against a no-reduction baseline.
 
-## 7.10 — See also
+## 7.11 — See also
 
 - **[Mathematical Foundations] Linear Algebra** — eigenvectors, SVD, and projections that underpin PCA, LDA, and ICA.
 - **[Mathematical Foundations] Probability & Statistics** — covariance, variance, KL divergence, non-Gaussianity, and the Central Limit Theorem behind ICA.

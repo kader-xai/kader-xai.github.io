@@ -105,11 +105,13 @@ toc-expand: true
 
 ------------------------------------------------------------------------
 
-Search is the oldest and most general problem-solving engine in AI: when you can describe *where you are*, *what you can do*, and *what counts as done*, search systematically explores the space of possibilities to find a sequence of actions that gets you to a goal. It sits at the root of Classical & Symbolic AI and quietly powers planners, theorem provers, route finders, puzzle solvers, and the move-selection logic inside game-playing programs. Master it once and you have the scaffolding for half of GOFAI.
+Search is the oldest and most general problem-solving engine in AI: when you can describe *where you are*, *what you can do*, and *what counts as done*, search systematically explores the space of possibilities to find a sequence of actions that gets you to a goal. It sits at the root of Classical & Symbolic AI and quietly powers planners, theorem provers, route finders, puzzle solvers, and the move-selection logic inside [game-playing programs](ch34.html). Master it once and you have the scaffolding for half of GOFAI.
 
 ::: {.callout-note appearance="simple"}
 🧭 **In context:** Classical & Symbolic AI · used to find action sequences from a start state to a goal · the one key idea: turn any problem into a graph of states and explore it smartly.
 :::
+
+> 💡 **Remember this:** Once you can name a state, the legal actions, a goal test, and a step cost, almost any problem becomes "explore this graph smartly" — and the heuristic you bolt on decides how much of the graph you can skip.
 
 ## 32.1 — Problem formulation (states, actions, goal test, path cost)
 
@@ -201,7 +203,7 @@ Let $b$ be the **branching factor** (successors per node), $d$ the depth of the 
 
 **Depth-first search (DFS)** expands the deepest node first, using a **LIFO stack** (or recursion). It plunges down one branch, backtracking only at dead ends. Its virtue is memory: it stores only the current path plus unexpanded siblings, $O(bm)$ — linear. Its vices: it is *not optimal*, and on infinite or cyclic graphs it may run forever (not complete) unless you track visited states.
 
-**Uniform-cost search (UCS)** is BFS's cost-aware cousin: it expands the node with the lowest *path cost* $g(n)$ so far, using a **priority queue** ordered by $g$. When step costs vary, this — not BFS — is what guarantees the cheapest solution. It is complete and optimal given non-negative step costs. It is essentially **Dijkstra's algorithm** rediscovered as a search strategy.
+**Uniform-cost search (UCS)** is BFS's cost-aware cousin: it expands the node with the lowest *path cost* $g(n)$ so far, using a **priority queue** ordered by $g$. When step costs vary, this — not BFS — is what guarantees the cheapest solution. It is complete and optimal given non-negative step costs. It is essentially **Dijkstra's algorithm** rediscovered as a search strategy — the same shortest-path machinery that resurfaces in [graph machine learning](ch40.html).
 
 **Iterative deepening search (IDS)** is the clever hybrid: run a depth-limited DFS with limit 0, then 1, then 2, and so on until the goal is found. Each round rediscovers the shallow nodes, but because the number of nodes grows exponentially with depth, the wasted re-work is negligible — the deepest level dominates the count. IDS gets BFS's completeness and optimality (with equal step costs) at DFS's $O(bd)$ linear memory. It is the **go-to uninformed method** when the search depth is unknown.
 
@@ -439,7 +441,7 @@ def astar(start, goal, succ_cost, h):
 
 The only change from UCS is the priority key: $g$ becomes $g + h$. That one extra term is the entire difference between blind and informed search.
 
-**Where this is used.** A\* is not a textbook curiosity — it is the workhorse behind GPS and map routing, where the straight-line distance to your destination is the heuristic that keeps the search from fanning out across the whole continent. It also drives pathfinding for units in video games (often on a navigation grid), robot motion planning, and network packet routing. Anywhere you need the *cheapest route* through a graph and you have even a rough sense of "which way is the goal," A\* is usually the first thing reached for.
+**Where this is used.** A\* is not a textbook curiosity — it is the workhorse behind GPS and map routing, where the straight-line distance to your destination is the heuristic that keeps the search from fanning out across the whole continent. It also drives pathfinding for units in video games (often on a navigation grid), [robot motion planning](ch41.html), and network packet routing. Anywhere you need the *cheapest route* through a graph and you have even a rough sense of "which way is the goal," A\* is usually the first thing reached for.
 
 ::: {.callout-tip}
 A useful mental picture: UCS searches in expanding circles around the start, while A\* searches in stretched ellipses pointing toward the goal. A good heuristic squeezes the ellipse tighter, so fewer nodes get explored.
@@ -513,7 +515,7 @@ If your heuristic *overestimates* — say, multiplying distances by 1.5 to speed
 
 ## 32.5 — Local search (hill climbing, simulated annealing, beam search)
 
-Everything so far returns a *path*. But for many problems — scheduling, layout, n-queens, parameter tuning — we only care about the **final configuration**, not how we got there. **Local search** exploits this: keep just the **current state** (and maybe a few), and iteratively nudge it toward better neighbors using an **objective function** $f$ to maximize (or a cost to minimize). It uses almost no memory and scales to huge or even continuous spaces, but it sees only the local neighborhood — it climbs the landscape blindfolded, feeling only which nearby step goes up.
+Everything so far returns a *path*. But for many problems — scheduling, layout, n-queens, [hyperparameter tuning](ch12.html) — we only care about the **final configuration**, not how we got there. **Local search** exploits this: keep just the **current state** (and maybe a few), and iteratively nudge it toward better neighbors using an **objective function** $f$ to maximize (or a cost to minimize). It uses almost no memory and scales to huge or even continuous spaces, but it sees only the local neighborhood — it climbs the landscape blindfolded, feeling only which nearby step goes up.
 
 **Hill climbing** is the greedy local mover: from the current state, look at all neighbors and step to the best one; stop when no neighbor is better. It is fast and memory-trivial, but it gets trapped at a **local optimum** (a peak lower than the global one), stalls on **plateaus** (flat regions where no neighbor looks better), and struggles on **ridges** (where progress needs an awkward zig-zag). Restarting from many random starts — **random-restart hill climbing** — mitigates this surprisingly effectively, because a few of the starts will land on slopes leading to the global peak.
 
@@ -662,7 +664,7 @@ for _ in range(500):
 assert max(fitness(ind) for ind in pop) == 28
 ```
 
-GAs are one corner of a larger family — **evolutionary computation and metaheuristics** (genetic programming, evolution strategies, particle swarms, ant colonies) — all of which generalize the population-based idea. They shine when the landscape is rugged and you have no usable gradient or heuristic, at the cost of many fitness evaluations and a fistful of hyperparameters (population size, mutation rate, selection pressure) to tune.
+GAs are one corner of a larger family — [**evolutionary computation and metaheuristics**](ch35.html) (genetic programming, evolution strategies, particle swarms, ant colonies) — all of which generalize the population-based idea. They shine when the landscape is rugged and you have no usable [gradient](ch02.html) or heuristic, at the cost of many fitness evaluations and a fistful of hyperparameters (population size, mutation rate, selection pressure) to tune.
 
 ::: {.callout-tip}
 Reach for a GA only after simpler local search (with random restarts) has visibly failed. The crossover operator is what justifies the extra machinery — if your problem's partial solutions don't *combine* meaningfully, a GA buys you little over annealing.
@@ -731,7 +733,7 @@ Search is not an island — it is the substrate beneath two large branches of AI
 
 **Planning** is search through a space of world states, where actions have **preconditions** (what must be true to apply them) and **effects** (how they change the world). A planner formulates the task as "from the initial state, find a sequence of actions whose result satisfies the goal" — which is *exactly* a search problem, just with states described by logical facts rather than tile positions. Heuristics for planners are often derived automatically by relaxing the action model (for instance, ignoring the "delete" effects of actions), which is the very same relaxation trick from §32.4 applied to logic instead of puzzles.
 
-**Game playing** is search through a space of moves where an **adversary** also gets to move. The state space becomes a **game tree** that alternates your moves and the opponent's. **Minimax** search assumes the opponent plays optimally and propagates values up the tree — you maximize your score, they minimize it — while **alpha–beta pruning** is the game-tree analogue of skipping unpromising branches, cutting away parts of the search that cannot change the result. Modern engines layer heuristic evaluation functions and Monte-Carlo Tree Search on top, but the spine is still tree search.
+**Game playing** is search through a space of moves where an **adversary** also gets to move. The state space becomes a [**game tree**](ch34.html) that alternates your moves and the opponent's. **Minimax** search assumes the opponent plays optimally and propagates values up the tree — you maximize your score, they minimize it — while **alpha–beta pruning** is the game-tree analogue of skipping unpromising branches, cutting away parts of the search that cannot change the result. Modern engines layer heuristic evaluation functions and Monte-Carlo Tree Search — the same lookahead idea that shows up in [reinforcement learning](ch25.html) — on top, but the spine is still tree search.
 
 ```{mermaid}
 flowchart TB
@@ -743,11 +745,52 @@ flowchart TB
 
 The takeaway is that once you can describe states, actions, a goal, and costs, an astonishing range of problems collapses into "explore this graph well." Planning, games, and combinatorial optimization are all search wearing different costumes.
 
+**Which search should I use?** A quick decision path through this chapter's methods:
+
+```{mermaid}
+flowchart TB
+  Q1{"Do you need the<br/>actual path, or just a<br/>good final state?"}
+  Q1 -->|"final state only"| L{"Landscape<br/>rugged with traps?"}
+  L -->|"no — single peak"| HC["Hill climbing<br/>(+ random restarts)"]
+  L -->|"yes"| SA{"Partial solutions<br/>combine meaningfully?"}
+  SA -->|"no"| ANN["Simulated annealing<br/>/ beam search"]
+  SA -->|"yes"| GA["Genetic algorithm"]
+  Q1 -->|"need the path"| H{"Have a usable<br/>heuristic h(n)?"}
+  H -->|"no"| C{"Step costs equal?"}
+  C -->|"yes"| IDS["Iterative deepening<br/>(or BFS if RAM allows)"]
+  C -->|"no"| UCS["Uniform-cost / Dijkstra"]
+  H -->|"yes"| M{"A* frontier<br/>fits in memory?"}
+  M -->|"yes"| AST["A*"]
+  M -->|"no"| IDA["IDA* / SMA*"]
+```
+
 ::: {.callout-tip}
 When facing a new AI problem, first ask the four formulation questions — *What is a state? What are the actions? When am I done? What does a step cost?* If you can answer them, you can almost certainly attack the problem with the machinery in this chapter.
 :::
 
-## 32.9 — Key takeaways
+## 32.9 — Quick reference
+
+| Term / method | What it means | When / why to reach for it |
+|---|---|---|
+| Problem formulation | States, initial state, actions, $\text{Result}(s,a)$, goal test, path cost | The first move on *any* search problem; get it right and the algorithm is easy |
+| State graph vs. search tree | Graph = the map (each state once); tree = the routes (a state may recur) | Add a `seen` set (graph search) to expand each state at most once and avoid loops |
+| BFS | Expand shallowest first via a FIFO queue; $O(b^d)$ time and memory | Shallow goal, equal step costs, and the frontier fits in RAM |
+| DFS | Expand deepest first via a LIFO stack; $O(bm)$ memory | Memory is tight and you don't need optimality; guard cycles with a visited set |
+| Uniform-cost search (UCS) | Expand lowest $g(n)$ via a priority queue; = Dijkstra | Varying step costs and you need the cheapest path, no heuristic available |
+| Iterative deepening (IDS) | Depth-limited DFS with a rising limit; $O(bd)$ memory, $O(b^d)$ time | Default uninformed method when depth is unknown — BFS guarantees at DFS memory |
+| Heuristic $h(n)$ | Cheap estimate of cost-to-go from $n$ to the goal | Domain knowledge that lets informed search skip whole regions |
+| Greedy best-first | Order frontier by $h(n)$ alone | Fast when "looks closest" usually is closest; not complete, not optimal |
+| A\* — $f(n)=g(n)+h(n)$ | Balance cost-behind ($g$) against cost-ahead ($h$) | The default when you need the *cheapest path* and have an admissible $h$ |
+| Admissible $h$ | $h(n)\le h^*(n)$ — never overestimates | Required for A\* optimality; straight-line distance for road travel |
+| Consistent $h$ | $h(n)\le c(n,a,n')+h(n')$ (triangle inequality) | Stronger: graph-search A\* needs no node re-expansion |
+| Dominance / relaxation | Higher admissible $h$ prunes more; relax a constraint to invent $h$ | Manhattan dominates misplaced-tiles on the 8-puzzle — explores far fewer nodes |
+| Hill climbing | Step to the best neighbor; stop at a peak | Vast space, final state only; pair with random restarts to escape local optima |
+| Simulated annealing | Accept worse moves with prob. $e^{-\Delta/T}$, cool $T\to 0$ | Rugged landscape with traps; cool slowly to converge to the global optimum |
+| Beam search (width $k$) | Keep the best $k$ states each step | Middle ground between hill climbing ($k{=}1$) and breadth-first |
+| Genetic algorithm | Population + selection + crossover + mutation | Gradient-free, rugged spaces where partial solutions *combine* meaningfully |
+| IDA\* / RBFS / SMA\* | Memory-bounded A\* variants that re-expand nodes | A\*'s frontier won't fit in RAM — trade time for a hard memory ceiling |
+
+## 32.10 — Key takeaways
 
 - **Formulate first:** every search problem reduces to states, an initial state, actions, a transition model, a goal test, and a path cost — get these right (and abstract away irrelevant detail) and the algorithm is the easy part. Keep the **state graph** (the map) distinct from the **search tree** (the routes through it); graph search adds a visited set so each state is expanded once.
 - **Uninformed search** explores blindly: BFS is complete and optimal (equal costs) but memory-hungry; DFS is memory-light but neither optimal nor (on cyclic graphs) complete; UCS handles varying costs optimally; **iterative deepening** is the practical default — BFS's guarantees at DFS's memory.
@@ -758,13 +801,13 @@ When facing a new AI problem, first ask the four formulation questions — *What
 - **Time vs memory** is the central tradeoff: IDA\* and SMA\* buy back A\*'s exponential memory by re-expanding nodes.
 - Search is the **engine under planning, game playing, and combinatorial optimization** — different costumes, same graph exploration.
 
-## 32.10 — See also
+## 32.11 — See also
 
-- **Optimization** — gradient-based and continuous optimization, the numerical cousin of local search.
-- **Planning, Constraint Satisfaction & Game Playing** — adversarial search (minimax, alpha–beta), planning systems, and CSPs built directly on this chapter.
-- **Knowledge Representation & Reasoning** — how states and goals get expressed as logical facts for planners.
-- **Evolutionary Computation & Metaheuristics** — population-based global search (genetic algorithms, swarms) that generalizes beam and local search.
-- **Reinforcement Learning** — sequential decision-making when the transition model is learned rather than given.
+- [**Optimization**](ch03.html) — gradient-based and continuous optimization, the numerical cousin of local search.
+- [**Planning, Constraint Satisfaction & Game Playing**](ch34.html) — adversarial search (minimax, alpha–beta), planning systems, and CSPs built directly on this chapter.
+- [**Knowledge Representation & Reasoning**](ch33.html) — how states and goals get expressed as logical facts for planners.
+- [**Evolutionary Computation & Metaheuristics**](ch35.html) — population-based global search (genetic algorithms, swarms) that generalizes beam and local search.
+- [**Reinforcement Learning**](ch25.html) — sequential decision-making when the transition model is learned rather than given.
 
 ------------------------------------------------------------------------
 

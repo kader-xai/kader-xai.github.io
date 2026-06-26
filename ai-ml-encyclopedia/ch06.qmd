@@ -105,11 +105,13 @@ toc-expand: true
 
 ------------------------------------------------------------------------
 
-Raw data is almost never ready for a model. It arrives with holes, wildly different scales, text where numbers belong, typos masquerading as outliers, and classes that show up a thousand times more often than others. Data preprocessing is the craft of turning that mess into clean numeric tensors a learning algorithm can actually use — and it routinely decides more of a project's success than the choice of model. This chapter sits right after you understand the learning process (Chapter 05) and right before you start fitting real models (Chapters 08+).
+Raw data is almost never ready for a model. It arrives with holes, wildly different scales, text where numbers belong, typos masquerading as outliers, and classes that show up a thousand times more often than others. Data preprocessing is the craft of turning that mess into clean numeric tensors a learning algorithm can actually use — and it routinely decides more of a project's success than the choice of model. This chapter sits right after you understand the [learning process](ch05.html) (Chapter 05) and right before you start fitting real models ([Regression](ch08.html) onward).
 
 ::: {.callout-note appearance="simple"}
 🧭 **In context:** The ML Workflow · turning raw, dirty data into clean numeric features a model can learn from · garbage in, garbage out — the model is only as good as what you feed it.
 :::
+
+> 💡 **Remember this:** Fit every transformation on the training set only, then apply it to validation and test — that single discipline, enforced by a pipeline, prevents the leakage that quietly inflates almost every preprocessing score.
 
 Think of preprocessing like prepping ingredients before cooking. You wash, peel, chop, and measure *before* anything hits the pan. A great chef with dirty, unmeasured ingredients still cooks a bad meal; a modest cook with everything prepped properly turns out something solid. The model is the pan; this chapter is the prep.
 
@@ -266,7 +268,7 @@ Run the same salaries `[40, 50, 60, 200]` (in thousands) through all three to fe
   <rect x="10" y="125" width="80" height="14" fill="#f59e0b"/><text x="95" y="136" fill="currentColor">salary z</text>
 </svg>
 
-Which models actually need this? Distance-based and gradient-based models do, because they combine feature magnitudes directly. Tree-based models do not, because a tree only ever asks "is $x < t$?", and the answer to that question is unchanged by any monotonic rescaling — the sort order of the values stays the same.
+Which models actually need this? Distance-based and gradient-based models do, because they combine feature magnitudes directly. [Tree-based models](ch09.html) do not, because a tree only ever asks "is $x < t$?", and the answer to that question is unchanged by any monotonic rescaling — the sort order of the values stays the same.
 
 | Needs scaling | Indifferent to scaling |
 |---|---|
@@ -315,7 +317,7 @@ The contrast between the two is easiest to *see* — ordinal smears the three ci
 
 **Target (mean) encoding** stays compact even at high cardinality by replacing each category with the mean of the target for that category — `city = Riyadh` becomes the average churn rate among Riyadh customers. It is powerful but exposes the label directly, so it overfits badly unless you compute the means out-of-fold (using cross-validation folds) and smooth small categories toward the global mean.
 
-Two more options handle very high cardinality. **Hashing** runs each category string through a hash function into a fixed number of buckets — constant width, no dictionary to store, and unseen categories are handled automatically — at the price of occasional collisions that merge unrelated categories. **Embeddings** learn a short dense vector per category inside a neural net (Chapter 14), capturing genuine similarity between categories, and are the go-to when cardinality is very high and a deep model is already in play.
+Two more options handle very high cardinality. **Hashing** runs each category string through a hash function into a fixed number of buckets — constant width, no dictionary to store, and unseen categories are handled automatically — at the price of occasional collisions that merge unrelated categories. **Embeddings** learn a short dense vector per category inside a [neural net](ch14.html) (Chapter 14), capturing genuine similarity between categories, and are the go-to when cardinality is very high and a deep model is already in play.
 
 ```python
 # one-hot from scratch
@@ -537,7 +539,7 @@ pipe.fit(X_train, y_train)
 ```
 
 ::: {.callout-warning}
-Resample and SMOTE **only on the training fold, after splitting** — never before. Synthesizing or duplicating points and *then* splitting leaks near-copies into the test set and gives a gloriously fake score. And stop trusting plain accuracy here; use precision/recall/F1 or AUC (Chapter 12).
+Resample and SMOTE **only on the training fold, after splitting** — never before. Synthesizing or duplicating points and *then* splitting leaks near-copies into the test set and gives a gloriously fake score. And stop trusting plain accuracy here; use [precision/recall/F1 or AUC](ch12.html) (Chapter 12).
 :::
 
 ## 6.7 — Feature extraction
@@ -573,9 +575,9 @@ $$\text{tfidf}(t,d) = \text{tf}(t,d)\cdot\log\frac{N}{1+\text{df}(t)}$$
 **In words:** how often a word appears in this document, multiplied by how rare it is across all documents, so common-everywhere words are pushed toward zero.
 **Also written:** $\text{tfidf} = \text{tf} \times \text{idf}$, where $\text{idf}(t) = \log\frac{N}{1+\text{df}(t)}$ ($N$ = number of documents, $\text{df}(t)$ = documents containing $t$).
 
-Modern pipelines increasingly replace both with learned embeddings (Chapter 20).
+Modern pipelines increasingly replace both with learned embeddings ([Natural Language Processing](ch20.html)).
 
-For **images**, classic pipelines hand-built edge and corner descriptors, while modern ones pass the image through a pretrained CNN and read out an intermediate layer as the feature vector (Chapters 15, 19). And when you have many *correlated numeric* features, **PCA** extracts a few uncorrelated combinations that retain most of the variance — covered in full in Chapter 07.
+For **images**, classic pipelines hand-built edge and corner descriptors, while modern ones pass the image through a pretrained [CNN](ch15.html) and read out an intermediate layer as the feature vector ([Computer Vision](ch19.html)). And when you have many *correlated numeric* features, **PCA** extracts a few uncorrelated combinations that retain most of the variance — covered in full in [Dimensionality Reduction](ch07.html).
 
 ```python
 import numpy as np, datetime as dt
@@ -608,7 +610,7 @@ More features are not better. Irrelevant and redundant columns add noise, slow t
 
 **Wrapper methods** instead train an actual model on different feature subsets and keep whichever subset scores best. *Recursive Feature Elimination* is the classic: fit a model, drop the weakest feature, refit, and repeat. Because it measures real model performance it is accurate, but the repeated refitting makes it expensive.
 
-**Embedded methods** select *during* training and strike the best cost-quality balance, which is why they are the usual default. **L1 (Lasso)** regularization adds a penalty that drives useless coefficients exactly to zero, performing selection for free as the model fits (Chapter 08). Tree-based **feature importances** rank features by how much each one reduces impurity across the trees.
+**Embedded methods** select *during* training and strike the best cost-quality balance, which is why they are the usual default. **L1 (Lasso)** regularization adds a penalty that drives useless coefficients exactly to zero, performing selection for free as the model fits ([Regression](ch08.html)). Tree-based **feature importances** rank features by how much each one reduces impurity across the trees.
 
 ```{mermaid}
 flowchart TD
@@ -691,7 +693,30 @@ A worked sanity check makes the leakage concrete. Imagine 1000 rows, scaled by a
 If you remember one habit from this chapter, make it this: never call `fit` on anything outside a pipeline. `fit_transform` on the training split, `transform` on everything else — or better, let a `Pipeline` do both so you cannot get it wrong.
 :::
 
-## 6.10 — Key takeaways
+## 6.10 — Quick reference
+
+| Term / method | Meaning in one line | When / why to reach for it |
+|---|---|---|
+| Fit on train only | Learn every statistic from the training split, apply to test | Always — the one rule that prevents leakage |
+| MCAR / MAR / MNAR | Missingness depends on nothing / observed cols / the hidden value | Diagnose *before* imputing; MNAR needs a was-missing flag |
+| Median imputation | Fill gaps with the column middle | Default for numeric columns you suspect are skewed or noisy |
+| Was-missing flag | Extra 0/1 column marking imputed cells | Whenever absence itself carries signal (esp. MNAR) |
+| Z-score $z=(x-\mu)/\sigma$ | Recenter to mean 0, sd 1 | Default scaler for distance/gradient models |
+| Robust scaling | Center on median, divide by IQR | Heavy outliers present; resistant to extreme tails |
+| Min-max $[0,1]$ | Map min→0, max→1 | Need a bounded range (pixels, sigmoid targets) |
+| One-hot encoding | One 0/1 column per category | Low-cardinality nominal features; no fake order |
+| Target encoding | Replace category with its target mean | High cardinality — but fit out-of-fold or it leaks |
+| IQR rule | Flag outside $Q_1-1.5\,\text{IQR}$ … $Q_3+1.5\,\text{IQR}$ | Quick, robust 1-D outlier detection (the boxplot) |
+| Isolation Forest | Anomaly = isolated in few random cuts | Multivariate outliers across many features |
+| Log / Box-Cox | Compress a long right tail toward bell shape | Features spanning several orders of magnitude |
+| SMOTE | Synthesize minority points between neighbours | Imbalanced classes; train fold only, inside an imblearn pipeline |
+| Class weights $w_c=N/(K\,n_c)$ | Penalize minority errors more in the loss | Cleanest imbalance fix; invents no data |
+| Cyclical sin/cos | Encode hour/month on a circle | So 23:00 and 00:00 read as adjacent |
+| TF-IDF | Term frequency × inverse document frequency | Turn documents into vectors, down-weight common words |
+| Filter / wrapper / embedded | Score alone / train on subsets / select while fitting | Speed→accuracy trade for feature selection; L1 default |
+| Pipeline / ColumnTransformer | Bundle fit+transform into one sealed object | Enforces fit-on-train-only by construction |
+
+## 6.11 — Key takeaways
 
 - Preprocessing often decides a project more than model choice — clean inputs beat clever algorithms.
 - **Fit on train, apply to test.** Every statistic — imputation value, scaler, encoder means, SMOTE, feature selection — must be learned from training data only, or you leak. A `Pipeline` / `ColumnTransformer` enforces this by construction.
@@ -703,7 +728,7 @@ If you remember one habit from this chapter, make it this: never call `fit` on a
 - Fight imbalance with class weights or SMOTE (training fold only) and judge with precision/recall/F1/AUC, never plain accuracy.
 - Extraction *creates* features (datetime parts, TF-IDF, CNN/embedding vectors); selection *keeps* the useful originals (filter / wrapper / embedded).
 
-## 6.11 — See also
+## 6.12 — See also
 
 - **Dimensionality Reduction** — PCA, t-SNE, UMAP: building new compressed features rather than selecting existing ones.
 - **AI, ML & the Learning Process** — train/validation/test splits and the leakage discipline this chapter depends on.

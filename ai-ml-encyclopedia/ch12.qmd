@@ -105,11 +105,13 @@ toc-expand: true
 
 ------------------------------------------------------------------------
 
-Training a model is the easy part; knowing whether it will actually *work* on data it has never seen is the hard part. This chapter is the discipline that separates a number that looks good in a notebook from a model you can trust in production. It sits at the end of the classical-ML workflow — after you have algorithms (Chapters 8–11), before you ship them (Chapter 29) — and its core question is always the same: *how well does this generalize, and how do I make it generalize better?*
+Training a model is the easy part; knowing whether it will actually *work* on data it has never seen is the hard part. This chapter is the discipline that separates a number that looks good in a notebook from a model you can trust in production. It sits at the end of the classical-ML workflow — after you have algorithms ([Regression](ch08.html), [Classification](ch09.html), [Ensembles](ch10.html), [Clustering](ch11.html)), before you ship them ([MLOps & Deployment](ch29.html)) — and its core question is always the same: *how well does this generalize, and how do I make it generalize better?*
 
 ::: {.callout-note appearance="simple"}
 🧭 **In context:** The ML Workflow / Classical ML · used to estimate true (out-of-sample) performance and pick model settings · the one key idea: **measure on data the model never touched, and tune to minimize that out-of-sample error.**
 :::
+
+> 💡 **Remember this:** A model is only as good as its score on data it never saw during fitting — so measure on held-out data, mind the train–test gap, and pick the metric that matches the cost of your mistakes.
 
 <style>
 @keyframes c12-flow { 0% { stroke-dashoffset: 120; } 100% { stroke-dashoffset: 0; } }
@@ -364,7 +366,7 @@ You cannot eliminate both — you trade them. More capacity / less regularizatio
 :::
 
 ::: {.callout-note}
-**A modern footnote — double descent.** The clean U-shape is the *classical* story and it holds for the models in this chapter. But for very over-parameterized models (huge neural nets), pushing capacity *past* the point of memorizing the training set can make test error fall a *second* time — the so-called **double-descent** curve. The classical U still governs the regimes you tune by hand here; double descent is covered with deep nets (Chapter 14).
+**A modern footnote — double descent.** The clean U-shape is the *classical* story and it holds for the models in this chapter. But for very over-parameterized models (huge neural nets), pushing capacity *past* the point of memorizing the training set can make test error fall a *second* time — the so-called **double-descent** curve. The classical U still governs the regimes you tune by hand here; double descent is covered with deep nets ([Neural Networks](ch14.html)).
 :::
 
 ## 12.3 — Overfitting & underfitting (diagnosing)
@@ -435,7 +437,7 @@ $$L_{\text{ridge}} = L(\mathbf{w}) + \lambda \sum_j w_j^2 \quad(\text{L2}), \qqu
 
 **L2 (Ridge)** penalizes squared weights. It shrinks all weights smoothly toward zero but rarely *to* zero. It's a good default and handles correlated features gracefully, spreading weight across them rather than picking one arbitrarily.
 
-**L1 (Lasso)** penalizes absolute weights. Its geometry drives many weights *exactly* to zero, performing automatic **feature selection** — the surviving nonzero weights are the features the model decided to keep.
+**L1 (Lasso)** penalizes absolute weights. Its geometry drives many weights *exactly* to zero, performing automatic **feature selection** ([Dimensionality Reduction](ch07.html) covers other ways to cut features) — the surviving nonzero weights are the features the model decided to keep.
 
 The knob $\lambda$ (the **regularization strength**) is a hyperparameter: $\lambda = 0$ is no regularization at all; large $\lambda$ forces a simpler model with smaller weights. You tune it with CV (Section 12.8).
 
@@ -522,7 +524,7 @@ Start with L2 as a safe default. Reach for L1 when you suspect many features are
 
 **Dropout** is a regularizer designed for neural networks. During each training step it randomly "drops" (sets to zero) a fraction $p$ of the neurons in a layer — each neuron is silenced independently with probability $p$. The network must therefore learn redundant, robust features rather than relying on any single neuron, because that neuron might vanish on the next step.
 
-The intuition is that dropout trains an *ensemble*. Each random mask defines a slightly different sub-network; over training you implicitly train exponentially many of them sharing weights, and at test time using the full network approximates averaging all their predictions. Ensembling reduces variance (Chapter 10) — which is exactly what fights overfitting.
+The intuition is that dropout trains an *ensemble*. Each random mask defines a slightly different sub-network; over training you implicitly train exponentially many of them sharing weights, and at test time using the full network approximates averaging all their predictions. Ensembling reduces variance ([Ensemble Methods](ch10.html)) — which is exactly what fights overfitting.
 
 The doodle below shows the same little network on three training steps: a different random subset of neurons goes dark each time, so no single unit can be relied on.
 
@@ -745,7 +747,7 @@ best_threshold = thr[f1[:-1].argmax()]   # operating point, not the lazy 0.5
 ```
 
 ::: {.callout-warning}
-On rare-positive problems (fraud, disease, anomalies in Chapter 27), a high AUC can hide a useless model. Report the **PR curve / average precision** alongside it, and always pick the operating threshold from the cost of FP vs. FN — not the lazy 0.5 default.
+On rare-positive problems (fraud, disease, anomalies in [Anomaly & Fraud Detection](ch27.html)), a high AUC can hide a useless model. Report the **PR curve / average precision** alongside it, and always pick the operating threshold from the cost of FP vs. FN — not the lazy 0.5 default.
 :::
 
 ## 12.8 — Probability calibration
@@ -802,7 +804,7 @@ Three strategies, in roughly increasing order of sophistication:
 
 **Random search** samples combinations at random from ranges, for a fixed budget of trials. Counterintuitively it usually beats grid search at equal cost. The reason: when only a couple of hyperparameters actually matter, random search tries many *distinct* values of those important ones, while a grid wastes most of its budget re-testing the same few values of the important knob across irrelevant ones.
 
-**Bayesian optimization** builds a probabilistic model (a *surrogate*, often a Gaussian process) of "hyperparameters → CV score" from the trials so far, then uses it to choose the most promising next point to evaluate — balancing **exploitation** (search near the current best) against **exploration** (probe uncertain regions). It finds good settings in far fewer trials, at the cost of more bookkeeping and sequential (less parallel) evaluation.
+**Bayesian optimization** builds a probabilistic model (a *surrogate*, often a Gaussian process) of "hyperparameters → CV score" from the trials so far, then uses it to choose the most promising next point to evaluate — balancing **exploitation** (search near the current best) against **exploration** (probe uncertain regions). It finds good settings in far fewer trials, at the cost of more bookkeeping and sequential (less parallel) evaluation. (The broader landscape of search and optimization methods lives in [Optimization](ch03.html).)
 
 The picture below shows why random beats grid when one axis is irrelevant: the grid samples only 3 distinct values of the important parameter, while random samples 9.
 
@@ -962,7 +964,7 @@ The two cases below share the *same* 0.6-point win, but the noise (spread of the
   </g>
 </svg>
 
-A small $p$-value (say $<0.05$) says the improvement is unlikely to be noise. The standard caveats apply: CV folds overlap in training data, so they aren't fully independent and the naive $t$-test is **optimistic** — practitioners often prefer a corrected variant (e.g. Nadeau–Bengio) or a non-parametric test, and on multiple-dataset benchmarks the Wilcoxon signed-rank test. Also separate **statistical** from **practical** significance: a real but 0.05% gain may not be worth a more complex, slower model.
+A small $p$-value (say $<0.05$) says the improvement is unlikely to be noise (the machinery of $p$-values and significance tests lives in [Probability & Statistics](ch04.html)). The standard caveats apply: CV folds overlap in training data, so they aren't fully independent and the naive $t$-test is **optimistic** — practitioners often prefer a corrected variant (e.g. Nadeau–Bengio) or a non-parametric test, and on multiple-dataset benchmarks the Wilcoxon signed-rank test. Also separate **statistical** from **practical** significance: a real but 0.05% gain may not be worth a more complex, slower model.
 
 **Worked example.** Across 10 folds, model B beats A by a mean of 0.6 points with a fold-to-fold std of 0.4. Then $t = 0.6 / (0.4/\sqrt{10}) \approx 4.7$, a $p$-value around 0.001 — the gain is real, not luck. Change the std to 1.5 (noisy folds) and $t \approx 1.3$, $p \approx 0.22$ — the same 0.6-point "win" is now indistinguishable from chance, and you should keep the simpler model.
 
@@ -988,7 +990,7 @@ A single test-set number with no notion of variability invites self-deception. R
 
 Leakage has a few classic forms.
 
-**Preprocessing on the full dataset** is the most common: computing a scaler's mean and standard deviation, an imputation value, or a feature-selection ranking on *all* the data before splitting lets the training fold peek at the test fold's statistics. The fix is to fit every transform on the training fold only, then apply it to validation and test. Inside CV, that means the *entire* preprocessing pipeline goes inside each fold.
+**Preprocessing on the full dataset** is the most common: computing a scaler's mean and standard deviation, an imputation value, or a feature-selection ranking (these transforms are the subject of [Data Preprocessing](ch06.html)) on *all* the data before splitting lets the training fold peek at the test fold's statistics. The fix is to fit every transform on the training fold only, then apply it to validation and test. Inside CV, that means the *entire* preprocessing pipeline goes inside each fold.
 
 **Target leakage** is a feature that is a proxy for, or is computed from, the label. The classic case: predicting hospital readmission using a `discharge_medication` column that only exists *because* the patient was readmitted. The model isn't predicting — it's reading the answer off a feature that wouldn't exist yet at prediction time.
 
@@ -1023,10 +1025,36 @@ scores = cross_val_score(pipe, X, y, cv=5)   # honest estimate
 ```
 
 ::: {.callout-warning}
-The tell-tale sign of leakage is a result that seems *too good*. When CV accuracy is suspiciously high, assume leakage until proven otherwise: audit every feature with "could this value exist before the label is known?", and make sure all preprocessing lives inside the CV loop. Preventing leakage is the whole reason the `Pipeline` object exists in scikit-learn (Chapter 31).
+The tell-tale sign of leakage is a result that seems *too good*. When CV accuracy is suspiciously high, assume leakage until proven otherwise: audit every feature with "could this value exist before the label is known?", and make sure all preprocessing lives inside the CV loop. Preventing leakage is the whole reason the `Pipeline` object exists in scikit-learn ([Tools & Frameworks](ch31.html)).
 :::
 
-## 12.13 — Key takeaways
+## 12.13 — Quick reference
+
+| Term / formula | Meaning | When / why to reach for it |
+|---|---|---|
+| Train/val/test split | Fit on train, tune on val, touch test once | Always; test set is your final honest number |
+| **k-fold CV** ($\frac1k\sum_i \text{score}_i$) | Rotate the held-out fold, average $k$ scores | Stable estimate without wasting data; $k=5$ or $10$ |
+| **Stratified k-fold** | Keep class proportions equal in every fold | Default for classification, especially imbalanced |
+| **Time-series CV** | Train only on the past, test on the future | Any data with a time index — a shuffle leaks the future |
+| Bias–variance ($\text{Bias}^2+\text{Var}+\sigma^2$) | Error = wrong-on-average + wobbly + noise | Frame any under/overfit; tune to the bottom of the U |
+| **Train–test gap** | Distance between train and test error | Big gap = overfit; both bad = underfit |
+| **L2 / Ridge** ($\lambda\lVert w\rVert_2^2$) | Shrink all weights smoothly toward zero | Safe default; handles correlated features |
+| **L1 / Lasso** ($\lambda\lVert w\rVert_1$) | Drive many weights exactly to zero | Want sparsity / automatic feature selection |
+| **Weight decay** ($w\leftarrow(1-\eta\lambda)w-\eta\nabla L$) | L2 applied per gradient step | Standard NN regularizer (`weight_decay` in AdamW) |
+| **Early stopping** | Halt at the validation-loss minimum | Iterative training; pair with `patience` |
+| **Dropout** (rate $p$) | Silence random neurons; implicit ensemble | NN overfitting; disable at inference (`model.eval()`) |
+| **Precision** ($TP/(TP+FP)$) | Of what I flagged, how much was right | When false alarms are costly (spam filter) |
+| **Recall** ($TP/(TP+FN)$) | Of all positives, how many I caught | When misses are costly (cancer screening) |
+| **F1** (harmonic mean of P, R) | One score, high only if both are high | Imbalanced data where both errors matter |
+| **ROC / AUC** | $P(\text{score}^+ > \text{score}^-)$, ranking quality | Threshold-free model comparison; balanced-ish data |
+| **PR curve / AP** | Precision vs recall, ignores true negatives | Rare positives — AUC looks too good there |
+| **Calibration / ECE** | Do predicted probabilities match frequencies | When a decision consumes the probability itself |
+| **Grid / Random / Bayesian** | Exhaustive / sampled / surrogate-guided search | Random beats grid; Bayesian for expensive training |
+| **Learning curve** | Error vs amount of training data | Decide: buy more data (gap closing) vs bigger model (flat) |
+| **Paired CV $t$-test** ($\bar d\sqrt{k}/s_d$) | Is the fold-to-fold win bigger than the noise | Before declaring model B beats model A |
+| **Data leakage** | Future/label info sneaks into training | Suspect when results look too good; use a `Pipeline` |
+
+## 12.14 — Key takeaways
 
 - **Always measure on held-out data.** A train/test split gives one noisy estimate; **k-fold CV** averages several. Use **stratified** folds for classification and **time-series** (forward-only) folds for ordered data.
 - Every model's error splits into **bias** (too simple), **variance** (too sensitive), and irreducible noise; tuning is the search for the bottom of the U-shaped total-error curve.
@@ -1039,7 +1067,7 @@ The tell-tale sign of leakage is a result that seems *too good*. When CV accurac
 - Compare models **honestly**: report a spread, not a lone number, and use a **paired** significance test on the same folds before declaring a winner.
 - **Data leakage** produces results that are too good to be true; put all preprocessing inside the CV loop (use a `Pipeline`) and audit every feature for future information.
 
-## 12.14 — See also
+## 12.15 — See also
 
 - **Optimization** — the gradient methods and search landscapes behind hyperparameter tuning and early stopping.
 - **Probability & Statistics** — sampling variance, distributions, significance testing, and the noise term in the bias–variance decomposition.

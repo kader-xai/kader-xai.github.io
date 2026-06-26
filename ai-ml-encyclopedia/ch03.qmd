@@ -105,17 +105,19 @@ toc-expand: true
 
 ------------------------------------------------------------------------
 
-Optimization is the engine room of machine learning. A model "learns" by searching for the parameters that make a loss function as small as possible, and every algorithm in this book — from linear regression to a trillion-parameter transformer — is, underneath, a procedure for minimizing some function. This chapter is about *how* that search is actually carried out: the update rules, the tricks that make them fast, and the classical theory that tells us when we can trust the answer.
+Optimization is the engine room of machine learning. A model "learns" by searching for the parameters that make a loss function as small as possible, and every algorithm in this book — from [linear regression](ch08.html) to a trillion-parameter [transformer](ch17.html) — is, underneath, a procedure for minimizing some function. This chapter is about *how* that search is actually carried out: the update rules, the tricks that make them fast, and the classical theory that tells us when we can trust the answer.
 
 ::: {.callout-note appearance="simple"}
 🧭 **In context:** Mathematical Foundations · how models actually learn their parameters · the one key idea — follow the negative gradient downhill, and add cleverness (momentum, adaptivity, schedules) to get there faster and more reliably.
 :::
 
+> 💡 **Remember this:** Almost all of machine learning is one move repeated — take the negative gradient of a loss and step against it; everything else (momentum, adaptivity, schedules, curvature, constraints) is a refinement of how big and in which direction that step should be.
+
 ## 3.1 — Gradient descent
 
 Imagine you are standing on a foggy hillside and want to reach the lowest point in the valley. You cannot see far, but you can feel the slope under your feet. The greedy strategy is simple: take a step in the steepest downhill direction, then feel the slope again and repeat. That is **gradient descent** (GD), the foundational optimization algorithm of machine learning.
 
-Formally, we want to minimize a **loss function** $L(\theta)$ over parameters $\theta$. The **gradient** $\nabla L(\theta)$ is the vector of partial derivatives; it points in the direction of *steepest ascent*. So to go downhill we step in the opposite direction:
+Formally, we want to minimize a [**loss function**](ch05.html) $L(\theta)$ over parameters $\theta$. The **gradient** $\nabla L(\theta)$ is the vector of partial derivatives; it points in the direction of *steepest ascent*. So to go downhill we step in the opposite direction:
 
 $$\theta_{t+1} = \theta_t - \eta \, \nabla L(\theta_t)$$
 
@@ -230,7 +232,7 @@ $$\theta_{t+1} = \theta_t - \eta \,\frac{1}{B}\sum_{i\in \mathcal{B}_t} \nabla \
 
 **Also written:** $\theta \leftarrow \theta - \eta\,\bar g_{\mathcal{B}}$ where $\bar g_{\mathcal{B}} = \frac{1}{B}\sum_{i\in\mathcal{B}} g_i$ is the batch-mean gradient.
 
-**Why the noise helps.** The randomness is not just a cost — it is a feature. The jitter lets the optimizer escape shallow local minima and saddle points that would trap exact GD, and it acts as a mild regularizer. The picture below contrasts the smooth, deliberate GD path with the jittery SGD path; both reach the basin, but SGD does it with far cheaper steps.
+**Why the noise helps.** The randomness is not just a cost — it is a feature. The jitter lets the optimizer escape shallow local minima and saddle points that would trap exact GD, and it acts as a mild [regularizer](ch12.html). The picture below contrasts the smooth, deliberate GD path with the jittery SGD path; both reach the basin, but SGD does it with far cheaper steps.
 
 <svg viewBox="0 0 420 200" xmlns="http://www.w3.org/2000/svg">
   <ellipse cx="300" cy="100" rx="150" ry="80" fill="none" stroke="#ddd"/>
@@ -494,6 +496,19 @@ optw = torch.optim.AdamW(model.parameters(), lr=1e-3, weight_decay=0.01)  # tran
 <div class="ml-viz" data-viz="graddesc" data-params="{&quot;surface&quot;: &quot;nonconvex&quot;, &quot;momentum&quot;: true}"></div>
 :::
 
+**Which optimizer should I use?** A quick chooser across the gradient-based methods of Sections 3.1–3.5:
+
+```{mermaid}
+flowchart TD
+    A[Pick an optimizer] --> B{Smooth, deterministic,<br/>full-batch problem?}
+    B -- yes --> C[L-BFGS / Newton<br/>see 3.7]
+    B -- no --> D{Training a<br/>transformer / LLM?}
+    D -- yes --> E[AdamW + warmup<br/>then cosine decay]
+    D -- no --> F{Vision / CNN where<br/>you can tune carefully?}
+    F -- yes --> G[SGD + momentum<br/>often best generalization]
+    F -- no --> H[Adam<br/>safe default first try]
+```
+
 ## 3.6 — Learning rate & schedules (warmup, decay, cyclical)
 
 The learning rate is the single most important hyperparameter, and it rarely should stay constant. Early in training, large steps make fast progress; late in training, small steps are needed to settle precisely into a minimum. A **learning-rate schedule** $\eta_t$ varies the step size over time to get the best of both.
@@ -604,7 +619,7 @@ Multiplying by $H^{-1}$ rescales and rotates the gradient to account for the cur
 
 The catch: the Hessian is $n\times n$ for $n$ parameters. For a model with a million weights that is $10^{12}$ entries to form and invert — utterly infeasible. **Quasi-Newton** methods sidestep this by *building up an approximation* of $H^{-1}$ from the sequence of gradients observed, never computing the true Hessian.
 
-**BFGS** maintains a dense inverse-Hessian estimate, updated each step from the change in position and gradient. **L-BFGS** (limited-memory BFGS) stores only the last $m$ (say 10–20) update vectors instead of the full matrix, making it practical for large problems. It is the optimizer of choice for smooth, deterministic, medium-scale problems — logistic regression, CRFs, many scientific fits — though its reliance on accurate full-batch gradients makes it a poor fit for noisy mini-batch deep learning.
+**BFGS** maintains a dense inverse-Hessian estimate, updated each step from the change in position and gradient. **L-BFGS** (limited-memory BFGS) stores only the last $m$ (say 10–20) update vectors instead of the full matrix, making it practical for large problems. It is the optimizer of choice for smooth, deterministic, medium-scale problems — logistic regression, CRFs, many scientific fits — though its reliance on accurate full-batch gradients makes it a poor fit for noisy mini-batch [deep learning](ch14.html).
 
 | Method | Uses curvature? | Memory | Best for |
 |---|---|---|---|
@@ -686,7 +701,7 @@ A problem is **convex** if its objective is a convex function over a convex feas
   <text x="250" y="40" font-size="11" fill="#888">non-convex: many minima</text>
 </svg>
 
-Many cornerstone ML models are convex in their parameters — linear and ridge regression, logistic regression, SVMs (in the dual), LASSO — which is exactly why they are reliable and well-understood: solvers find the unique optimum every time.
+Many cornerstone ML models are convex in their parameters — linear and ridge regression, logistic regression, [SVMs](ch09.html) (in the dual), LASSO — which is exactly why they are reliable and well-understood: solvers find the unique optimum every time.
 
 **Duality** is the idea that every minimization problem (the **primal**) comes with a paired maximization problem (the **dual**). Think of it as attacking the same target from two sides: the primal pushes a ceiling *down*, the dual pushes a floor *up*. The dual's answer can never exceed the primal's — it is always a valid lower bound — so the two close in on the true optimum like a vise. That guarantee is **weak duality**, and it always holds. For convex problems (with a mild technical caveat called Slater's condition) the floor and ceiling actually *meet*: the two answers are equal and the gap shrinks to zero. This is **strong duality**. Why care? The lower bound *certifies* how good a solution is, the dual is sometimes far easier to solve than the primal, and this exact machinery is what makes the "kernel trick" in SVMs work.
 
@@ -747,7 +762,7 @@ Complementary slackness is the subtle, powerful one: an inactive constraint exer
 
 Most methods move all parameters at once along the gradient. **Coordinate descent** takes the opposite, almost stubbornly simple approach: fix every coordinate but one, minimize the loss along that single direction (often in closed form), then cycle to the next coordinate and repeat.
 
-The appeal is that a one-dimensional minimization is frequently trivial even when the full problem is messy. The classic example is **LASSO** (L1-regularized regression). The L1 penalty $\lambda\sum|\theta_j|$ is non-differentiable at zero, which complicates gradient methods, but along a single coordinate the optimum has a clean closed form via the **soft-thresholding** operator:
+The appeal is that a one-dimensional minimization is frequently trivial even when the full problem is messy. The classic example is [**LASSO**](ch08.html) (L1-regularized regression). The L1 penalty $\lambda\sum|\theta_j|$ is non-differentiable at zero, which complicates gradient methods, but along a single coordinate the optimum has a clean closed form via the **soft-thresholding** operator:
 
 $$\theta_j \leftarrow \operatorname{sign}(z_j)\,\max(|z_j| - \lambda,\ 0)$$
 
@@ -848,7 +863,7 @@ def crossover(a, b):
     return a[:k]+b[k:], b[:k]+a[k:]        # swap tails
 ```
 
-Relatives include **evolution strategies** (mutating real-valued vectors, used for some RL policies), **genetic programming** (evolving programs or expression trees), and **differential evolution**. Their strength is generality — no gradient, robust to rugged landscapes, easily parallelized. Their weakness is sample-hungriness: many thousands of evaluations, with weak convergence guarantees. They earn their keep on hyperparameter search, neural architecture search, and black-box engineering design. (Chapter 35 covers the broader family of metaheuristics.)
+Relatives include **evolution strategies** (mutating real-valued vectors, used for some RL policies), **genetic programming** (evolving programs or expression trees), and **differential evolution**. Their strength is generality — no gradient, robust to rugged landscapes, easily parallelized. Their weakness is sample-hungriness: many thousands of evaluations, with weak convergence guarantees. They earn their keep on [hyperparameter search](ch12.html), neural architecture search, and black-box engineering design. ([Chapter 35](ch35.html) covers the broader family of metaheuristics.)
 
 ::: {.callout-warning}
 **Common mistake:** reaching for a genetic algorithm when a gradient is available. If you *can* differentiate the objective, gradient methods are orders of magnitude more sample-efficient — save evolution for the truly black-box cases.
@@ -944,7 +959,31 @@ def grad_check(loss, grad, theta, eps=1e-5):
 **Common mistake:** gradient-checking through non-smooth points (ReLU at 0, L1 at 0) and panicking at the mismatch. Finite differences straddle the kink and disagree with the subgradient there — test at smooth points, or nudge inputs away from exact zeros.
 :::
 
-## 3.16 — Key takeaways
+## 3.16 — Quick reference
+
+| Method / term | One-line meaning | When / why to use it |
+|---|---|---|
+| Gradient descent (GD) | $\theta \leftarrow \theta - \eta\nabla L$, step against the slope | the base case; small, smooth, full-batch problems |
+| Learning rate $\eta$ | step size; safe if $\eta\le 1/\beta$ (smoothness) | the make-or-break knob — cut 3–10× if loss diverges |
+| SGD / mini-batch | step on a noisy gradient from $B$ examples | the deep-learning default; cheap steps + regularizing noise |
+| Momentum / NAG | accumulate velocity $v=\beta v+g$, glide through ravines | ill-conditioned valleys; $\beta=0.9$, NAG brakes earlier |
+| AdaGrad | divide step by $\sqrt{\sum g^2}$ (sum grows forever) | sparse features; warning — learning rate decays to zero |
+| RMSProp | AdaGrad with an EMA of $g^2$ (forgets old gradients) | non-stationary / online; step size adapts without dying |
+| Adam / AdamW | momentum + RMSProp + bias correction | safe first choice; AdamW (decoupled decay) for transformers |
+| LR schedule | vary $\eta_t$: warmup, cosine decay, cyclical | warmup-then-decay is standard for large models |
+| Newton | $\theta \leftarrow \theta - H^{-1}g$, uses curvature | tiny smooth problems; exact in one step on a quadratic |
+| L-BFGS | quasi-Newton from last $m$ gradients, $O(mn)$ memory | large, smooth, full-batch (logistic regression, CRFs) |
+| Conjugate gradient | $A$-conjugate directions, no zig-zag | large sparse linear systems $Ax=b$; quadratics in $\le n$ steps |
+| Line search (Armijo/Wolfe) | pick step length $\alpha$ that decreases loss enough | when a good fixed $\eta$ is unknown; pairs with CG / L-BFGS |
+| Convexity / duality | every local min is global; dual bounds the primal | guarantees + optimality certificates (SVMs, LP) |
+| KKT conditions | stationarity + feasibility + complementary slackness | tests for constrained optima; defines SVM support vectors |
+| Coordinate descent | optimize one coordinate at a time (soft-threshold) | LASSO and separable problems; closed-form per-coordinate |
+| Linear programming | linear objective + constraints; optimum at a vertex | scheduling, routing, allocation; simplex / interior-point |
+| Subgradient / proximal | handle kinks via subgradients or a prox operator | non-smooth losses (L1, hinge); prox of L1 = soft-threshold |
+| Evolutionary / GA | population + select/crossover/mutate, gradient-free | black-box, non-differentiable objectives; sample-hungry |
+| Gradient check | centered finite difference vs analytic gradient | one-time sanity test; rel.err $<10^{-7}$ means correct |
+
+## 3.17 — Key takeaways
 
 - **Gradient descent** is the master algorithm: step in the negative-gradient direction; the **learning rate** is the make-or-break knob.
 - **SGD with mini-batches** trades exact gradients for cheap, noisy ones — the noise is both a speedup and a regularizer, and it is the default for deep learning.
@@ -957,16 +996,16 @@ def grad_check(loss, grad, theta, eps=1e-5):
 - **Gradient checking** with centered finite differences is the cheap insurance against a silently wrong gradient — verify once before trusting any optimizer.
 - **Evolutionary algorithms** are the fallback for black-box, non-differentiable objectives — general but sample-hungry.
 
-## 3.17 — See also
+## 3.18 — See also
 
-- **Calculus & Differentiation** — gradients, Hessians, and the chain rule that make these methods computable.
-- **Linear Algebra** — vectors, matrices, and the conditioning that determines how hard a loss surface is to optimize.
-- **Probability & Statistics** — the expectation view of SGD and the noise that drives stochastic methods.
-- **Neural Networks (Core)** — backpropagation, the gradient source these optimizers consume.
-- **Regression** — convex least-squares and LASSO, direct applications of coordinate descent and convex optimization.
-- **Model Evaluation & Tuning** — learning-rate search and hyperparameter optimization, where evolutionary methods reappear.
-- **Evolutionary Computation & Metaheuristics** — the full treatment of genetic algorithms and their relatives.
-- **Reinforcement Learning** — policy-gradient and evolution-strategy optimization in sequential decision problems.
+- [**Calculus & Differentiation**](ch02.html) — gradients, Hessians, and the chain rule that make these methods computable.
+- [**Linear Algebra**](ch01.html) — vectors, matrices, and the conditioning that determines how hard a loss surface is to optimize.
+- [**Probability & Statistics**](ch04.html) — the expectation view of SGD and the noise that drives stochastic methods.
+- [**Neural Networks (Core)**](ch14.html) — backpropagation, the gradient source these optimizers consume.
+- [**Regression**](ch08.html) — convex least-squares and LASSO, direct applications of coordinate descent and convex optimization.
+- [**Model Evaluation & Tuning**](ch12.html) — learning-rate search and hyperparameter optimization, where evolutionary methods reappear.
+- [**Evolutionary Computation & Metaheuristics**](ch35.html) — the full treatment of genetic algorithms and their relatives.
+- [**Reinforcement Learning**](ch25.html) — policy-gradient and evolution-strategy optimization in sequential decision problems.
 
 ------------------------------------------------------------------------
 

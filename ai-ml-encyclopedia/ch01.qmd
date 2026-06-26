@@ -111,6 +111,8 @@ Linear algebra is the language machine learning speaks. Almost every model — f
 🧭 **In context:** Mathematical Foundations · the data structures and transformations every ML algorithm runs on · the one key idea — *data is vectors, models are transformations, and the right basis makes hard problems easy*.
 :::
 
+> 💡 **Remember this:** data points are vectors, every model layer is a matrix that transforms them, and finding the right basis (eigenvectors, SVD, PCA) is what turns a hard problem into simple scaling.
+
 ## 1.1 — Vectors & vector operations
 
 A **vector** is an ordered list of numbers. Geometrically, picture an arrow from the origin to a point; algebraically, it's just coordinates like $\mathbf{v} = [3, 2]$. In ML, a vector is how you encode one *thing*: a house becomes $[\text{1500 sqft}, 3\,\text{beds}, 2\,\text{baths}]$, a word becomes a 300-dimensional embedding, an image becomes a flattened list of pixel intensities. Each slot is a **feature** — one measurable axis of the thing.
@@ -135,7 +137,7 @@ $$\mathbf{v}\cdot\mathbf{w} = \|\mathbf{v}\|\,\|\mathbf{w}\|\cos\theta$$
 **In words:** the dot product equals the two lengths multiplied together, scaled by how aligned they are (the cosine of the angle between them).
 **Also written:** $\mathbf{v}\cdot\mathbf{w} = \mathbf{v}^\top\mathbf{w} = \sum_i v_i w_i$ — the same number as a row-times-column matrix product or an explicit sum.
 
-So the dot product is positive when vectors point the same way, zero when **orthogonal** (perpendicular, $\theta = 90°$), negative when opposed. This single number powers cosine similarity in search, the score inside every neuron, and the kernels of Chapter 9.
+So the dot product is positive when vectors point the same way, zero when **orthogonal** (perpendicular, $\theta = 90°$), negative when opposed. This single number powers cosine similarity in search, the score inside every neuron, and the kernels of [Chapter 9 (Classification)](ch09.html).
 
 Watch the alignment idea move: a fixed reference arrow and a sweeping arrow. When they overlap the dot product is large and positive; at a right angle it passes through zero; when opposed it goes negative.
 
@@ -326,7 +328,7 @@ $$A\mathbf{v} = \lambda\mathbf{v}, \quad \mathbf{v}\neq\mathbf{0}$$
 **In words:** applying the matrix to this special vector gives back the *same direction*, just scaled by $\lambda$ — no rotation, only stretch.
 **Also written:** $(A - \lambda I)\mathbf{v} = \mathbf{0}$ — rearranged, the eigenvector lives in the null space of $A-\lambda I$, which is why a nonzero solution forces $\det(A-\lambda I)=0$.
 
-Eigenvectors are the **natural axes** of a transformation — the directions along which it acts as pure scaling. They are everywhere in ML: the principal components of PCA are eigenvectors of the covariance matrix (Chapter 7), PageRank is the dominant eigenvector of the web's link matrix, and the eigenvalues of the loss Hessian govern whether training converges or diverges (Chapter 3).
+Eigenvectors are the **natural axes** of a transformation — the directions along which it acts as pure scaling. They are everywhere in ML: the principal components of PCA are eigenvectors of the [covariance matrix](ch04.html) ([Chapter 7, Dimensionality Reduction](ch07.html)), PageRank is the dominant eigenvector of the web's link matrix, and the eigenvalues of the loss Hessian govern whether training converges or diverges ([Chapter 3, Optimization](ch03.html)).
 
 To find them, solve $\det(A - \lambda I) = 0$ (the **characteristic equation**). Worked example with $A = \begin{bmatrix} 2 & 1 \\ 1 & 2 \end{bmatrix}$:
 
@@ -521,7 +523,7 @@ Cholesky throws if the matrix isn't positive-definite — and that failure is a 
 
 **Matrix factorization** is the general move of writing one matrix as a product of two thinner ones: $R \approx W H$, where $R$ is $m\times n$ but $W$ is $m\times k$ and $H$ is $k\times n$ with $k$ small. The shared inner dimension $k$ is a **latent space** — a compact set of hidden factors that explain the data. This is the same idea as SVD's low-rank approximation, now used as a *model you learn*.
 
-The canonical example is a **recommender system**. Take the Netflix-style matrix $R$ of users × movies, mostly empty because nobody watches everything. Factor it into a user matrix $W$ (each user → $k$ taste factors) and a movie matrix $H$ (each movie → the same $k$ factors). The predicted rating is a dot product: user $u$'s taste against movie $i$'s profile.
+The canonical example is a **recommender system** ([Chapter 26](ch26.html)). Take the Netflix-style matrix $R$ of users × movies, mostly empty because nobody watches everything. Factor it into a user matrix $W$ (each user → $k$ taste factors) and a movie matrix $H$ (each movie → the same $k$ factors). The predicted rating is a dot product: user $u$'s taste against movie $i$'s profile.
 
 $$\hat{r}_{ui} = \mathbf{w}_u \cdot \mathbf{h}_i = \sum_{f=1}^{k} w_{uf}\,h_{if}$$
 
@@ -554,14 +556,14 @@ print(np.round(W @ H, 1))               # gaps now filled with predictions
 ```
 
 ::: {.callout-tip}
-The latent dimension $k$ is the dial that trades fit against generalization. Too small and the model can't capture taste; too large and it memorizes noise in the sparse ratings. It's the same bias–variance knob you'll meet again in Chapter 12.
+The latent dimension $k$ is the dial that trades fit against generalization. Too small and the model can't capture taste; too large and it memorizes noise in the sparse ratings. It's the same bias–variance knob you'll meet again in [Chapter 12 (Model Evaluation & Tuning)](ch12.html).
 :::
 
 ## 1.8 — Norms, rank, trace & orthogonality
 
 These four scalars and properties are the everyday measuring tools of linear algebra.
 
-A **norm** measures the "size" or length of a vector. The **L2 (Euclidean) norm** $\|\mathbf{v}\|_2 = \sqrt{\sum v_i^2}$ is ordinary straight-line length. The **L1 norm** $\|\mathbf{v}\|_1 = \sum |v_i|$ is the taxicab distance. The distinction is load-bearing in ML: **L2 regularization** (ridge) shrinks weights smoothly, while **L1 regularization** (lasso) drives them to *exactly zero*, producing sparse, feature-selecting models (Chapter 8).
+A **norm** measures the "size" or length of a vector. The **L2 (Euclidean) norm** $\|\mathbf{v}\|_2 = \sqrt{\sum v_i^2}$ is ordinary straight-line length. The **L1 norm** $\|\mathbf{v}\|_1 = \sum |v_i|$ is the taxicab distance. The distinction is load-bearing in ML: **L2 regularization** (ridge) shrinks weights smoothly, while **L1 regularization** (lasso) drives them to *exactly zero*, producing sparse, feature-selecting models ([Chapter 8, Regression](ch08.html)).
 
 $$\|\mathbf{v}\|_2 = \sqrt{\textstyle\sum_i v_i^2}, \qquad \|\mathbf{v}\|_1 = \textstyle\sum_i |v_i|$$
 
@@ -711,9 +713,9 @@ Forming $A^\top A$ *squares* the condition number — it doubles the numerical d
 
 ## 1.10 — Tensors
 
-A **tensor** is the generalization of the scalar–vector–matrix ladder to any number of dimensions, called the **rank** or **order** (the count of indices needed to address an element). A scalar is rank-0, a vector rank-1, a matrix rank-2, and beyond that we just say "tensor". The word carries deeper meaning in physics, but in ML it's pragmatic: a tensor is an n-dimensional array, the universal container that flows through TensorFlow and PyTorch.
+A **tensor** is the generalization of the scalar–vector–matrix ladder to any number of dimensions, called the **rank** or **order** (the count of indices needed to address an element). A scalar is rank-0, a vector rank-1, a matrix rank-2, and beyond that we just say "tensor". The word carries deeper meaning in physics, but in ML it's pragmatic: a tensor is an n-dimensional array, the universal container that flows through TensorFlow and PyTorch ([Chapter 31, Tools & Frameworks](ch31.html)).
 
-The reason deep learning needs them is that real data has natural multi-axis structure you don't want to flatten away. A color image is rank-3: $(\text{height}, \text{width}, \text{channels})$. A batch of images for training is rank-4: $(\text{batch}, \text{height}, \text{width}, \text{channels})$. A batch of text sequences fed to a transformer is rank-3: $(\text{batch}, \text{tokens}, \text{embedding})$. Keeping the axes separate lets a convolution slide over height and width while treating channels specially (Chapter 15).
+The reason deep learning needs them is that real data has natural multi-axis structure you don't want to flatten away. A color image is rank-3: $(\text{height}, \text{width}, \text{channels})$. A batch of images for training is rank-4: $(\text{batch}, \text{height}, \text{width}, \text{channels})$. A batch of text sequences fed to a transformer is rank-3: $(\text{batch}, \text{tokens}, \text{embedding})$. Keeping the axes separate lets a convolution slide over height and width while treating channels specially ([Chapter 15, Convolutional Neural Networks](ch15.html)).
 
 ```{mermaid}
 flowchart LR
@@ -1087,7 +1089,7 @@ Two everyday tricks fight conditioning damage at the algorithm level.
 
 **Pivoting** keeps Gaussian elimination stable. When eliminating a column, dividing by a tiny pivot element multiplies every downstream error by a huge factor. **Partial pivoting** simply swaps rows so the largest-magnitude entry sits on the diagonal before each elimination step — keeping the multipliers $\le 1$ and the errors bounded. It costs almost nothing, and it is why `scipy.linalg.lu` and every production solver pivot by default. The lesson: *never divide by a small number when a larger one is available by reordering.*
 
-**Log-sum-exp** is the same principle in a different disguise, and it is everywhere in machine learning. The softmax and cross-entropy loss need $\log \sum_i e^{z_i}$. But $e^{1000}$ overflows to infinity and $e^{-1000}$ underflows to zero, even though the *answer* is a perfectly ordinary number. The fix uses a clean identity: subtract the max $m = \max_i z_i$ before exponentiating, then add it back.
+**Log-sum-exp** is the same principle in a different disguise, and it is everywhere in machine learning. The [softmax](ch14.html) and cross-entropy loss need $\log \sum_i e^{z_i}$. But $e^{1000}$ overflows to infinity and $e^{-1000}$ underflows to zero, even though the *answer* is a perfectly ordinary number. The fix uses a clean identity: subtract the max $m = \max_i z_i$ before exponentiating, then add it back.
 
 $$ \log \sum_i e^{z_i} = m + \log \sum_i e^{z_i - m}, \qquad m = \max_i z_i. $$
 
@@ -1309,7 +1311,7 @@ That is why rank-1 outer products are the *atoms* of the big decompositions. SVD
   <text x="200" y="140" fill="currentColor">every column ∝ u</text>
 </svg>
 
-Outer products also show up the moment you take a gradient. The gradient of a linear layer's loss with respect to its weight matrix is an outer product of the input vector and the upstream error vector — which is exactly why a single backprop step updates the whole weight matrix at once (Chapter 14). Covariance estimates are averaged outer products of centered data, $\frac{1}{n}\sum_i (\mathbf{x}_i-\bar{\mathbf{x}})(\mathbf{x}_i-\bar{\mathbf{x}})^\top$ — the link to the Gram matrix of §1.18.
+Outer products also show up the moment you take a gradient. The gradient of a linear layer's loss with respect to its weight matrix is an outer product of the input vector and the upstream error vector — which is exactly why a single backprop step updates the whole weight matrix at once ([Chapter 14, Neural Networks](ch14.html)). Covariance estimates are averaged outer products of centered data, $\frac{1}{n}\sum_i (\mathbf{x}_i-\bar{\mathbf{x}})(\mathbf{x}_i-\bar{\mathbf{x}})^\top$ — the link to the Gram matrix of §1.18.
 
 ```python
 import numpy as np
@@ -1334,7 +1336,29 @@ print(np.allclose(recon, B))    # True
 Read $\mathbf{u}\mathbf{v}^\top$ as "one direction repeated, scaled across the grid". Once you see that SVD, PCA, recommender factorization, and the weight-gradient are all *sums of rank-1 outer products*, those four topics stop being separate tricks and become one idea: build complicated matrices out of the simplest possible building block.
 :::
 
-## 1.21 — Key takeaways
+## 1.21 — Quick reference
+
+| Term / formula | Meaning in one line | When / why it matters |
+|---|---|---|
+| Dot product $\mathbf{v}\cdot\mathbf{w}=\|\mathbf{v}\|\|\mathbf{w}\|\cos\theta$ | How much two vectors align | Cosine similarity, the score inside every neuron, kernels |
+| Matrix–vector $A\mathbf{x}$ | A transformation: linear combo of $A$'s columns | One layer of a network applied to a batch |
+| Determinant $\det A$ | Volume-scaling factor; $0\Rightarrow$ singular | Tells you if $A$ is invertible / collapses space |
+| Inverse $A^{-1}$ | Undoes $A$; solves $A\mathbf{x}=\mathbf{b}$ | Use `solve`, never form `inv` (cost + instability) |
+| Eigen $A\mathbf{v}=\lambda\mathbf{v}$ | Directions of pure scaling, factor $\lambda$ | PCA axes, PageRank, training stability |
+| SVD $A=U\Sigma V^\top$ | Rotate–scale–rotate of any matrix | Best low-rank approx: compression, PCA, recommenders |
+| LU / QR / Cholesky | Factor $A$ into easy-to-solve pieces | LU general, QR stable least-squares, Cholesky for SPD |
+| Matrix factorization $R\approx WH$ | Learn $k$ latent factors filling a sparse matrix | Recommenders; latent-space models |
+| Norms $\|\mathbf{v}\|_1,\|\mathbf{v}\|_2$ | Taxicab vs. straight-line size | L1 = sparse (lasso), L2 = smooth (ridge) |
+| Rank | Count of independent directions | Exposes redundancy / multicollinearity |
+| Condition number $\kappa=\sigma_{\max}/\sigma_{\min}$ | How much error gets amplified | Large $\kappa$ ⇒ lose digits; regularize or rescale |
+| Normal equations $\hat{\mathbf{x}}=(A^\top A)^{-1}A^\top\mathbf{b}$ | Least-squares fit as a projection | Closed-form linear regression (prefer QR/SVD) |
+| Conjugate gradient | Iterative SPD solver, matrix-free | Huge sparse systems where inverting is impossible |
+| Tensor (rank-$n$ array) | Generalized matrix with $n$ axes | Batched images / sequences in deep learning |
+| Gram matrix $G=X^\top X$ | Table of pairwise dot products | Kernel trick: nonlinear power from dot products |
+| Outer product $\mathbf{u}\mathbf{v}^\top$ | Rank-1 matrix, the atom of decompositions | Building block of SVD, factorization, weight gradients |
+| Diagonalization $A=P\Lambda P^{-1}$ | Re-express $A$ as pure scaling in eigenbasis | Cheap matrix powers, Markov steady states |
+
+## 1.22 — Key takeaways
 
 - **Data is vectors, models are matrices.** Examples are vectors of features; a model layer is a matrix that transforms them. The dot product — alignment of two vectors — is the atomic operation underneath neurons, similarity, and kernels.
 - **A matrix is a transformation.** Multiplication chains transformations; the determinant measures volume scaling and flags non-invertibility (zero ⇒ singular); shapes must conform.
@@ -1348,15 +1372,15 @@ Read $\mathbf{u}\mathbf{v}^\top$ as "one direction repeated, scaled across the g
 - **The right basis makes hard problems easy.** Change of basis and diagonalization ($A=P\Lambda P^{-1}$) turn coupled transformations into pure scaling; it is the same plot as PCA and SVD — rotate into friendlier axes.
 - **Everything similarity-based runs on dot products.** The Gram matrix collects pairwise dot products; the kernel trick swaps that dot product for a kernel to buy nonlinear power without leaving linear algebra.
 
-## 1.22 — See also
+## 1.23 — See also
 
-- **Calculus & Differentiation** — gradients and the chain rule that train the transformations defined here.
-- **Optimization** — how eigenvalues of the Hessian and conditioning govern convergence.
-- **Probability & Statistics** — covariance matrices, where symmetric eigendecomposition lives.
-- **Dimensionality Reduction** — PCA built directly on eigenvectors and SVD.
-- **Regression** — the normal equations and least squares put to work.
-- **Recommender Systems** — matrix factorization scaled up to production.
-- **Neural Networks (Core)** — layers as matrix multiplications, in bulk.
+- **[Calculus & Differentiation](ch02.html)** — gradients and the chain rule that train the transformations defined here.
+- **[Optimization](ch03.html)** — how eigenvalues of the Hessian and conditioning govern convergence.
+- **[Probability & Statistics](ch04.html)** — covariance matrices, where symmetric eigendecomposition lives.
+- **[Dimensionality Reduction](ch07.html)** — PCA built directly on eigenvectors and SVD.
+- **[Regression](ch08.html)** — the normal equations and least squares put to work.
+- **[Recommender Systems](ch26.html)** — matrix factorization scaled up to production.
+- **[Neural Networks (Core)](ch14.html)** — layers as matrix multiplications, in bulk.
 
 ------------------------------------------------------------------------
 
