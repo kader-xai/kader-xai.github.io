@@ -193,6 +193,29 @@ The simplest global question is: *which features does the model actually rely on
 
 The intuition is a stress test. If I scramble `income` and the model's error barely changes, income was not doing real work. If I scramble it and accuracy collapses, income was load-bearing.
 
+<style>
+@keyframes c36-shuffle { 0%,100% { transform: translateY(0); } 25% { transform: translateY(14px); } 50% { transform: translateY(-10px); } 75% { transform: translateY(6px); } }
+@keyframes c36-err { 0%,100% { height: 18px; y: 132px; fill: #22c55e; } 50% { height: 96px; y: 54px; fill: #ec4899; } }
+.c36-cell { animation: c36-shuffle 4s ease-in-out infinite; }
+.c36-cell:nth-child(2) { animation-delay: .3s; } .c36-cell:nth-child(3) { animation-delay: .6s; } .c36-cell:nth-child(4) { animation-delay: .15s; }
+.c36-bar { animation: c36-err 4s ease-in-out infinite; }
+@media (prefers-reduced-motion: reduce) { .c36-cell, .c36-bar { animation: none; } }
+</style>
+<svg viewBox="0 0 380 180" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif" font-size="11">
+  <text x="70" y="16" text-anchor="middle" fill="currentColor">shuffle one column…</text>
+  <g class="c36-shufgroup">
+    <rect class="c36-cell" x="50" y="30" width="40" height="20" rx="3" fill="#6366f1" opacity="0.8"/>
+    <rect class="c36-cell" x="50" y="55" width="40" height="20" rx="3" fill="#6366f1" opacity="0.8"/>
+    <rect class="c36-cell" x="50" y="80" width="40" height="20" rx="3" fill="#6366f1" opacity="0.8"/>
+    <rect class="c36-cell" x="50" y="105" width="40" height="20" rx="3" fill="#6366f1" opacity="0.8"/>
+  </g>
+  <rect x="48" y="28" width="44" height="124" rx="4" fill="none" stroke="#6366f1" stroke-dasharray="4 3"/>
+  <text x="200" y="95" text-anchor="middle" fill="currentColor">→ error jumps →</text>
+  <line x1="300" y1="150" x2="360" y2="150" stroke="currentColor"/>
+  <rect class="c36-bar" x="318" y="132" width="26" height="18" rx="2" fill="#22c55e"/>
+  <text x="331" y="168" text-anchor="middle" fill="currentColor">error</text>
+</svg>
+
 $$\text{Imp}(j) = \text{Error}\big(\text{model on } X_{\text{shuffled } j}\big) - \text{Error}\big(\text{model on } X\big)$$
 
 **In words:** a feature's importance is how much worse the model gets once you scramble that one feature, compared with leaving everything intact. **Also written:** $\text{Imp}(j) = e_{\text{perm},j} - e_{\text{orig}}$, or as a *ratio* $e_{\text{perm},j}\,/\,e_{\text{orig}}$ when you want a scale-free "fold increase in error."
@@ -346,7 +369,7 @@ $$\phi_j = \sum_{S \subseteq F \setminus \{j\}} \frac{|S|!\,(|F|-|S|-1)!}{|F|!}\
 
 **In words:** a feature's SHAP value is the average, over every coalition of other features that might already be "in the room," of how much adding this feature changes the prediction. **Also written:** $\phi_j = \frac{1}{|F|!}\sum_{\pi}\big[f(\text{before}_\pi(j)\cup\{j\}) - f(\text{before}_\pi(j))\big]$ — the plain average of the marginal gain of $j$ taken over all $|F|!$ feature orderings $\pi$.
 
-Here $S$ ranges over subsets of features *not* containing $j$, and the bracket is how much adding $j$ improves the prediction on top of $S$. The combinatorial weight is what makes it an average over all orderings.
+Don't let the factorials scare you — they are just bookkeeping. The bracket $f(S \cup \{j\}) - f(S)$ is the one thing that matters: how much the prediction changes the moment feature $j$ joins a group $S$ of features already present. The messy fraction in front is only there to weight each group so that, all told, every possible *order* of arrival counts equally. Net effect: $\phi_j$ is just "the average bump feature $j$ gives, no matter who got there first."
 
 This yields the prized **additivity** property: the SHAP values plus the baseline reconstruct the prediction *exactly*.
 
@@ -508,6 +531,32 @@ But the field's consensus, after the "Attention is not Explanation" / "Attention
   <text x="300" y="70" fill="#e15759">"it" attends to "cat"</text>
 </svg>
 
+A live attention row — the cells brighten and fade in turn, the way a head spreads its weight over tokens, with no single cell ever clearly "the" reason:
+
+<style>
+@keyframes c36-attn { 0%,100% { opacity: 0.15; } 50% { opacity: 0.95; } }
+.c36-atn rect { animation: c36-attn 4s ease-in-out infinite; }
+.c36-atn rect:nth-of-type(1){animation-delay:0s} .c36-atn rect:nth-of-type(2){animation-delay:.5s}
+.c36-atn rect:nth-of-type(3){animation-delay:1s} .c36-atn rect:nth-of-type(4){animation-delay:1.5s} .c36-atn rect:nth-of-type(5){animation-delay:2s}
+@media (prefers-reduced-motion: reduce) { .c36-atn rect { animation: none; opacity: 0.6; } }
+</style>
+<svg viewBox="0 0 380 90" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif" font-size="11">
+  <text x="10" y="25" fill="currentColor">"it" reads from →</text>
+  <g class="c36-atn">
+    <rect x="20"  y="40" width="60" height="26" rx="4" fill="#a855f7"/>
+    <rect x="86"  y="40" width="60" height="26" rx="4" fill="#a855f7"/>
+    <rect x="152" y="40" width="60" height="26" rx="4" fill="#a855f7"/>
+    <rect x="218" y="40" width="60" height="26" rx="4" fill="#a855f7"/>
+    <rect x="284" y="40" width="60" height="26" rx="4" fill="#a855f7"/>
+  </g>
+  <text x="50"  y="58" text-anchor="middle" fill="currentColor">The</text>
+  <text x="116" y="58" text-anchor="middle" fill="currentColor">cat</text>
+  <text x="182" y="58" text-anchor="middle" fill="currentColor">sat</text>
+  <text x="248" y="58" text-anchor="middle" fill="currentColor">on</text>
+  <text x="314" y="58" text-anchor="middle" fill="currentColor">mat</text>
+  <text x="190" y="84" text-anchor="middle" fill="currentColor">high weight ≠ high influence</text>
+</svg>
+
 The pragmatic stance: attention is a useful *hint* about information routing and a fine visualization, but for a faithful per-feature attribution prefer SHAP-style or gradient-based methods that measure actual effect on the output. Attention shows what was *looked at*, not necessarily what was *used*.
 
 ## 36.11 — Counterfactual explanations
@@ -521,6 +570,24 @@ $$x' = \arg\min_{x'} \; d(x, x') \quad \text{subject to}\quad f(x') = \text{desi
 **In words:** find the nearest tweaked version of this case that the model would have decided the other way — the smallest realistic change that flips the outcome. **Also written:** as a single soft objective, $x' = \arg\min_{x'}\;\big(f(x') - y_{\text{target}}\big)^2 + \lambda\,d(x, x')$, trading off "reach the desired class" against "stay close to the original."
 
 The distance $d$ keeps the change *small and realistic* — change as few features as little as possible.
+
+A counterfactual is the smallest nudge that carries a point across the line. Watch the denied point drift just past the boundary into "approved":
+
+<style>
+@keyframes c36-cf { 0%,15% { cx: 120px; fill: #f59e0b; } 55%,75% { cx: 240px; fill: #22c55e; } 100% { cx: 120px; fill: #f59e0b; } }
+.c36-cfdot { animation: c36-cf 5s ease-in-out infinite; }
+@media (prefers-reduced-motion: reduce) { .c36-cfdot { animation: none; cx: 240px; fill: #22c55e; } }
+</style>
+<svg viewBox="0 0 360 150" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif" font-size="11">
+  <rect x="20" y="20" width="160" height="110" fill="rgba(245,158,11,0.12)"/>
+  <rect x="180" y="20" width="160" height="110" fill="rgba(34,197,94,0.12)"/>
+  <line x1="180" y1="15" x2="180" y2="135" stroke="currentColor" stroke-dasharray="5 3"/>
+  <text x="95" y="38" text-anchor="middle" fill="#f59e0b">denied</text>
+  <text x="262" y="38" text-anchor="middle" fill="#22c55e">approved</text>
+  <text x="180" y="148" text-anchor="middle" fill="currentColor">decision boundary (score = 0.5)</text>
+  <circle class="c36-cfdot" cx="120" cy="80" r="8"/>
+  <text x="120" y="105" text-anchor="middle" fill="currentColor">+$6k income →</text>
+</svg>
 
 A worked example. An applicant is denied; the model approves when a score crosses $0.5$. Their current feature values and the closest approving point:
 
@@ -590,6 +657,10 @@ print("probe accuracy:", probe.score(acts_test, y_test))
 The field has produced striking concrete results: **induction heads** in transformers that implement in-context copying ("...A B ... A → predict B"), and a real risk — **polysemanticity**, where a single neuron fires for several unrelated concepts because the network packs more features than it has neurons (**superposition**). **Sparse autoencoders** are the current tool for disentangling these into mono-semantic features. Probing has its own trap: a powerful probe might *learn* the concept itself rather than *find* it already there — control with a randomized-label baseline to confirm the model, not the probe, holds the information.
 
 A complementary, more *causal* tool is **activation patching** (a.k.a. causal tracing): run the model on a clean input, run it again on a corrupted one, then copy a specific activation from the clean run into the corrupted run and see if the correct answer is restored. If patching one head's output flips the prediction back, that head *causally* carries the relevant information — much stronger evidence than a correlational probe.
+
+::: {.callout-tip}
+**Where this shows up in practice.** Anthropic's interpretability team used sparse autoencoders on a production LLM to pull out millions of human-nameable features — a "Golden Gate Bridge" feature, a "code with a security bug" feature — and showed that *clamping* a feature up or down steers the model's behaviour. That is mechanistic interpretability leaving the lab: not just reading a circuit, but using it as a dial.
+:::
 
 ```{mermaid}
 flowchart TB

@@ -137,6 +137,27 @@ $$\mathbf{v}\cdot\mathbf{w} = \|\mathbf{v}\|\,\|\mathbf{w}\|\cos\theta$$
 
 So the dot product is positive when vectors point the same way, zero when **orthogonal** (perpendicular, $\theta = 90°$), negative when opposed. This single number powers cosine similarity in search, the score inside every neuron, and the kernels of Chapter 9.
 
+Watch the alignment idea move: a fixed reference arrow and a sweeping arrow. When they overlap the dot product is large and positive; at a right angle it passes through zero; when opposed it goes negative.
+
+<style>
+@keyframes c1-dotsweep { 0%,100% { transform: rotate(-65deg); } 50% { transform: rotate(65deg); } }
+@media (prefers-reduced-motion: reduce) { .c1-sweeparm { animation: none !important; } }
+</style>
+<svg viewBox="0 0 240 200" xmlns="http://www.w3.org/2000/svg" width="280" font-family="sans-serif" font-size="11">
+  <line x1="20" y1="160" x2="220" y2="160" stroke="currentColor" stroke-opacity="0.3"/>
+  <line x1="120" y1="30" x2="120" y2="180" stroke="currentColor" stroke-opacity="0.3"/>
+  <!-- fixed reference vector w -->
+  <line x1="120" y1="160" x2="210" y2="160" stroke="#22c55e" stroke-width="3"/>
+  <text x="185" y="178" fill="#22c55e">w (fixed)</text>
+  <!-- sweeping vector v -->
+  <g style="transform-origin:120px 160px; animation:c1-dotsweep 6s ease-in-out infinite;" class="c1-sweeparm">
+    <line x1="120" y1="160" x2="210" y2="160" stroke="#6366f1" stroke-width="3"/>
+    <circle cx="210" cy="160" r="4" fill="#6366f1"/>
+  </g>
+  <text x="30" y="50" fill="#6366f1">v swings →</text>
+  <text x="30" y="66" fill="currentColor" font-size="10">v·w: + when aligned, 0 at 90°, − when opposed</text>
+</svg>
+
 A small worked **cosine similarity** to make it concrete: a search query embedding $\mathbf{q}=[1,0,1]$ against two documents $\mathbf{d}_1=[1,0,1]$ (identical topic) and $\mathbf{d}_2=[0,1,0]$ (unrelated). Then $\mathbf{q}\cdot\mathbf{d}_1 = 2$ with cosine $=2/(\sqrt2\sqrt2)=1.0$ (perfect match), while $\mathbf{q}\cdot\mathbf{d}_2 = 0$ with cosine $=0$ (no overlap). That is literally how a vector search engine ranks results.
 
 ```python
@@ -330,6 +351,30 @@ print(vals)        # [3. 1.]
 print(vecs)        # columns are eigenvectors (unit length)
 ```
 
+The animation below makes "stays on its own line" literal: the blue ordinary vector gets swung off its direction by the matrix, while the green eigenvector only pulses longer and shorter along its fixed line — direction locked, length scaling by $\lambda$.
+
+<style>
+@keyframes c1-eigenswing { 0%,100% { transform: rotate(0deg); } 50% { transform: rotate(-32deg) scaleX(0.8); } }
+@keyframes c1-eigenstretch { 0%,100% { transform: scale(1); } 50% { transform: scale(1.4); } }
+@media (prefers-reduced-motion: reduce) { .c1-swing, .c1-stretch { animation: none !important; } }
+</style>
+<svg viewBox="0 0 240 200" xmlns="http://www.w3.org/2000/svg" width="280" font-family="sans-serif" font-size="11">
+  <line x1="20" y1="100" x2="220" y2="100" stroke="currentColor" stroke-opacity="0.25"/>
+  <line x1="120" y1="20" x2="120" y2="190" stroke="currentColor" stroke-opacity="0.25"/>
+  <!-- ordinary vector: gets rotated off its line -->
+  <g style="transform-origin:120px 100px; animation:c1-eigenswing 5s ease-in-out infinite;" class="c1-swing">
+    <line x1="120" y1="100" x2="200" y2="100" stroke="#6366f1" stroke-width="3"/>
+    <circle cx="200" cy="100" r="4" fill="#6366f1"/>
+  </g>
+  <text x="150" y="92" fill="#6366f1">ordinary → rotates off</text>
+  <!-- eigenvector: stays on its line, only stretches -->
+  <g style="transform-origin:120px 100px; animation:c1-eigenstretch 5s ease-in-out infinite;" class="c1-stretch">
+    <line x1="120" y1="100" x2="170" y2="50" stroke="#22c55e" stroke-width="3"/>
+    <circle cx="170" cy="50" r="4" fill="#22c55e"/>
+  </g>
+  <text x="40" y="40" fill="#22c55e">eigenvector → only stretches (×λ)</text>
+</svg>
+
 A symmetric matrix (like every covariance matrix) always has **real eigenvalues** and **orthogonal eigenvectors** — the spectral theorem — which is exactly why PCA's axes come out perpendicular.
 
 ::: {.callout-tip}
@@ -378,6 +423,21 @@ $U$ ($m\times m$) and $V$ ($n\times n$) are **orthogonal** (pure rotations/refle
   <text x="290" y="120" font-size="11" fill="#555">ellipse (σ₁,σ₂)</text>
 </svg>
 
+Here is that "stretch the circle into an ellipse" step animated — the unit circle breathing out along two clean axes by the singular values $\sigma_1,\sigma_2$, which is the only thing $\Sigma$ does between the two rotations.
+
+<style>
+@keyframes c1-svdstretch { 0%,100% { transform: scale(1,1); } 50% { transform: scale(1.6,0.65); } }
+@media (prefers-reduced-motion: reduce) { .c1-svdcirc { animation: none !important; } }
+</style>
+<svg viewBox="0 0 200 160" xmlns="http://www.w3.org/2000/svg" width="240" font-family="sans-serif" font-size="11">
+  <line x1="20" y1="80" x2="180" y2="80" stroke="currentColor" stroke-opacity="0.25"/>
+  <line x1="100" y1="15" x2="100" y2="145" stroke="currentColor" stroke-opacity="0.25"/>
+  <circle cx="100" cy="80" r="45" fill="#a855f7" fill-opacity="0.2" stroke="#a855f7" stroke-width="2"
+          class="c1-svdcirc"
+          style="transform-origin:100px 80px; animation:c1-svdstretch 5s ease-in-out infinite;"/>
+  <text x="35" y="155" fill="currentColor" font-size="10">Σ stretches by σ₁ (wide) and σ₂ (tall)</text>
+</svg>
+
 The killer application is **low-rank approximation**. Keep only the top $k$ singular values and their vectors, and you get the *best possible* rank-$k$ approximation of $A$ (the Eckart–Young theorem). This is the engine of compression, denoising, PCA, latent semantic analysis, and the recommenders of §1.7.
 
 ```python
@@ -422,6 +482,8 @@ These three factorizations are the *computational* backbone — the routines tha
 **QR decomposition** factors $A = QR$ where $Q$ is **orthogonal** (perpendicular unit columns) and $R$ is upper-triangular. Because orthogonal matrices preserve length and never amplify error, QR is the numerically stable way to solve **least-squares** problems and the core step of eigenvalue algorithms.
 
 **Cholesky decomposition** is the specialist: for a **symmetric positive-definite** matrix (all eigenvalues positive — covariance matrices qualify), $A = LL^\top$. It's roughly twice as fast as LU and underpins Gaussian processes, Kalman filters, and sampling from multivariate Gaussians.
+
+Worked Cholesky on small numbers — factor $A = \begin{bmatrix} 4 & 2 \\ 2 & 3 \end{bmatrix}$. You read $L$ off entry by entry: $\ell_{11}=\sqrt4=2$; $\ell_{21}=2/\ell_{11}=1$; $\ell_{22}=\sqrt{3-1^2}=\sqrt2$. So $L=\begin{bmatrix}2 & 0 \\ 1 & \sqrt2\end{bmatrix}$, and indeed $LL^\top=A$. Where this shows up: to draw a sample from a Gaussian with covariance $A$, take standard normal noise $\mathbf{z}$ and compute $L\mathbf{z}$ — Cholesky is the cheap machine that "colors" white noise with the right correlations.
 
 | Decomposition | Form | Requires | Main use |
 |---|---|---|---|
@@ -730,6 +792,22 @@ $$ f(x) = \tfrac{1}{2}\,x^\top A x - b^\top x. $$
 
 Its gradient is $\nabla f(x) = Ax - b$, which is zero precisely at the solution. So solving the linear system *is* finding the bottom of a bowl. The negative gradient $r = b - Ax$ is the **residual** — it points downhill and measures how wrong we are.
 
+Picture it: a ball released on the side of the bowl rolls down and settles at the lowest point. That resting point is the $x$ solving $Ax=b$.
+
+<style>
+@keyframes c1-ballroll { 0% { offset-distance: 4%; } 50% { offset-distance: 50%; } 100% { offset-distance: 4%; } }
+@media (prefers-reduced-motion: reduce) { .c1-ball { animation: none !important; offset-distance: 50% !important; } }
+</style>
+<svg viewBox="0 0 280 160" xmlns="http://www.w3.org/2000/svg" width="320" font-family="sans-serif" font-size="11">
+  <path id="c1-bowl" d="M 30 20 Q 140 220 250 20" fill="none" stroke="#38bdf8" stroke-width="2.5"/>
+  <circle r="7" fill="#f59e0b" stroke="currentColor" stroke-opacity="0.4"
+          class="c1-ball"
+          style="offset-path: path('M 30 20 Q 140 220 250 20'); animation: c1-ballroll 4s ease-in-out infinite;"/>
+  <circle cx="140" cy="130" r="3" fill="#22c55e"/>
+  <text x="148" y="138" fill="#22c55e">minimum: Ax = b</text>
+  <text x="95" y="15" fill="currentColor" font-size="10">f(x) = ½ xᵀA x − bᵀx</text>
+</svg>
+
 The naive idea, **steepest descent**, walks straight downhill each step. On a stretched bowl (an ill-conditioned $A$) this zigzags badly, taking tiny crisscrossing steps. CG's insight: instead of independent downhill steps, choose search directions that are **$A$-conjugate**, meaning $p_i^\top A p_j = 0$ for $i \neq j$. Conjugate directions don't interfere: progress made along one is never undone by the next. In exact arithmetic, $n$ conjugate steps land *exactly* at the solution — but in practice you stop far earlier, once the residual is small enough.
 
 ```{mermaid}
@@ -803,7 +881,7 @@ flowchart LR
     end
 ```
 
-**GMRES** (Generalized Minimal RESidual) works for *any* invertible $A$. At step $k$ it returns the vector in the Krylov subspace that minimizes the residual norm $\|b - Ax\|_2$. To do this it builds an orthonormal basis of $\mathcal{K}_k$ via the **Arnoldi process** (essentially Gram-Schmidt applied to the Krylov vectors). The catch: GMRES must *store every basis vector* and orthogonalize each new one against all previous ones. So work and memory grow with the iteration count. In practice you use **restarted GMRES**, written GMRES($m$): run $m$ steps, throw away the basis, restart from the current solution. Smaller $m$ saves memory but can stall; it is a tuning knob.
+**GMRES** (Generalized Minimal RESidual) works for *any* invertible $A$. At each step it picks, from everything it can currently reach, the guess that makes the leftover error $\|b - Ax\|_2$ as small as possible. To compare candidates cleanly it keeps a tidy set of perpendicular reference vectors (built by the **Arnoldi process**, basically Gram-Schmidt on the Krylov vectors). The catch is the bill: GMRES has to *remember every one of those reference vectors* and line up each new one against all the old ones, so both memory and work climb with every step. The standard fix is **restarted GMRES**, GMRES($m$): take $m$ steps, throw the saved vectors away, and start fresh from where you are. A small $m$ keeps memory flat but can stall — it is a knob you tune.
 
 **MINRES** (Minimal RESidual) is the specialization for $A$ **symmetric but possibly indefinite**. Symmetry lets the Arnoldi process collapse into a short three-term recurrence (the **Lanczos** process): each new basis vector only needs the previous two, not all of them. So MINRES, like CG, runs in fixed memory per step — no growing storage, no restarts. The rule of thumb is a small decision tree, captured above: symmetric and positive definite leads to CG; symmetric but indefinite leads to MINRES; anything else leads to GMRES.
 

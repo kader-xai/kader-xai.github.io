@@ -111,6 +111,41 @@ Training a model is only half the story; running it cheaply and quickly for mill
 🧭 **In context:** Production, Tooling & Infrastructure · used to train and serve large models fast and cheaply · the one key idea: modern AI is bottlenecked by **memory bandwidth and memory capacity**, not raw compute — almost every technique here is about moving fewer bytes.
 :::
 
+<style>
+@keyframes c30-byte-flow {
+  0%   { transform: translateX(0); opacity: 0; }
+  10%  { opacity: 1; }
+  90%  { opacity: 1; }
+  100% { transform: translateX(330px); opacity: 0; }
+}
+@keyframes c30-core-idle {
+  0%, 100% { fill: #f59e0b; }
+  50%      { fill: rgba(245,158,11,0.25); }
+}
+.c30-byte { animation: c30-byte-flow 3.2s linear infinite; }
+.c30-byte2 { animation: c30-byte-flow 3.2s linear infinite 1.6s; }
+.c30-core { animation: c30-core-idle 3.2s ease-in-out infinite; }
+@media (prefers-reduced-motion: reduce) {
+  .c30-byte, .c30-byte2, .c30-core { animation: none; }
+}
+</style>
+<svg viewBox="0 0 420 130" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif" font-size="11" role="img" aria-label="Bytes trickling slowly from memory to compute cores, leaving them starved.">
+  <rect x="10" y="35" width="60" height="60" rx="6" fill="#6366f1" fill-opacity="0.2" stroke="#6366f1"/>
+  <text x="40" y="22" text-anchor="middle" fill="currentColor">HBM</text>
+  <text x="40" y="70" text-anchor="middle" fill="currentColor" font-size="9">slow but</text>
+  <text x="40" y="82" text-anchor="middle" fill="currentColor" font-size="9">huge</text>
+  <line x1="70" y1="65" x2="350" y2="65" stroke="currentColor" stroke-opacity="0.25" stroke-dasharray="3 3"/>
+  <rect class="c30-byte" x="70" y="60" width="10" height="10" rx="2" fill="#38bdf8"/>
+  <rect class="c30-byte2" x="70" y="60" width="10" height="10" rx="2" fill="#38bdf8"/>
+  <rect x="350" y="35" width="60" height="60" rx="6" fill="#22c55e" fill-opacity="0.12" stroke="#22c55e"/>
+  <circle class="c30-core" cx="368" cy="55" r="5"/>
+  <circle class="c30-core" cx="392" cy="55" r="5"/>
+  <circle class="c30-core" cx="368" cy="78" r="5"/>
+  <circle class="c30-core" cx="392" cy="78" r="5"/>
+  <text x="380" y="22" text-anchor="middle" fill="currentColor">cores</text>
+  <text x="210" y="112" text-anchor="middle" fill="currentColor" font-size="10">a thin trickle of bytes starves thousands of fast cores → memory-bound</text>
+</svg>
+
 ## 30.1 — GPUs vs TPUs vs CPUs and why parallelism/memory matter
 
 Imagine you need to add a million pairs of numbers. A **CPU** (central processing unit) is a brilliant short-order cook: a handful of very fast, very clever cores that handle one complicated order at a time, with deep branch prediction and huge caches. A **GPU** (graphics processing unit) is a stadium kitchen: thousands of simpler cooks who can only follow the same recipe in lockstep, but there are *thousands* of them. For the million additions — all identical, no branching — the stadium wins by a mile. Deep learning is exactly this: the same matrix multiply applied across enormous arrays, which is **embarrassingly parallel**.
@@ -178,6 +213,35 @@ Think of memory like a desk: the GPU has a vast warehouse (HBM, slow to walk to)
 
 This is the whole idea behind **kernel fusion**: instead of running, say, a matmul, then a separate bias-add, then a separate activation — each one re-reading the data from HBM — you *fuse* them into one kernel that loads once, does all three on-chip, and writes once. **FlashAttention** is the famous example for transformers: classic attention materializes the full $n\times n$ attention-score matrix in HBM (huge for long sequences), but FlashAttention computes attention in tiles that fit in SRAM, never writing the giant matrix out. The result is the same numbers, far fewer bytes moved, and it is now standard in every serious inference stack.
 
+The same operation, the slow way versus the fused way — every HBM round-trip you erase is the speedup:
+
+<svg viewBox="0 0 470 200" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif" font-size="10.5" role="img" aria-label="Unfused path makes three HBM round-trips; fused path loads once and stores once.">
+  <text x="10" y="16" font-weight="bold" fill="currentColor">Unfused: 3 round-trips to slow HBM</text>
+  <rect x="10" y="26" width="450" height="22" rx="4" fill="#6366f1" fill-opacity="0.15" stroke="#6366f1"/>
+  <text x="235" y="41" text-anchor="middle" fill="currentColor">HBM (slow warehouse)</text>
+  <g stroke="#c0392b" stroke-width="1.5" fill="none">
+    <path d="M70 48 v14 M70 76 v-14" marker-end="url(#c30a)"/>
+    <path d="M210 48 v14 M210 76 v-14" marker-end="url(#c30a)"/>
+    <path d="M350 48 v14 M350 76 v-14" marker-end="url(#c30a)"/>
+  </g>
+  <rect x="40" y="64" width="60" height="20" rx="3" fill="#f59e0b" fill-opacity="0.7"/><text x="70" y="78" text-anchor="middle" fill="currentColor">matmul</text>
+  <rect x="180" y="64" width="60" height="20" rx="3" fill="#f59e0b" fill-opacity="0.7"/><text x="210" y="78" text-anchor="middle" fill="currentColor">bias</text>
+  <rect x="320" y="64" width="60" height="20" rx="3" fill="#f59e0b" fill-opacity="0.7"/><text x="350" y="78" text-anchor="middle" fill="currentColor">act</text>
+  <text x="10" y="120" font-weight="bold" fill="currentColor">Fused: load once, store once</text>
+  <rect x="10" y="130" width="450" height="22" rx="4" fill="#6366f1" fill-opacity="0.15" stroke="#6366f1"/>
+  <text x="235" y="145" text-anchor="middle" fill="currentColor">HBM</text>
+  <g stroke="#22c55e" stroke-width="1.5" fill="none">
+    <path d="M120 152 v12" marker-end="url(#c30b)"/>
+    <path d="M350 164 v-12" marker-end="url(#c30b)"/>
+  </g>
+  <rect x="140" y="164" width="180" height="22" rx="3" fill="#22c55e" fill-opacity="0.45"/>
+  <text x="230" y="179" text-anchor="middle" fill="currentColor">matmul + bias + act (on SRAM)</text>
+  <defs>
+    <marker id="c30a" markerWidth="7" markerHeight="7" refX="3.5" refY="6" orient="auto"><path d="M0 0 L3.5 6 L7 0 Z" fill="#c0392b"/></marker>
+    <marker id="c30b" markerWidth="7" markerHeight="7" refX="3.5" refY="6" orient="auto"><path d="M0 0 L3.5 6 L7 0 Z" fill="#22c55e"/></marker>
+  </defs>
+</svg>
+
 ```{mermaid}
 graph TD
     A[Registers / SRAM: tiny, ~100x faster] --> B[L2 cache]
@@ -221,13 +285,64 @@ graph LR
 
 A quick memory illustration of why this matters: training in mixed precision, the **optimizer states** (Adam's two moments plus an fp32 master copy) dominate. A common accounting is **~16 bytes per parameter** of training state (2 fp16 weight + 2 fp16 grad + 4+4+4 fp32 master/momentum/variance ≈ 16). For a 7B model that is **~112 GB** — already past a single 80 GB GPU. Shard it across 8 GPUs with ZeRO and each holds ~14 GB. That is the whole game.
 
-ZeRO comes in **three stages**, each sharding one more thing and saving more memory at the cost of a little more communication. The intuition: stage 1 splits up the bulkiest part (optimizer states), stage 2 also splits gradients, and stage 3 splits the parameters themselves (this is what FSDP does).
+ZeRO comes in **three stages**. The picture below is the fastest way to get it: think of the per-parameter training state as three stacked bricks — weights, gradients, optimizer states — and each stage slices one more brick into $1/N$ pieces spread over the GPUs.
+
+<style>
+@keyframes c30-shard-pulse {
+  0%, 100% { opacity: 0.35; }
+  50%      { opacity: 0.9; }
+}
+.c30-shard { animation: c30-shard-pulse 4s ease-in-out infinite; }
+@media (prefers-reduced-motion: reduce) { .c30-shard { animation: none; } }
+</style>
+<svg viewBox="0 0 470 210" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif" font-size="10.5" role="img" aria-label="Each ZeRO stage shards one more part of the training state across GPUs.">
+  <!-- column headers -->
+  <text x="70"  y="20" text-anchor="middle" font-weight="bold" fill="currentColor">DP (none)</text>
+  <text x="190" y="20" text-anchor="middle" font-weight="bold" fill="currentColor">ZeRO-1</text>
+  <text x="310" y="20" text-anchor="middle" font-weight="bold" fill="currentColor">ZeRO-2</text>
+  <text x="430" y="20" text-anchor="middle" font-weight="bold" fill="currentColor">ZeRO-3/FSDP</text>
+  <!-- legend -->
+  <rect x="10" y="180" width="12" height="12" fill="#38bdf8"/><text x="26" y="190" fill="currentColor">weights</text>
+  <rect x="100" y="180" width="12" height="12" fill="#f59e0b"/><text x="116" y="190" fill="currentColor">grads</text>
+  <rect x="175" y="180" width="12" height="12" fill="#a855f7"/><text x="191" y="190" fill="currentColor">optimizer states (heaviest)</text>
+  <text x="340" y="190" fill="currentColor" font-size="9.5">solid = full copy · striped = sharded 1/N</text>
+  <!-- DP column: all full -->
+  <rect x="40" y="40" width="60" height="24" fill="#38bdf8" fill-opacity="0.8"/>
+  <rect x="40" y="66" width="60" height="24" fill="#f59e0b" fill-opacity="0.8"/>
+  <rect x="40" y="92" width="60" height="48" fill="#a855f7" fill-opacity="0.8"/>
+  <!-- ZeRO-1: opt sharded -->
+  <rect x="160" y="40" width="60" height="24" fill="#38bdf8" fill-opacity="0.8"/>
+  <rect x="160" y="66" width="60" height="24" fill="#f59e0b" fill-opacity="0.8"/>
+  <rect class="c30-shard" x="160" y="92" width="60" height="48" fill="#a855f7" stroke="#a855f7" stroke-dasharray="4 3" fill-opacity="0.25"/>
+  <!-- ZeRO-2: grads + opt sharded -->
+  <rect x="280" y="40" width="60" height="24" fill="#38bdf8" fill-opacity="0.8"/>
+  <rect class="c30-shard" x="280" y="66" width="60" height="24" fill="#f59e0b" stroke="#f59e0b" stroke-dasharray="4 3" fill-opacity="0.25"/>
+  <rect class="c30-shard" x="280" y="92" width="60" height="48" fill="#a855f7" stroke="#a855f7" stroke-dasharray="4 3" fill-opacity="0.25"/>
+  <!-- ZeRO-3: everything sharded -->
+  <rect class="c30-shard" x="400" y="40" width="60" height="24" fill="#38bdf8" stroke="#38bdf8" stroke-dasharray="4 3" fill-opacity="0.25"/>
+  <rect class="c30-shard" x="400" y="66" width="60" height="24" fill="#f59e0b" stroke="#f59e0b" stroke-dasharray="4 3" fill-opacity="0.25"/>
+  <rect class="c30-shard" x="400" y="92" width="60" height="48" fill="#a855f7" stroke="#a855f7" stroke-dasharray="4 3" fill-opacity="0.25"/>
+  <text x="235" y="162" text-anchor="middle" fill="currentColor" font-size="10">→ each step shards one more brick · more saving, a little more communication →</text>
+</svg>
+
+The per-GPU memory for stage 1, written as a formula:
 
 $$\text{mem per GPU} \approx \underbrace{2\Psi}_{\text{fp16 weights}} + \underbrace{2\Psi}_{\text{fp16 grads}} + \frac{\overbrace{K\Psi}^{\text{optimizer states}}}{N_{\text{shard}}}\quad\text{(ZeRO-1, }K\approx 12\text{)}$$
 
 **In words:** every GPU still keeps a full copy of the 16-bit weights and gradients, but the heavy optimizer states (the fp32 master copy plus Adam's two moments, about 12 bytes/param) get divided by the number of GPUs you shard across.
 
 **Also written:** for $\Psi$ parameters across $N$ GPUs, ZeRO-1 ≈ $4\Psi + 12\Psi/N$ bytes/GPU; ZeRO-2 also shards gradients → $2\Psi + (2\Psi+12\Psi)/N$; ZeRO-3 (FSDP) shards everything → $\approx 16\Psi/N$ bytes/GPU.
+
+A worked example with small numbers makes the stages tangible. Take a **1B-parameter** model ($\Psi = 1\text{B}$) on **$N=8$** GPUs, using the 16-bytes/param accounting (2 weight + 2 grad + 12 optimizer):
+
+| Setup | Formula | Bytes/param | Per-GPU memory |
+|---|---|---|---|
+| Plain DP | $16\Psi$ | 16 | 16 GB (every GPU full) |
+| ZeRO-1 | $4\Psi + 12\Psi/8$ | $4 + 1.5 = 5.5$ | 5.5 GB |
+| ZeRO-2 | $2\Psi + 14\Psi/8$ | $2 + 1.75 = 3.75$ | 3.75 GB |
+| ZeRO-3 | $16\Psi/8$ | $2$ | 2 GB |
+
+Same model, same 8 GPUs — going from plain DP to ZeRO-3 drops each GPU's footprint from 16 GB to 2 GB, an 8× saving, purely by not storing redundant copies.
 
 | Strategy | What it splits | Each GPU stores | Main cost | Use when |
 |---|---|---|---|---|
@@ -355,6 +470,33 @@ $$q = \operatorname{round}\!\Big(\frac{w}{s}\Big),\qquad \hat w = s\cdot q,\qqua
 
 The naive way to round every weight independently loses accuracy at 4-bit. **GPTQ** and **AWQ** are smarter *post-training* quantizers: **GPTQ** rounds weights one column at a time while adjusting the rest to compensate for the error (using second-order/Hessian information from a small calibration set); **AWQ** (Activation-aware Weight Quantization) notices that a few weight channels carry most of the activation magnitude and protects those by scaling, quantizing the rest aggressively. Both recover near-fp16 quality at 4-bit.
 
+The picture below shows what "round to the nearest code" actually does — continuous fp16 weights snap onto a small grid of allowed levels:
+
+<svg viewBox="0 0 470 150" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif" font-size="10.5" role="img" aria-label="Continuous weights snapping down onto a coarse grid of quantization levels.">
+  <text x="10" y="16" font-weight="bold" fill="currentColor">Quantization snaps each weight to the nearest grid level</text>
+  <!-- continuous axis -->
+  <line x1="30" y1="50" x2="440" y2="50" stroke="currentColor" stroke-opacity="0.4"/>
+  <text x="30" y="38" fill="currentColor" font-size="9">continuous fp16 weights ↓</text>
+  <circle cx="95"  cy="50" r="4" fill="#ec4899"/>
+  <circle cx="160" cy="50" r="4" fill="#ec4899"/>
+  <circle cx="250" cy="50" r="4" fill="#ec4899"/>
+  <circle cx="330" cy="50" r="4" fill="#ec4899"/>
+  <circle cx="400" cy="50" r="4" fill="#ec4899"/>
+  <!-- snap arrows -->
+  <g stroke="#a855f7" stroke-width="1.3" stroke-dasharray="3 2" fill="none" marker-end="url(#c30q)">
+    <path d="M95 56 V96"/><path d="M160 56 V96"/><path d="M250 56 V96"/><path d="M330 56 V96"/><path d="M400 56 V96"/>
+  </g>
+  <!-- grid of levels -->
+  <line x1="30" y1="104" x2="440" y2="104" stroke="currentColor" stroke-opacity="0.4"/>
+  <g fill="#22c55e">
+    <rect x="76"  y="100" width="8" height="8"/><rect x="146" y="100" width="8" height="8"/>
+    <rect x="216" y="100" width="8" height="8"/><rect x="286" y="100" width="8" height="8"/>
+    <rect x="356" y="100" width="8" height="8"/><rect x="396" y="100" width="8" height="8"/>
+  </g>
+  <text x="30" y="128" fill="currentColor" font-size="9">↑ allowed integer levels (e.g. 16 for 4-bit) — the gap between them is the rounding error</text>
+  <defs><marker id="c30q" markerWidth="7" markerHeight="7" refX="3.5" refY="6" orient="auto"><path d="M0 0 L3.5 6 L7 0 Z" fill="#a855f7"/></marker></defs>
+</svg>
+
 Tiny worked example of int8 with a per-tensor scale:
 
 ```python
@@ -443,6 +585,10 @@ structured:    drop the whole column/head this row feeds → matrix shrinks 8→
   <text x="10" y="148" fill="#555" font-size="10">Half the weight bytes moved, and the pattern is regular enough for tensor cores to skip the zeros.</text>
 </svg>
 
+::: {.callout-warning}
+Pruning to a flashy "90% sparse" number is misleading if it is *unstructured* — on a normal GPU that model usually runs at the *same* speed as the dense one, because the hardware still streams the zeros. Only structured pruning or hardware-supported patterns like 2:4 turn sparsity into real wall-clock speedup. Quote the speedup you measured, not the sparsity you achieved.
+:::
+
 ### 30.4c — Knowledge distillation
 
 **Knowledge distillation** trains a small **student** model to mimic a large **teacher**. Instead of (or alongside) the hard labels, the student matches the teacher's full output probabilities — the "soft targets," softened with a temperature $T$ — which carry richer information ("this image is mostly cat, a little dog, definitely not car"). The result is a compact model that punches above its size. DistilBERT and many small instruct models are distilled this way.
@@ -458,6 +604,23 @@ The temperature is the heart of it. A **softmax with temperature** $T$ computes 
 **In words:** dividing the logits by $T$ before the exponential squashes the gaps between them, so a confident "87% cat" relaxes into "70% cat, 26% dog" — revealing which wrong answers the teacher thought were close calls.
 
 **Also written:** $p_i = \operatorname{softmax}(z/T)_i$; as $T\to\infty$ it approaches the uniform distribution $1/K$, and as $T\to 0$ it approaches a one-hot at $\arg\max_i z_i$.
+
+The bars below show the *same* teacher logits at two temperatures — raising $T$ lifts the hidden "dog" signal into view:
+
+<svg viewBox="0 0 470 175" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif" font-size="10.5" role="img" aria-label="At T=1 only cat is visible; at T=2 the dog probability rises, revealing dark knowledge.">
+  <text x="10" y="16" font-weight="bold" fill="currentColor">Same logits, two temperatures — softening reveals 'dark knowledge'</text>
+  <line x1="40" y1="140" x2="450" y2="140" stroke="currentColor" stroke-opacity="0.4"/>
+  <!-- T=1 group -->
+  <text x="105" y="158" text-anchor="middle" fill="currentColor">T = 1 (peaked)</text>
+  <rect x="60"  y="34"  width="34" height="106" fill="#6366f1"/><text x="77" y="30" text-anchor="middle" fill="currentColor" font-size="9">cat .87</text>
+  <rect x="100" y="126" width="34" height="14"  fill="#f59e0b"/><text x="117" y="120" text-anchor="middle" fill="currentColor" font-size="9">dog .12</text>
+  <rect x="140" y="138" width="34" height="2"   fill="#ec4899"/><text x="157" y="120" text-anchor="middle" fill="currentColor" font-size="9">car .02</text>
+  <!-- T=2 group -->
+  <text x="345" y="158" text-anchor="middle" fill="currentColor">T = 2 (softened)</text>
+  <rect x="300" y="54"  width="34" height="86" fill="#6366f1"/><text x="317" y="50" text-anchor="middle" fill="currentColor" font-size="9">cat .70</text>
+  <rect x="340" y="108" width="34" height="32" fill="#f59e0b"/><text x="357" y="102" text-anchor="middle" fill="currentColor" font-size="9">dog .26</text>
+  <rect x="380" y="136" width="34" height="4"  fill="#ec4899"/><text x="397" y="120" text-anchor="middle" fill="currentColor" font-size="9">car .03</text>
+</svg>
 
 A tiny number-in/number-out example. Suppose for one image the teacher's logits over three classes {cat, dog, car} are $z = [3.0,\ 1.0,\ -1.0]$.
 
@@ -514,6 +677,27 @@ The picture is the whole lesson: weights are a flat red line, but the blue KV ba
 Because decode is memory-bound, processing **one** request wastes the GPU — you load all the weights to serve a single token. **Batching** runs many requests together so each weight load serves many tokens, multiplying throughput nearly for free. Static batching is clumsy, though: requests finish at different times, and a batch that waits for its slowest member leaves GPUs idle.
 
 **Continuous batching** (a.k.a. in-flight batching) fixes this by scheduling at the *token* level: as soon as one sequence finishes, a new one slots into its place, so the batch is always full. **vLLM** is the popular server that does this. Its key trick is **PagedAttention**: instead of reserving one big contiguous block of memory for each request's KV cache (which wastes a lot to fragmentation and over-reservation), it stores the cache in small fixed-size *pages* like an operating system's virtual memory. Pages are allocated on demand and can even be shared across requests with a common prefix. The result is far less wasted memory and much higher throughput.
+
+The animation contrasts the two: in a static batch, finished requests leave dead slots until the slowest one ends; continuous batching backfills them instantly.
+
+<style>
+@keyframes c30-slot-fill {
+  0%, 45%   { fill: rgba(99,102,241,0.12); stroke-dasharray: 4 3; }
+  55%, 100% { fill: rgba(34,197,94,0.55); stroke-dasharray: 0; }
+}
+.c30-fill { animation: c30-slot-fill 4s ease-in-out infinite; }
+@media (prefers-reduced-motion: reduce) { .c30-fill { animation: none; fill: rgba(34,197,94,0.55); } }
+</style>
+<svg viewBox="0 0 470 175" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif" font-size="10.5" role="img" aria-label="Static batch leaves idle gaps; continuous batch backfills finished slots.">
+  <text x="10" y="16" font-weight="bold" fill="currentColor">Static batch: idle gaps</text>
+  <rect x="20" y="26" width="120" height="18" rx="3" fill="#6366f1" fill-opacity="0.6"/><text x="80" y="39" text-anchor="middle" fill="currentColor">req1 done</text>
+  <rect x="20" y="48" width="60"  height="18" rx="3" fill="#6366f1" fill-opacity="0.6"/><rect x="80" y="48" width="60" height="18" rx="3" fill="none" stroke="#c0392b" stroke-dasharray="4 3"/><text x="110" y="61" text-anchor="middle" fill="#c0392b" font-size="9">idle</text>
+  <rect x="20" y="70" width="280" height="18" rx="3" fill="#6366f1" fill-opacity="0.6"/><text x="160" y="83" text-anchor="middle" fill="currentColor">req3 holds the batch →</text>
+  <text x="10" y="116" font-weight="bold" fill="currentColor">Continuous batch: slot backfilled the moment it frees</text>
+  <rect x="20" y="126" width="120" height="20" rx="3" fill="#6366f1" fill-opacity="0.6"/><text x="80" y="140" text-anchor="middle" fill="currentColor">req1</text>
+  <rect class="c30-fill" x="142" y="126" width="120" height="20" rx="3" stroke="#22c55e"/><text x="202" y="140" text-anchor="middle" fill="currentColor">req4 ↩</text>
+  <rect x="20" y="150" width="242" height="18" rx="3" fill="#6366f1" fill-opacity="0.6"/><text x="140" y="163" text-anchor="middle" fill="currentColor">req2 still running — batch stays full</text>
+</svg>
 
 ```{mermaid}
 graph TD
@@ -587,6 +771,33 @@ Total time for a response $\approx \text{TTFT} + (\text{output tokens}-1)\times\
 **In words:** the user waits once for the prompt to be digested (TTFT), then waits one short gap (TPOT) for every additional word that streams out — add them up for the whole response.
 
 **Also written:** $T_{\text{total}} \approx \text{TTFT} + (N_{\text{out}}-1)\cdot\text{TPOT}$, and the perceived streaming speed is $\text{tokens/sec} = 1/\text{TPOT}$.
+
+The timeline below shows the two phases: one big upfront prefill, then a steady drip of decode steps. The pulsing dots are the tokens streaming out at one TPOT apart.
+
+<style>
+@keyframes c30-tok-pop {
+  0%, 100% { r: 4; opacity: 0.4; }
+  50%      { r: 6; opacity: 1; }
+}
+.c30-tok { animation: c30-tok-pop 2.8s ease-in-out infinite; fill: #22c55e; }
+.c30-t2 { animation-delay: 0.5s; }
+.c30-t3 { animation-delay: 1.0s; }
+.c30-t4 { animation-delay: 1.5s; }
+@media (prefers-reduced-motion: reduce) { .c30-tok { animation: none; opacity: 1; } }
+</style>
+<svg viewBox="0 0 470 120" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif" font-size="10.5" role="img" aria-label="A long prefill block produces the first token, then evenly spaced decode tokens stream out.">
+  <line x1="20" y1="70" x2="450" y2="70" stroke="currentColor" stroke-opacity="0.4"/>
+  <rect x="20" y="50" width="150" height="20" rx="3" fill="#a855f7" fill-opacity="0.55"/>
+  <text x="95" y="64" text-anchor="middle" fill="currentColor" font-size="9">prefill (whole prompt)</text>
+  <circle class="c30-tok" cx="175" cy="60" r="4"/>
+  <text x="175" y="40" text-anchor="middle" fill="currentColor" font-size="9">TTFT ↑</text>
+  <circle class="c30-tok c30-t2" cx="245" cy="60" r="4"/>
+  <circle class="c30-tok c30-t3" cx="315" cy="60" r="4"/>
+  <circle class="c30-tok c30-t4" cx="385" cy="60" r="4"/>
+  <path d="M175 88 H245" stroke="#22c55e" stroke-opacity="0.6" marker-start="url(#c30tl)" marker-end="url(#c30tl)"/>
+  <text x="210" y="104" text-anchor="middle" fill="currentColor" font-size="9">TPOT</text>
+  <defs><marker id="c30tl" markerWidth="6" markerHeight="6" refX="3" refY="3" orient="auto"><circle cx="3" cy="3" r="2" fill="#22c55e"/></marker></defs>
+</svg>
 
 ```{mermaid}
 graph LR

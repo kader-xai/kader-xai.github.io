@@ -111,6 +111,36 @@ Training a model is the easy part; knowing whether it will actually *work* on da
 🧭 **In context:** The ML Workflow / Classical ML · used to estimate true (out-of-sample) performance and pick model settings · the one key idea: **measure on data the model never touched, and tune to minimize that out-of-sample error.**
 :::
 
+<style>
+@keyframes c12-flow { 0% { stroke-dashoffset: 120; } 100% { stroke-dashoffset: 0; } }
+@keyframes c12-pulse { 0%,100% { r: 7; opacity: .55; } 50% { r: 10; opacity: 1; } }
+.c12-flow-line { stroke-dasharray: 8 6; animation: c12-flow 3.2s linear infinite; }
+.c12-stage { animation: c12-pulse 3.2s ease-in-out infinite; }
+.c12-stage.s2 { animation-delay: .8s; }
+.c12-stage.s3 { animation-delay: 1.6s; }
+.c12-stage.s4 { animation-delay: 2.4s; }
+@media (prefers-reduced-motion: reduce) {
+  .c12-flow-line, .c12-stage { animation: none; }
+}
+</style>
+<svg viewBox="0 0 520 90" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif" font-size="11" role="img" aria-label="Evaluation workflow: split, tune, measure, ship">
+  <line class="c12-flow-line" x1="40" y1="45" x2="480" y2="45" stroke="#6366f1" stroke-width="2.5"/>
+  <g text-anchor="middle">
+    <circle class="c12-stage s1" cx="60"  cy="45" fill="#38bdf8"/>
+    <circle class="c12-stage s2" cx="200" cy="45" fill="#22c55e"/>
+    <circle class="c12-stage s3" cx="340" cy="45" fill="#f59e0b"/>
+    <circle class="c12-stage s4" cx="460" cy="45" fill="#ec4899"/>
+    <text x="60"  y="78" fill="currentColor">split</text>
+    <text x="200" y="78" fill="currentColor">tune</text>
+    <text x="340" y="78" fill="currentColor">measure</text>
+    <text x="460" y="78" fill="currentColor">ship</text>
+    <text x="60"  y="25" fill="currentColor" font-size="9">hold out data</text>
+    <text x="200" y="25" fill="currentColor" font-size="9">CV on val</text>
+    <text x="340" y="25" fill="currentColor" font-size="9">test once</text>
+    <text x="460" y="25" fill="currentColor" font-size="9">production</text>
+  </g>
+</svg>
+
 ## 12.1 — Train/test split & cross-validation (k-fold, stratified, time-series)
 
 The single most important rule in machine learning: **never judge a model on the data it learned from.** A model can memorize its training set and score 100% on it while being useless on anything new. To estimate real performance you hold out data the model never sees during fitting.
@@ -126,6 +156,71 @@ $$\text{CV score} = \frac{1}{k}\sum_{i=1}^{k} \text{score}_i$$
 **In words:** add up the score you got on each of the $k$ held-out folds and divide by the number of folds — the typical performance across all the held-out trials.
 
 **Also written:** $\widehat{\text{CV}} = \mathbb{E}_i[\text{score}_i]$, the sample mean of the fold scores $\{\text{score}_1,\dots,\text{score}_k\}$.
+
+The figure below makes the rotation concrete: the orange test fold slides along the data, one fold per round, until every block has been the test set exactly once.
+
+<style>
+@keyframes c12-rotate { 0%,100% { opacity:.35; } 18% { opacity:1; } }
+.c12-fold { animation: c12-rotate 5s ease-in-out infinite; }
+.c12-fold.r2 { animation-delay: 1s; }
+.c12-fold.r3 { animation-delay: 2s; }
+.c12-fold.r4 { animation-delay: 3s; }
+.c12-fold.r5 { animation-delay: 4s; }
+@media (prefers-reduced-motion: reduce) { .c12-fold { animation: none; opacity:1; } }
+</style>
+<svg viewBox="0 0 460 200" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif" font-size="10" role="img" aria-label="k-fold cross-validation: the test fold rotates through each of five blocks">
+  <text x="20" y="14" fill="currentColor" font-size="11">5-fold CV — orange = test, blue = train (test fold rotates each round)</text>
+  <!-- 5 rows, each with 5 cells; the highlighted cell = test for that round -->
+  <g>
+    <!-- helper layout: x positions 30,110,190,270,350 width 76 -->
+    <!-- Round 1 -->
+    <g transform="translate(0,30)">
+      <text x="20" y="13" fill="currentColor" font-size="9">R1</text>
+      <rect class="c12-fold r1" x="40"  y="2" width="76" height="16" fill="#f59e0b" stroke="currentColor"/>
+      <rect x="118" y="2" width="76" height="16" fill="#38bdf8" fill-opacity=".45" stroke="currentColor"/>
+      <rect x="196" y="2" width="76" height="16" fill="#38bdf8" fill-opacity=".45" stroke="currentColor"/>
+      <rect x="274" y="2" width="76" height="16" fill="#38bdf8" fill-opacity=".45" stroke="currentColor"/>
+      <rect x="352" y="2" width="76" height="16" fill="#38bdf8" fill-opacity=".45" stroke="currentColor"/>
+    </g>
+    <!-- Round 2 -->
+    <g transform="translate(0,52)">
+      <text x="20" y="13" fill="currentColor" font-size="9">R2</text>
+      <rect x="40"  y="2" width="76" height="16" fill="#38bdf8" fill-opacity=".45" stroke="currentColor"/>
+      <rect class="c12-fold r2" x="118" y="2" width="76" height="16" fill="#f59e0b" stroke="currentColor"/>
+      <rect x="196" y="2" width="76" height="16" fill="#38bdf8" fill-opacity=".45" stroke="currentColor"/>
+      <rect x="274" y="2" width="76" height="16" fill="#38bdf8" fill-opacity=".45" stroke="currentColor"/>
+      <rect x="352" y="2" width="76" height="16" fill="#38bdf8" fill-opacity=".45" stroke="currentColor"/>
+    </g>
+    <!-- Round 3 -->
+    <g transform="translate(0,74)">
+      <text x="20" y="13" fill="currentColor" font-size="9">R3</text>
+      <rect x="40"  y="2" width="76" height="16" fill="#38bdf8" fill-opacity=".45" stroke="currentColor"/>
+      <rect x="118" y="2" width="76" height="16" fill="#38bdf8" fill-opacity=".45" stroke="currentColor"/>
+      <rect class="c12-fold r3" x="196" y="2" width="76" height="16" fill="#f59e0b" stroke="currentColor"/>
+      <rect x="274" y="2" width="76" height="16" fill="#38bdf8" fill-opacity=".45" stroke="currentColor"/>
+      <rect x="352" y="2" width="76" height="16" fill="#38bdf8" fill-opacity=".45" stroke="currentColor"/>
+    </g>
+    <!-- Round 4 -->
+    <g transform="translate(0,96)">
+      <text x="20" y="13" fill="currentColor" font-size="9">R4</text>
+      <rect x="40"  y="2" width="76" height="16" fill="#38bdf8" fill-opacity=".45" stroke="currentColor"/>
+      <rect x="118" y="2" width="76" height="16" fill="#38bdf8" fill-opacity=".45" stroke="currentColor"/>
+      <rect x="196" y="2" width="76" height="16" fill="#38bdf8" fill-opacity=".45" stroke="currentColor"/>
+      <rect class="c12-fold r4" x="274" y="2" width="76" height="16" fill="#f59e0b" stroke="currentColor"/>
+      <rect x="352" y="2" width="76" height="16" fill="#38bdf8" fill-opacity=".45" stroke="currentColor"/>
+    </g>
+    <!-- Round 5 -->
+    <g transform="translate(0,118)">
+      <text x="20" y="13" fill="currentColor" font-size="9">R5</text>
+      <rect x="40"  y="2" width="76" height="16" fill="#38bdf8" fill-opacity=".45" stroke="currentColor"/>
+      <rect x="118" y="2" width="76" height="16" fill="#38bdf8" fill-opacity=".45" stroke="currentColor"/>
+      <rect x="196" y="2" width="76" height="16" fill="#38bdf8" fill-opacity=".45" stroke="currentColor"/>
+      <rect x="274" y="2" width="76" height="16" fill="#38bdf8" fill-opacity=".45" stroke="currentColor"/>
+      <rect class="c12-fold r5" x="352" y="2" width="76" height="16" fill="#f59e0b" stroke="currentColor"/>
+    </g>
+  </g>
+  <text x="230" y="170" text-anchor="middle" fill="currentColor" font-size="9">average the 5 held-out scores → one stable estimate</text>
+</svg>
 
 ```{mermaid}
 flowchart LR
@@ -236,19 +331,32 @@ The intuition is a dartboard. High bias = darts clustered tightly but far from t
 
 **Worked example.** Fit polynomials to a noisy sine wave. A degree-1 line has high bias: it misses the curve on both train and test (both errors high → underfitting). A degree-15 polynomial has high variance: it threads every training point (train error ≈ 0) but wiggles wildly between them (test error high → overfitting). A degree-3 or 4 balances the two and minimizes test error. As you increase capacity, bias falls and variance rises; total error traces a U — high on the left from bias, high on the right from variance, lowest in the middle.
 
-<svg viewBox="0 0 360 200" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif" font-size="11">
-  <line x1="40" y1="170" x2="330" y2="170" stroke="#333"/>
-  <line x1="40" y1="170" x2="40" y2="20" stroke="#333"/>
-  <text x="185" y="192" text-anchor="middle">model capacity →</text>
-  <text x="16" y="95" text-anchor="middle" transform="rotate(-90 16 95)">error</text>
-  <path d="M55,40 C120,120 180,150 320,165" fill="none" stroke="#36c" stroke-width="2"/>
-  <path d="M55,165 C150,150 220,120 320,40" fill="none" stroke="#c93" stroke-width="2"/>
-  <path d="M55,90 C140,55 220,55 320,95" fill="none" stroke="#2a6" stroke-width="2.5"/>
-  <circle cx="178" cy="58" r="3.5" fill="#2a6"/>
-  <text x="70" y="55" fill="#36c" font-size="10">bias²</text>
-  <text x="290" y="55" fill="#c93" font-size="10">variance</text>
-  <text x="150" y="45" fill="#2a6" font-size="10">total error</text>
-  <text x="178" y="50" text-anchor="middle" font-size="9" fill="#2a6">sweet spot</text>
+The animated curve below makes the U concrete: a marble rolls down the total-error curve and settles at the sweet spot where bias and variance balance.
+
+<style>
+@keyframes c12-marble {
+  0%   { transform: translate(0px, 0px); }
+  50%  { transform: translate(123px, 28px); }
+  100% { transform: translate(0px, 0px); }
+}
+.c12-marble { animation: c12-marble 4.5s ease-in-out infinite; }
+@media (prefers-reduced-motion: reduce) { .c12-marble { animation: none; transform: translate(123px,28px); } }
+</style>
+<svg viewBox="0 0 360 210" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif" font-size="11" role="img" aria-label="Total error U-curve with a marble settling at the sweet spot">
+  <line x1="40" y1="170" x2="330" y2="170" stroke="currentColor"/>
+  <line x1="40" y1="170" x2="40" y2="20" stroke="currentColor"/>
+  <text x="185" y="192" text-anchor="middle" fill="currentColor">model capacity →</text>
+  <text x="16" y="95" text-anchor="middle" transform="rotate(-90 16 95)" fill="currentColor">error</text>
+  <path d="M55,40 C120,120 180,150 320,165" fill="none" stroke="#38bdf8" stroke-width="2"/>
+  <path d="M55,165 C150,150 220,120 320,40" fill="none" stroke="#f59e0b" stroke-width="2"/>
+  <path d="M55,90 C140,55 220,55 320,95" fill="none" stroke="#22c55e" stroke-width="2.5"/>
+  <!-- marble starts at left of green curve (55,90) and eases to sweet spot (~178,58) -->
+  <circle class="c12-marble" cx="55" cy="90" r="6" fill="#a855f7"/>
+  <line x1="178" y1="58" x2="178" y2="170" stroke="#a855f7" stroke-dasharray="3" stroke-opacity=".5"/>
+  <text x="70" y="55" fill="#38bdf8" font-size="10">bias²</text>
+  <text x="290" y="55" fill="#f59e0b" font-size="10">variance</text>
+  <text x="150" y="42" fill="#22c55e" font-size="10">total error</text>
+  <text x="178" y="47" text-anchor="middle" font-size="9" fill="#a855f7">sweet spot</text>
 </svg>
 
 ::: {.callout-tip}
@@ -331,26 +439,26 @@ $$L_{\text{ridge}} = L(\mathbf{w}) + \lambda \sum_j w_j^2 \quad(\text{L2}), \qqu
 
 The knob $\lambda$ (the **regularization strength**) is a hyperparameter: $\lambda = 0$ is no regularization at all; large $\lambda$ forces a simpler model with smaller weights. You tune it with CV (Section 12.8).
 
-Why does L1 zero things out but L2 doesn't? The constraint regions differ. L1's region is a diamond with corners on the axes; the loss contours tend to first touch it at a corner, where one coordinate is exactly zero. L2's region is a circle with no corners, so the optimum lands at a generic point with all coordinates small but nonzero.
+Why does L1 zero things out but L2 doesn't? Picture the optimizer as a ball that wants to roll to the lowest point of the loss, but it's fenced inside a "weight budget" region — and the *shape* of that fence decides where it stops. L1's fence is a **diamond** with sharp corners that sit exactly on the axes (where one weight is zero). The loss tends to bump into the fence at a corner, so a weight snaps to zero. L2's fence is a **circle** — smooth, no corners — so the ball settles at a generic edge point where every weight is small but none is exactly zero. Corners create sparsity; round edges don't.
 
 <svg viewBox="0 0 420 200" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif" font-size="11">
   <!-- L1 diamond -->
   <g>
     <line x1="20" y1="100" x2="180" y2="100" stroke="#aaa"/><line x1="100" y1="20" x2="100" y2="180" stroke="#aaa"/>
-    <polygon points="100,45 145,100 100,155 55,100" fill="#9cf" fill-opacity="0.5" stroke="#369"/>
-    <ellipse cx="135" cy="60" rx="45" ry="30" fill="none" stroke="#c33"/>
-    <ellipse cx="135" cy="60" rx="25" ry="16" fill="none" stroke="#c33"/>
-    <circle cx="100" cy="45" r="4" fill="#c33"/>
-    <text x="100" y="195" text-anchor="middle">L1: touches at a corner (w₂=0)</text>
+    <polygon points="100,45 145,100 100,155 55,100" fill="#6366f1" fill-opacity="0.4" stroke="#6366f1"/>
+    <ellipse cx="135" cy="60" rx="45" ry="30" fill="none" stroke="#ec4899"/>
+    <ellipse cx="135" cy="60" rx="25" ry="16" fill="none" stroke="#ec4899"/>
+    <circle cx="100" cy="45" r="4" fill="#ec4899"/>
+    <text x="100" y="195" text-anchor="middle" fill="currentColor">L1: touches at a corner (w₂=0)</text>
   </g>
   <!-- L2 circle -->
   <g>
     <line x1="240" y1="100" x2="400" y2="100" stroke="#aaa"/><line x1="320" y1="20" x2="320" y2="180" stroke="#aaa"/>
-    <circle cx="320" cy="100" r="48" fill="#9cf" fill-opacity="0.5" stroke="#369"/>
-    <ellipse cx="355" cy="62" rx="45" ry="30" fill="none" stroke="#c33"/>
-    <ellipse cx="355" cy="62" rx="25" ry="16" fill="none" stroke="#c33"/>
-    <circle cx="350" cy="68" r="4" fill="#c33"/>
-    <text x="320" y="195" text-anchor="middle">L2: touches off-axis (both ≠ 0)</text>
+    <circle cx="320" cy="100" r="48" fill="#6366f1" fill-opacity="0.4" stroke="#6366f1"/>
+    <ellipse cx="355" cy="62" rx="45" ry="30" fill="none" stroke="#ec4899"/>
+    <ellipse cx="355" cy="62" rx="25" ry="16" fill="none" stroke="#ec4899"/>
+    <circle cx="350" cy="68" r="4" fill="#ec4899"/>
+    <text x="320" y="195" text-anchor="middle" fill="currentColor">L2: touches off-axis (both ≠ 0)</text>
   </g>
 </svg>
 
@@ -416,6 +524,35 @@ Start with L2 as a safe default. Reach for L1 when you suspect many features are
 
 The intuition is that dropout trains an *ensemble*. Each random mask defines a slightly different sub-network; over training you implicitly train exponentially many of them sharing weights, and at test time using the full network approximates averaging all their predictions. Ensembling reduces variance (Chapter 10) — which is exactly what fights overfitting.
 
+The doodle below shows the same little network on three training steps: a different random subset of neurons goes dark each time, so no single unit can be relied on.
+
+<style>
+@keyframes c12-drop-a { 0%,100% { opacity:1; } 33%,66% { opacity:.18; } }
+@keyframes c12-drop-b { 0%,33% { opacity:.18; } 50%,100% { opacity:1; } }
+@keyframes c12-drop-c { 0%,66% { opacity:1; } 80%,95% { opacity:.18; } }
+.c12-n-a { animation: c12-drop-a 4s steps(1,end) infinite; }
+.c12-n-b { animation: c12-drop-b 4s steps(1,end) infinite; }
+.c12-n-c { animation: c12-drop-c 4s steps(1,end) infinite; }
+@media (prefers-reduced-motion: reduce) { .c12-n-a,.c12-n-b,.c12-n-c { animation: none; opacity:1; } }
+</style>
+<svg viewBox="0 0 300 160" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif" font-size="10" role="img" aria-label="Dropout silences a different random subset of neurons each training step">
+  <!-- inputs -->
+  <circle cx="40" cy="55"  r="9" fill="#38bdf8" fill-opacity=".7"/>
+  <circle cx="40" cy="105" r="9" fill="#38bdf8" fill-opacity=".7"/>
+  <!-- hidden layer (some drop) -->
+  <line x1="49" y1="55" x2="141" y2="35" stroke="#888"/><line x1="49" y1="55" x2="141" y2="80" stroke="#888"/>
+  <line x1="49" y1="105" x2="141" y2="80" stroke="#888"/><line x1="49" y1="105" x2="141" y2="125" stroke="#888"/>
+  <circle class="c12-n-a" cx="150" cy="35"  r="9" fill="#a855f7" fill-opacity=".8"/>
+  <circle class="c12-n-b" cx="150" cy="80"  r="9" fill="#a855f7" fill-opacity=".8"/>
+  <circle class="c12-n-c" cx="150" cy="125" r="9" fill="#a855f7" fill-opacity=".8"/>
+  <!-- output -->
+  <line x1="159" y1="35" x2="251" y2="80" stroke="#888"/>
+  <line x1="159" y1="80" x2="251" y2="80" stroke="#888"/>
+  <line x1="159" y1="125" x2="251" y2="80" stroke="#888"/>
+  <circle cx="260" cy="80" r="9" fill="#22c55e" fill-opacity=".8"/>
+  <text x="150" y="152" text-anchor="middle" fill="currentColor" font-size="9">each step, a different subset goes dark</text>
+</svg>
+
 ```{mermaid}
 flowchart LR
   subgraph Train["Training step (p=0.5)"]
@@ -466,10 +603,10 @@ For binary classification it has four cells: **TP** (true positive — predicted
   <text x="250" y="42" text-anchor="middle">Negative</text>
   <text x="20" y="95" text-anchor="middle" font-weight="bold" transform="rotate(-90 20 130)">Actual</text>
   <text x="55" y="90">Pos</text><text x="55" y="160">Neg</text>
-  <rect x="80" y="55" width="120" height="60" fill="#bfe3bf" stroke="#333"/>
-  <rect x="200" y="55" width="120" height="60" fill="#f3c0c0" stroke="#333"/>
-  <rect x="80" y="115" width="120" height="60" fill="#f3c0c0" stroke="#333"/>
-  <rect x="200" y="115" width="120" height="60" fill="#bfe3bf" stroke="#333"/>
+  <rect x="80" y="55" width="120" height="60" fill="#22c55e" fill-opacity="0.45" stroke="currentColor"/>
+  <rect x="200" y="55" width="120" height="60" fill="#ec4899" fill-opacity="0.45" stroke="currentColor"/>
+  <rect x="80" y="115" width="120" height="60" fill="#ec4899" fill-opacity="0.45" stroke="currentColor"/>
+  <rect x="200" y="115" width="120" height="60" fill="#22c55e" fill-opacity="0.45" stroke="currentColor"/>
   <text x="140" y="90" text-anchor="middle" font-weight="bold">TP</text>
   <text x="260" y="90" text-anchor="middle" font-weight="bold">FN</text>
   <text x="140" y="150" text-anchor="middle" font-weight="bold">FP</text>
@@ -523,6 +660,35 @@ Say the metric in plain words before computing it: precision = "when I shout, am
 ## 12.7 — ROC, AUC & thresholds (and PR curves for imbalance)
 
 Most classifiers don't output a hard label; they output a **score** or probability, and you pick a **threshold** above which you call it positive. Precision and recall are computed *at one threshold*. Slide the threshold and they change — lower it and you flag more (recall up, precision usually down); raise it and you flag less. So to judge the model itself, independent of any one cutoff, we sweep the threshold across its whole range and plot the result.
+
+The animation below shows that sweep: as the dashed threshold line glides from strict to lenient, more cases get flagged positive and the operating point travels up the ROC curve.
+
+<style>
+@keyframes c12-thresh { 0%,100% { transform: translateX(0); } 50% { transform: translateX(150px); } }
+@keyframes c12-op { 0%,100% { transform: translate(0,0); } 50% { transform: translate(150px,-130px); } }
+.c12-thresh-line { animation: c12-thresh 5s ease-in-out infinite; }
+.c12-op-dot { animation: c12-op 5s ease-in-out infinite; }
+@media (prefers-reduced-motion: reduce) { .c12-thresh-line, .c12-op-dot { animation: none; } }
+</style>
+<svg viewBox="0 0 420 210" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif" font-size="10" role="img" aria-label="Sliding the threshold moves the operating point along the ROC curve">
+  <!-- left: score distribution with sliding threshold -->
+  <text x="90" y="16" text-anchor="middle" fill="currentColor" font-size="10">scores (— = threshold)</text>
+  <rect x="20" y="30" width="160" height="120" fill="none" stroke="currentColor" stroke-opacity=".4"/>
+  <path d="M30,150 Q70,40 110,150 Z" fill="#38bdf8" fill-opacity=".4" stroke="#38bdf8"/>
+  <path d="M90,150 Q130,55 170,150 Z" fill="#ec4899" fill-opacity=".4" stroke="#ec4899"/>
+  <text x="55" y="120" fill="#38bdf8" font-size="9">neg</text>
+  <text x="145" y="120" fill="#ec4899" font-size="9">pos</text>
+  <line class="c12-thresh-line" x1="50" y1="28" x2="50" y2="152" stroke="#f59e0b" stroke-width="2"/>
+  <!-- right: ROC curve with travelling operating point -->
+  <text x="320" y="16" text-anchor="middle" fill="currentColor" font-size="10">ROC</text>
+  <line x1="240" y1="180" x2="400" y2="180" stroke="currentColor"/>
+  <line x1="240" y1="180" x2="240" y2="35" stroke="currentColor"/>
+  <line x1="240" y1="180" x2="400" y2="35" stroke="#888" stroke-dasharray="4"/>
+  <path d="M240,180 C260,90 300,55 400,35" fill="none" stroke="#22c55e" stroke-width="2"/>
+  <circle class="c12-op-dot" cx="248" cy="170" r="5" fill="#a855f7"/>
+  <text x="320" y="200" text-anchor="middle" fill="currentColor">FPR →</text>
+  <text x="225" y="110" text-anchor="middle" transform="rotate(-90 225 110)" fill="currentColor">TPR</text>
+</svg>
 
 The **ROC curve** (Receiver Operating Characteristic) plots the **True Positive Rate** (= recall, $TP/(TP+FN)$) against the **False Positive Rate** ($FP/(FP+TN)$) as the threshold varies from strict to lenient. The top-left corner is perfect (catch everything, no false alarms); the diagonal line is random guessing.
 
@@ -642,22 +808,22 @@ The picture below shows why random beats grid when one axis is irrelevant: the g
 
 <svg viewBox="0 0 420 180" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif" font-size="11">
   <g>
-    <rect x="40" y="20" width="120" height="120" fill="none" stroke="#333"/>
-    <g fill="#36c">
+    <rect x="40" y="20" width="120" height="120" fill="none" stroke="currentColor"/>
+    <g fill="#38bdf8">
       <circle cx="70" cy="50" r="4"/><circle cx="100" cy="50" r="4"/><circle cx="130" cy="50" r="4"/>
       <circle cx="70" cy="80" r="4"/><circle cx="100" cy="80" r="4"/><circle cx="130" cy="80" r="4"/>
       <circle cx="70" cy="110" r="4"/><circle cx="100" cy="110" r="4"/><circle cx="130" cy="110" r="4"/>
     </g>
-    <text x="100" y="160" text-anchor="middle">Grid: 3 useful x-values</text>
+    <text x="100" y="160" text-anchor="middle" fill="currentColor">Grid: 3 useful x-values</text>
   </g>
   <g>
-    <rect x="260" y="20" width="120" height="120" fill="none" stroke="#333"/>
-    <g fill="#2a6">
+    <rect x="260" y="20" width="120" height="120" fill="none" stroke="currentColor"/>
+    <g fill="#22c55e">
       <circle cx="278" cy="40" r="4"/><circle cx="350" cy="55" r="4"/><circle cx="300" cy="70" r="4"/>
       <circle cx="330" cy="95" r="4"/><circle cx="270" cy="110" r="4"/><circle cx="365" cy="120" r="4"/>
       <circle cx="310" cy="130" r="4"/><circle cx="290" cy="100" r="4"/><circle cx="345" cy="35" r="4"/>
     </g>
-    <text x="320" y="160" text-anchor="middle">Random: 9 useful x-values</text>
+    <text x="320" y="160" text-anchor="middle" fill="currentColor">Random: 9 useful x-values</text>
   </g>
 </svg>
 
@@ -763,6 +929,38 @@ $$t = \frac{\bar d}{s_d / \sqrt{k}}$$
 **In words:** take the average score difference across folds, and divide by the typical size of that difference's random wobble — a big ratio means the gap is real, a small one means it's within noise.
 
 **Also written:** $t = \dfrac{\bar d \sqrt{k}}{s_d}$, where $\bar d$ is the mean of the paired fold differences, $s_d$ their standard deviation, and $k$ the number of folds — a paired $t$-statistic on $\{d_i\}$.
+
+The two cases below share the *same* 0.6-point win, but the noise (spread of the per-fold differences) decides whether it counts: tight spread → real, wide spread → indistinguishable from chance.
+
+<svg viewBox="0 0 440 180" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif" font-size="10" role="img" aria-label="Same mean difference, different spread, opposite verdicts">
+  <!-- left: tight spread, real win -->
+  <g>
+    <text x="110" y="16" text-anchor="middle" fill="currentColor" font-size="10">tight spread → real (t≈4.7)</text>
+    <line x1="30" y1="100" x2="190" y2="100" stroke="currentColor" stroke-opacity=".4"/>
+    <line x1="40" y1="95" x2="40" y2="105" stroke="currentColor"/>
+    <text x="40" y="120" text-anchor="middle" fill="currentColor" font-size="8">0</text>
+    <!-- tight cluster of fold diffs around +0.6 -->
+    <g fill="#22c55e">
+      <circle cx="120" cy="100" r="3.5"/><circle cx="128" cy="100" r="3.5"/><circle cx="116" cy="100" r="3.5"/>
+      <circle cx="124" cy="100" r="3.5"/><circle cx="132" cy="100" r="3.5"/>
+    </g>
+    <line x1="124" y1="70" x2="124" y2="130" stroke="#22c55e" stroke-dasharray="3"/>
+    <text x="124" y="148" text-anchor="middle" fill="#22c55e" font-size="8">mean +0.6</text>
+  </g>
+  <!-- right: wide spread, noise -->
+  <g transform="translate(220,0)">
+    <text x="110" y="16" text-anchor="middle" fill="currentColor" font-size="10">wide spread → noise (t≈1.3)</text>
+    <line x1="10" y1="100" x2="200" y2="100" stroke="currentColor" stroke-opacity=".4"/>
+    <line x1="20" y1="95" x2="20" y2="105" stroke="currentColor"/>
+    <text x="20" y="120" text-anchor="middle" fill="currentColor" font-size="8">0</text>
+    <g fill="#f59e0b">
+      <circle cx="60" cy="100" r="3.5"/><circle cx="150" cy="100" r="3.5"/><circle cx="95" cy="100" r="3.5"/>
+      <circle cx="180" cy="100" r="3.5"/><circle cx="40" cy="100" r="3.5"/>
+    </g>
+    <line x1="105" y1="70" x2="105" y2="130" stroke="#f59e0b" stroke-dasharray="3"/>
+    <text x="105" y="148" text-anchor="middle" fill="#f59e0b" font-size="8">mean +0.6</text>
+  </g>
+</svg>
 
 A small $p$-value (say $<0.05$) says the improvement is unlikely to be noise. The standard caveats apply: CV folds overlap in training data, so they aren't fully independent and the naive $t$-test is **optimistic** — practitioners often prefer a corrected variant (e.g. Nadeau–Bengio) or a non-parametric test, and on multiple-dataset benchmarks the Wilcoxon signed-rank test. Also separate **statistical** from **practical** significance: a real but 0.05% gain may not be worth a more complex, slower model.
 

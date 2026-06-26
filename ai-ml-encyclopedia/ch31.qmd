@@ -330,6 +330,8 @@ $$\frac{\partial L}{\partial w} = \frac{\partial L}{\partial g}\cdot\frac{\parti
 **In words:** the sensitivity of the loss to a weight is the product of the local sensitivities along the path from that weight to the loss — multiply the per-step "if I nudge this, that moves by…" factors together.
 **Also written:** for a deep stack of layers $L = f_n(f_{n-1}(\cdots f_1(w)))$, this generalizes to the product $\frac{\partial L}{\partial w} = \prod_{k=1}^{n} \frac{\partial f_k}{\partial f_{k-1}}$, which is exactly what `.backward()` (PyTorch) or the gradient tape (TensorFlow) evaluates for every parameter at once.
 
+A two-link worked example with real numbers: let $g = w^2$ and $L = 3g$, with $w = 2$. The local factors are $\frac{\partial g}{\partial w} = 2w = 4$ and $\frac{\partial L}{\partial g} = 3$. Multiply them along the chain: $\frac{\partial L}{\partial w} = 3 \times 4 = 12$. That single multiplication of "how much $L$ moves per unit $g$" times "how much $g$ moves per unit $w$" is the entire backward pass — autograd just does it for millions of links at once.
+
 ### PyTorch: dynamic graphs and the training loop
 
 **PyTorch** builds the graph **dynamically** — an approach called "define-by-run". Each line of Python *is* a graph operation as it executes, so the model is just ordinary control flow. You can put an `if` or a Python `for` loop in the middle of a forward pass and it simply works, because the graph is rebuilt fresh on every call. This makes debugging feel like debugging normal code — you can drop a `print` or a breakpoint anywhere and inspect real numbers.
@@ -376,6 +378,23 @@ flowchart LR
   D --> E[opt.step<br/>updates weights]
   E --> A
 ```
+
+What that loop actually *does* is roll the parameters downhill on the loss surface — each `opt.step()` is one nudge toward the bottom. The ball below eases down a loss curve the way training eases the loss toward its minimum:
+
+<style>
+@keyframes c31-roll { 0% { offset-distance: 4%; } 100% { offset-distance: 96%; } }
+@keyframes c31-pulse { 0%,100% { r: 7; opacity: 1; } 50% { r: 9; opacity: 0.85; } }
+.c31-ball { offset-path: path('M 30 30 C 110 150, 200 175, 230 175 C 260 175, 350 150, 430 30'); animation: c31-roll 4s ease-in-out infinite alternate, c31-pulse 1s ease-in-out infinite; }
+@media (prefers-reduced-motion: reduce) { .c31-ball { animation: none; offset-distance: 50%; } }
+</style>
+<svg viewBox="0 0 460 210" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif" font-size="12">
+  <path d="M 30 30 C 110 150, 200 175, 230 175 C 260 175, 350 150, 430 30" fill="none" stroke="#6366f1" stroke-width="2.5"/>
+  <line x1="30" y1="190" x2="430" y2="190" stroke="currentColor" stroke-width="0.5" opacity="0.4"/>
+  <circle class="c31-ball" cx="0" cy="0" r="7" fill="#f59e0b" stroke="currentColor" stroke-width="0.5"/>
+  <text x="200" y="200" fill="currentColor" opacity="0.7" font-size="11">parameter value →</text>
+  <text x="10" y="20" fill="currentColor" opacity="0.7" font-size="11">loss ↑</text>
+  <text x="200" y="120" fill="#6366f1" font-weight="bold">each opt.step() = one nudge downhill</text>
+</svg>
 
 The explicitness is the appeal: nothing is hidden, so research code — custom losses, odd architectures, novel training schemes — is natural to express. This is why PyTorch dominates research. For real datasets you rarely feed `X` whole; you wrap it in a `Dataset`/`DataLoader` that yields shuffled mini-batches, and the same four-line body runs per batch:
 
@@ -514,6 +533,10 @@ probs  = torch.softmax(logits, dim=-1)        # -> probabilities per class
 
 Fine-tuning a full large model means updating *all* its weights — billions of numbers — which needs heavy GPUs and storage. **LoRA** (Low-Rank Adaptation) is the lazy, effective shortcut: freeze the original weights and inject small trainable matrices alongside them, training only those. The analogy: rather than re-teaching a fluent translator the whole language, you hand them a small phrasebook of your domain's terms.
 
+The trick is one observation: the *change* a layer needs is usually simple, even when the layer is huge. So instead of learning a full grid of edits, LoRA learns two thin strips and multiplies them to reconstruct that grid.
+
+Concrete numbers make it click. Say a layer is a $1000 \times 1000$ weight matrix — that is **1,000,000** numbers to retrain. Pick a tiny rank $r = 8$. Now you train only a $1000 \times 8$ strip and an $8 \times 1000$ strip: $8000 + 8000 = $ **16,000** numbers — about **1.6%** of the original. You froze a million weights and trained sixteen thousand, and their product still adds a meaningful correction.
+
 Formally, LoRA replaces a weight update $\Delta W$ (a big $d \times k$ matrix) with a product of two skinny matrices:
 
 $$W' = W + \Delta W \approx W + B A, \qquad B \in \mathbb{R}^{d\times r},\; A \in \mathbb{R}^{r\times k},\; r \ll \min(d,k)$$
@@ -548,6 +571,10 @@ model.print_trainable_parameters()
 
 ::: {.callout-tip}
 **Rule of thumb:** before training anything, search the Hub. If a pretrained model is close, fine-tune it (LoRA if it is large); only train from scratch when nothing fits or your data is truly unlike anything public. Downloading beats forging almost every time.
+:::
+
+::: {.callout-warning}
+**Common mistake:** loading a tokenizer and a model from *different* checkpoints. The model expects the exact vocabulary and special tokens its own tokenizer produces; pair `bert-base` text with a `roberta` tokenizer and the IDs are silently wrong — no crash, just garbage predictions. Always build both from the *same* `name` (as in the example above), and call `model.eval()` before inference so dropout and batch-norm behave deterministically.
 :::
 
 ## 31.4 — Streaming & real-time
@@ -610,6 +637,29 @@ A quick picture of the log abstraction — events appended on the right, each co
   <text x="90"  y="106" fill="#393">consumer A offset=2</text>
   <line x1="220" y1="64" x2="220" y2="118" stroke="#936"/>
   <text x="186" y="132" fill="#936">consumer B offset=4</text>
+</svg>
+
+Streaming feels less abstract once you watch an event move: a producer drops it on the belt, it travels the durable log, and a consumer picks it up and scores it. Here three events drift through, end to end:
+
+<style>
+@keyframes c31-flow { 0% { transform: translateX(0); opacity: 0; } 8% { opacity: 1; } 88% { opacity: 1; } 100% { transform: translateX(360px); opacity: 0; } }
+.c31-evt { animation: c31-flow 4.5s linear infinite; }
+.c31-evt2 { animation-delay: 1.5s; }
+.c31-evt3 { animation-delay: 3s; }
+@media (prefers-reduced-motion: reduce) { .c31-evt { animation: none; opacity: 1; } .c31-evt2 { transform: translateX(120px); } .c31-evt3 { transform: translateX(240px); } }
+</style>
+<svg viewBox="0 0 460 110" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif" font-size="11">
+  <rect x="6" y="38" width="60" height="34" rx="4" fill="rgba(56,189,248,0.25)" stroke="#38bdf8"/>
+  <text x="14" y="59" fill="currentColor">producer</text>
+  <line x1="70" y1="55" x2="390" y2="55" stroke="#a855f7" stroke-width="2" opacity="0.5"/>
+  <rect x="394" y="38" width="60" height="34" rx="4" fill="rgba(34,197,94,0.25)" stroke="#22c55e"/>
+  <text x="402" y="55" fill="currentColor">consumer</text>
+  <text x="402" y="68" fill="currentColor" font-size="9">score()</text>
+  <g class="c31-evt"><circle cx="78" cy="55" r="8" fill="#f59e0b" stroke="currentColor" stroke-width="0.5"/></g>
+  <g class="c31-evt c31-evt2"><circle cx="78" cy="55" r="8" fill="#ec4899" stroke="currentColor" stroke-width="0.5"/></g>
+  <g class="c31-evt c31-evt3"><circle cx="78" cy="55" r="8" fill="#6366f1" stroke="currentColor" stroke-width="0.5"/></g>
+  <text x="150" y="28" fill="#a855f7" font-weight="bold">durable, ordered log (Kafka)</text>
+  <text x="150" y="98" fill="currentColor" opacity="0.7" font-size="10">events flow continuously; the consumer never waits for a file</text>
 </svg>
 
 ### Spark Streaming vs Flink: micro-batch vs true streaming

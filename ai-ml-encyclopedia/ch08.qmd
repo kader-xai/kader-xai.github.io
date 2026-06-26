@@ -111,6 +111,31 @@ Regression is the corner of machine learning that answers "how much?" rather tha
 🧭 **In context:** Classical supervised learning · used to predict continuous values and model relationships between variables · the one key idea is *fit a function by minimizing a loss between predictions and truth, then control its complexity*.
 :::
 
+<style>
+@keyframes c8-ball-roll {
+  0%   { offset-distance: 4%; }
+  50%  { offset-distance: 50%; }
+  100% { offset-distance: 4%; }
+}
+@keyframes c8-ball-pulse {
+  0%, 100% { r: 6; opacity: 0.85; }
+  50%      { r: 7.5; opacity: 1; }
+}
+.c8-ball { offset-path: path('M40 40 C 140 250, 360 250, 460 70'); animation: c8-ball-roll 5s ease-in-out infinite, c8-ball-pulse 5s ease-in-out infinite; }
+@media (prefers-reduced-motion: reduce) { .c8-ball { animation: none; offset-distance: 50%; } }
+</style>
+<svg viewBox="0 0 500 270" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="A ball easing down to the bottom of a loss curve.">
+  <line x1="30" y1="240" x2="480" y2="240" stroke="currentColor" stroke-width="1" opacity="0.4"/>
+  <line x1="30" y1="240" x2="30" y2="30" stroke="currentColor" stroke-width="1" opacity="0.4"/>
+  <path d="M40 40 C 140 250, 360 250, 460 70" stroke="#6366f1" stroke-width="2.5" fill="none"/>
+  <circle class="c8-ball" cx="0" cy="0" fill="#f59e0b" stroke="#b45309" stroke-width="1.5"/>
+  <text x="250" y="262" font-size="12" fill="currentColor" text-anchor="middle" opacity="0.75">parameters (β) →</text>
+  <text x="16" y="135" font-size="12" fill="currentColor" opacity="0.75" transform="rotate(-90 16,135)">loss</text>
+  <text x="240" y="225" font-size="11" fill="#22c55e" text-anchor="middle">best fit</text>
+</svg>
+
+Every model in this chapter, at heart, rolls a ball downhill on a loss surface like this one — the whole job is choosing what the loss measures and how much curvature (complexity) to allow.
+
 ## 8.1 — Linear regression / OLS
 
 **Linear regression** assumes the target $y$ is a straight-line (affine) combination of the inputs: each feature gets a weight, you multiply and add, plus an intercept. With one feature it is the line $y = \beta_0 + \beta_1 x$ you drew in school; with $p$ features it is a flat plane (a *hyperplane*) in higher dimensions.
@@ -193,6 +218,31 @@ print(model.predict([[6]]))            # extrapolate to 6 hours -> ~91.8
 
 **Assumptions** (the fine print that makes OLS valid and its uncertainty estimates trustworthy): linearity of the relationship; independent errors; **homoscedasticity** (constant error variance across the range — not a fan that widens); and roughly normal errors for inference. Violate them and the line may still predict, but p-values and confidence intervals lie.
 
+The picture to keep in your head: *good* residuals form a featureless horizontal band; a *widening fan* (heteroscedasticity) or a *curved* trend means an assumption is broken and your error bars cannot be trusted.
+
+<svg viewBox="0 0 360 130" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Two residual plots: a healthy flat band versus a widening fan.">
+  <!-- healthy band -->
+  <line x1="20" y1="100" x2="160" y2="100" stroke="currentColor" opacity="0.4"/>
+  <line x1="20" y1="40" x2="160" y2="40" stroke="#22c55e" stroke-dasharray="3" opacity="0.7"/>
+  <line x1="20" y1="20" x2="160" y2="20" stroke="#22c55e" stroke-dasharray="3" opacity="0.7"/>
+  <g fill="#22c55e">
+    <circle cx="35" cy="28" r="2.5"/><circle cx="55" cy="33" r="2.5"/><circle cx="72" cy="25" r="2.5"/>
+    <circle cx="90" cy="31" r="2.5"/><circle cx="108" cy="27" r="2.5"/><circle cx="126" cy="33" r="2.5"/>
+    <circle cx="144" cy="26" r="2.5"/>
+  </g>
+  <text x="90" y="118" font-size="10" fill="#22c55e" text-anchor="middle">healthy: flat band ✓</text>
+  <!-- fan -->
+  <line x1="200" y1="100" x2="340" y2="100" stroke="currentColor" opacity="0.4"/>
+  <line x1="200" y1="30" x2="340" y2="12" stroke="#f59e0b" stroke-dasharray="3" opacity="0.8"/>
+  <line x1="200" y1="30" x2="340" y2="48" stroke="#f59e0b" stroke-dasharray="3" opacity="0.8"/>
+  <g fill="#f59e0b">
+    <circle cx="212" cy="30" r="2.5"/><circle cx="232" cy="27" r="2.5"/><circle cx="252" cy="33" r="2.5"/>
+    <circle cx="272" cy="22" r="2.5"/><circle cx="292" cy="40" r="2.5"/><circle cx="312" cy="16" r="2.5"/>
+    <circle cx="328" cy="44" r="2.5"/>
+  </g>
+  <text x="270" y="118" font-size="10" fill="#f59e0b" text-anchor="middle">widening fan ✗</text>
+</svg>
+
 ::: {.callout-tip}
 Always standardize features before comparing coefficient magnitudes. On raw scales, a coefficient of 0.001 on "salary in dollars" may matter far more than a coefficient of 5 on "number of kids."
 :::
@@ -256,6 +306,48 @@ A polynomial that fits training data perfectly is a red flag, not a trophy. Zero
 Sections 8.1–8.2 kept appealing to "bias" and "variance" as the two enemies of a good fit. Here is the precise statement that names them — the single most quoted equation for *why* models fail to generalize, and the lens through which every regularizer, ensemble, and cross-validation choice in this book is justified.
 
 The intuition: imagine refitting your model on many different random training sets drawn from the same world, then asking how it does on one fixed test point. Two things can go wrong. The model's *average* prediction across all those fits can sit off-target (**bias** — it is systematically wrong, like a bathroom scale that always reads 2 kg light). Or the predictions can scatter wildly from fit to fit (**variance** — the scale gives a different number each time you step on it). On top of both sits **irreducible noise** the data itself carries, which no model can ever remove.
+
+The dartboard picture is the fastest way to lock this in: bias is how far the cluster of shots sits from the bullseye; variance is how spread out the cluster is. You want both small — but the two are usually in tension.
+
+<svg viewBox="0 0 420 180" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Four dartboards showing combinations of low and high bias and variance.">
+  <!-- generic board generator drawn inline four times -->
+  <g>
+    <!-- low bias, low variance -->
+    <circle cx="55" cy="80" r="40" fill="none" stroke="currentColor" opacity="0.3"/>
+    <circle cx="55" cy="80" r="26" fill="none" stroke="currentColor" opacity="0.3"/>
+    <circle cx="55" cy="80" r="12" fill="#22c55e" opacity="0.18"/>
+    <g fill="#22c55e"><circle cx="53" cy="78" r="2.5"/><circle cx="58" cy="82" r="2.5"/><circle cx="55" cy="84" r="2.5"/><circle cx="51" cy="81" r="2.5"/></g>
+    <text x="55" y="140" font-size="9" fill="currentColor" text-anchor="middle" opacity="0.8">low bias</text>
+    <text x="55" y="152" font-size="9" fill="currentColor" text-anchor="middle" opacity="0.8">low var ✓</text>
+  </g>
+  <g>
+    <!-- low bias, high variance -->
+    <circle cx="155" cy="80" r="40" fill="none" stroke="currentColor" opacity="0.3"/>
+    <circle cx="155" cy="80" r="26" fill="none" stroke="currentColor" opacity="0.3"/>
+    <circle cx="155" cy="80" r="12" fill="#f59e0b" opacity="0.18"/>
+    <g fill="#f59e0b"><circle cx="150" cy="66" r="2.5"/><circle cx="172" cy="84" r="2.5"/><circle cx="145" cy="95" r="2.5"/><circle cx="160" cy="78" r="2.5"/></g>
+    <text x="155" y="140" font-size="9" fill="currentColor" text-anchor="middle" opacity="0.8">low bias</text>
+    <text x="155" y="152" font-size="9" fill="currentColor" text-anchor="middle" opacity="0.8">high var</text>
+  </g>
+  <g>
+    <!-- high bias, low variance -->
+    <circle cx="255" cy="80" r="40" fill="none" stroke="currentColor" opacity="0.3"/>
+    <circle cx="255" cy="80" r="26" fill="none" stroke="currentColor" opacity="0.3"/>
+    <circle cx="255" cy="80" r="12" fill="#6366f1" opacity="0.18"/>
+    <g fill="#6366f1"><circle cx="283" cy="52" r="2.5"/><circle cx="287" cy="57" r="2.5"/><circle cx="284" cy="48" r="2.5"/><circle cx="289" cy="53" r="2.5"/></g>
+    <text x="255" y="140" font-size="9" fill="currentColor" text-anchor="middle" opacity="0.8">high bias</text>
+    <text x="255" y="152" font-size="9" fill="currentColor" text-anchor="middle" opacity="0.8">low var</text>
+  </g>
+  <g>
+    <!-- high bias, high variance -->
+    <circle cx="355" cy="80" r="40" fill="none" stroke="currentColor" opacity="0.3"/>
+    <circle cx="355" cy="80" r="26" fill="none" stroke="currentColor" opacity="0.3"/>
+    <circle cx="355" cy="80" r="12" fill="#ec4899" opacity="0.18"/>
+    <g fill="#ec4899"><circle cx="380" cy="48" r="2.5"/><circle cx="388" cy="62" r="2.5"/><circle cx="372" cy="55" r="2.5"/><circle cx="390" cy="50" r="2.5"/></g>
+    <text x="355" y="140" font-size="9" fill="currentColor" text-anchor="middle" opacity="0.8">high bias</text>
+    <text x="355" y="152" font-size="9" fill="currentColor" text-anchor="middle" opacity="0.8">high var ✗</text>
+  </g>
+</svg>
 
 For squared-error loss, the *expected* test error at a point $x$ decomposes exactly into those three pieces:
 
@@ -328,7 +420,7 @@ The strength $\lambda \ge 0$ is a knob: $\lambda = 0$ recovers OLS, large $\lamb
 
 **Also written:** the full objective is $\min_\beta \lVert y - X\beta\rVert_2^2 + \lambda\lVert\beta\rVert_1$, where $\lVert\beta\rVert_1 = \sum_j|\beta_j|$ is the L1 norm.
 
-Why the geometry differs: the penalty defines a constraint region the solution must live in. L2's region is a circle (smooth), so the loss contours touch it at a slanted point with both coefficients nonzero. L1's region is a diamond with sharp corners on the axes, so contours tend to touch *at* a corner — where a coefficient is zero. That is the whole sparsity story in one picture:
+Why the geometry differs — in plain terms: regularizing is like fitting the line on a budget. The error surface still wants to slide toward the OLS solution, but you can only spend so much "coefficient size." Ridge's budget is a round coin; the error contour rolls onto it and stops at a slanted point where *both* coefficients are still nonzero. Lasso's budget is a diamond with sharp corners poking out along the axes; the contour almost always first touches one of those corners — and a corner sits exactly where one coefficient is *zero*. That single shape difference is the whole reason Lasso zeroes features and Ridge merely shrinks them:
 
 <svg viewBox="0 0 360 180" xmlns="http://www.w3.org/2000/svg">
   <!-- Ridge -->
@@ -456,6 +548,8 @@ print(clf.predict_proba([[3.5]]))   # P(fail), P(pass) at the boundary region
 print(clf.coef_, clf.intercept_)    # slope = log-odds per study hour
 ```
 
+**A concrete odds-ratio read.** Suppose a credit-default model gives feature "missed payments last year" a coefficient of $\beta = 0.7$. Then $e^{0.7}\approx 2.0$: each extra missed payment *doubles the odds* of default. Going from 0.7 to 1.4 (two coefficients' worth) multiplies the odds by $e^{1.4}\approx 4$. This multiplicative-on-odds reading is why logistic coefficients are so loved in medicine and credit scoring — you report "doubles the odds," not an abstract slope.
+
 ::: {.callout-warning}
 Logistic regression outputs probabilities, but with imbalanced classes the default 0.5 threshold can be terrible. Tune the threshold to your costs, and judge with ROC-AUC or precision/recall, not raw accuracy (see **Classification Algorithms** and **Model Evaluation & Tuning**).
 :::
@@ -543,6 +637,28 @@ $$ R^2 = 1 - \frac{\sum_i (y_i - \hat y_i)^2}{\sum_i (y_i - \bar y)^2} = 1 - \fr
 **Also written:** $R^2 = 1 - \frac{\text{MSE}_{\text{model}}}{\text{Var}(y)}$ — dividing top and bottom by $n$ turns the sums into the model's mean squared error over the variance of the target.
 
 With $\bar y = 270$, $\text{SS}_{\text{tot}} = 70^2+20^2+30^2+10^2+50^2 = 9400$ and $\text{SS}_{\text{res}}=1525$, so $R^2 = 1 - 1525/9400 \approx 0.84$ — the model explains about 84% of the variation in price.
+
+This little visual maps the four metrics onto the same five test points — each metric is just a different way to summarize the red error bars:
+
+<svg viewBox="0 0 360 150" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Five prediction errors shown as bars, summarized by MAE, RMSE and R-squared.">
+  <line x1="30" y1="110" x2="340" y2="110" stroke="currentColor" opacity="0.4"/>
+  <!-- error bars proportional to |error| 10,20,5,30,10 -->
+  <rect x="50"  y="80"  width="20" height="30" fill="#ec4899" opacity="0.55"/>
+  <rect x="110" y="50"  width="20" height="60" fill="#ec4899" opacity="0.55"/>
+  <rect x="170" y="95"  width="20" height="15" fill="#ec4899" opacity="0.55"/>
+  <rect x="230" y="20"  width="20" height="90" fill="#ec4899" opacity="0.55"/>
+  <rect x="290" y="80"  width="20" height="30" fill="#ec4899" opacity="0.55"/>
+  <text x="60"  y="124" font-size="9" fill="currentColor" text-anchor="middle" opacity="0.8">10</text>
+  <text x="120" y="124" font-size="9" fill="currentColor" text-anchor="middle" opacity="0.8">20</text>
+  <text x="180" y="124" font-size="9" fill="currentColor" text-anchor="middle" opacity="0.8">5</text>
+  <text x="240" y="124" font-size="9" fill="currentColor" text-anchor="middle" opacity="0.8">30</text>
+  <text x="300" y="124" font-size="9" fill="currentColor" text-anchor="middle" opacity="0.8">10</text>
+  <line x1="30" y1="95" x2="340" y2="95" stroke="#6366f1" stroke-dasharray="4" opacity="0.8"/>
+  <text x="346" y="98" font-size="9" fill="#6366f1">MAE=15</text>
+  <line x1="30" y1="92.5" x2="340" y2="92.5" stroke="#f59e0b" stroke-dasharray="2" opacity="0.9"/>
+  <text x="346" y="142" font-size="9" fill="#f59e0b">RMSE≈17.5 (pulled up by the 30)</text>
+  <text x="40" y="18" font-size="9" fill="#22c55e">R²≈0.84 = fraction of price-variance explained</text>
+</svg>
 
 **Adjusted $R^2$** fixes a flaw: plain $R^2$ never *decreases* when you add a feature, even a useless random one, so it tempts overfitting. Adjusted $R^2$ docks you for each predictor $p$ relative to sample size $n$:
 
@@ -669,6 +785,30 @@ The deep insight of *generalized linear models* (GLMs) is that all three are the
 
 The intuition: a GLM keeps the familiar linear predictor $\eta = \mathbf{x}^\top\boldsymbol\beta$ — a weighted sum of features — but inserts two flexible slots. First, the response can be drawn from any exponential-family distribution, not just a Gaussian. Second, a **link function** decides how the linear predictor connects to the distribution's mean. Choose Gaussian + identity link and you recover OLS. Choose Bernoulli + logit link and you recover logistic regression. Choose Poisson + log link and you recover Poisson regression. Nothing else changes.
 
+The whole framework really is just two interchangeable slots feeding one fixed engine — picture it as a control panel:
+
+<svg viewBox="0 0 420 170" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="A GLM control panel with a distribution dial and a link dial feeding one fitting engine.">
+  <rect x="10" y="20" width="120" height="130" rx="8" fill="#6366f1" opacity="0.12" stroke="#6366f1"/>
+  <text x="70" y="38" font-size="10" fill="currentColor" text-anchor="middle">slot 1: distribution</text>
+  <text x="70" y="62" font-size="9" fill="currentColor" text-anchor="middle" opacity="0.85">Gaussian</text>
+  <text x="70" y="80" font-size="9" fill="currentColor" text-anchor="middle" opacity="0.85">Bernoulli</text>
+  <text x="70" y="98" font-size="9" fill="currentColor" text-anchor="middle" opacity="0.85">Poisson</text>
+  <text x="70" y="116" font-size="9" fill="currentColor" text-anchor="middle" opacity="0.85">Gamma …</text>
+  <rect x="10" y="20" width="120" height="22" rx="8" fill="#6366f1" opacity="0.25"/>
+  <rect x="150" y="20" width="120" height="130" rx="8" fill="#22c55e" opacity="0.12" stroke="#22c55e"/>
+  <text x="210" y="38" font-size="10" fill="currentColor" text-anchor="middle">slot 2: link g</text>
+  <text x="210" y="62" font-size="9" fill="currentColor" text-anchor="middle" opacity="0.85">identity</text>
+  <text x="210" y="80" font-size="9" fill="currentColor" text-anchor="middle" opacity="0.85">logit</text>
+  <text x="210" y="98" font-size="9" fill="currentColor" text-anchor="middle" opacity="0.85">log</text>
+  <text x="210" y="116" font-size="9" fill="currentColor" text-anchor="middle" opacity="0.85">inverse …</text>
+  <rect x="150" y="20" width="120" height="22" rx="8" fill="#22c55e" opacity="0.25"/>
+  <path d="M270 85 L300 85" stroke="currentColor" stroke-width="1.5" opacity="0.6" marker-end="url(#c8arr)"/>
+  <defs><marker id="c8arr" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path d="M0 0 L6 3 L0 6 z" fill="currentColor" opacity="0.6"/></marker></defs>
+  <rect x="300" y="50" width="110" height="70" rx="8" fill="#f59e0b" opacity="0.15" stroke="#f59e0b"/>
+  <text x="355" y="80" font-size="10" fill="currentColor" text-anchor="middle">one engine:</text>
+  <text x="355" y="96" font-size="10" fill="currentColor" text-anchor="middle">IRLS (max-likelihood)</text>
+</svg>
+
 ### The exponential-family form
 
 A distribution belongs to the exponential family if its density (or mass) for a single observation $y$ can be written as
@@ -782,7 +922,9 @@ $$
 
 Notice the shape: every term is a **residual** $y_i - \mu_i$, reweighted by how noisy that point is ($V(\mu_i)$) and how steep the link is there ($g'(\mu_i)$). Unlike OLS, there is no closed-form solution in general — the $\mu_i$ depend nonlinearly on $\boldsymbol\beta$. So we solve it iteratively.
 
-The standard solver is **Iteratively Reweighted Least Squares (IRLS)**, which is just Newton's method (with Fisher scoring) wearing a disguise. At each step you linearize, build a *working response* $z$ and *working weights* $w$, and solve an ordinary weighted least-squares problem:
+The standard solver is **Iteratively Reweighted Least Squares (IRLS)**. Here is the plain idea before the symbols: you cannot solve the whole curved problem in one shot, so you *fake* it as a straight one. Stand at your current guess, pretend the model is locally an ordinary weighted least-squares fit with a made-up target and made-up weights, solve that easy problem, step to the answer, and repeat. Each round the fake gets closer to the truth, and after a handful of rounds the coefficients stop moving. (It is exactly Newton's method with Fisher scoring, wearing the disguise of "just one more weighted OLS fit.")
+
+The two made-up ingredients are the **working response** $z$ and the **working weights** $w$:
 
 $$
 z_i = \eta_i + (y_i - \mu_i)\,g'(\mu_i), \qquad w_i = \frac{1}{V(\mu_i)\,g'(\mu_i)^2},

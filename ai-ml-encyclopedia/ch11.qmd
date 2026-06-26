@@ -115,6 +115,23 @@ Most of the data in the world arrives without labels: customers without segments
 
 **Plain intuition:** imagine scattering $k$ magnets onto a table covered with iron filings. Each filing sticks to its nearest magnet; then you slide each magnet to the middle of the pile it collected; the filings re-stick; you slide again. After a few rounds nothing moves, and each magnet sits at the heart of a tidy clump. That is k-Means: the magnets are **centroids**, the sliding is averaging, and the clumps are clusters.
 
+<style>
+@keyframes c11-km-slide { 0%,12% { transform: translate(0,0); } 45%,55% { transform: translate(34px,-8px); } 88%,100% { transform: translate(0,0); } }
+@keyframes c11-km-pulse { 0%,100% { r: 11; opacity: .85; } 50% { r: 14; opacity: 1; } }
+.c11-km-star { animation: c11-km-slide 5s ease-in-out infinite; }
+.c11-km-halo { animation: c11-km-pulse 5s ease-in-out infinite; }
+@media (prefers-reduced-motion: reduce) { .c11-km-star, .c11-km-halo { animation: none; } }
+</style>
+<svg viewBox="0 0 360 150" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif" font-size="10">
+  <g fill="#6366f1"><circle cx="120" cy="55" r="5"/><circle cx="150" cy="45" r="5"/><circle cx="135" cy="75" r="5"/><circle cx="165" cy="70" r="5"/><circle cx="118" cy="85" r="5"/><circle cx="155" cy="95" r="5"/></g>
+  <g transform="translate(60,95)">
+    <circle class="c11-km-halo" cx="0" cy="0" r="11" fill="#f59e0b" fill-opacity="0.25" stroke="#f59e0b"/>
+    <path class="c11-km-star" d="M0,-7 L2,-2 L7,-2 L3,1 L4,6 L0,3 L-4,6 L-3,1 L-7,-2 L-2,-2 Z" fill="#f59e0b"/>
+  </g>
+  <text x="200" y="50" fill="#6366f1">data points (iron filings)</text>
+  <text x="60" y="130" text-anchor="middle" fill="#f59e0b">centroid slides to the blob's centre, round by round</text>
+</svg>
+
 **k-Means** is the "centre of gravity" algorithm. You decide in advance on $k$ groups, and the method finds $k$ centre points (**centroids**) so that every data point belongs to the nearest centre and the total squared distance from points to their centres is as small as possible. The intuition: a good cluster is a tight ball around a central point, and the centre is just the average of the cluster's members.
 
 Formally, k-Means minimises the **within-cluster sum of squares** (WCSS), also called inertia:
@@ -327,7 +344,7 @@ $$ p \text{ is core} \iff |N_\varepsilon(p)| \ge \text{minPts} $$
 
 **In words:** a point is a core point exactly when at least *minPts* points (itself included) lie within radius $\varepsilon$ of it.
 
-**Also written:** $\sum_{q} \math[d(p,q) \le \varepsilon] \ge \text{minPts}$, counting how many points fall inside the ball of radius $\varepsilon$ around $p$.
+**Also written:** $\sum_{q} \mathbb{1}[d(p,q) \le \varepsilon] \ge \text{minPts}$, counting how many points fall inside the ball of radius $\varepsilon$ around $p$ (the indicator $\mathbb{1}[\cdot]$ is 1 when the condition holds, else 0).
 
 **Worked example.** Set $\varepsilon = 1.0$, $\text{minPts} = 3$. Points $\{(0,0),(0.5,0),(0,0.5),(0.5,0.5)\}$ each have $\geq 3$ neighbours within radius 1 → all core, all one cluster. A lone point at $(9,9)$ has zero neighbours → labelled noise. DBSCAN found one cluster and one outlier without ever being told there were two groups.
 
@@ -434,7 +451,7 @@ flowchart LR
     E --> F[Cluster labels]
 ```
 
-Why does this work? The Laplacian's smallest eigenvalues encode the graph's natural "cuts." If the graph splits cleanly into $k$ connected components, $L$ has exactly $k$ zero eigenvalues, and their eigenvectors are constant on each component — so k-Means on them trivially recovers the pieces. For nearly-disconnected components (clusters joined by a few weak edges), the eigenvectors are *nearly* piecewise-constant, and clustering them finds the minimum-cut boundaries. The number of small eigenvalues before a large jump (the **eigengap**) even suggests $k$.
+Why does this work? Here is the plain version. Suppose the graph falls into $k$ clumps with *no* edges between them. Then the Laplacian hands you $k$ special eigenvectors — one per clump — and each is dead flat: it holds the *same* value on every node in its clump and a different value on the others. So each point's new coordinate is essentially just a tag saying which clump it belongs to, and k-Means reads those tags off instantly. Real data is messier — clumps are joined by a few stray edges instead of none — so the eigenvectors are *almost* flat per clump instead of perfectly flat, but that is close enough: k-Means on them still cuts along the weakest links. As a bonus, counting how many eigenvalues sit near zero before the first big jump (the **eigengap**) tells you how many clumps the graph wanted, i.e. a good $k$.
 
 **Worked example (two-component graph).** Six nodes, two triangles $\{1,2,3\}$ and $\{4,5,6\}$ fully connected internally, with no edge between them. $L = D - W$ has two zero eigenvalues; their eigenvectors are constant within each triangle. k-Means on those 2-D embeddings separates the triangles perfectly — even though, in raw space, the triangles might be interleaved.
 
@@ -518,6 +535,20 @@ flowchart TD
 ```
 
 **Worked example (1-D, two components).** Means $\mu_1=0$, $\mu_2=10$, equal variance $1$, equal weights. For a point at $x=2$: the densities are $\mathcal{N}(2\mid0,1) \approx 0.054$ and $\mathcal{N}(2\mid10,1) \approx 10^{-15}$. Responsibilities: $\gamma_1 \approx 1.000$, $\gamma_2 \approx 0$. For $x=5$, exactly between the means, both densities are tiny but equal, giving $\gamma_1 = \gamma_2 = 0.5$ — a genuinely ambiguous point that k-Means would have forced into one side.
+
+<style>
+@keyframes c11-gmm-split { 0%,15% { width: 95%; } 50% { width: 50%; } 85%,100% { width: 95%; } }
+.c11-gmm-blue { animation: c11-gmm-split 6s ease-in-out infinite; }
+@media (prefers-reduced-motion: reduce) { .c11-gmm-blue { animation: none; } }
+</style>
+<div style="max-width:340px; margin:0.4em 0; font-family:sans-serif; font-size:11px;">
+  <div style="display:flex; height:22px; border-radius:5px; overflow:hidden; border:1px solid currentColor;">
+    <div class="c11-gmm-blue" style="background:#6366f1; opacity:0.7;"></div>
+    <div style="flex:1; background:#ec4899; opacity:0.7;"></div>
+  </div>
+  <div style="display:flex; justify-content:space-between; opacity:0.8;"><span>γ₁ (component 1)</span><span>γ₂ (component 2)</span></div>
+  <div style="text-align:center; opacity:0.7;">one point's membership splits between two bells — and always sums to 1</div>
+</div>
 
 ```python
 import numpy as np
@@ -608,6 +639,8 @@ rules = association_rules(freq, metric="lift", min_threshold=1.0)
 print(rules[["antecedents","consequents","support","confidence","lift"]])
 ```
 
+**Where this is used.** The same machinery runs well beyond grocery aisles: e-commerce "frequently bought together" widgets, Netflix-style "people who watched X also watched Y" lists, web-usage mining (which pages get visited in the same session), and even healthcare — flagging sets of symptoms or co-prescribed drugs that co-occur more than chance. Anywhere you have transactions of co-occurring items, support/confidence/lift is the first tool to reach for.
+
 ::: {.callout-warning}
 Confidence alone is misleading: a rule predicting a very common consequent (milk in 80% of baskets) will look "confident" even when the antecedent adds nothing. Always check lift (or the related *conviction*) to confirm a genuine, non-spurious association.
 :::
@@ -684,7 +717,30 @@ Read a trained SOM like a terrain map: a **U-matrix** colours each cell by how d
 
 **Plain intuition:** there is no single "best" clusterer — each one quietly *assumes* a shape for what a cluster looks like, and it shines only when the data agrees. k-Means assumes round balls; DBSCAN assumes dense islands in a sparse sea; spectral assumes connected webs; GMM assumes overlapping ellipses. The skill is matching the assumption to the data, not memorising one default.
 
-Before picking, ask four questions: (1) Do I know $k$? (2) Are clusters convex blobs or arbitrary shapes? (3) Is there noise/outliers to isolate? (4) How big is the data? The table maps answers to methods:
+Before picking, ask four questions: (1) Do I know $k$? (2) Are clusters convex blobs or arbitrary shapes? (3) Is there noise/outliers to isolate? (4) How big is the data? The table maps answers to methods.
+
+The picture below shows the four assumptions side by side — each method only "sees" the world its own way:
+
+<svg viewBox="0 0 420 130" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif" font-size="10">
+  <!-- k-Means: round balls -->
+  <circle cx="50" cy="50" r="24" fill="#6366f1" fill-opacity="0.22" stroke="#6366f1"/>
+  <circle cx="50" cy="50" r="3" fill="#6366f1"/>
+  <text x="50" y="100" text-anchor="middle" fill="#6366f1">k-Means</text>
+  <text x="50" y="113" text-anchor="middle" fill="currentColor">round balls</text>
+  <!-- DBSCAN: dense islands + noise -->
+  <g fill="#22c55e"><circle cx="135" cy="40" r="4"/><circle cx="148" cy="48" r="4"/><circle cx="130" cy="55" r="4"/><circle cx="145" cy="62" r="4"/></g>
+  <circle cx="170" cy="30" r="3" fill="#f59e0b"/>
+  <text x="150" y="100" text-anchor="middle" fill="#22c55e">DBSCAN</text>
+  <text x="150" y="113" text-anchor="middle" fill="currentColor">dense islands + noise</text>
+  <!-- Spectral: connected ring -->
+  <path d="M240,50 a25,25 0 1,0 0.1,0" fill="none" stroke="#38bdf8" stroke-width="3" stroke-opacity="0.7"/>
+  <text x="265" y="100" text-anchor="middle" fill="#38bdf8">Spectral</text>
+  <text x="265" y="113" text-anchor="middle" fill="currentColor">connected webs</text>
+  <!-- GMM: tilted ellipses -->
+  <ellipse cx="370" cy="50" rx="28" ry="13" transform="rotate(-25 370 50)" fill="#ec4899" fill-opacity="0.22" stroke="#ec4899"/>
+  <text x="375" y="100" text-anchor="middle" fill="#ec4899">GMM</text>
+  <text x="375" y="113" text-anchor="middle" fill="currentColor">tilted ellipses</text>
+</svg>
 
 | Method | Needs $k$? | Cluster shape | Handles noise | Scale | Soft labels |
 |---|---|---|---|---|---|

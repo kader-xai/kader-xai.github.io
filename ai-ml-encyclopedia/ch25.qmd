@@ -141,6 +141,32 @@ flowchart LR
     E -->|state s_t+1| A
 ```
 
+Watch the signal circulate: the agent fires an action, the world answers with a reward and a new state, and round it goes — a single packet of information looping forever.
+
+<style>
+@keyframes c25-loop-dash { to { stroke-dashoffset: -28; } }
+@keyframes c25-loop-pulse { 0%,100% { r: 26px; opacity: .85; } 50% { r: 30px; opacity: 1; } }
+@media (prefers-reduced-motion: reduce) {
+  .c25-loop-arc, .c25-loop-node { animation: none; }
+}
+</style>
+<svg viewBox="0 0 360 150" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif" font-size="12">
+  <circle class="c25-loop-node" cx="80" cy="75" r="26" fill="#6366f1" fill-opacity="0.35" stroke="#6366f1" stroke-width="2" style="animation: c25-loop-pulse 3s ease-in-out infinite;"/>
+  <text x="80" y="79" text-anchor="middle" fill="currentColor" font-weight="bold">Agent</text>
+  <circle class="c25-loop-node" cx="280" cy="75" r="26" fill="#22c55e" fill-opacity="0.35" stroke="#22c55e" stroke-width="2" style="animation: c25-loop-pulse 3s ease-in-out infinite 1.5s;"/>
+  <text x="280" y="79" text-anchor="middle" fill="currentColor" font-weight="bold">World</text>
+  <!-- action arc (top) -->
+  <path class="c25-loop-arc" d="M104 60 A 110 110 0 0 1 256 60" fill="none" stroke="#6366f1" stroke-width="3" stroke-dasharray="6 8" stroke-linecap="round" marker-end="url(#c25ah)" style="animation: c25-loop-dash 1.4s linear infinite;"/>
+  <text x="180" y="22" text-anchor="middle" fill="#6366f1">action a_t</text>
+  <!-- reward+state arc (bottom) -->
+  <path class="c25-loop-arc" d="M256 92 A 110 110 0 0 1 104 92" fill="none" stroke="#22c55e" stroke-width="3" stroke-dasharray="6 8" stroke-linecap="round" marker-end="url(#c25ah2)" style="animation: c25-loop-dash 1.4s linear infinite;"/>
+  <text x="180" y="142" text-anchor="middle" fill="#22c55e">reward r, state s'</text>
+  <defs>
+    <marker id="c25ah" markerWidth="8" markerHeight="8" refX="6" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 Z" fill="#22c55e"/></marker>
+    <marker id="c25ah2" markerWidth="8" markerHeight="8" refX="6" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 Z" fill="#6366f1"/></marker>
+  </defs>
+</svg>
+
 We can also picture an MDP as a small graph of states and transitions. Below, a three-state chain: the agent starts at $s_0$ and walks right toward the rewarding terminal $s_2$.
 
 <svg viewBox="0 0 460 120" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif" font-size="12">
@@ -210,7 +236,33 @@ for _ in range(50):
 print(V)   # [8.1 9.  0. ]  -> matches the hand calculation
 ```
 
-The loop converges because each sweep pulls every state's estimate closer to its true value — a property called **contraction**. Value and policy iteration are the two faces of the same idea, sketched below.
+The loop converges because each sweep pulls every state's estimate closer to its true value — a property called **contraction**. Picture the estimate as a ball: every sweep nudges it a fixed fraction of the way toward the true value, so the gap shrinks geometrically and the ball settles onto the dashed target line.
+
+<style>
+@keyframes c25-vi-settle {
+  0%   { cy: 110px; } 25% { cy: 78px; } 50% { cy: 60px; }
+  75%  { cy: 52px; } 100% { cy: 48px; }
+}
+@media (prefers-reduced-motion: reduce) { .c25-vi-ball { animation: none; cy: 48px; } }
+</style>
+<svg viewBox="0 0 360 150" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif" font-size="11">
+  <line x1="40" y1="130" x2="330" y2="130" stroke="currentColor" stroke-width="1"/>
+  <line x1="40" y1="20" x2="40" y2="130" stroke="currentColor" stroke-width="1"/>
+  <text x="44" y="16" fill="currentColor">V estimate</text>
+  <text x="270" y="144" fill="currentColor">sweeps →</text>
+  <!-- target value line -->
+  <line x1="40" y1="48" x2="330" y2="48" stroke="#22c55e" stroke-width="2" stroke-dasharray="5 4"/>
+  <text x="280" y="44" fill="#22c55e">true V*</text>
+  <!-- decaying-gap markers -->
+  <circle cx="80" cy="110" r="3" fill="#6366f1" opacity="0.4"/>
+  <circle cx="130" cy="78" r="3" fill="#6366f1" opacity="0.5"/>
+  <circle cx="180" cy="60" r="3" fill="#6366f1" opacity="0.6"/>
+  <circle cx="230" cy="52" r="3" fill="#6366f1" opacity="0.7"/>
+  <!-- the moving ball -->
+  <circle class="c25-vi-ball" cx="80" cy="110" r="8" fill="#6366f1" fill-opacity="0.7" stroke="#6366f1" stroke-width="2" style="animation: c25-vi-settle 4s cubic-bezier(.5,0,.5,1) infinite alternate;"/>
+</svg>
+
+Value and policy iteration are the two faces of the same idea, sketched below.
 
 ```{mermaid}
 flowchart TD
@@ -436,6 +488,8 @@ $$\nabla_\theta J(\theta) = \mathbb{E}_\pi\big[\,\nabla_\theta \log \pi_\theta(a
 
 Intuition: make actions that led to high return more likely, low return less likely. But $G_t$ has huge variance. The cure is to subtract a **baseline** — typically a learned value estimate $V(s)$ — giving the **advantage** $A_t = G_t - V(s_t)$: "how much better than expected was this action?"
 
+**Worked example — why the baseline matters.** In a state the policy gives two actions probability 0.5 each. Both happen to return a *large* positive number — say $G=100$ and $G=98$. Raw REINFORCE multiplies each log-prob gradient by $\approx 100$, so it shoves *both* actions up hard and learns almost nothing about which is better — the signal is drowned by the shared offset. Now subtract a baseline $V(s)=99$: the advantages become $A=+1$ and $A=-1$. The first action is gently up-voted, the second down-voted — same outcomes, but now the update reflects the *relative* quality, which is all that matters. The baseline does not change the gradient's average direction; it only strips out the noisy common offset.
+
 That pairing is **actor-critic**. The **actor** is the policy $\pi_\theta$; the **critic** is the value estimator $V_\phi$ that supplies the baseline and bootstraps the return. **A2C** (Advantage Actor-Critic) is the clean synchronous version. The two halves form a tight feedback loop:
 
 ```{mermaid}
@@ -453,6 +507,29 @@ $$L^{\text{CLIP}}(\theta) = \mathbb{E}_t\Big[\min\big(r_t(\theta)\,A_t,\ \operat
 
 **In words:** improve the policy in the direction the advantage points, but if the new policy strays more than a fraction $\epsilon$ (say 20%) from the old one, stop giving credit for going further — the clip removes the incentive to take a reckless leap.
 **Also written:** with the unclipped term $u_t = r_t(\theta)A_t$ and clipped term $c_t = \operatorname{clip}(r_t,1-\epsilon,1+\epsilon)A_t$, the objective is just $\mathbb{E}_t[\min(u_t,c_t)]$ — a pessimistic (lower) bound on the improvement.
+
+Think of the clip as a fence. The policy ratio is free to move, but the moment it tries to wander past $1\pm\epsilon$ the gradient flattens — there's no more reward for straying, so the update gets pulled back inside the safe band.
+
+<style>
+@keyframes c25-ppo-ratio { 0%,100% { cx: 130px; } 35% { cx: 250px; } 50% { cx: 258px; } 70% { cx: 90px; } }
+@media (prefers-reduced-motion: reduce) { .c25-ppo-dot { animation: none; } }
+</style>
+<svg viewBox="0 0 360 110" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif" font-size="11">
+  <!-- full track -->
+  <line x1="40" y1="60" x2="320" y2="60" stroke="currentColor" stroke-width="1" opacity="0.4"/>
+  <!-- safe band 1-eps .. 1+eps -->
+  <rect x="110" y="42" width="140" height="36" rx="6" fill="#22c55e" fill-opacity="0.18" stroke="#22c55e" stroke-width="1.5"/>
+  <text x="180" y="34" text-anchor="middle" fill="#22c55e">safe band 1 ± ε</text>
+  <text x="110" y="98" text-anchor="middle" fill="currentColor">1−ε</text>
+  <text x="180" y="98" text-anchor="middle" fill="currentColor">1</text>
+  <text x="250" y="98" text-anchor="middle" fill="currentColor">1+ε</text>
+  <!-- clip walls -->
+  <line x1="110" y1="40" x2="110" y2="80" stroke="#f59e0b" stroke-width="2"/>
+  <line x1="250" y1="40" x2="250" y2="80" stroke="#f59e0b" stroke-width="2"/>
+  <!-- moving ratio dot -->
+  <circle class="c25-ppo-dot" cx="180" cy="60" r="7" fill="#6366f1" fill-opacity="0.8" stroke="#6366f1" stroke-width="2" style="animation: c25-ppo-ratio 5s ease-in-out infinite;"/>
+  <text x="300" y="64" text-anchor="middle" fill="#6366f1">ratio</text>
+</svg>
 
 | Method | Learns | Variance | Notes |
 |---|---|---|---|
@@ -1182,7 +1259,7 @@ Every method so far assumes the agent can *act* in the environment to gather fre
 
 **Intuition:** it is the difference between a student pilot in a real cockpit (online RL — risky but informative) and one who can only study a thick logbook of other pilots' flights (offline RL — safe, but you can never test a maneuver nobody recorded).
 
-The central obstacle is **distributional shift** combined with **overestimation**, and it is subtle. When the policy considers an action that the dataset rarely or never covers, the value network has no real data to ground its estimate there — so it extrapolates, and because training picks actions by $\max_a Q(s,a)$, it systematically latches onto whichever poorly-grounded action happens to be *overestimated*. The policy then confidently recommends actions it has never actually seen succeed. Online RL self-corrects this (try the action, get a low reward, fix the estimate); offline RL cannot — there is no feedback loop to puncture the delusion.
+The central obstacle is **distributional shift** combined with **overestimation**. Break it into three steps. (1) For an action the dataset barely covers, the value network is guessing — it has no real data to anchor $Q(s,a)$ there. (2) Some of those wild guesses come out *too high*. (3) Training always picks the action with the largest $Q$, so it homes straight in on the most over-inflated guess. The policy ends up confidently recommending actions it has never actually seen pay off. Online RL would catch this — try the action, get a low reward, fix the estimate — but offline RL has no such feedback loop, so the delusion never gets punctured.
 
 <svg viewBox="0 0 460 200" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif" font-size="11">
   <line x1="40" y1="160" x2="430" y2="160" stroke="currentColor" stroke-width="1"/>

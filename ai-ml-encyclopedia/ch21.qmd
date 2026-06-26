@@ -126,6 +126,42 @@ $$f_{\max} = \frac{f_s}{2}$$
 
 The key move in audio processing is switching from the **time domain** (amplitude vs. time) to the **frequency domain** (how much energy sits at each pitch). The tool is the **Fourier transform**, which decomposes a signal into a sum of sine waves. Applied to short overlapping windows of the waveform — the **Short-Time Fourier Transform (STFT)** — it produces a **spectrogram**: a 2-D image where the x-axis is time, the y-axis is frequency, and brightness is energy. We use *short* windows (typically 25 ms, hopping 10 ms) because speech is non-stationary — the frequencies change as the mouth moves — so we cut the signal into slices short enough to be roughly steady within each one.
 
+This animation shows the single most important move in the whole chapter: a window slides along the waveform, and each slice it covers becomes one vertical stripe of the spectrogram on the right.
+
+<style>
+@keyframes c21-slide { 0% { transform: translateX(0); } 100% { transform: translateX(150px); } }
+@keyframes c21-fillcol { 0%,100% { opacity: 0.25; } 50% { opacity: 0.85; } }
+@media (prefers-reduced-motion: reduce) {
+  .c21-window, .c21-col { animation: none !important; }
+}
+</style>
+<svg viewBox="0 0 560 200" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif" font-size="12">
+  <text x="100" y="18" text-anchor="middle" font-weight="bold" fill="currentColor">Waveform (time)</text>
+  <text x="420" y="18" text-anchor="middle" font-weight="bold" fill="currentColor">Spectrogram (time × freq)</text>
+  <!-- waveform -->
+  <polyline points="20,90 30,60 40,120 50,55 60,125 70,70 80,110 90,50 100,130 110,65 120,105 130,58 140,122 150,72 160,108 170,52 180,128 190,68 200,100"
+    fill="none" stroke="#38bdf8" stroke-width="1.6"/>
+  <!-- sliding window -->
+  <rect class="c21-window" x="20" y="40" width="40" height="100" fill="#f59e0b" opacity="0.25" stroke="#f59e0b"
+    style="animation: c21-slide 5s ease-in-out infinite alternate"/>
+  <!-- arrow -->
+  <line x1="220" y1="90" x2="280" y2="90" stroke="currentColor" stroke-width="1.5" marker-end="url(#c21a)"/>
+  <text x="250" y="80" text-anchor="middle" fill="currentColor" font-size="10">STFT</text>
+  <!-- spectrogram grid -->
+  <g>
+    <rect class="c21-col" x="300" y="40" width="18" height="100" fill="#6366f1" style="animation: c21-fillcol 5s ease-in-out infinite; animation-delay:0s"/>
+    <rect class="c21-col" x="320" y="40" width="18" height="100" fill="#22c55e" style="animation: c21-fillcol 5s ease-in-out infinite; animation-delay:0.6s"/>
+    <rect class="c21-col" x="340" y="40" width="18" height="100" fill="#a855f7" style="animation: c21-fillcol 5s ease-in-out infinite; animation-delay:1.2s"/>
+    <rect class="c21-col" x="360" y="40" width="18" height="100" fill="#ec4899" style="animation: c21-fillcol 5s ease-in-out infinite; animation-delay:1.8s"/>
+    <rect class="c21-col" x="380" y="40" width="18" height="100" fill="#38bdf8" style="animation: c21-fillcol 5s ease-in-out infinite; animation-delay:2.4s"/>
+    <rect class="c21-col" x="400" y="40" width="18" height="100" fill="#6366f1" style="animation: c21-fillcol 5s ease-in-out infinite; animation-delay:3.0s"/>
+    <rect class="c21-col" x="420" y="40" width="18" height="100" fill="#22c55e" style="animation: c21-fillcol 5s ease-in-out infinite; animation-delay:3.6s"/>
+    <rect class="c21-col" x="440" y="40" width="18" height="100" fill="#a855f7" style="animation: c21-fillcol 5s ease-in-out infinite; animation-delay:4.2s"/>
+  </g>
+  <text x="378" y="158" text-anchor="middle" fill="currentColor" font-size="10">each window → one column of energies</text>
+  <defs><marker id="c21a" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6 Z" fill="currentColor"/></marker></defs>
+</svg>
+
 The discrete Fourier transform that powers each STFT window is, for $N$ samples:
 
 $$X_k = \sum_{n=0}^{N-1} x_n \, e^{-\,i\,2\pi k n / N}, \qquad k = 0,\dots,N-1$$
@@ -139,6 +175,8 @@ $$m = 2595 \,\log_{10}\!\left(1 + \frac{f}{700}\right)$$
 
 **In words:** convert a frequency in hertz into "perceived pitch" units that are stretched out in the low range (where our ears are picky) and squeezed in the high range (where they are not).
 **Also written:** $m = 1127\,\ln\!\left(1 + \frac{f}{700}\right)$ — the identical curve using the natural log instead of base-10 (since $2595/\ln(10)\approx 1127$).
+
+A quick worked feel for that warp: plug in $f = 200$ Hz and you get $m \approx 283$ mels; plug in $f = 5000$ Hz and you get $m \approx 2363$ mels. So a 25× jump in raw hertz is only about an 8× jump in mels — exactly the squeezing of the high end that makes the mel axis line up with what your ear actually notices.
 
 Second, we hear loudness logarithmically, so energies are converted to decibels (a log). Finally, **MFCCs (Mel-Frequency Cepstral Coefficients)** apply one more transform (a discrete cosine transform) to the log-mel energies, compressing each time frame into ~13 decorrelated numbers — the workhorse feature of classical speech systems for decades.
 
@@ -304,6 +342,29 @@ $$p(\mathbf{x}) = \prod_{t=1}^{T} p\!\left(x_t \mid x_1, x_2, \dots, x_{t-1}\rig
 **In words:** the probability of a whole waveform is built one sample at a time — each new audio sample is predicted from all the samples that came before it.
 **Also written:** $p(\mathbf{x}) = \prod_t p(x_t \mid x_{<t})$, where $x_{<t}$ is shorthand for the entire history before step $t$ — which is exactly why naive generation is sequential and slow.
 
+This little animation makes the "one sample at a time" idea tangible: each new sample (the pulsing dot) is born only after looking back at the samples already laid down to its left.
+
+<style>
+@keyframes c21-ar-pulse { 0%,100% { r: 4; opacity: 0.4; } 50% { r: 7; opacity: 1; } }
+@keyframes c21-ar-march { 0% { cx: 70; } 100% { cx: 430; } }
+@media (prefers-reduced-motion: reduce) {
+  .c21-ar-head { animation: c21-ar-pulse 3s ease-in-out infinite !important; }
+}
+</style>
+<svg viewBox="0 0 480 130" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif" font-size="12">
+  <text x="240" y="18" text-anchor="middle" font-weight="bold" fill="currentColor">Autoregressive generation: predict x_t from its past</text>
+  <line x1="40" y1="80" x2="450" y2="80" stroke="currentColor" stroke-width="1" opacity="0.4"/>
+  <g fill="#6366f1">
+    <circle cx="70" cy="80" r="4"/><circle cx="110" cy="80" r="4"/><circle cx="150" cy="80" r="4"/>
+    <circle cx="190" cy="80" r="4"/><circle cx="230" cy="80" r="4"/><circle cx="270" cy="80" r="4"/>
+    <circle cx="310" cy="80" r="4"/><circle cx="350" cy="80" r="4"/><circle cx="390" cy="80" r="4"/>
+  </g>
+  <!-- moving prediction head -->
+  <circle class="c21-ar-head" cx="70" cy="80" r="6" fill="#ec4899"
+    style="animation: c21-ar-march 6s steps(9) infinite, c21-ar-pulse 0.66s ease-in-out infinite"/>
+  <text x="240" y="112" text-anchor="middle" fill="currentColor" font-size="10">each new sample depends on the whole history to its left → slow but high fidelity</text>
+</svg>
+
 ```{mermaid}
 flowchart LR
   T["Text: Dr. Smith"] --> FE["Front end:<br/>normalize + phonemize"]
@@ -377,6 +438,26 @@ flowchart LR
 
 The first stage, **Voice Activity Detection (VAD)**, is worth naming on its own: a lightweight classifier that decides, frame by frame, whether speech is present at all. It trims silence before the expensive embedding step, and it is also what tells a phone "the caller stopped talking."
 
+The clustering step is easy to picture: every short window becomes a dot in embedding space, and dots from the same voice naturally pile up together. The diagram below shows two such piles — one cluster per speaker — which is exactly what "who spoke when" reduces to once the embeddings exist.
+
+<svg viewBox="0 0 420 180" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif" font-size="12">
+  <text x="210" y="18" text-anchor="middle" font-weight="bold" fill="currentColor">Speaker embeddings cluster by voice</text>
+  <!-- cluster A -->
+  <circle cx="120" cy="100" r="50" fill="#6366f1" opacity="0.12" stroke="#6366f1" stroke-dasharray="4 3"/>
+  <g fill="#6366f1">
+    <circle cx="100" cy="90" r="5"/><circle cx="125" cy="80" r="5"/><circle cx="115" cy="110" r="5"/>
+    <circle cx="140" cy="105" r="5"/><circle cx="105" cy="120" r="5"/>
+  </g>
+  <text x="120" y="165" text-anchor="middle" fill="currentColor" font-size="11">Speaker A</text>
+  <!-- cluster B -->
+  <circle cx="300" cy="90" r="50" fill="#22c55e" opacity="0.12" stroke="#22c55e" stroke-dasharray="4 3"/>
+  <g fill="#22c55e">
+    <circle cx="290" cy="80" r="5"/><circle cx="315" cy="75" r="5"/><circle cx="305" cy="100" r="5"/>
+    <circle cx="325" cy="95" r="5"/><circle cx="285" cy="105" r="5"/>
+  </g>
+  <text x="300" y="155" text-anchor="middle" fill="currentColor" font-size="11">Speaker B</text>
+</svg>
+
 Here is a real x-vector embedding and verification using **SpeechBrain**, the de-facto open toolkit for speaker tasks:
 
 ```python
@@ -398,6 +479,41 @@ Not all audio is speech. **Audio classification** assigns a label to a sound cli
 **Music Information Retrieval (MIR)** is the audio-classification family aimed at music: genre and mood tagging, **beat and tempo (BPM) tracking**, **chord recognition**, instrument detection, and **audio fingerprinting** — the Shazam trick of matching a noisy phone clip to a track by hashing peaks in its spectrogram. The fingerprint is robust because peak locations survive noise and compression that would wreck the raw waveform. MIR powers recommendation (Chapter 26), auto-tagging, and DJ tools.
 
 **Keyword spotting (KWS)**, or **wake-word detection**, is the always-listening task: a tiny model that runs continuously on-device, waiting for "Hey Siri" or "Alexa." Its constraints are unique — it must be small enough to fit on a microcontroller, sip power, and produce almost no **false accepts** (waking when you didn't call it) while keeping **false rejects** (missing a real call) low. Only after the wake word fires does the heavy cloud ASR kick in.
+
+The two-stage idea is the whole game here: a cheap detector listens forever and stays quiet, then *lights up* the instant it hears the wake word and hands off to the expensive model.
+
+<style>
+@keyframes c21-kws-listen { 0%,90%,100% { opacity: 0.3; } 45% { opacity: 0.7; } }
+@keyframes c21-kws-fire { 0%,40% { opacity: 0.15; transform: scale(0.9); } 60%,100% { opacity: 0.9; transform: scale(1); } }
+@keyframes c21-kws-bars { 0%,100% { height: 8px; y: 76px; } 50% { height: 28px; y: 56px; } }
+@media (prefers-reduced-motion: reduce) {
+  .c21-kws-pulse, .c21-kws-bar { animation: none !important; }
+}
+</style>
+<svg viewBox="0 0 460 150" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif" font-size="12">
+  <text x="230" y="18" text-anchor="middle" font-weight="bold" fill="currentColor">Tiny gatekeeper → wakes the heavy model</text>
+  <!-- mic / listening bars -->
+  <g>
+    <rect class="c21-kws-bar" x="40" y="76" width="8" height="8" fill="#38bdf8" style="animation: c21-kws-bars 1.4s ease-in-out infinite; animation-delay:0s"/>
+    <rect class="c21-kws-bar" x="52" y="76" width="8" height="8" fill="#38bdf8" style="animation: c21-kws-bars 1.4s ease-in-out infinite; animation-delay:0.2s"/>
+    <rect class="c21-kws-bar" x="64" y="76" width="8" height="8" fill="#38bdf8" style="animation: c21-kws-bars 1.4s ease-in-out infinite; animation-delay:0.4s"/>
+  </g>
+  <text x="56" y="110" text-anchor="middle" fill="currentColor" font-size="10">always-on mic</text>
+  <!-- tiny KWS box -->
+  <rect x="110" y="55" width="90" height="44" rx="6" fill="#22c55e" opacity="0.3" stroke="currentColor"/>
+  <text x="155" y="74" text-anchor="middle" fill="currentColor" font-size="10">tiny KWS</text>
+  <text x="155" y="89" text-anchor="middle" fill="currentColor" font-size="9">low power</text>
+  <!-- arrow firing -->
+  <line x1="205" y1="77" x2="255" y2="77" stroke="#f59e0b" stroke-width="2" marker-end="url(#c21k)"/>
+  <text x="230" y="68" text-anchor="middle" fill="currentColor" font-size="9">"Hey…"</text>
+  <!-- heavy model, pulses on -->
+  <g class="c21-kws-pulse" style="animation: c21-kws-fire 4s ease-in-out infinite; transform-origin: 330px 77px">
+    <rect x="262" y="48" width="140" height="58" rx="8" fill="#a855f7" opacity="0.35" stroke="currentColor"/>
+    <text x="332" y="72" text-anchor="middle" fill="currentColor" font-size="10">full ASR + NLU</text>
+    <text x="332" y="88" text-anchor="middle" fill="currentColor" font-size="9">(cloud, ~1% of the time)</text>
+  </g>
+  <defs><marker id="c21k" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6 Z" fill="#f59e0b"/></marker></defs>
+</svg>
 
 A worked classification pass with a real pretrained audio model (the Audio Spectrogram Transformer):
 
@@ -437,6 +553,8 @@ $$\mathcal{L} = -\sum_{t \in M} \log p\!\left(z_t \mid \tilde{\mathbf{X}}\right)
 
 **In words:** only over the masked time steps $M$, ask the model to predict the correct hidden unit $z_t$ from the corrupted (partially masked) input $\tilde{\mathbf{X}}$, and penalize it when it's wrong.
 **Also written:** $\mathcal{L} = -\frac{1}{|M|}\sum_{t\in M}\log p(z_t \mid \tilde{\mathbf X})$ — the same loss averaged over the masked frames; $z_t$ is a quantized latent (wav2vec 2.0) or a k-means cluster ID (HuBERT).
+
+**Where this shows up.** This is not a lab curiosity: the speech pipeline behind many phone keyboards, call-center analytics, and low-resource-language transcription efforts starts from a wav2vec 2.0 or HuBERT checkpoint. A team building ASR for, say, Welsh or Swahili — languages with almost no transcribed corpora — can fine-tune a multilingual pretrained encoder on a few hours of labels and land near where an English-only system needed thousands of hours.
 
 The payoff is the **pretrain-then-finetune** workflow that now dominates speech:
 
@@ -493,7 +611,7 @@ print(proc.batch_decode(pred_ids))
 
 A neural codec is an **autoencoder** (Chapter 19) with a quantizer in the middle: an encoder compresses the waveform into a low-rate latent, a **vector quantizer** snaps each latent to the nearest entry in a learned codebook (turning it into an integer token), and a decoder reconstructs the waveform. The landmarks are **SoundStream** (Google) and **EnCodec** (Meta).
 
-The catch: a single codebook can't be both small and high-fidelity. The fix is **Residual Vector Quantization (RVQ)** — quantize, then quantize the *leftover error* with a second codebook, then the error of that with a third, and so on. Each layer cleans up what the previous one missed, so a stack of small codebooks achieves what one giant codebook never could.
+**The leftover-error trick, in plain terms.** One small codebook can't describe sound precisely — it only has a handful of "sound words" to choose from, so its best guess is always a little off. **Residual Vector Quantization (RVQ)** fixes that by stacking guessers. The first codebook makes a rough guess. You subtract that guess from the true vector and you're left with the *error* it missed. A second codebook then guesses *that error*; you subtract again, and a third codebook guesses what's still left, and so on. Each layer is a small correction on top of the last, so a stack of tiny codebooks ends up as accurate as one impossibly huge codebook — and you store just the chosen index from each layer.
 
 $$\mathbf{z} \approx \sum_{i=1}^{Q} \mathbf{e}_i, \qquad \mathbf{e}_i = \text{codebook}_i\big[\,k_i\,\big]$$
 
@@ -525,6 +643,14 @@ $$\mathbf{z} \approx \sum_{i=1}^{Q} \mathbf{e}_i, \qquad \mathbf{e}_i = \text{co
   <text x="558" y="135" text-anchor="middle" fill="currentColor" font-size="10">reconstruction</text>
   <defs><marker id="cc" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6 Z" fill="currentColor"/></marker></defs>
 </svg>
+
+A tiny worked RVQ pass makes the "correct the leftover" idea concrete. Say the true latent is the single number $\mathbf{z} = 0.74$, and each codebook holds just two entries:
+
+- Codebook 1 = {0.0, 0.8}. Nearest to 0.74 is **0.8** (index 1). Residual: $0.74 - 0.8 = -0.06$.
+- Codebook 2 = {−0.1, +0.1}. Nearest to −0.06 is **−0.1** (index 0). Residual: $-0.06 - (-0.1) = +0.04$.
+- Codebook 3 = {−0.03, +0.03}. Nearest to +0.04 is **+0.03** (index 1). Residual now ≈ 0.01.
+
+Reconstruction: $0.8 + (-0.1) + 0.03 = 0.73$, within 0.01 of the true 0.74 — using only three 1-bit choices. The stored tokens are just the indices `(1, 0, 1)`.
 
 Why this matters: once audio is a token stream, **generation** becomes a language-modeling problem. Models like AudioLM, VALL-E, and MusicGen generate speech or music by predicting these codec tokens autoregressively, then hand them to the codec's decoder to render sound. The same codec also gives extreme compression (EnCodec hits a few kbit/s at quality that rivals classic codecs like Opus).
 
@@ -559,6 +685,8 @@ $$\text{SNR}_{\text{dB}} = 10 \,\log_{10}\!\left(\frac{P_{\text{signal}}}{P_{\te
 
 **In words:** compare the power of the speech to the power of the background, on a decibel (log) scale — a big positive number means clean speech, near zero means the noise is as loud as the talker.
 **Also written:** $\text{SNR}_{\text{dB}} = 20\,\log_{10}\!\left(\dfrac{A_{\text{signal}}}{A_{\text{noise}}}\right)$ — the same ratio expressed with amplitudes instead of powers (since power $\propto$ amplitude$^2$, the 10 becomes 20).
+
+Worked example: if the speech carries 100 units of power and the background carries 1, the ratio is 100, and $10\log_{10}(100) = 20$ dB — comfortably clean. Let the noise grow to match the speech (ratio 1) and you get $10\log_{10}(1) = 0$ dB — the talker and the background are equally loud, where WER starts falling off a cliff.
 
 SpecAugment in practice is a one-liner you apply to the log-mel features during training:
 

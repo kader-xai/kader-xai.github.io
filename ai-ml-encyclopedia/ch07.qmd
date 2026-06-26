@@ -115,27 +115,22 @@ Before any single method, fix the **curse of dimensionality** in your head: as $
 
 Here is the curse made concrete. Imagine sprinkling 1,000 points uniformly inside a unit cube. In 1-D (a line segment), the points are 0.001 apart on average — cozy. In 2-D they spread over an area; in 3-D over a volume; by 10-D you would need $10^{30}$ points to keep that same density. The data you have stays fixed at 1,000, so the space around each point grows emptier and emptier. A quick way to feel it: the fraction of a $D$-dimensional cube's volume that sits within a thin outer shell (the outer 10%) is $1-0.9^{D}$. In 2-D that is 19%; by $D=50$ it is 99.5% — almost *all* the volume hugs the boundary, so "typical" points are all out near the edges, far from the center and from each other.
 
-<svg viewBox="0 0 380 150" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif" font-size="10">
-  <text x="10" y="14" fill="currentColor">Same 9 points, sparser as D grows →</text>
-  <rect x="20" y="30" width="90" height="20" fill="none" stroke="currentColor"/>
-  <circle cx="30" cy="40" r="2.5" fill="#6366f1"/><circle cx="48" cy="40" r="2.5" fill="#6366f1"/>
-  <circle cx="66" cy="40" r="2.5" fill="#6366f1"/><circle cx="84" cy="40" r="2.5" fill="#6366f1"/>
-  <circle cx="100" cy="40" r="2.5" fill="#6366f1"/>
-  <text x="20" y="64" fill="currentColor">1-D: packed</text>
-  <rect x="150" y="20" width="80" height="80" fill="none" stroke="currentColor"/>
-  <circle cx="165" cy="35" r="2.5" fill="#22c55e"/><circle cx="210" cy="40" r="2.5" fill="#22c55e"/>
-  <circle cx="180" cy="70" r="2.5" fill="#22c55e"/><circle cx="215" cy="85" r="2.5" fill="#22c55e"/>
-  <text x="150" y="115" fill="currentColor">2-D: spread out</text>
-  <g transform="translate(270,20)">
-    <rect x="0" y="10" width="70" height="70" fill="none" stroke="currentColor"/>
-    <rect x="20" y="0" width="70" height="70" fill="none" stroke="currentColor" opacity="0.5"/>
-    <line x1="0" y1="10" x2="20" y2="0" stroke="currentColor" opacity="0.5"/>
-    <line x1="70" y1="10" x2="90" y2="0" stroke="currentColor" opacity="0.5"/>
-    <line x1="70" y1="80" x2="90" y2="70" stroke="currentColor" opacity="0.5"/>
-    <circle cx="30" cy="30" r="2.5" fill="#f59e0b"/><circle cx="60" cy="55" r="2.5" fill="#f59e0b"/>
-    <circle cx="45" cy="20" r="2.5" fill="#f59e0b"/>
-  </g>
-  <text x="270" y="115" fill="currentColor">3-D: nearly empty</text>
+The animation below watches that shell fill up as $D$ climbs: the dark core (the roomy middle) shrinks while the colored rind (where points actually end up) swells to swallow the whole cube.
+
+<style>
+@keyframes c7-shell-grow { 0%,100% { r: 56px; } 50% { r: 20px; } }
+@keyframes c7-shell-label { 0%,100% { opacity:0.4; } 50% { opacity:1; } }
+@media (prefers-reduced-motion: reduce){ .c7-core{ animation:none !important; } }
+</style>
+<svg viewBox="0 0 380 150" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif" font-size="11">
+  <text x="10" y="16" fill="currentColor">As D grows, almost all volume moves to the outer shell</text>
+  <circle cx="90" cy="90" r="62" fill="rgba(236,72,153,0.30)" stroke="#ec4899"/>
+  <circle class="c7-core" cx="90" cy="90" r="56" fill="rgba(99,102,241,0.55)" style="animation: c7-shell-grow 5s ease-in-out infinite;"/>
+  <text x="60" y="94" fill="currentColor" font-size="9">core</text>
+  <text x="118" y="60" fill="#ec4899" font-size="9" style="animation: c7-shell-label 5s ease-in-out infinite;">shell</text>
+  <text x="195" y="86" fill="currentColor">low D ⇄ high D:</text>
+  <text x="195" y="104" fill="currentColor">the middle empties out,</text>
+  <text x="195" y="120" fill="currentColor">points crowd the edge.</text>
 </svg>
 
 We split reduction into two families. **Linear** methods (PCA, LDA, ICA) find a new set of axes that are weighted sums of the originals — a rotation and projection. **Nonlinear / manifold** methods (Kernel PCA, t-SNE, UMAP) bend space to unfold curved structure a straight projection would flatten wrongly.
@@ -175,15 +170,17 @@ $$\Sigma w = \lambda w.$$
 
 $$(-2,-1),\ (-1,-1),\ (0,0),\ (1,1),\ (2,1).$$
 
-The (uncentered-form, since the mean is already zero) covariance matrix with $1/n=1/5$ is
+Because the mean is already zero, each entry of the covariance is just an average of products over the five points. Add them up coordinate by coordinate:
 
-$$\Sigma = \frac{1}{5}\begin{bmatrix} 10 & 7 \\ 7 & 4 \end{bmatrix} = \begin{bmatrix} 2.0 & 1.4 \\ 1.4 & 0.8 \end{bmatrix}.$$
+- top-left $= \tfrac15\sum x_1^2 = \tfrac15(4+1+0+1+4) = \tfrac{10}{5} = 2.0$
+- bottom-right $= \tfrac15\sum x_2^2 = \tfrac15(1+1+0+1+1) = \tfrac{4}{5} = 0.8$
+- off-diagonal $= \tfrac15\sum x_1 x_2 = \tfrac15(2+1+0+1+2) = \tfrac{6}{5} = 1.2$
 
-Check the arithmetic: $\sum x_1^2 = 4+1+0+1+4 = 10$, $\sum x_2^2 = 1+1+0+1+1 = 4$, $\sum x_1 x_2 = 2+1+0+1+2 = 6$. So the off-diagonal should be $6/5 = 1.2$, not $1.4$ — let us use the **honest** matrix:
+So the covariance is
 
 $$\Sigma = \begin{bmatrix} 2.0 & 1.2 \\ 1.2 & 0.8 \end{bmatrix}.$$
 
-Now the numbers are consistent and the matrix is a valid covariance. Its eigenvalues solve $\lambda^2 - (\text{trace})\lambda + \det = 0$ with $\text{trace} = 2.8$ and $\det = (2.0)(0.8) - (1.2)^2 = 1.6 - 1.44 = 0.16$ (positive, as a real covariance must be):
+Its eigenvalues solve $\lambda^2 - (\text{trace})\lambda + \det = 0$ with $\text{trace} = 2.8$ and $\det = (2.0)(0.8) - (1.2)^2 = 1.6 - 1.44 = 0.16$ (positive, as a real covariance must be):
 
 $$\lambda = \frac{2.8 \pm \sqrt{2.8^2 - 4(0.16)}}{2} = \frac{2.8 \pm \sqrt{7.84 - 0.64}}{2} = \frac{2.8 \pm \sqrt{7.2}}{2}.$$
 
@@ -425,6 +422,8 @@ Maximizing this leads to the generalized eigenproblem $S_W^{-1} S_B\, w = \lambd
 
 **Worked example.** Class A means lie at feature-1 $\approx$ low, class B at feature-1 $\approx$ high, but both classes have huge spread along feature-2 (noise). PCA, chasing total variance, would pick feature-2 and smear the classes together. LDA divides by within-class scatter, so it discounts the noisy feature-2 and lines its axis up with feature-1 — projecting onto it leaves the two classes cleanly apart. That division by $S_W$ is the whole trick: it rewards directions where classes are tight, not just far.
 
+**Where this shows up.** LDA is a staple in face recognition (the "Fisherfaces" method beats raw eigenfaces by aligning axes to *identity* differences rather than lighting), in bankruptcy and credit-default scoring (project many financial ratios onto the one axis that best splits "defaults" from "survives"), and as a fast, label-aware front-end before a $k$-NN or logistic classifier.
+
 **With scikit-learn.** LDA doubles as both a dimensionality reducer (`transform`) and a classifier (`predict`) — the same fitted object does both:
 
 ```python
@@ -465,6 +464,31 @@ flowchart LR
     C --> D[Minimize KL divergence<br/>via gradient descent]
     D --> E[2-D map: neighbors stay near]
 ```
+
+The animation below shows the core move: scattered high-D points (left) drift into tight, color-coded neighborhoods on the 2-D map (right) as the layout settles — neighbors snap together, the rest spreads apart.
+
+<style>
+@keyframes c7-tsne-a { 0% { transform: translate(0,0); } 100% { transform: translate(118px,-6px); } }
+@keyframes c7-tsne-b { 0% { transform: translate(0,0); } 100% { transform: translate(120px,4px); } }
+@keyframes c7-tsne-c { 0% { transform: translate(0,0); } 100% { transform: translate(150px,2px); } }
+@media (prefers-reduced-motion: reduce){ .c7-tp{ animation:none !important; } }
+.c7-tp { animation-duration: 5s; animation-timing-function: ease-in-out; animation-iteration-count: infinite; animation-direction: alternate; }
+</style>
+<svg viewBox="0 0 380 160" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif" font-size="10">
+  <text x="14" y="14" fill="currentColor">scattered in high-D</text>
+  <text x="250" y="14" fill="currentColor">grouped in 2-D</text>
+  <line x1="190" y1="24" x2="190" y2="150" stroke="currentColor" opacity="0.3" stroke-dasharray="3 3"/>
+  <!-- cluster 1 (indigo) -->
+  <circle class="c7-tp" cx="40"  cy="40"  r="5" fill="#6366f1" style="animation-name:c7-tsne-a;"/>
+  <circle class="c7-tp" cx="150" cy="120" r="5" fill="#6366f1" style="animation-name:c7-tsne-b;"/>
+  <circle class="c7-tp" cx="30"  cy="120" r="5" fill="#6366f1" style="animation-name:c7-tsne-c;"/>
+  <!-- cluster 2 (green) -->
+  <circle class="c7-tp" cx="120" cy="40"  r="5" fill="#22c55e" style="animation-name:c7-tsne-c;"/>
+  <circle class="c7-tp" cx="60"  cy="80"  r="5" fill="#22c55e" style="animation-name:c7-tsne-b;"/>
+  <circle class="c7-tp" cx="160" cy="70"  r="5" fill="#22c55e" style="animation-name:c7-tsne-a;"/>
+  <text x="250" y="86" fill="currentColor">same colors</text>
+  <text x="250" y="102" fill="currentColor">end up adjacent →</text>
+</svg>
 
 **UMAP** (Uniform Manifold Approximation and Projection) reaches a similar 2-D picture through a different door: it builds a **fuzzy nearest-neighbor graph** in high-D, then optimizes a low-D graph to match it. In practice UMAP is much faster, scales to millions of points, and tends to preserve more **global** structure (the relative arrangement of clusters), where t-SNE mostly nails local clusters but scrambles the big picture.
 
@@ -589,6 +613,10 @@ A_hat = ica.mixing_                   # estimated mixing matrix A
 | Assumes | nothing about distribution | sources non-Gaussian |
 | Typical use | compress, denoise | unmix sources (audio, EEG) |
 
+::: {.callout-tip}
+Always **center and whiten before ICA** (FastICA does this for you). Whitening strips out the easy second-order structure so the algorithm can spend all its effort on the hard part — finding the non-Gaussian rotation. Skipping it makes convergence slow and flaky. And if a source really is Gaussian, no amount of tuning will separate it; that is a limit of the math, not a bug to fix.
+:::
+
 ::: {.callout-warning}
 ICA has two built-in **ambiguities**: it cannot recover the original **scale** of each source (a source and its doubled version mix identically), nor their **order** — so recovered components come out unranked and arbitrarily scaled. That is fine for separation tasks (the unmixed waveform is what matters) but means you cannot read "component 1 is most important" the way you can with PCA.
 :::
@@ -627,6 +655,26 @@ $$\mathcal{L} = \frac{1}{n}\sum_{i=1}^{n}\big\|x_i - g\big(f(x_i)\big)\big\|^2.$
 
 **In words:** push each example through encoder $f$ then decoder $g$, and penalize how far the rebuilt version drifts from the original; minimizing this forces the bottleneck to keep what matters.
 **Also written:** $\mathcal{L} = \mathbb{E}_{x}\big[\|x - g(f(x))\|^2\big]$, the expected squared reconstruction loss over the data distribution.
+
+Watch the funnel in motion: a packet of data flows in wide, is squeezed through the narrow bottleneck (the pulse), and re-expands on the way out — anything that does not fit through the waist is lost, so the network learns to send only what matters.
+
+<style>
+@keyframes c7-ae-flow { 0% { offset-distance: 0%; opacity:0; } 10% { opacity:1; } 90% { opacity:1; } 100% { offset-distance: 100%; opacity:0; } }
+@keyframes c7-ae-pulse { 0%,100% { r: 7px; opacity:0.6; } 50% { r: 11px; opacity:1; } }
+@media (prefers-reduced-motion: reduce){ .c7-pkt,.c7-neck{ animation:none !important; } }
+</style>
+<svg viewBox="0 0 380 150" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif" font-size="10">
+  <text x="10" y="14" fill="currentColor">data squeezed through the bottleneck, then rebuilt</text>
+  <polygon points="30,40 170,68 170,82 30,110" fill="rgba(99,102,241,0.30)" stroke="#6366f1"/>
+  <polygon points="350,40 210,68 210,82 350,110" fill="rgba(34,197,94,0.30)" stroke="#22c55e"/>
+  <circle class="c7-neck" cx="190" cy="75" r="8" fill="#f59e0b" style="animation: c7-ae-pulse 2.5s ease-in-out infinite;"/>
+  <text x="174" y="100" fill="#f59e0b">code z</text>
+  <circle class="c7-pkt" r="4" fill="#ec4899" style="offset-path: path('M30,75 L190,75 L350,75'); animation: c7-ae-flow 4s linear infinite;"/>
+  <text x="34" y="130" fill="currentColor">encoder (squeeze)</text>
+  <text x="250" y="130" fill="currentColor">decoder (rebuild)</text>
+</svg>
+
+**A tiny worked intuition.** Say each input is a 3-pixel patch that is *always* a flat gray ramp: $(a,\ a,\ a)$ for some brightness $a$. Three numbers, but only one truly varies. A bottleneck of width 1 can store $a$ and the decoder can rebuild $(a,a,a)$ with zero error — the autoencoder has discovered, on its own, that this data is secretly 1-dimensional. Give it patches that vary in two independent ways and a width-1 code can no longer reconstruct them; you would watch the reconstruction loss refuse to fall until you widen the bottleneck to 2. The narrowest bottleneck that still reconstructs well *is* the intrinsic dimension.
 
 The deep tie-in: a **linear** autoencoder with one bottleneck layer and squared-error loss recovers exactly the PCA subspace — same span as the top principal components. Autoencoders are therefore PCA's nonlinear generalization. Swap the linear layers for deep nonlinear ones and the bottleneck can bend around curved manifolds (the Swiss roll, handwritten digits) that linear PCA would crush. Two important variants you will meet: the **denoising autoencoder** (feed in corrupted input, ask it to reconstruct the clean original — learns robust features), and the **variational autoencoder (VAE)**, which makes the latent code a probability distribution so you can *sample* new data from it, bridging reduction and generative modeling.
 

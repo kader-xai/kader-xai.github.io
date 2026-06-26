@@ -117,7 +117,24 @@ A **multilayer perceptron (MLP)**, also called a **feedforward network**, is the
 
 Each **layer** is a set of **neurons** (units). A neuron computes a **weighted sum** of its inputs plus a **bias**, then passes that through a nonlinear **activation function**. The reason we need many layers is *representation*: early layers learn simple features (edges, word fragments), later layers combine them into abstract concepts (faces, sentiment). One layer alone is just a linear model; stacking with nonlinearity is what gives the network its expressive power. The **universal approximation theorem** makes this precise: a single hidden layer with enough units can approximate any continuous function to arbitrary accuracy — but "enough" can mean astronomically many units, which is why in practice depth is far more efficient than width. Deep networks reuse features across layers; a shallow one would have to enumerate every combination.
 
-A single neuron, opened up, is just a dot product followed by a squashing function — the same shape as logistic regression. Picture it as a little voting machine: each input arrives weighted, the votes are summed, a bias tips the scale, and the activation decides how loudly the neuron fires.
+A single neuron, opened up, is just a dot product followed by a squashing function — the same shape as logistic regression. Picture it as a little voting machine: each input arrives weighted, the votes are summed, a bias tips the scale, and the activation decides how loudly the neuron fires. The doodle below pulses to show a neuron gathering its inputs and "firing":
+
+<style>
+@keyframes c14-pulse { 0%,100% { r: 16; opacity: .55; } 50% { r: 21; opacity: .95; } }
+@keyframes c14-spark { 0% { stroke-dashoffset: 60; opacity: 0; } 40%,100% { stroke-dashoffset: 0; opacity: .8; } }
+@media (prefers-reduced-motion: reduce) { .c14-pulse-core, .c14-spark { animation: none; } }
+</style>
+<svg viewBox="0 0 300 130" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif" font-size="11">
+  <g class="c14-spark" stroke="#38bdf8" stroke-width="2" stroke-dasharray="60" style="animation: c14-spark 3s ease-in-out infinite">
+    <line x1="30" y1="30" x2="120" y2="65"/><line x1="30" y1="65" x2="120" y2="65"/><line x1="30" y1="100" x2="120" y2="65"/>
+  </g>
+  <g fill="#38bdf8" opacity="0.8"><circle cx="30" cy="30" r="7"/><circle cx="30" cy="65" r="7"/><circle cx="30" cy="100" r="7"/></g>
+  <circle class="c14-pulse-core" cx="135" cy="65" r="16" fill="#6366f1" style="animation: c14-pulse 3s ease-in-out infinite"/>
+  <text x="135" y="69" text-anchor="middle" fill="currentColor" font-size="12">Σ</text>
+  <line x1="155" y1="65" x2="210" y2="65" stroke="#22c55e" stroke-width="2" class="c14-spark" stroke-dasharray="60" style="animation: c14-spark 3s ease-in-out infinite; animation-delay: .6s"/>
+  <circle cx="225" cy="65" r="9" fill="#22c55e" opacity="0.7"/>
+  <text x="262" y="69" fill="currentColor">fires</text>
+</svg>
 
 <svg viewBox="0 0 360 150" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif" font-size="11">
   <g stroke="currentColor" stroke-width="0.8" opacity="0.6">
@@ -251,7 +268,27 @@ Training means adjusting the weights to reduce the loss. To do that we need the 
 
 A useful mental picture: think of blame flowing backward. The output made an error; each layer asks "how much of that error is *my* fault?" and answers by multiplying the blame coming from above by its own local sensitivity. Backprop is just bookkeeping that reuses the blame already computed at higher layers instead of recomputing it for every weight from scratch.
 
-Define the error signal $\delta^{[\ell]} = \partial L / \partial z^{[\ell]}$. The recipe has three rules. At the output, $\delta^{[L]} = \partial L/\partial a^{[L]} \odot g'(z^{[L]})$. To propagate backward, $\delta^{[\ell]} = (W^{[\ell+1]\top}\delta^{[\ell+1]}) \odot g'(z^{[\ell]})$. And the gradients you actually use are $\partial L/\partial W^{[\ell]} = \delta^{[\ell]} a^{[\ell-1]\top}$ and $\partial L/\partial b^{[\ell]} = \delta^{[\ell]}$.
+Give the blame a name: $\delta^{[\ell]} = \partial L / \partial z^{[\ell]}$ is "how much the loss cares about layer $\ell$'s pre-activation." The whole algorithm is then three short rules:
+
+1. **Start the blame at the output.** $\delta^{[L]} = \dfrac{\partial L}{\partial a^{[L]}} \odot g'(z^{[L]})$ — how wrong the final answer was, scaled by how steep the output activation was.
+2. **Pass the blame down a layer.** $\delta^{[\ell]} = (W^{[\ell+1]\top}\delta^{[\ell+1]}) \odot g'(z^{[\ell]})$ — pull the blame above back through the weights, then scale by this layer's slope.
+3. **Read off the weight gradients.** $\dfrac{\partial L}{\partial W^{[\ell]}} = \delta^{[\ell]}\,a^{[\ell-1]\top}$ and $\dfrac{\partial L}{\partial b^{[\ell]}} = \delta^{[\ell]}$ — a weight's gradient is its incoming blame times the input that fed it.
+
+The animation shows the blame flowing right-to-left, brightening each layer in turn:
+
+<style>
+@keyframes c14-blame { 0%,100% { opacity: .25; } 50% { opacity: 1; } }
+@media (prefers-reduced-motion: reduce) { .c14-blame { animation: none !important; opacity: .8 !important; } }
+</style>
+<svg viewBox="0 0 380 90" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif" font-size="11">
+  <g stroke="#ec4899" stroke-width="1.4" opacity="0.5"><line x1="280" y1="45" x2="220" y2="45"/><line x1="190" y1="45" x2="130" y2="45"/><line x1="100" y1="45" x2="40" y2="45"/></g>
+  <g text-anchor="middle" fill="currentColor">
+    <circle class="c14-blame" cx="310" cy="45" r="20" fill="#ec4899" style="animation: c14-blame 3.2s ease-in-out infinite; animation-delay: 0s"/><text x="310" y="49">δᴸ</text>
+    <circle class="c14-blame" cx="205" cy="45" r="20" fill="#a855f7" style="animation: c14-blame 3.2s ease-in-out infinite; animation-delay: .9s"/><text x="205" y="49">δ²</text>
+    <circle class="c14-blame" cx="115" cy="45" r="20" fill="#6366f1" style="animation: c14-blame 3.2s ease-in-out infinite; animation-delay: 1.8s"/><text x="115" y="49">δ¹</text>
+  </g>
+  <text x="190" y="82" text-anchor="middle" fill="currentColor" font-size="9">blame flows backward: output → hidden → input</text>
+</svg>
 
 **In words:** the error at a layer is the error from the layer above, pulled back through that layer's weights and then scaled by how steep this layer's activation was; a weight's gradient is its incoming error times the input that fed it.
 **Also written:** $\delta^{[\ell]} = \big(W^{[\ell+1]\top}\delta^{[\ell+1]}\big)\odot g'\!\big(z^{[\ell]}\big)$ and $\nabla_{W^{[\ell]}} L = \delta^{[\ell]}\,(a^{[\ell-1]})^\top$ (outer product form).
@@ -447,6 +484,8 @@ $$\text{softmax}(z)_i = \frac{e^{z_i}}{\sum_{j=1}^{K} e^{z_j}}.$$
 
 **Worked example.** Logits $z = [2.0,\ 1.0,\ 0.1]$. Exponentiate: $[7.39,\ 2.72,\ 1.11]$, sum $= 11.22$. Divide: $[0.659,\ 0.242,\ 0.099]$ — a valid distribution, peaked on class 0.
 
+**Where it shows up:** every time a language model picks the next word, a softmax over the whole vocabulary turns the model's raw scores into "probability of each possible next token" — and the *temperature* knob you see in chat APIs simply divides the logits before this softmax, flattening or sharpening that distribution to make outputs more random or more focused.
+
 ```python
 def softmax(z):
     z = z - np.max(z)          # subtract max for numerical stability
@@ -548,6 +587,23 @@ Don't pair MSE with softmax for classification — the gradients are weak when t
 Backprop hands you the gradient; **gradient descent** is what *uses* it to actually move the weights. The gradient $\nabla_w L$ points in the direction of steepest *increase* of the loss, so to shrink the loss you step the opposite way. That's the whole training engine in one line.
 
 The intuition everyone reaches for: you're a hiker in fog trying to reach the valley floor. You can't see the whole landscape, but you can feel the slope under your feet (the gradient). So you take a small step straight downhill, feel the slope again, step again — repeat until the ground is flat. The **learning rate** $\eta$ is your stride length: too short and you crawl, too long and you bound clear over the valley and end up higher than you started.
+
+Here is that hiker as a ball easing down the loss bowl, settling at the minimum:
+
+<style>
+@keyframes c14-roll {
+  0% { offset-distance: 4%; }
+  85% { offset-distance: 50%; }
+  100% { offset-distance: 50%; }
+}
+@media (prefers-reduced-motion: reduce) { .c14-ball { animation: none; offset-distance: 50%; } }
+</style>
+<svg viewBox="0 0 320 150" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif" font-size="11">
+  <path d="M20,20 Q160,200 300,20" fill="none" stroke="currentColor" stroke-width="1.6" opacity="0.5"/>
+  <circle class="c14-ball" r="8" fill="#22c55e"
+    style="offset-path: path('M20,20 Q160,200 300,20'); animation: c14-roll 4s ease-in-out infinite"/>
+  <text x="160" y="130" text-anchor="middle" fill="currentColor" font-size="10">each step rolls a little further downhill</text>
+</svg>
 
 $$w \leftarrow w - \eta\,\nabla_w L$$
 

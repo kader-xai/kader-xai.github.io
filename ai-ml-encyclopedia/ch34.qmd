@@ -177,6 +177,39 @@ print(s1)
 
 The mechanism is just set arithmetic: confirm the preconditions are a subset of the current state, subtract the delete list, then add the add list. That is the whole engine for *applying* one action. The genuinely hard part is *which* actions, in *what order* — and that is a search over the graph of reachable states.
 
+The animation below shows one action firing as a "diff": the precondition guard checks, the delete facts fade out, and the add facts slide in.
+
+<svg viewBox="0 0 480 150" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif" font-size="12">
+  <style>
+    @keyframes c34-del { 0%,40% { opacity:1 } 70%,100% { opacity:.12 } }
+    @keyframes c34-add { 0%,50% { opacity:.12 } 80%,100% { opacity:1 } }
+    @keyframes c34-guard { 0%,100% { opacity:.5 } 50% { opacity:1 } }
+    .c34-del { animation: c34-del 5s ease-in-out infinite; }
+    .c34-add { animation: c34-add 5s ease-in-out infinite; }
+    .c34-guard { animation: c34-guard 5s ease-in-out infinite; }
+    @media (prefers-reduced-motion: reduce) { .c34-del,.c34-add,.c34-guard { animation: none; } }
+  </style>
+  <text x="60" y="22" text-anchor="middle" fill="currentColor" font-weight="bold">state s</text>
+  <rect class="c34-guard" x="180" y="6" width="120" height="22" rx="6" fill="rgba(99,102,241,0.18)" stroke="#6366f1"/>
+  <text x="240" y="22" text-anchor="middle" fill="currentColor" font-size="11">Pre ⊆ s ?  ✓</text>
+  <text x="420" y="22" text-anchor="middle" fill="currentColor" font-weight="bold">state s′</text>
+  <rect x="20" y="42" width="120" height="90" rx="8" fill="rgba(56,189,248,0.12)" stroke="#38bdf8"/>
+  <text x="80" y="64" text-anchor="middle" fill="currentColor">on(A,B)</text>
+  <text x="80" y="84" text-anchor="middle" fill="currentColor">clear(A)</text>
+  <text x="80" y="104" text-anchor="middle" fill="currentColor">handEmpty</text>
+  <text x="155" y="92" fill="#6366f1" font-size="20">→</text>
+  <rect x="180" y="42" width="120" height="90" rx="8" fill="rgba(236,72,153,0.10)" stroke="#ec4899"/>
+  <text class="c34-del" x="240" y="64" text-anchor="middle" fill="#ec4899">− on(A,B)</text>
+  <text class="c34-del" x="240" y="84" text-anchor="middle" fill="#ec4899">− clear(A)</text>
+  <text class="c34-add" x="240" y="104" text-anchor="middle" fill="#22c55e">+ holding(A)</text>
+  <text class="c34-add" x="240" y="124" text-anchor="middle" fill="#22c55e">+ clear(B)</text>
+  <text x="315" y="92" fill="#6366f1" font-size="20">→</text>
+  <rect x="340" y="42" width="120" height="90" rx="8" fill="rgba(34,197,94,0.12)" stroke="#22c55e"/>
+  <text x="400" y="64" text-anchor="middle" fill="currentColor">onTable(B)</text>
+  <text x="400" y="84" text-anchor="middle" fill="currentColor">clear(B)</text>
+  <text x="400" y="104" text-anchor="middle" fill="currentColor">holding(A)</text>
+</svg>
+
 We can write the state-transition rule as a single formula. Applying action $a$ to state $s$ gives the successor:
 
 $$ \text{Result}(s, a) = \big(s \setminus \text{Del}(a)\big) \cup \text{Add}(a), \quad \text{defined only when } \text{Pre}(a) \subseteq s $$
@@ -245,7 +278,7 @@ So far we have searched the state graph directly. Two landmark ideas reframe pla
 
 The intuition for **GraphPlan** is a "ripple of possibility." Imagine dropping the initial state into a pond: in one step, every fact reachable by one action lights up; in two steps, everything reachable by two; and so on. GraphPlan builds exactly this layered **planning graph** — alternating layers of *facts* and *actions* — propagating forward and recording **mutex** (mutually-exclusive) pairs: two actions that interfere, or two facts that cannot co-occur. Once all goal facts appear in a layer with no mutex among them, GraphPlan searches *backward* through that compact graph for a real plan. The graph is a cheap relaxation that both bounds the plan length and supplies a strong heuristic — and it is where the relaxed-plan heuristic of forward planners comes from.
 
-The intuition for **SATPlan** is "turn the plan into a giant logic puzzle." Fix a horizon $k$ (how many steps the plan may take), then write one big Boolean formula whose variables say "action $a$ happens at step $t$" and "fact $f$ holds at step $t$." Clauses encode the initial state, the goal at step $k$, each action's preconditions/effects, and the frame axioms. Hand the formula to a SAT solver: if it finds a satisfying assignment, reading off the true action-variables *is* a valid $k$-step plan; if it reports UNSAT, no plan of length $k$ exists, so you bump $k$ and try again.
+**SATPlan** turns the plan into a giant true/false puzzle. First you guess a length $k$ — "let me look for a plan with at most $k$ steps." Then you make one yes/no variable for every "did action $a$ happen at step $t$?" and every "is fact $f$ true at step $t$?" You write down the rules connecting them (the start, the goal at the end, and what each action needs and changes) as a big logic formula. A SAT solver then tries to make the whole formula true at once. If it can, the actions it marked "yes" spell out a working $k$-step plan. If it can't, no plan that short exists, so you raise $k$ by one and try again.
 
 ```{mermaid}
 flowchart LR
@@ -331,6 +364,30 @@ def ac3(domains, neighbors, constraint):
             queue += [(z, x) for z in neighbors[x] if z != y]   # recheck arcs into x
     return True
 ```
+
+The animation below shows that ripple: fix one variable, and the now-impossible value drains out of every neighbour's domain on its own.
+
+<svg viewBox="0 0 460 130" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif" font-size="12">
+  <style>
+    @keyframes c34-drain { 0%,30% { opacity:1 } 60%,100% { opacity:.12; text-decoration:line-through } }
+    @keyframes c34-fix { 0%,100% { opacity:.6 } 50% { opacity:1 } }
+    .c34-drain { animation: c34-drain 4.5s ease-in-out infinite; }
+    .c34-fix { animation: c34-fix 4.5s ease-in-out infinite; }
+    @media (prefers-reduced-motion: reduce) { .c34-drain,.c34-fix { animation: none; } }
+  </style>
+  <rect class="c34-fix" x="20" y="48" width="110" height="34" rx="8" fill="rgba(99,102,241,0.20)" stroke="#6366f1"/>
+  <text x="75" y="69" text-anchor="middle" fill="currentColor">SA = {B}</text>
+  <line x1="130" y1="65" x2="170" y2="35" stroke="#6366f1"/>
+  <line x1="130" y1="65" x2="170" y2="65" stroke="#6366f1"/>
+  <line x1="130" y1="65" x2="170" y2="95" stroke="#6366f1"/>
+  <g font-size="13">
+    <text x="180" y="30" fill="currentColor">WA: R G <tspan class="c34-drain" fill="#ec4899">B</tspan></text>
+    <text x="180" y="69" fill="currentColor">NT: R G <tspan class="c34-drain" fill="#ec4899">B</tspan></text>
+    <text x="180" y="108" fill="currentColor">Q:&#160; R G <tspan class="c34-drain" fill="#ec4899">B</tspan></text>
+  </g>
+  <text x="370" y="60" fill="#22c55e" font-size="11">three domains</text>
+  <text x="370" y="76" fill="#22c55e" font-size="11">shrink for free</text>
+</svg>
 
 **Worked example.** Start map-coloring with domains `{R, G, B}` on every region. Now suppose we fix `SA = blue`. Arc-consistency immediately fires: because SA is a neighbor of WA, NT, and Q, the value `blue` loses its support for those three and is deleted from each of their domains, leaving them all at `{R, G}`. We did no guessing, yet three domains shrank for free. WA and NT are still neighbors and still arc-consistent (WA can be R while NT is G, and vice versa), so propagation stops — but the search tree we now face is vastly smaller. Interleaving AC-3 inside the backtracking loop, re-running propagation after every assignment, is called **MAC** (Maintaining Arc Consistency), and it prunes enormous subtrees before they are ever explored.
 
@@ -447,6 +504,8 @@ $$ V(\text{chance node}) = \sum_{i} P(i)\, V(\text{child}_i) $$
 
 The everyday intuition: against a coin flip you cannot assume the worst *or* the best — you have to plan for the average of what might happen. A subtle consequence is that, unlike minimax, expectimax values are sensitive to the *scale* of your evaluation function (doubling all scores can change which gamble looks best), so the numbers must mean something, not just rank-order positions.
 
+**Worked example.** You face a choice between two moves. Move A is safe: it leads straight to a position worth $+4$. Move B rolls a die — with probability $0.5$ you land on a $+10$ position, and with probability $0.5$ on a $-2$ one. The chance node for B is worth $0.5(10) + 0.5(-2) = +4$, exactly tying the safe move. Now double every score: A becomes $+8$, but B becomes $0.5(20) + 0.5(-4) = +8$ as well — still tied. The tie survived because *both* sides scaled together; what breaks under rescaling is comparisons where the two options weight outcomes differently, which is why expectimax needs meaningful magnitudes, not just an ordering.
+
 For **more than two players**, each node stores a *vector* of utilities, one per player, and each player maximizes *their own* component — the natural generalization of minimax to three or more competitors.
 
 ### Evaluation functions and depth limits
@@ -559,6 +618,34 @@ flowchart LR
 4. **Backpropagation** — carry the result back up the path you came down, incrementing each node's visit count and adding to its win count.
 
 After a fixed budget of iterations — say 10,000 — you do *not* pick the move with the best average; you pick the root child with the most *visits*, the move the search trusted enough to investigate most thoroughly.
+
+The doodle below captures MCTS's signature *asymmetry*: the promising branch (left) keeps deepening as visits pour into it, while the unpromising one (right) is barely touched.
+
+<svg viewBox="0 0 420 180" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif" font-size="11">
+  <style>
+    @keyframes c34-grow { 0%,100% { r:5 } 50% { r:9 } }
+    @keyframes c34-fade { 0% { opacity:0 } 100% { opacity:.9 } }
+    .c34-hot { animation: c34-grow 3s ease-in-out infinite; }
+    .c34-n2 { animation: c34-fade 3s ease-out infinite; }
+    .c34-n3 { animation: c34-fade 3s ease-out .8s infinite; }
+    @media (prefers-reduced-motion: reduce) { .c34-hot,.c34-n2,.c34-n3 { animation: none; opacity:.9 } }
+  </style>
+  <line x1="210" y1="28" x2="120" y2="78" stroke="#22c55e" stroke-width="2"/>
+  <line x1="210" y1="28" x2="320" y2="78" stroke="#888" stroke-dasharray="3 3"/>
+  <line x1="120" y1="78" x2="80" y2="128" stroke="#22c55e" stroke-width="2"/>
+  <line x1="120" y1="78" x2="160" y2="128" stroke="#22c55e" stroke-width="2"/>
+  <line x1="80" y1="128" x2="60" y2="168" stroke="#22c55e" stroke-width="1.5"/>
+  <line x1="80" y1="128" x2="105" y2="168" stroke="#22c55e" stroke-width="1.5"/>
+  <circle cx="210" cy="28" r="9" fill="rgba(99,102,241,0.35)" stroke="#6366f1"/>
+  <circle class="c34-hot" cx="120" cy="78" r="8" fill="rgba(34,197,94,0.45)" stroke="#22c55e"/>
+  <circle cx="320" cy="78" r="6" fill="rgba(150,150,150,0.18)" stroke="#888"/>
+  <circle class="c34-n2" cx="80" cy="128" r="6" fill="rgba(34,197,94,0.4)" stroke="#22c55e"/>
+  <circle class="c34-n2" cx="160" cy="128" r="6" fill="rgba(34,197,94,0.4)" stroke="#22c55e"/>
+  <circle class="c34-n3" cx="60" cy="168" r="5" fill="rgba(34,197,94,0.4)" stroke="#22c55e"/>
+  <circle class="c34-n3" cx="105" cy="168" r="5" fill="rgba(34,197,94,0.4)" stroke="#22c55e"/>
+  <text x="300" y="100" fill="#888">barely visited</text>
+  <text x="20" y="150" fill="#22c55e">promising line, deepened</text>
+</svg>
 
 The cleverness is concentrated in the selection rule, **UCT** (Upper Confidence bounds applied to Trees). For each child you compute:
 
@@ -766,6 +853,10 @@ $$ T_{\text{AC-3}} = O(e\, d^3) $$
 **In words:** each arc can be re-checked at most $d$ times (once per value its neighbor loses), and each check scans up to $d^2$ value pairs — so the work grows roughly with the number of constraints times the cube of the domain size.
 
 **Also written:** $O(n^2 d^3)$ in the dense case where every pair of the $n$ variables is constrained, since then $e = O(n^2)$.
+
+::: {.callout-warning}
+**Common mistake:** treating a successful AC-3 run as "the CSP is solved." It is not. Arc consistency only deletes values that *provably* belong in no solution; a problem can be fully arc-consistent and still be unsatisfiable (the triangle 3-coloring above is the canonical trap). AC-3 is a powerful *pruner* you run before and during search — never a standalone solver.
+:::
 
 ## 34.8 — Forward checking and local search (min-conflicts)
 

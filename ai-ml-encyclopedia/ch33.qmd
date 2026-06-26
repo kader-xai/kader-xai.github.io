@@ -217,6 +217,31 @@ flowchart LR
     G -- no --> H["No proof:<br/>query not entailed"]
 ```
 
+The same loop animated — clauses keep merging until the **empty clause** $\square$ falls out, the moment the contradiction lands:
+
+<style>
+@keyframes c33-spark { 0%,100% { opacity:.25; transform:scale(.9);} 45%,55% { opacity:1; transform:scale(1.15);} }
+@keyframes c33-flow  { 0% { stroke-dashoffset:60;} 100% { stroke-dashoffset:0;} }
+@media (prefers-reduced-motion: reduce){ .c33-spark,.c33-flow{animation:none!important;} }
+</style>
+<svg viewBox="0 0 480 130" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif" font-size="12">
+  <rect x="12" y="20" width="92" height="26" rx="5" fill="rgba(56,189,248,0.25)" stroke="#38bdf8"/>
+  <text x="58" y="37" text-anchor="middle" fill="currentColor">{ P }</text>
+  <rect x="12" y="78" width="92" height="26" rx="5" fill="rgba(56,189,248,0.25)" stroke="#38bdf8"/>
+  <text x="58" y="95" text-anchor="middle" fill="currentColor">{ ¬P, Q }</text>
+  <line class="c33-flow" x1="104" y1="33" x2="200" y2="55" stroke="#6366f1" stroke-width="2" stroke-dasharray="6" style="animation:c33-flow 3s linear infinite"/>
+  <line class="c33-flow" x1="104" y1="91" x2="200" y2="62" stroke="#6366f1" stroke-width="2" stroke-dasharray="6" style="animation:c33-flow 3s linear infinite"/>
+  <rect x="200" y="44" width="80" height="26" rx="5" fill="rgba(99,102,241,0.25)" stroke="#6366f1"/>
+  <text x="240" y="61" text-anchor="middle" fill="currentColor">{ Q }</text>
+  <rect x="200" y="92" width="80" height="26" rx="5" fill="rgba(236,72,153,0.22)" stroke="#ec4899"/>
+  <text x="240" y="109" text-anchor="middle" fill="currentColor">{ ¬Q }</text>
+  <line class="c33-flow" x1="280" y1="57" x2="372" y2="62" stroke="#6366f1" stroke-width="2" stroke-dasharray="6" style="animation:c33-flow 3s linear infinite"/>
+  <line class="c33-flow" x1="280" y1="105" x2="372" y2="68" stroke="#6366f1" stroke-width="2" stroke-dasharray="6" style="animation:c33-flow 3s linear infinite"/>
+  <circle class="c33-spark" cx="410" cy="65" r="20" fill="rgba(34,197,94,0.3)" stroke="#22c55e" stroke-width="2" style="animation:c33-spark 3s ease-in-out infinite"/>
+  <text x="410" y="62" text-anchor="middle" fill="currentColor" font-size="16">□</text>
+  <text x="410" y="100" text-anchor="middle" fill="#22c55e" font-size="10">contradiction!</text>
+</svg>
+
 ::: {.callout-tip}
 **Intuition:** resolution is "proof by trying to break it." You assume the opposite of what you want and show the assumption explodes. If the only way to keep the KB consistent is to accept your goal, the goal is proved.
 :::
@@ -772,6 +797,32 @@ assert p_cat * 0.0 == 0 and 0.0 * p_dog == 0           # satisfied if either dro
 print(f"constraint violation penalty = {loss_logic:.2f}")
 ```
 
+The constraint as a gentle force — both beliefs lit means a glowing penalty pulls them apart; let either fade and the pull vanishes:
+
+<style>
+@keyframes c33-pulse { 0%,100% { r:16; opacity:.45; } 50% { r:22; opacity:.85; } }
+@keyframes c33-tug   { 0%,100% { transform:translateX(0); } 50% { transform:translateX(-7px); } }
+@keyframes c33-tug2  { 0%,100% { transform:translateX(0); } 50% { transform:translateX(7px); } }
+@media (prefers-reduced-motion: reduce){ .c33-pulse,.c33-tug,.c33-tug2{animation:none!important;} }
+</style>
+<svg viewBox="0 0 480 130" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif" font-size="12">
+  <g class="c33-tug" style="animation:c33-tug 3.5s ease-in-out infinite;">
+    <circle class="c33-pulse" cx="150" cy="60" r="16" fill="#6366f1" style="animation:c33-pulse 3.5s ease-in-out infinite;"/>
+    <text x="150" y="64" text-anchor="middle" fill="currentColor">p_cat=.7</text>
+  </g>
+  <g class="c33-tug2" style="animation:c33-tug2 3.5s ease-in-out infinite;">
+    <circle class="c33-pulse" cx="330" cy="60" r="16" fill="#ec4899" style="animation:c33-pulse 3.5s ease-in-out infinite;"/>
+    <text x="330" y="64" text-anchor="middle" fill="currentColor">p_dog=.6</text>
+  </g>
+  <line x1="172" y1="60" x2="308" y2="60" stroke="#f59e0b" stroke-width="2" stroke-dasharray="5"/>
+  <text x="240" y="40" text-anchor="middle" fill="#f59e0b" font-weight="bold">penalty λ·p_cat·p_dog</text>
+  <text x="240" y="100" text-anchor="middle" fill="currentColor" font-size="11">“not both” — minimising the product pushes the two apart</text>
+</svg>
+
+::: {.callout-note appearance="simple"}
+**Where this shows up:** the same trick — turn a known rule into a differentiable penalty — powers real systems. Self-driving perception stacks penalise physically impossible label combinations; **PSL** and **DeepProbLog** train networks under logical constraints; and an LLM re-ranker can down-weight any answer that violates a knowledge-graph fact. The rule is not enforced as a hard gate; it is a soft force nudging the network toward consistency.
+:::
+
 Note what the code does and does *not* show: it computes the *penalty*, not a gradient step. The point is that the penalty is **positive precisely when the constraint is violated** and vanishes when it is satisfied — so minimising it (via whatever optimiser trains the network) steers the model away from logically impossible answers. The network still *learns* from data; the symbolic rule just adds a force pulling it toward consistency — neural perception and symbolic knowledge pulling in the same harness.
 
 The same idea, written as a real training step in PyTorch — the logic term is just another addend in the loss, fully differentiable:
@@ -990,6 +1041,32 @@ Formula: $(x_1 \lor x_2) \land (\lnot x_1 \lor x_3) \land (\lnot x_3)$.
 4. Every clause is satisfied with no branching at all: $x_1{=}F,\ x_2{=}T,\ x_3{=}F$. **SAT.**
 
 Propagation alone solved it — that is why it dominates solver runtime.
+
+DPLL's search is a token threading down a decision tree: decide, propagate, and on a conflict (the red dead-end) **backtrack** and try the other branch until a leaf satisfies every clause:
+
+<style>
+@keyframes c33-walk { 0% { offset-distance:0%; } 100% { offset-distance:100%; } }
+@media (prefers-reduced-motion: reduce){ .c33-walk{animation:none!important; offset-distance:100%!important;} }
+</style>
+<svg viewBox="0 0 480 170" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif" font-size="11">
+  <!-- edges -->
+  <g stroke="currentColor" stroke-width="1.5" opacity="0.55">
+    <line x1="240" y1="28" x2="140" y2="80"/><line x1="240" y1="28" x2="340" y2="80"/>
+    <line x1="140" y1="80" x2="90" y2="132"/><line x1="140" y1="80" x2="190" y2="132"/>
+    <line x1="340" y1="80" x2="290" y2="132"/><line x1="340" y1="80" x2="390" y2="132"/>
+  </g>
+  <circle cx="240" cy="28" r="12" fill="rgba(99,102,241,0.3)" stroke="#6366f1"/><text x="240" y="32" text-anchor="middle" fill="currentColor">x₁</text>
+  <circle cx="140" cy="80" r="12" fill="rgba(99,102,241,0.3)" stroke="#6366f1"/><text x="140" y="84" text-anchor="middle" fill="currentColor">x₂</text>
+  <circle cx="340" cy="80" r="12" fill="rgba(99,102,241,0.3)" stroke="#6366f1"/><text x="340" y="84" text-anchor="middle" fill="currentColor">x₂</text>
+  <circle cx="90"  cy="132" r="11" fill="rgba(236,72,153,0.3)" stroke="#ec4899"/><text x="90" y="136" text-anchor="middle" fill="#ec4899">✗</text>
+  <circle cx="190" cy="132" r="11" fill="rgba(34,197,94,0.35)" stroke="#22c55e"/><text x="190" y="136" text-anchor="middle" fill="#22c55e">✓</text>
+  <circle cx="290" cy="132" r="11" fill="rgba(236,72,153,0.3)" stroke="#ec4899"/><text x="290" y="136" text-anchor="middle" fill="#ec4899">✗</text>
+  <circle cx="390" cy="132" r="11" fill="rgba(236,72,153,0.3)" stroke="#ec4899"/><text x="390" y="136" text-anchor="middle" fill="#ec4899">✗</text>
+  <!-- walking token: root -> conflict -> back -> SAT leaf -->
+  <circle class="c33-walk" r="6" fill="#f59e0b" stroke="currentColor"
+    style="offset-path:path('M240,28 L140,80 L90,132 L140,80 L190,132'); animation:c33-walk 5s ease-in-out infinite;"/>
+  <text x="240" y="160" text-anchor="middle" fill="currentColor" font-size="10">decide → propagate → conflict → backtrack → SAT</text>
+</svg>
 
 ```python
 # The same formula handed to a production CDCL solver (pip install python-sat).

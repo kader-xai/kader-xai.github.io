@@ -162,6 +162,40 @@ flowchart LR
 
 Two architectures dominate, and the difference is easiest to feel as a contrast in *how they look*. A CNN is like reading a page through a small magnifying glass slid across it — it sees a little neighborhood at a time and builds up understanding locally. A Vision Transformer is more like glancing at the whole page and letting every word talk to every other word at once. The CNN's local habit is a built-in head start (nearby pixels usually belong together); the ViT's everything-sees-everything freedom needs more data to pay off but then surpasses it.
 
+<style>
+@keyframes c19-conv-slide { 0%{transform:translate(0,0)} 25%{transform:translate(48px,0)} 50%{transform:translate(48px,48px)} 75%{transform:translate(0,48px)} 100%{transform:translate(0,0)} }
+@keyframes c19-vit-pulse { 0%,100%{opacity:.15} 50%{opacity:.7} }
+@media (prefers-reduced-motion: reduce){ .c19-conv-win{animation:none!important} .c19-vit-line{animation:none!important} }
+</style>
+<svg viewBox="0 0 380 180" xmlns="http://www.w3.org/2000/svg" width="440" font-family="sans-serif" font-size="11">
+  <text x="6" y="14" fill="currentColor">CNN: a window slides locally · ViT: every patch talks to every patch</text>
+  <!-- CNN side -->
+  <text x="40" y="34" fill="#6366f1">CNN</text>
+  <g>
+    <rect x="20" y="42" width="120" height="120" fill="#6366f1" fill-opacity="0.10" stroke="currentColor" stroke-width="0.5"/>
+    <g stroke="currentColor" stroke-width="0.4" stroke-opacity="0.4">
+      <line x1="68" y1="42" x2="68" y2="162"/><line x1="116" y1="42" x2="116" y2="162"/>
+      <line x1="20" y1="90" x2="140" y2="90"/><line x1="20" y1="138" x2="140" y2="138"/>
+    </g>
+    <rect class="c19-conv-win" x="20" y="42" width="48" height="48" fill="#22c55e" fill-opacity="0.45" stroke="#22c55e" stroke-width="2" style="animation: c19-conv-slide 6s ease-in-out infinite"/>
+  </g>
+  <!-- ViT side -->
+  <text x="250" y="34" fill="#a855f7">ViT</text>
+  <g>
+    <rect x="220" y="42" width="120" height="120" fill="#a855f7" fill-opacity="0.10" stroke="currentColor" stroke-width="0.5"/>
+    <g stroke="#a855f7" stroke-width="1.2" fill="none">
+      <line class="c19-vit-line" x1="250" y1="72" x2="310" y2="132" style="animation: c19-vit-pulse 3s ease-in-out infinite"/>
+      <line class="c19-vit-line" x1="310" y1="72" x2="250" y2="132" style="animation: c19-vit-pulse 3s ease-in-out infinite .5s"/>
+      <line class="c19-vit-line" x1="250" y1="72" x2="310" y2="72" style="animation: c19-vit-pulse 3s ease-in-out infinite 1s"/>
+      <line class="c19-vit-line" x1="250" y1="132" x2="310" y2="132" style="animation: c19-vit-pulse 3s ease-in-out infinite 1.5s"/>
+      <line class="c19-vit-line" x1="280" y1="60" x2="280" y2="144" style="animation: c19-vit-pulse 3s ease-in-out infinite 2s"/>
+    </g>
+    <g fill="#a855f7">
+      <circle cx="250" cy="72" r="4"/><circle cx="310" cy="72" r="4"/><circle cx="250" cy="132" r="4"/><circle cx="310" cy="132" r="4"/><circle cx="280" cy="60" r="4"/><circle cx="280" cy="144" r="4"/>
+    </g>
+  </g>
+</svg>
+
 The dominant tool for two decades has been the **convolutional neural network (CNN)** — a stack of learned filters that slide across the image detecting local patterns, getting more abstract with depth (Chapter 15 owns the mechanics). More recently the **Vision Transformer (ViT)** chops the image into a grid of patches, treats each patch like a word token, and runs self-attention over them (Chapter 17 owns attention). CNNs bake in the assumption that nearby pixels matter most (a strong, data-efficient *inductive bias*); ViTs drop that assumption and instead learn relationships from large data, winning when data is plentiful.
 
 **How the output works.** The final layer produces one **logit** (raw score) per class. A **softmax** turns the logits into probabilities that sum to 1:
@@ -277,6 +311,40 @@ Classification answers *what*; **object detection** answers *what and where, for
 **The R-CNN family** took the "propose then classify" route. The original **R-CNN** used an external algorithm to suggest ~2000 candidate regions, then ran a CNN on each — accurate but painfully slow. **Fast R-CNN** ran the CNN once over the whole image and cropped features per region. **Faster R-CNN** replaced the external proposer with a learned **Region Proposal Network (RPN)**, making the whole thing end-to-end trainable. These *two-stage* detectors are accurate but heavier.
 
 **Single-stage detectors** — **YOLO** ("You Only Look Once") and **SSD** ("Single Shot Detector") — skip the proposal step. They divide the image into a grid and predict boxes and classes directly in one forward pass. Faster, ideal for real-time/video, historically a touch less accurate on small objects — though modern YOLO versions have largely closed that gap.
+
+<style>
+@keyframes c19-yolo-cell { 0%,80%,100%{fill-opacity:.08} 40%{fill-opacity:.5} }
+@keyframes c19-yolo-box { 0%,30%{opacity:0} 50%,100%{opacity:1} }
+@media (prefers-reduced-motion: reduce){ .c19-cell,.c19-box{animation:none!important} }
+</style>
+<svg viewBox="0 0 280 180" xmlns="http://www.w3.org/2000/svg" width="300" font-family="sans-serif" font-size="11">
+  <text x="6" y="14" fill="currentColor">YOLO: one pass — each grid cell predicts boxes + classes</text>
+  <g>
+    <rect x="40" y="26" width="160" height="120" fill="none" stroke="currentColor" stroke-width="0.6"/>
+    <!-- grid cells pulsing in a wave -->
+    <g fill="#38bdf8">
+      <rect class="c19-cell" x="40"  y="26"  width="40" height="40" style="animation:c19-yolo-cell 4s ease-in-out infinite 0s"/>
+      <rect class="c19-cell" x="80"  y="26"  width="40" height="40" style="animation:c19-yolo-cell 4s ease-in-out infinite .3s"/>
+      <rect class="c19-cell" x="120" y="26"  width="40" height="40" style="animation:c19-yolo-cell 4s ease-in-out infinite .6s"/>
+      <rect class="c19-cell" x="160" y="26"  width="40" height="40" style="animation:c19-yolo-cell 4s ease-in-out infinite .9s"/>
+      <rect class="c19-cell" x="40"  y="66"  width="40" height="40" style="animation:c19-yolo-cell 4s ease-in-out infinite .4s"/>
+      <rect class="c19-cell" x="80"  y="66"  width="40" height="40" style="animation:c19-yolo-cell 4s ease-in-out infinite .7s"/>
+      <rect class="c19-cell" x="120" y="66"  width="40" height="40" style="animation:c19-yolo-cell 4s ease-in-out infinite 1.0s"/>
+      <rect class="c19-cell" x="160" y="66"  width="40" height="40" style="animation:c19-yolo-cell 4s ease-in-out infinite 1.3s"/>
+      <rect class="c19-cell" x="40"  y="106" width="40" height="40" style="animation:c19-yolo-cell 4s ease-in-out infinite .8s"/>
+      <rect class="c19-cell" x="80"  y="106" width="40" height="40" style="animation:c19-yolo-cell 4s ease-in-out infinite 1.1s"/>
+      <rect class="c19-cell" x="120" y="106" width="40" height="40" style="animation:c19-yolo-cell 4s ease-in-out infinite 1.4s"/>
+      <rect class="c19-cell" x="160" y="106" width="40" height="40" style="animation:c19-yolo-cell 4s ease-in-out infinite 1.7s"/>
+    </g>
+    <g stroke="currentColor" stroke-width="0.4" stroke-opacity="0.5">
+      <line x1="80" y1="26" x2="80" y2="146"/><line x1="120" y1="26" x2="120" y2="146"/><line x1="160" y1="26" x2="160" y2="146"/>
+      <line x1="40" y1="66" x2="200" y2="66"/><line x1="40" y1="106" x2="200" y2="106"/>
+    </g>
+    <!-- emitted boxes -->
+    <rect class="c19-box" x="70" y="56" width="70" height="60" fill="none" stroke="#22c55e" stroke-width="2.5" style="animation:c19-yolo-box 4s ease-in-out infinite"/>
+    <rect class="c19-box" x="150" y="80" width="44" height="44" fill="none" stroke="#f59e0b" stroke-width="2.5" style="animation:c19-yolo-box 4s ease-in-out infinite .5s"/>
+  </g>
+</svg>
 
 | | Two-stage (R-CNN family) | Single-stage (YOLO, SSD) |
 |---|---|---|
@@ -554,6 +622,10 @@ for t, d in zip(tracks, dets):
     print(f"track {t} -> detection {d}  (cost {cost[t, d]:.2f})")
 ```
 
+::: {.callout-warning}
+Tracking-by-detection inherits the detector's mistakes. A single missed detection can break a track in two and hand the same object a brand-new ID — an **ID switch** — and crossing objects often swap IDs when only motion (IoU) is used to match. This is why appearance embeddings (DeepSORT) help through occlusions: when two boxes are equally plausible by position, "which one *looks* like car #7?" breaks the tie. If your track IDs flicker, the fix is usually a stronger detector or better appearance features, not a fancier matcher.
+:::
+
 ## 19.6 — Data Augmentation for Vision
 
 Vision models are hungry for labelled data, which is expensive. **Data augmentation** manufactures extra training variety for free by applying *label-preserving* transformations to existing images — a flipped, brightened, slightly rotated cat is still a cat. This teaches the model **invariance** to nuisances it shouldn't care about (lighting, position, scale) and is one of the cheapest, most reliable ways to cut overfitting.
@@ -757,6 +829,24 @@ $$Z = \frac{f \cdot B}{d},$$
 
 where $B$ is the **baseline** (distance between the cameras) and $f$ the focal length in pixels. Near objects shift a lot between the two views; far objects barely move — exactly why your two eyes sense depth, and why the moon seems to follow the car.
 
+<style>
+@keyframes c19-disp-near { 0%,100%{transform:translateX(0)} 50%{transform:translateX(34px)} }
+@keyframes c19-disp-far  { 0%,100%{transform:translateX(0)} 50%{transform:translateX(6px)} }
+@media (prefers-reduced-motion: reduce){ .c19-near,.c19-far{animation:none!important} }
+</style>
+<svg viewBox="0 0 360 150" xmlns="http://www.w3.org/2000/svg" width="400" font-family="sans-serif" font-size="11">
+  <text x="6" y="14" fill="currentColor">Disparity = how far a point jumps left↔right view (big = near)</text>
+  <text x="40" y="42" fill="currentColor" font-size="10">left eye view ↔ right eye view (animating between them)</text>
+  <line x1="20" y1="60" x2="340" y2="60" stroke="currentColor" stroke-width="0.5" stroke-opacity="0.4"/>
+  <line x1="20" y1="120" x2="340" y2="120" stroke="currentColor" stroke-width="0.5" stroke-opacity="0.4"/>
+  <!-- near object: big jump -->
+  <circle class="c19-near" cx="70" cy="60" r="9" fill="#ec4899" fill-opacity="0.7" style="animation:c19-disp-near 4s ease-in-out infinite"/>
+  <text x="60" y="86" fill="#ec4899" font-size="9">near · big jump</text>
+  <!-- far object: tiny jump -->
+  <circle class="c19-far" cx="240" cy="120" r="6" fill="#38bdf8" fill-opacity="0.8" style="animation:c19-disp-far 4s ease-in-out infinite"/>
+  <text x="220" y="142" fill="#38bdf8" font-size="9">far · tiny jump</text>
+</svg>
+
 Worked example: cameras with $f = 800\text{ px}$ and baseline $B = 0.1\text{ m}$. A point with disparity $d = 16\text{ px}$ sits at $Z = 800 \times 0.1 / 16 = 5\text{ m}$. Halve the disparity to $8\text{ px}$ and the depth doubles to $10\text{ m}$ — note that the same one-pixel matching error costs far more depth accuracy far away, the fundamental weakness of stereo at range.
 
 | Disparity $d$ (px) | Depth $Z$ (m) | Depth error per ±1 px |
@@ -811,7 +901,7 @@ $$F_\Theta : (x, y, z, \theta, \phi) \;\longmapsto\; (r, g, b, \sigma).$$
 
 **Also written:** $F_\Theta(\mathbf{p}, \mathbf{d}) = (\mathbf{c}, \sigma)$ with position $\mathbf{p}\in\mathbb{R}^3$, unit view direction $\mathbf{d}$, color $\mathbf{c}=(r,g,b)$, and density $\sigma$.
 
-To render a pixel, you don't query one point — you shoot a ray from the camera through that pixel and **march** along it, sampling colors and densities, then composite them front-to-back with **volume rendering**. A sample's contribution is its color weighted by its density *and* by the probability that light got through everything in front of it (transmittance $T_i$):
+To render one pixel, picture looking into fog along a straight line of sight. You shoot a ray from the camera through that pixel and take a series of small steps along it (**ray marching**), asking the network at each step "what color and how solid is it here?" Then you blend those steps front-to-back: the nearest solid stuff you hit gets the most say, and anything hidden behind it counts for almost nothing — exactly how the foreground of fog hides the background. That blend is **volume rendering**. Each step's contribution is its color, dimmed by two things: how opaque the step itself is, and how much light still made it that far without being blocked (the *transmittance* $T_i$):
 
 $$C(\mathbf{r}) = \sum_i T_i\,\big(1 - e^{-\sigma_i \delta_i}\big)\,c_i, \qquad T_i = e^{-\sum_{j<i}\sigma_j \delta_j},$$
 
@@ -1026,6 +1116,28 @@ $$\mathcal{L} = -\frac{1}{N}\sum_{i=1}^{N} \log \frac{e^{\,\text{sim}(I_i, T_i)/
 **In words:** for each image, treat its own caption as the right answer among all captions in the batch, and push the model to score that pairing highest — a softmax over similarities, sharpened by temperature $\tau$.
 
 **Also written:** this is exactly cross-entropy with the matched index as the label, computed symmetrically over rows (image→text) and columns (text→image) of the $N\times N$ similarity matrix.
+
+<style>
+@keyframes c19-clip-img { 0%{transform:translate(0,0)} 50%,100%{transform:translate(56px,28px)} }
+@keyframes c19-clip-txt { 0%{transform:translate(0,0)} 50%,100%{transform:translate(-56px,-28px)} }
+@keyframes c19-clip-link { 0%{stroke-opacity:.15} 50%,100%{stroke-opacity:.9} }
+@media (prefers-reduced-motion: reduce){ .c19-ci,.c19-ct,.c19-cl{animation:none!important} }
+</style>
+<svg viewBox="0 0 340 160" xmlns="http://www.w3.org/2000/svg" width="380" font-family="sans-serif" font-size="11">
+  <text x="6" y="14" fill="currentColor">CLIP: matching image &amp; caption pulled together in one space</text>
+  <line class="c19-cl" x1="80" y1="40" x2="240" y2="120" stroke="#22c55e" stroke-width="2" style="animation:c19-clip-link 5s ease-in-out infinite"/>
+  <g class="c19-ci" style="animation:c19-clip-img 5s ease-in-out infinite">
+    <circle cx="80" cy="40" r="9" fill="#38bdf8" fill-opacity="0.7"/>
+    <text x="92" y="38" fill="#38bdf8" font-size="9">🖼 image</text>
+  </g>
+  <g class="c19-ct" style="animation:c19-clip-txt 5s ease-in-out infinite">
+    <circle cx="240" cy="120" r="9" fill="#f59e0b" fill-opacity="0.7"/>
+    <text x="178" y="138" fill="#f59e0b" font-size="9">"a cat" text</text>
+  </g>
+  <text x="120" y="150" fill="currentColor" font-size="9">shared embedding space — matched pair converges</text>
+</svg>
+
+**A tiny worked example of the contrastive idea.** Say a batch has 2 pairs and the model's image-to-text similarities (after temperature scaling) are: image 1 scores $[3.0, 0.5]$ against [its own caption, the other caption], and image 2 scores $[0.2, 2.4]$. For image 1 the softmax over $[3.0, 0.5]$ puts $\approx 0.92$ on the correct caption, so its loss is $-\log 0.92 \approx 0.08$ — small, because the right pairing already wins. If image 2 had instead scored $[2.0, 1.9]$ (correct caption barely ahead), its softmax would give only $\approx 0.48$ to the wrong-but-tied answer and push a much larger loss, dragging that true pair closer together on the next step. The loss is large exactly when the matching pair is *not* clearly the most similar.
 
 CLIP embeddings underpin much of modern multimodal AI (Chapter on Multimodal owns the full story) and are the text-grounding behind open-vocabulary detectors and segmenters.
 

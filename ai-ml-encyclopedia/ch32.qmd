@@ -222,6 +222,48 @@ flowchart TB
 
 For this tree, **BFS** visits Start, A, B, C, D, E, Goal — finding Goal at depth 2 only after exploring the whole level above it. **DFS** visits Start, A, C, D, B, E, Goal — diving all the way into A's subtree before it ever looks at B.
 
+You can *feel* the difference in how the two sweep a tree: BFS fills a whole level before dropping down (a ripple spreading outward), while DFS plunges straight down one branch and only backtracks at a dead end. The two highlighted nodes below pulse to show the order each strategy reaches them:
+
+<style>
+@keyframes c32-bfs-pulse { 0%,100% { r: 9; fill-opacity: .25; } 50% { r: 12; fill-opacity: .7; } }
+@keyframes c32-dfs-pulse { 0%,100% { r: 9; fill-opacity: .25; } 50% { r: 12; fill-opacity: .7; } }
+.c32-bfs { animation: c32-bfs-pulse 3.2s ease-in-out infinite; }
+.c32-dfs { animation: c32-dfs-pulse 3.2s ease-in-out infinite; }
+@media (prefers-reduced-motion: reduce) { .c32-bfs, .c32-dfs { animation: none; } }
+</style>
+<svg viewBox="0 0 440 200" xmlns="http://www.w3.org/2000/svg" font-size="11" fill="currentColor">
+  <text x="110" y="18" text-anchor="middle" fill="#38bdf8">BFS — ripples level by level</text>
+  <text x="330" y="18" text-anchor="middle" fill="#f59e0b">DFS — plunges down a branch</text>
+  <!-- BFS tree -->
+  <line x1="110" y1="40" x2="70" y2="90" stroke="currentColor" stroke-opacity=".5"/>
+  <line x1="110" y1="40" x2="150" y2="90" stroke="currentColor" stroke-opacity=".5"/>
+  <line x1="70" y1="90" x2="50" y2="150" stroke="currentColor" stroke-opacity=".5"/>
+  <line x1="70" y1="90" x2="90" y2="150" stroke="currentColor" stroke-opacity=".5"/>
+  <line x1="150" y1="90" x2="130" y2="150" stroke="currentColor" stroke-opacity=".5"/>
+  <line x1="150" y1="90" x2="170" y2="150" stroke="currentColor" stroke-opacity=".5"/>
+  <circle class="c32-bfs" cx="70" cy="90" r="9" fill="#38bdf8" style="animation-delay:0s"/>
+  <circle class="c32-bfs" cx="150" cy="90" r="9" fill="#38bdf8" style="animation-delay:.4s"/>
+  <circle cx="110" cy="40" r="9" fill="#38bdf8" fill-opacity=".2"/>
+  <circle cx="50" cy="150" r="9" fill="#38bdf8" fill-opacity=".12"/>
+  <circle cx="90" cy="150" r="9" fill="#38bdf8" fill-opacity=".12"/>
+  <circle cx="130" cy="150" r="9" fill="#38bdf8" fill-opacity=".12"/>
+  <circle cx="170" cy="150" r="9" fill="#38bdf8" fill-opacity=".12"/>
+  <!-- DFS tree -->
+  <line x1="330" y1="40" x2="290" y2="90" stroke="currentColor" stroke-opacity=".5"/>
+  <line x1="330" y1="40" x2="370" y2="90" stroke="currentColor" stroke-opacity=".5"/>
+  <line x1="290" y1="90" x2="270" y2="150" stroke="currentColor" stroke-opacity=".5"/>
+  <line x1="290" y1="90" x2="310" y2="150" stroke="currentColor" stroke-opacity=".5"/>
+  <line x1="370" y1="90" x2="350" y2="150" stroke="currentColor" stroke-opacity=".5"/>
+  <line x1="370" y1="90" x2="390" y2="150" stroke="currentColor" stroke-opacity=".5"/>
+  <circle class="c32-dfs" cx="290" cy="90" r="9" fill="#f59e0b" style="animation-delay:.4s"/>
+  <circle class="c32-dfs" cx="270" cy="150" r="9" fill="#f59e0b" style="animation-delay:.8s"/>
+  <circle cx="330" cy="40" r="9" fill="#f59e0b" fill-opacity=".2"/>
+  <circle cx="310" cy="150" r="9" fill="#f59e0b" fill-opacity=".12"/>
+  <circle cx="370" cy="90" r="9" fill="#f59e0b" fill-opacity=".12"/>
+  <circle cx="350" cy="150" r="9" fill="#f59e0b" fill-opacity=".12"/>
+  <circle cx="390" cy="150" r="9" fill="#f59e0b" fill-opacity=".12"/>
+</svg>
+
 This "where does the next node come from?" choice is the whole story, and a single picture captures it — the *only* difference between BFS, DFS, and UCS is which end of the frontier you remove from:
 
 <svg viewBox="0 0 440 180" xmlns="http://www.w3.org/2000/svg" font-size="11" fill="currentColor">
@@ -397,6 +439,8 @@ def astar(start, goal, succ_cost, h):
 
 The only change from UCS is the priority key: $g$ becomes $g + h$. That one extra term is the entire difference between blind and informed search.
 
+**Where this is used.** A\* is not a textbook curiosity — it is the workhorse behind GPS and map routing, where the straight-line distance to your destination is the heuristic that keeps the search from fanning out across the whole continent. It also drives pathfinding for units in video games (often on a navigation grid), robot motion planning, and network packet routing. Anywhere you need the *cheapest route* through a graph and you have even a rough sense of "which way is the goal," A\* is usually the first thing reached for.
+
 ::: {.callout-tip}
 A useful mental picture: UCS searches in expanding circles around the start, while A\* searches in stretched ellipses pointing toward the goal. A good heuristic squeezes the ellipse tighter, so fewer nodes get explored.
 :::
@@ -485,6 +529,31 @@ $$P(\text{accept a worse move}) = e^{-\Delta / T}$$
 The temperature controls how reckless the search is. When $T$ is large, $e^{-\Delta/T}$ is close to 1, so even bad moves get through; as $T \to 0$, the same probability collapses toward 0 and the search hardens into plain hill climbing.
 
 A small numeric feel: with $\Delta = 2$, at a hot $T = 10$ the accept probability is $e^{-0.2} \approx 0.82$ (very willing to backtrack), but at a cold $T = 0.5$ it is $e^{-4} \approx 0.018$ (almost never). Same bad move, opposite behavior — that is the cooling schedule doing its job.
+
+Picture a ball on a bumpy landscape. When the system is **hot**, the ball jitters wildly and can bounce *out* of a shallow trap; as it **cools**, the jitter dies down and it settles into the deepest nearby valley. The marker below shakes hard at first, then calms — exactly the annealing schedule in motion:
+
+<style>
+@keyframes c32-anneal-shake {
+  0%   { transform: translate(-22px, -14px); }
+  15%  { transform: translate(20px, 10px); }
+  30%  { transform: translate(-16px, 6px); }
+  45%  { transform: translate(12px, -8px); }
+  60%  { transform: translate(-7px, 3px); }
+  75%  { transform: translate(4px, -2px); }
+  100% { transform: translate(0, 0); }
+}
+.c32-anneal-ball { animation: c32-anneal-shake 5s ease-in-out infinite; transform-origin: center; }
+@media (prefers-reduced-motion: reduce) { .c32-anneal-ball { animation: none; } }
+</style>
+<svg viewBox="0 0 420 150" xmlns="http://www.w3.org/2000/svg" font-size="11" fill="currentColor">
+  <path d="M10,70 C70,30 100,120 160,95 C210,75 240,130 300,70 C340,35 380,95 410,80"
+        fill="none" stroke="#a855f7" stroke-width="2.5"/>
+  <g class="c32-anneal-ball">
+    <circle cx="300" cy="70" r="7" fill="#ec4899" fill-opacity="0.85"/>
+  </g>
+  <text x="40" y="120" fill="#f59e0b">hot: big jitter, escapes traps</text>
+  <text x="250" y="135" fill="#38bdf8">cold: settles into deepest valley</text>
+</svg>
 
 **Beam search** (the local version) is the parallel compromise: instead of one current state, keep the $k$ best states (the **beam width**). At each step, generate all successors of all $k$ states and keep the best $k$ overall. With $k=1$ it is hill climbing; with $k=\infty$ it approaches breadth-first behavior. The danger is that all $k$ beams crowd into the same promising region and lose diversity; **stochastic beam search** keeps successors with probability rising in their quality, which spreads the beams out and avoids that collapse.
 
@@ -611,11 +680,27 @@ Other memory-bounded variants — **recursive best-first search (RBFS)** and **S
 
 A small numeric feel for why iterative deepening's re-work is cheap: with branching factor $b=10$, a tree of depth $d=5$ has about $10^5 = 100{,}000$ nodes at the bottom level but only $11{,}111$ in all the levels above combined. Re-generating those upper levels a handful of times adds only single-digit percentage overhead — a bargain for cutting memory from exponential to linear.
 
+Why is the re-work so cheap? A search tree is **bottom-heavy**: each level is $b$ times bigger than the one above it, so the very last level holds more nodes than all the levels above it combined. Iterative deepening re-visits the shallow levels many times — but those levels are tiny, so the repeats barely add up. The bottom level, which gets generated only once, dominates the whole count.
+
+<svg viewBox="0 0 420 150" xmlns="http://www.w3.org/2000/svg" font-size="11" fill="currentColor">
+  <text x="210" y="14" text-anchor="middle">tree levels (b=10): each one 10× the last</text>
+  <rect x="200" y="26" width="20" height="16" rx="2" fill="#6366f1" fill-opacity=".7"/>
+  <text x="330" y="38" text-anchor="end">level 0: 1 node (re-visited often, but tiny)</text>
+  <rect x="190" y="48" width="40" height="16" rx="2" fill="#6366f1" fill-opacity=".55"/>
+  <text x="330" y="60" text-anchor="end">level 1: 10</text>
+  <rect x="170" y="70" width="80" height="16" rx="2" fill="#6366f1" fill-opacity=".4"/>
+  <text x="345" y="82" text-anchor="end">level 2: 100</text>
+  <rect x="120" y="92" width="180" height="16" rx="2" fill="#22c55e" fill-opacity=".45"/>
+  <text x="360" y="104" text-anchor="end">level 3: 1,000</text>
+  <rect x="40" y="114" width="340" height="20" rx="2" fill="#22c55e" fill-opacity=".7"/>
+  <text x="210" y="128" text-anchor="middle">bottom level: 100,000 — generated once, swamps everything</text>
+</svg>
+
 The total nodes generated by iterative deepening, counting the re-work, is dominated by the last round:
 
 $$N_{\text{IDS}} = \sum_{i=0}^{d} (d - i + 1)\, b^i = (d{+}1)b^0 + d\, b^1 + \dots + 1\cdot b^d \approx \frac{b}{b-1}\, b^d$$
 
-**In words:** shallow levels get re-expanded once per remaining round, but because each deeper level is $b$ times bigger, the bottom level swamps all the repeats — the total is only a constant factor more than a single BFS sweep.
+**In words:** add up every level's node count, weighting each by how many times it gets re-visited (shallow levels more, the bottom level once). Because the bottom level is so much larger than all the rest, the whole sum lands within a small constant factor of a single BFS sweep.
 **Also written:** $N_{\text{IDS}} = O(b^d)$, the *same* big-O as BFS — for $b=10$ the overhead factor $b/(b-1)$ is about $1.11$, i.e. roughly 11% extra work.
 
 ```{mermaid}
