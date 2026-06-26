@@ -111,6 +111,8 @@ Calculus is the mathematics of change, and machine learning is the art of changi
 🧭 **In context:** Mathematical Foundations · used to measure how a loss changes when you nudge a parameter, so optimizers know which way to step · the one key idea: the **gradient points uphill, so step against it**.
 :::
 
+> 💡 **Remember this:** every "the loss went down" moment in machine learning is the chain rule computing a gradient and an optimizer stepping in the opposite direction.
+
 Here is the whole chapter in one picture: a ball, placed on a loss curve, rolls *downhill* — each frame it reads the local slope (the derivative) and steps against it until it settles in the valley. Everything below is the machinery that makes this little roll precise.
 
 <style>
@@ -252,7 +254,7 @@ The animation below shows a gradient signal flowing *backward* through three lin
   <circle class="c2-grad" cx="0" cy="0" r="5"/>
 </svg>
 
-This is *exactly* how **backpropagation** works. A neural network is a long composition: input → linear layer → activation → linear layer → … → loss. To learn, we need $\partial \text{loss}/\partial w$ for every weight $w$ buried deep inside. The chain rule lets us compute these by starting at the loss and multiplying derivatives backward through the layers, reusing intermediate results.
+This is *exactly* how **backpropagation** works. A [neural network](ch14.html) is a long composition: input → linear layer → activation → linear layer → … → loss. To learn, we need $\partial \text{loss}/\partial w$ for every weight $w$ buried deep inside. The chain rule lets us compute these by starting at the loss and multiplying derivatives backward through the layers, reusing intermediate results.
 
 When variables branch and recombine (one input feeding several paths), you also need the **multivariate chain rule**: sum the contributions over every path. For $z = f(u, v)$ with $u = u(x)$, $v = v(x)$,
 
@@ -322,7 +324,7 @@ Backprop *reuses* the forward-pass values ($g$, $a$, …). If you overwrite them
 
 When a function has many inputs, its derivatives organize into structured objects. Which object you get depends on how many inputs and outputs you have.
 
-The **gradient** $\nabla f$ collects all the first-order partials of a scalar function into a vector:
+The **gradient** $\nabla f$ collects all the first-order partials of a scalar function into a [vector](ch01.html):
 
 $$\nabla f = \left[\frac{\partial f}{\partial x_1}, \frac{\partial f}{\partial x_2}, \dots, \frac{\partial f}{\partial x_n}\right]$$
 
@@ -348,7 +350,7 @@ Its defining property is the one that makes optimization work: **the gradient po
   <text x="60" y="225" fill="#3b82f6">−∇f (downhill)</text>
 </svg>
 
-The **Jacobian** generalizes this to *vector-valued* functions — many inputs *and* many outputs. If $\mathbf{f}: \mathbb{R}^n \to \mathbb{R}^m$, the Jacobian $J$ is the $m \times n$ matrix whose entry $J_{ij} = \partial f_i / \partial x_j$. Each row is the gradient of one output. Jacobians show up whenever you differentiate a layer that maps a vector to a vector (e.g. a softmax).
+The **Jacobian** generalizes this to *vector-valued* functions — many inputs *and* many outputs. If $\mathbf{f}: \mathbb{R}^n \to \mathbb{R}^m$, the Jacobian $J$ is the $m \times n$ matrix whose entry $J_{ij} = \partial f_i / \partial x_j$. Each row is the gradient of one output. Jacobians show up whenever you differentiate a layer that maps a vector to a vector (e.g. a [softmax](ch09.html)).
 
 The **Hessian** $H$ holds the *second* derivatives of a scalar function — the curvature. It is the $n \times n$ matrix $H_{ij} = \partial^2 f / \partial x_i \partial x_j$. Where the gradient tells you which way is downhill, the Hessian tells you whether the ground is curving up like a bowl (minimum), down like a dome (maximum), or twisting like a saddle.
 
@@ -374,7 +376,7 @@ A useful way to see the family: each object is the derivative of the one above i
   <defs><marker id="ah" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6 Z" fill="currentColor"/></marker></defs>
 </svg>
 
-**Worked example.** For $f(x, y) = x^2 + 3y^2$: the gradient is $\nabla f = [2x, 6y]$, and the Hessian is the constant matrix $H = \begin{bmatrix} 2 & 0 \\ 0 & 6 \end{bmatrix}$. Both diagonal entries are positive, so the bowl curves upward in every direction — the point $(0,0)$ is a genuine minimum. The unequal entries ($2$ vs $6$) mean the bowl is steeper along $y$ than $x$, which is exactly the kind of "stretched bowl" that makes plain gradient descent zig-zag (see Chapter 03).
+**Worked example.** For $f(x, y) = x^2 + 3y^2$: the gradient is $\nabla f = [2x, 6y]$, and the Hessian is the constant matrix $H = \begin{bmatrix} 2 & 0 \\ 0 & 6 \end{bmatrix}$. Both diagonal entries are positive, so the bowl curves upward in every direction — the point $(0,0)$ is a genuine minimum. The unequal entries ($2$ vs $6$) mean the bowl is steeper along $y$ than $x$, which is exactly the kind of "stretched bowl" that makes plain [gradient descent](ch03.html) zig-zag.
 
 ```python
 # autodiff gives gradient, Jacobian, and Hessian in a few lines (PyTorch)
@@ -516,7 +518,7 @@ If differentiation is about *rates*, **integration** is about *accumulation* —
   <text x="245" y="195" fill="#111">b</text>
 </svg>
 
-In ML, integration shows up most often as **expectation**. The expected value of a function $g$ under a probability density $p$ is an integral:
+In ML, integration shows up most often as **expectation**. The expected value of a function $g$ under a [probability density](ch04.html) $p$ is an integral:
 
 $$\mathbb{E}_{x \sim p}[g(x)] = \int g(x)\, p(x)\, dx$$
 
@@ -524,7 +526,7 @@ $$\mathbb{E}_{x \sim p}[g(x)] = \int g(x)\, p(x)\, dx$$
 
 **Also written:** for a discrete distribution this becomes a sum, $\mathbb{E}[g(x)] = \sum_x g(x)\,p(x)$ — integration is just the continuous limit of that weighted sum.
 
-This single formula hides under enormous amounts of ML: the expected loss over the data distribution, the mean of a Gaussian, the normalizing constant that makes a probability density integrate to $1$, the area under the ROC curve, and the marginal likelihood in Bayesian models. Probabilities themselves are integrals of densities over a region.
+This single formula hides under enormous amounts of ML: the expected loss over the data distribution, the mean of a Gaussian, the normalizing constant that makes a probability density integrate to $1$, the [area under the ROC curve](ch12.html), and the marginal likelihood in Bayesian models. Probabilities themselves are integrals of densities over a region.
 
 The catch: most of these integrals have *no closed form*. You cannot solve them with algebra. So ML almost always **approximates** them — most commonly by **Monte Carlo**: replace the integral with an average over random samples, since by the law of large numbers $\frac{1}{N}\sum_i g(x_i) \to \mathbb{E}[g(x)]$ as samples accumulate.
 
@@ -567,7 +569,7 @@ est = np.mean(xs**2)                    # average of g(x)=x^2 = E[x^2]
 print(est)                              # ~0.3334, close to 1/3
 ```
 
-Because $p(x)$ is uniform on $[0,1]$ (density $=1$), the integral equals $\mathbb{E}[x^2]$, and the sample mean estimates it. With 100k samples we land within a thousandth of the true $0.3333\ldots$. Monte Carlo is the engine behind everything from dropout estimates to the expectations inside reinforcement learning and variational inference (Chapters 18, 25).
+Because $p(x)$ is uniform on $[0,1]$ (density $=1$), the integral equals $\mathbb{E}[x^2]$, and the sample mean estimates it. With 100k samples we land within a thousandth of the true $0.3333\ldots$. Monte Carlo is the engine behind everything from dropout estimates to the expectations inside [reinforcement learning](ch25.html) and [variational inference](ch18.html).
 
 ::: {.callout-tip}
 Whenever you see "expected loss," "marginal likelihood," "average reward," or "area under the curve," translate it mentally as *an integral we will probably approximate by sampling*. That reframing demystifies most of probabilistic ML.
@@ -686,7 +688,28 @@ print(lse(np.array([1000.0, 1001.0, 1002.0])))   # 1002.407..., no overflow
 <div class="ml-viz" data-viz="graddesc" data-params="{&quot;surface&quot;: &quot;convex&quot;}"></div>
 :::
 
-## 2.8 — Key takeaways
+## 2.8 — Quick reference
+
+| Term / formula | Meaning in one line | When / why it matters |
+|----------------|---------------------|------------------------|
+| Derivative $f'(x)$ | Slope: rate of change of output per unit input | Sign = uphill direction, size = steepness; drives every optimizer step |
+| Power rule $x^n \to nx^{n-1}$ | Differentiate polynomials term by term | The everyday algebra of hand-derivatives |
+| Chain rule $\frac{dz}{dx}=\frac{dz}{dg}\frac{dg}{dx}$ | Rates multiply down a composition | This *is* backpropagation through layers |
+| Partial $\partial f/\partial x$ | Derivative w.r.t. one variable, others frozen | How a single weight affects the loss |
+| Multivariate chain rule | Sum contributions over every path | When a tensor feeds several places in the graph |
+| Gradient $\nabla f$ | Vector of all first-order partials | Points uphill; step against it to minimize |
+| Jacobian $J$ ($m\times n$) | Each output's gradient stacked | Differentiating vector→vector layers (softmax) |
+| Hessian $H$ ($n\times n$) | Second derivatives = curvature | Bowl vs saddle; $n^2$ cost keeps DL first-order |
+| Directional deriv. $\nabla f\cdot\mathbf{u}$ | Rate along a chosen heading | Proves $-\nabla f$ is steepest descent |
+| Taylor series | Rebuild $f$ near $a$ from its derivatives | Gradient descent = 1st order, Newton = 2nd order |
+| Integral $\int f\,dx$ | Signed area / accumulation | Becomes an **expectation** all over ML |
+| Expectation $\mathbb{E}[g]=\int g\,p\,dx$ | Probability-weighted average | Expected loss, marginal likelihood, mean reward |
+| Monte Carlo | Average over random samples ≈ integral | Estimates intractable integrals (RL, VI) |
+| Autodiff (reverse mode) | Chain rule on elementary ops, output→input | Exact, cheap gradients for all params = backprop |
+| Finite difference $(f(x+h)-f(x-h))/2h$ | Numerical derivative with small $h$ | Gradient checking; beware cancellation error |
+| Log-sum-exp $m+\log\sum e^{x_i-m}$ | Shift by max before exponentiating | Stable softmax/cross-entropy; dodges overflow |
+
+## 2.9 — Key takeaways
 
 - A **derivative** is a slope: the signed rate of change of output with respect to input. Sign = direction uphill, magnitude = steepness.
 - **Partial derivatives** freeze all but one variable; the **chain rule** multiplies rates through a composition — this *is* backpropagation.
@@ -696,7 +719,7 @@ print(lse(np.array([1000.0, 1001.0, 1002.0])))   # 1002.407..., no overflow
 - **Integration** in ML almost always means an **expectation**, usually intractable and estimated by **Monte Carlo** sampling.
 - Real computation lives in **floating point**: prefer **autodiff** (reverse mode = backprop) over finite differences or symbolic math, and use the **log-sum-exp trick** and friends to dodge overflow/underflow and `NaN`.
 
-## 2.9 — See also
+## 2.10 — See also
 
 - **Chapter 01 — Linear Algebra** — the vectors and matrices that gradients, Jacobians, and Hessians are built from.
 - **Chapter 03 — Optimization** — gradient descent, Newton's method, and learning rates that put these derivatives to work.

@@ -111,6 +111,8 @@ Classification is the task of assigning a discrete label to an input: spam or no
 🧭 **In context:** Classical Machine Learning · supervised prediction of discrete labels · every classifier is just a different way to carve the feature space into decision regions.
 :::
 
+> 💡 **Remember this:** Every classifier in this chapter does the same job — carve the feature space into regions — and differs only in what shape of boundary it bets on; start with logistic regression and climb in complexity only when the metric demands it.
+
 **The big picture first.** Every classifier in this chapter does the same job — split the feature space into regions, one per class — but each makes a different *bet* about what the boundary should look like. k-NN bets "you look like your neighbors." Naive Bayes bets "features are independent given the class." SVM bets "the widest gap is safest." Trees bet "a stack of yes/no questions is enough." Keep that one sentence per method in mind and the rest is detail.
 
 <svg viewBox="0 0 460 130" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif" font-size="10">
@@ -222,12 +224,12 @@ The SVG below shows how the decision regions change. With $k=1$ the boundary hug
 </svg>
 
 ::: {.callout-warning}
-k-NN is acutely sensitive to feature scale: a feature measured in thousands (salary) will dominate the distance and drown out a feature in single digits (years of experience). **Always standardize features** before using k-NN. It also suffers the curse of dimensionality — in high dimensions all points become roughly equidistant.
+k-NN is acutely sensitive to feature scale: a feature measured in thousands (salary) will dominate the distance and drown out a feature in single digits (years of experience). **Always [standardize features](ch06.html)** before using k-NN. It also suffers the [curse of dimensionality](ch07.html) — in high dimensions all points become roughly equidistant.
 :::
 
 ## 9.2 — Naive Bayes
 
-Naive Bayes flips the question around. Instead of asking "where is the boundary?", it asks "given this input, which class makes it most probable?" — a **generative** view. It builds on **Bayes' rule**:
+Naive Bayes flips the question around. Instead of asking "where is the boundary?", it asks "given this input, which class makes it most probable?" — a **generative** view. It builds on [**Bayes' rule**](ch04.html):
 
 > **Intuition:** you start with how common each class is (the prior), then let the evidence — the words in the email, the pixels in the image — push your belief up or down. Naive Bayes is just bookkeeping for "which explanation fits the evidence best."
 
@@ -312,7 +314,7 @@ Work in **log space** and add **Laplace smoothing** ($+1$ to every count). Witho
 
 ## 9.3 — Logistic Regression as a Classifier
 
-It is impossible to talk about classification without the model that quietly underpins half the chapter: **logistic regression**. Despite the name it is a *classifier*, and it is the binary cousin of the softmax you will meet in §9.9. (The full derivation lives in the Regression chapter; here we use it purely as a workhorse linear classifier and probability source.)
+It is impossible to talk about classification without the model that quietly underpins half the chapter: **logistic regression**. Despite the name it is a *classifier*, and it is the binary cousin of the softmax you will meet in §9.9. (The full derivation lives in the [Regression chapter](ch08.html); here we use it purely as a workhorse linear classifier and probability source.)
 
 > **Intuition:** take the perceptron's straight-line score $\mathbf{w}\cdot\mathbf{x}+b$, but instead of slamming it to a hard 0/1 with a step function, *squash* it through an S-curve so it becomes a smooth probability between 0 and 1. Now you don't just get a label — you get a confidence.
 
@@ -365,7 +367,7 @@ A **decision tree** classifies by asking a sequence of yes/no questions about fe
 
 The core question is **which split to make**. A good split makes the resulting groups **purer** (more dominated by one class). Two impurity measures:
 
-- **Entropy** (from information theory): $H = -\sum_c p_c \log_2 p_c$. Zero when a node is pure, maximal when classes are 50/50. **Information gain** = parent entropy minus the weighted child entropy; the tree greedily picks the split with the highest gain.
+- **Entropy** (from [information theory](ch04.html)): $H = -\sum_c p_c \log_2 p_c$. Zero when a node is pure, maximal when classes are 50/50. **Information gain** = parent entropy minus the weighted child entropy; the tree greedily picks the split with the highest gain.
 - **Gini impurity**: $G = 1 - \sum_c p_c^2$. The probability of mislabeling a random element. Cheaper to compute (no logs), and in practice gives nearly identical trees.
 
 For the **information gain** of a split:
@@ -422,7 +424,7 @@ print(clf.cost_complexity_pruning_path(X_train, y_train).ccp_alphas)
 A fully grown tree memorizes the training set and overfits. **Pruning** cuts it back: **pre-pruning** stops growth early (max depth, min samples per leaf), while **post-pruning** grows the full tree then removes branches that don't improve validation accuracy (cost-complexity pruning trades tree size against error).
 
 ::: {.callout-warning}
-Single trees are **high-variance**: shift a few training points and the whole structure can change. This instability is exactly what ensembles exploit — see Random Forests and boosting in the Ensemble Methods chapter.
+Single trees are **high-variance**: shift a few training points and the whole structure can change. This instability is exactly what ensembles exploit — see Random Forests and boosting in the [Ensemble Methods chapter](ch10.html).
 :::
 
 ## 9.5 — Support Vector Machines
@@ -431,7 +433,7 @@ Many lines can separate two classes; which is best? A **Support Vector Machine (
 
 > **Intuition:** imagine the boundary as the widest possible *road* you can pave between the two classes without driving over any point. The few points touching the curb on each side are the only ones that matter — pin them and the road is fixed.
 
-The boundary is a **hyperplane** $\mathbf{w}\cdot\mathbf{x} + b = 0$. The only training points that matter are the ones sitting on the edge of the margin — the **support vectors**. Move any other point and the boundary doesn't budge; move a support vector and it does. The margin width is $2/\|\mathbf{w}\|$, so maximizing the margin means minimizing $\|\mathbf{w}\|$ subject to every point being on the correct side: $y_i(\mathbf{w}\cdot\mathbf{x}_i + b) \ge 1$.
+The boundary is a [**hyperplane**](ch01.html) $\mathbf{w}\cdot\mathbf{x} + b = 0$. The only training points that matter are the ones sitting on the edge of the margin — the **support vectors**. Move any other point and the boundary doesn't budge; move a support vector and it does. The margin width is $2/\|\mathbf{w}\|$, so maximizing the margin means minimizing $\|\mathbf{w}\|$ subject to every point being on the correct side: $y_i(\mathbf{w}\cdot\mathbf{x}_i + b) \ge 1$.
 
 **In words:** the gap you want to widen shrinks as the weight vector grows, so making the margin big is the same as keeping the weights small — while still parking every point on its correct side of the road with a unit of clearance.
 **Also written:** maximize $\dfrac{2}{\|\mathbf{w}\|}$ $\Longleftrightarrow$ minimize $\dfrac{1}{2}\|\mathbf{w}\|^2$ subject to $y_i(\mathbf{w}\cdot\mathbf{x}_i+b)\ge 1$ for all $i$.
@@ -597,7 +599,7 @@ print(clf.coef_, clf.intercept_)   # a separating boundary for AND
 The convergence theorem only promises a boundary when the data is **linearly separable** — on non-separable data the perceptron never settles, it just cycles forever flipping the same few points. Always cap the iterations (`max_iter`), and don't read a stopped-but-not-converged perceptron as having found the "best" line; it merely ran out of patience.
 :::
 
-**Why it cannot solve XOR.** XOR returns 1 for $(0,1)$ and $(1,0)$ but 0 for $(0,0)$ and $(1,1)$. No straight line separates those two diagonal pairs — the classes are **not linearly separable**. This 1969 observation (Minsky & Papert) stalled neural-net research for a decade. The escape is stacking neurons into hidden layers, which the Neural Networks chapter develops.
+**Why it cannot solve XOR.** XOR returns 1 for $(0,1)$ and $(1,0)$ but 0 for $(0,0)$ and $(1,1)$. No straight line separates those two diagonal pairs — the classes are **not linearly separable**. This 1969 observation (Minsky & Papert) stalled neural-net research for a decade. The escape is stacking neurons into hidden layers, which the [Neural Networks chapter](ch14.html) develops.
 
 <svg viewBox="0 0 200 180" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif" font-size="11">
   <line x1="30" y1="150" x2="180" y2="150" stroke="#999"/>
@@ -612,7 +614,7 @@ The convergence theorem only promises a boundary when the data is **linearly sep
 
 ## 9.8 — Discriminant Analysis
 
-Discriminant analysis is a **generative** classifier in the same family as Naive Bayes, but instead of assuming features are independent, it models each class as a full **multivariate Gaussian** — a bell-shaped cloud with a mean and a covariance (its shape and tilt). To classify a point, it asks which class's Gaussian, weighted by the prior, makes the point most likely.
+Discriminant analysis is a **generative** classifier in the same family as Naive Bayes, but instead of assuming features are independent, it models each class as a full [**multivariate Gaussian**](ch04.html) — a bell-shaped cloud with a mean and a covariance (its shape and tilt). To classify a point, it asks which class's Gaussian, weighted by the prior, makes the point most likely.
 
 > **Intuition:** picture each class as a fuzzy blob of probability. A new point gets assigned to whichever blob it falls deepest inside — accounting for how big and how common that blob is. Naive Bayes draws those blobs as axis-aligned; discriminant analysis lets them tilt and stretch.
 
@@ -658,7 +660,7 @@ print(lda.transform(X_train).shape)   # LDA also projects to <=K-1 dims (see tip
 ```
 
 ::: {.callout-tip}
-LDA doubles as a supervised **dimensionality reduction** technique: it projects data onto the axes that best separate the classes. That projection view is covered in the Dimensionality Reduction chapter; here we use it purely as a classifier.
+LDA doubles as a supervised [**dimensionality reduction**](ch07.html) technique: it projects data onto the axes that best separate the classes. That projection view is covered in the Dimensionality Reduction chapter; here we use it purely as a classifier.
 :::
 
 ## 9.9 — Multi-class & Multi-label
@@ -837,7 +839,7 @@ y_pred = (clf.predict_proba(X_test)[:, 1] > best_t).astype(int)
 ```
 
 ::: {.callout-warning}
-Resample **inside** cross-validation, never before splitting — oversampling first leaks copies of the same point into both train and validation folds, inflating your score. Use `imblearn`'s `Pipeline` so SMOTE/undersampling runs per-fold. And judge imbalanced models with **precision-recall** curves, not ROC: on extreme imbalance, ROC-AUC looks deceptively rosy because the huge true-negative count dominates.
+Resample **inside** cross-validation, never before splitting — oversampling first leaks copies of the same point into both train and validation folds, inflating your score. Use `imblearn`'s `Pipeline` so SMOTE/undersampling runs per-fold. And judge imbalanced models with **precision-recall** curves, not ROC: on extreme imbalance, [ROC-AUC](ch12.html) looks deceptively rosy because the huge true-negative count dominates.
 :::
 
 ## 9.12 — Choosing a Classifier
@@ -872,7 +874,32 @@ graph TD
 Whatever you pick, judge it with the *right* metric, not raw accuracy — on a 99%-negative fraud set, "always negative" scores 99%. Use precision/recall, F1, ROC-AUC, or log loss as the problem demands. The Model Evaluation chapter develops these.
 :::
 
-## 9.13 — Key takeaways
+## 9.13 — Quick reference
+
+| Method / term | One-line meaning | When / why |
+|---------------|------------------|------------|
+| **k-NN** | label by majority vote of the $k$ closest training points | tiny/medium data, nonlinear boundary; must standardize, dies in high dim |
+| **Euclidean distance** $\|\mathbf{x}-\mathbf{x}'\|_2$ | straight-line gap between points | default metric for k-NN; use Manhattan/Minkowski for grid-like features |
+| **Naive Bayes** | $\text{posterior}\propto\text{likelihood}\times\text{prior}$ with independent features | text/spam, instant training, strong baseline on counts |
+| **Laplace smoothing** ($+1$) | nudge every count up so no probability hits 0 | always on for NB; one unseen word otherwise zeros the product |
+| **Logistic regression** | sigmoid of a linear score → probability | first thing to try; fast, interpretable, well-calibrated |
+| **Log loss** $-\sum[y\log\hat p+(1-y)\log(1-\hat p)]$ | penalty for confident-wrong predictions | training objective that yields honest probabilities |
+| **Decision tree** | stack of yes/no splits chosen to maximize purity | need human-readable if-then rules; prune to fight overfitting |
+| **Gini / Entropy** | impurity measures a split tries to lower | Gini cheaper, near-identical trees; gain = parent − weighted child |
+| **SVM (margin)** | widest road between classes; only support vectors matter | high-dim (features ≫ samples); standardize first |
+| **C** | penalty for margin violations | large $C$ → narrow margin/overfit; small $C$ → wide/underfit |
+| **Kernel trick** $K=\phi(\mathbf{x})\cdot\phi(\mathbf{x}')$ | dot product in a lifted space, computed cheaply | nonlinear boundaries (RBF, polynomial) without building features |
+| **$\gamma$ (RBF)** | inverse bump width, $1/(2\sigma^2)$ | large $\gamma$ → wiggly/overfit; tune with $C$ via CV |
+| **Perceptron** | step-threshold neuron with mistake-driven update | historical root of NNs; converges only if linearly separable (not XOR) |
+| **LDA / QDA** | per-class Gaussians; shared vs own covariance | LDA linear & stable on small data; QDA curved, needs more data |
+| **OvR / OvO** | reduce multi-class to many binary problems | OvR cheap ($K$ models); OvO balanced ($K(K-1)/2$), SVM default |
+| **Softmax** $e^{z_c}/\sum_k e^{z_k}$ | normalize scores into a probability distribution | native multi-class; one label per example, classes compete |
+| **Sigmoid (per-label)** | independent 0/1 probability per label | multi-label — never softmax, labels must not compete |
+| **Calibration / ECE** | are stated confidences actually right? | when the probability drives a decision; fix with Platt/isotonic |
+| **Threshold** $t^\star=C_{FP}/(C_{FP}+C_{FN})$ | cost-optimal cutoff, not 0.5 | imbalanced/asymmetric-cost problems (fraud, disease) |
+| **`class_weight="balanced"`** | up-weight the rare class in the loss | laziest imbalance fix; resample only inside CV |
+
+## 9.14 — Key takeaways
 
 - **k-NN** is a lazy learner — no training, just memorize and vote among nearest neighbors; sensitive to feature scale, the choice of $k$, and even to distance-tie-breaks at small $k$.
 - **Naive Bayes** uses Bayes' rule with a (false but useful) conditional-independence assumption; fast, strong for text/spam; smooth and work in log space.
@@ -887,7 +914,7 @@ Whatever you pick, judge it with the *right* metric, not raw accuracy — on a 9
 - **Imbalanced classes** break accuracy: reweight (`class_weight="balanced"`) or resample inside CV, then move the decision threshold by the cost ratio $t^\star = C_{FP}/(C_{FP}+C_{FN})$ — judge with precision-recall, not ROC.
 - **Choosing** a classifier: start with logistic regression as a baseline, climb only when the metric demands it — and judge with the right metric, not raw accuracy.
 
-## 9.14 — See also
+## 9.15 — See also
 
 - **Regression** — logistic regression and the linear models that underpin softmax classification.
 - **Ensemble Methods** — Random Forests and gradient boosting that fix the high variance of single decision trees.

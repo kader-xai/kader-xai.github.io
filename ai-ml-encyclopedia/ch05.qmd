@@ -111,6 +111,8 @@ Machine learning is the part of AI where a system improves at a task by looking 
 🧭 **In context:** The ML Workflow · framing problems and understanding why models generalize or fail · the one key idea — a model is only useful if it performs on data it has never seen.
 :::
 
+> 💡 **Remember this:** A model is only useful if it performs on data it has never seen — everything else (splits, regularization, the bias–variance dial) exists to protect that one goal.
+
 ## 5.1 — AI vs Machine Learning vs Deep Learning vs Data Science
 
 These four words get used interchangeably and shouldn't be. The clean mental model is **nested circles**: each is a subset of the one before, except data science, which cuts across them.
@@ -121,7 +123,7 @@ These four words get used interchangeably and shouldn't be. The clean mental mod
 
 **Machine Learning (ML)** is the subset of AI where the behavior is *learned from data* rather than programmed. You don't write the rule "emails with the word lottery are spam"; you show the system labeled emails and it infers the rule.
 
-**Deep Learning (DL)** is the subset of ML that uses **neural networks with many layers** to learn features automatically from raw data (pixels, audio, text), instead of you engineering those features by hand.
+**Deep Learning (DL)** is the subset of ML that uses **[neural networks](ch14.html) with many layers** to learn features automatically from raw data (pixels, audio, text), instead of you engineering those features by hand.
 
 **Data Science** is not a subset — it's the broader practice of extracting insight from data: statistics, visualization, data cleaning, experiment design, and ML when ML is the right tool. A data scientist might never train a neural network; a deep-learning researcher might never make a dashboard.
 
@@ -158,9 +160,9 @@ Rule of thumb: if a human wrote the decision rule, it's AI but not ML. If the ru
 
 AI has swung between two philosophies. **Symbolic AI** (1950s–1980s), also called "good old-fashioned AI," represented knowledge as explicit symbols and logical rules — expert systems encoded a doctor's reasoning as hundreds of if-then clauses. It was transparent but brittle: it only knew what someone had typed in, and the rules exploded in number.
 
-The pendulum swung to **connectionism** — learning from data with neural networks. The **perceptron** (1958) learned simple linear boundaries, but Minsky and Papert showed in 1969 it couldn't even learn XOR, triggering the first **AI winter** (a funding-and-interest collapse). **Backpropagation** (popularized 1986) let multi-layer networks learn, and **statistical ML** (SVMs, random forests) dominated the 1990s–2000s.
+The pendulum swung to **connectionism** — learning from data with neural networks. The **perceptron** (1958) learned simple linear boundaries, but Minsky and Papert showed in 1969 it couldn't even learn XOR, triggering the first **AI winter** (a funding-and-interest collapse). **Backpropagation** (popularized 1986) let multi-layer networks learn, and **statistical ML** (SVMs, [random forests](ch10.html)) dominated the 1990s–2000s.
 
-The modern era ignited in **2012**, when a deep convolutional network (AlexNet) crushed the ImageNet image-recognition benchmark, proving deep learning plus GPUs plus big data worked. The **transformer** (2017) unlocked scale, leading to **foundation models** — single large models pre-trained on internet-scale data, then adapted to many tasks (GPT, BERT, and their descendants).
+The modern era ignited in **2012**, when a deep [convolutional network](ch15.html) (AlexNet) crushed the ImageNet image-recognition benchmark, proving deep learning plus GPUs plus big data worked. The **[transformer](ch17.html)** (2017) unlocked scale, leading to **foundation models** — single large models pre-trained on internet-scale data, then adapted to many tasks ([LLMs](ch23.html) like GPT, BERT, and their descendants).
 
 The "pendulum" isn't just a metaphor — here it is swinging, hype peaks giving way to winters and back again:
 
@@ -204,15 +206,15 @@ The lesson of the history: each "winter" came from over-promising. The thaw came
 
 Learning paradigms differ in **what supervision signal** the model gets. The signal is the answer key: how much of it you have, and what form it takes, determines the whole approach. A simple way to picture it: supervised learning is studying with the answer key in hand, unsupervised is sorting a pile of unlabeled photos by gut feel, and reinforcement learning is learning to ride a bike — nobody tells you the right move, you just feel the reward (staying upright) or the punishment (falling).
 
-**Supervised learning** uses labeled examples — each input $x$ comes with the correct output $y$. The model learns a mapping $f: x \to y$. Two flavors: **classification** (discrete $y$, e.g. spam/not-spam) and **regression** (continuous $y$, e.g. house price). This is the workhorse of applied ML because labels make training direct.
+**Supervised learning** uses labeled examples — each input $x$ comes with the correct output $y$. The model learns a mapping $f: x \to y$. Two flavors: **[classification](ch09.html)** (discrete $y$, e.g. spam/not-spam) and **[regression](ch08.html)** (continuous $y$, e.g. house price). This is the workhorse of applied ML because labels make training direct.
 
-**Unsupervised learning** has inputs but no labels. The goal is structure: **clustering** groups similar points, **dimensionality reduction** compresses them. You're asking "what's in here?" rather than "predict this."
+**Unsupervised learning** has inputs but no labels. The goal is structure: **[clustering](ch11.html)** groups similar points, **[dimensionality reduction](ch07.html)** compresses them. You're asking "what's in here?" rather than "predict this."
 
 **Semi-supervised learning** mixes a small labeled set with a large unlabeled one — common when labels are expensive (a doctor must annotate scans) but raw data is cheap.
 
 **Self-supervised learning** is the trick behind modern foundation models: invent labels *from the data itself*. Hide a word and predict it; hide a patch of image and reconstruct it. No human labels, yet a supervised-style signal — which is why it scales to the whole internet.
 
-**Reinforcement learning (RL)** has no fixed answer key at all. An **agent** takes actions in an environment and gets a **reward** signal, learning a **policy** that maximizes long-run reward by trial and error (see Chapter 25).
+**Reinforcement learning (RL)** has no fixed answer key at all. An **agent** takes actions in an environment and gets a **reward** signal, learning a **policy** that maximizes long-run reward by trial and error (see [Reinforcement Learning](ch25.html)).
 
 ```{mermaid}
 flowchart TD
@@ -252,7 +254,7 @@ When you reach for a paradigm, follow the cost of labels. Labels plentiful → s
 
 A model is maybe 10% of a real ML project. The rest is the pipeline around it. The stages run in order, but the arrows loop back constantly — you learn things downstream that send you back upstream.
 
-**Problem framing** comes first and is the most-skipped step: decide what you're predicting, what a useful answer looks like, and the metric that defines success *in business terms* (a 1% accuracy gain is worthless if the cost of a false positive dominates). **Data** collection and cleaning typically eats most of the calendar. **Features** turn raw data into model inputs (Chapter 6). **Train** fits the model on a training split. **Evaluate** measures performance on held-out data (Chapter 12). **Deploy** puts it into production (Chapter 29). **Monitor** watches for **drift** — the world changing so the model silently rots — which loops you back to data.
+**Problem framing** comes first and is the most-skipped step: decide what you're predicting, what a useful answer looks like, and the metric that defines success *in business terms* (a 1% accuracy gain is worthless if the cost of a false positive dominates). **Data** collection and cleaning typically eats most of the calendar. **Features** turn raw data into model inputs ([Data Preprocessing](ch06.html)). **Train** fits the model on a training split. **Evaluate** measures performance on held-out data ([Model Evaluation & Tuning](ch12.html)). **Deploy** puts it into production ([MLOps & Deployment](ch29.html)). **Monitor** watches for **drift** — the world changing so the model silently rots — which loops you back to data.
 
 ```{mermaid}
 flowchart LR
@@ -602,7 +604,28 @@ for name, model in candidates.items():
 NFL is permission to be empirical. Stop arguing about which algorithm is "best" in the abstract — benchmark two or three on *your* data and let the validation score settle it.
 :::
 
-## 5.x — Key Takeaways
+## 5.11 — Quick reference
+
+| Term / formula | Meaning in one line | When / why it matters |
+|----------------|---------------------|------------------------|
+| AI ⊃ ML ⊃ DL | Nested scopes; data science cuts across | Pick the right vocabulary and tool for the problem |
+| Supervised | Learn $f: x \to y$ from labeled pairs | Labels are plentiful (classification/regression) |
+| Unsupervised | Find structure with no labels | Only raw data; want clusters or compression |
+| Self-supervised | Invent labels from the data itself | Raw data cheap, labels impossible at scale (LLMs) |
+| Reinforcement | Maximize long-run reward via trial and error | Agent acts in an environment, no answer key |
+| ML workflow | Frame → data → features → train → eval → deploy → monitor | Model is ~10%; framing and data dominate |
+| Train / val / test | Fit / tune / judge-once splits | Keep the final exam unseen to trust the score |
+| Data leakage | Outside info sneaks into training | Fit all preprocessing inside a pipeline on train only |
+| Generalization | Performance on unseen data | The single goal every technique serves |
+| Underfitting | Too simple → high bias, bad on train & test | Add capacity or features |
+| Overfitting | Memorizes noise → high variance, big train-test gap | Add data, simplify, or regularize |
+| Bias²+Var+$\sigma^2$ | Expected error decomposes into three buckets | Total error is U-shaped in complexity |
+| $\text{Loss}+\lambda\sum w_i^2$ | $L_2$ regularization penalizes large weights | Slide left toward the sweet spot; tune $\lambda$ by CV |
+| $L_1$ (lasso) | $\sum\lvert w_i\rvert$ drives weights to exactly 0 | Automatic feature selection |
+| $e_d(r)=r^{1/d}$ | Side to capture fraction $r$ in $d$ dims → 1 | Curse of dimensionality: "local" stops being local |
+| No-free-lunch | No universally best algorithm | Try several models; let validation decide |
+
+## 5.12 — Key Takeaways
 
 - **AI ⊃ ML ⊃ DL** are nested; **data science** cuts across them as the broader practice of getting insight from data.
 - AI's history swings between **symbolic** (rules) and **connectionist** (learning) approaches; today's foundation models came from scale — GPUs, big data, attention — not hype.
@@ -614,16 +637,16 @@ NFL is permission to be empirical. Stop arguing about which algorithm is "best" 
 - The **curse of dimensionality** makes high-dimensional data sparse and distances meaningless; more features is not more signal.
 - **No-free-lunch**: no universally best algorithm — so try several and let validation decide.
 
-## 5.y — See also
+## 5.13 — See also
 
-- **Data Preprocessing & Feature Engineering** — the data and feature stages of the workflow in depth.
-- **Dimensionality Reduction** — the cure for the curse of dimensionality.
-- **Regression** and **Classification Algorithms** — the core supervised methods named here.
-- **Ensemble Methods** — averaging away variance (bagging, boosting, random forests).
-- **Model Evaluation & Tuning** — held-out testing, cross-validation, and tuning $\lambda$.
-- **Neural Networks (Core)** — deep learning, dropout, and double descent.
-- **Reinforcement Learning** — the agent/reward/policy paradigm in full.
-- **Frontier & Emerging Directions** — foundation models and where the field is heading.
+- **[Data Preprocessing & Feature Engineering](ch06.html)** — the data and feature stages of the workflow in depth.
+- **[Dimensionality Reduction](ch07.html)** — the cure for the curse of dimensionality.
+- **[Regression](ch08.html)** and **[Classification Algorithms](ch09.html)** — the core supervised methods named here.
+- **[Ensemble Methods](ch10.html)** — averaging away variance (bagging, boosting, random forests).
+- **[Model Evaluation & Tuning](ch12.html)** — held-out testing, cross-validation, and tuning $\lambda$.
+- **[Neural Networks (Core)](ch14.html)** — deep learning, dropout, and double descent.
+- **[Reinforcement Learning](ch25.html)** — the agent/reward/policy paradigm in full.
+- **[Frontier & Emerging Directions](ch39.html)** — foundation models and where the field is heading.
 
 ------------------------------------------------------------------------
 

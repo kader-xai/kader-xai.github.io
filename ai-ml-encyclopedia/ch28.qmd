@@ -111,13 +111,15 @@ Most of this encyclopedia teaches algorithms in the abstract. This chapter is ab
 🧭 **In context:** Applied ML Systems & Industries · turning models into deployed decisions in finance, healthcare, and beyond · the one key idea — the hard part is rarely the model, it is the data, the drift, and matching the metric to the business.
 :::
 
+> 💡 **Remember this:** In real-world ML the model is the easy part — projects live or die on data quality, distribution shift, and whether your evaluation metric actually matches the business goal.
+
 ## 28.1 — Finance & Trading
 
 Finance was an early adopter of ML because it is drowning in structured, timestamped, labeled data and every basis point of accuracy maps directly to money. But it is also one of the hardest domains, for one deep reason: the data **fights back**. In most fields the world does not change because you modeled it; in markets, the moment a profitable pattern is discovered and traded, it gets arbitraged away. The four canonical finance applications each wrestle with this in their own way.
 
-**Fraud detection** asks: is this transaction legitimate? It is a classic imbalanced binary classification problem — perhaps 1 fraudulent transaction in 10,000. The cost structure is asymmetric: missing a $5,000 fraud (a **false negative** — a real bad event the model let through) costs far more than wrongly declining a legitimate $40 coffee (a **false positive** — a benign event the model flagged), but too many false positives drive customers away. Because fraud is a cross-industry workhorse, the mechanics live in Chapter 27; here the finance-specific twist is that fraudsters adapt — your training labels describe last month's scams, not next month's.
+**Fraud detection** asks: is this transaction legitimate? It is a classic imbalanced [binary classification](ch09.html) problem — perhaps 1 fraudulent transaction in 10,000. The cost structure is asymmetric: missing a $5,000 fraud (a **false negative** — a real bad event the model let through) costs far more than wrongly declining a legitimate $40 coffee (a **false positive** — a benign event the model flagged), but too many false positives drive customers away. Because fraud is a cross-industry workhorse, the mechanics live in [Chapter 27](ch27.html); here the finance-specific twist is that fraudsters adapt — your training labels describe last month's scams, not next month's.
 
-**Credit scoring** predicts the probability a borrower defaults. **Logistic regression** — a model that outputs a probability as a weighted sum of features passed through an S-curve — still dominates here, not because it is the most accurate, but because regulators require that you can **explain** every decision ("your application was declined because of X"). A gradient-boosted tree might score higher on **AUC** (area under the ROC curve, a single number summarizing how well a model ranks positives above negatives) yet be unusable if it cannot produce a legally defensible adverse-action reason.
+**Credit scoring** predicts the probability a borrower defaults. **[Logistic regression](ch08.html)** — a model that outputs a probability as a weighted sum of features passed through an S-curve — still dominates here, not because it is the most accurate, but because regulators require that you can **explain** every decision ("your application was declined because of X"). A [gradient-boosted tree](ch10.html) might score higher on **AUC** (area under the ROC curve, a single number summarizing how well a model ranks positives above negatives) yet be unusable if it cannot produce a legally defensible adverse-action reason.
 
 **Algorithmic trading** uses models to decide what and when to buy or sell. This is where non-stationarity bites hardest — a signal that **backtested** beautifully (was simulated on historical data) on 2015–2019 data can be pure noise by 2021.
 
@@ -253,7 +255,7 @@ assert daily.std() > 0                          # Sharpe is undefined for zero-v
 
 Healthcare is the mirror image of finance: data is scarcer, messier, and far less standardized, but the stakes are measured in lives, and a single confident mistake is catastrophic in a way a bad trade never is. The four flagship applications show ML at its most promising and most perilous.
 
-**Medical imaging** — classifying X-rays, CT, MRI, and pathology slides — is deep learning's biggest healthcare success. A **convolutional network** (a vision model that scans an image with small learned filters; Chapter 15) can flag diabetic retinopathy or detect lung nodules at radiologist-level accuracy on benchmark sets. **Diagnosis** from structured records and labs predicts disease risk and triages patients. **Drug discovery** uses models to screen millions of candidate molecules and predict binding affinity or toxicity, collapsing years of wet-lab work into a ranked shortlist. **Genomics** predicts which gene variants are pathogenic and how DNA sequence maps to biological function.
+**Medical imaging** — classifying X-rays, CT, MRI, and pathology slides — is deep learning's biggest healthcare success. A **convolutional network** (a vision model that scans an image with small learned filters; [Chapter 15](ch15.html)) can flag diabetic retinopathy or detect lung nodules at radiologist-level accuracy on benchmark sets. **Diagnosis** from structured records and labs predicts disease risk and triages patients. **Drug discovery** uses models to screen millions of candidate molecules and predict binding affinity or toxicity, collapsing years of wet-lab work into a ranked shortlist. **Genomics** predicts which gene variants are pathogenic and how DNA sequence maps to biological function.
 
 Let a tiny worked example expose why **accuracy is a trap** in healthcare. Imagine a screening test for a disease with 1% prevalence in 10,000 patients. A **confusion matrix** lays out the four outcomes — what the model said versus the truth:
 
@@ -311,7 +313,7 @@ flowchart TD
 
 The defining healthcare pitfall is **validation that does not generalize**. A model trained on one hospital's scanners routinely collapses at the next hospital because it secretly learned the scanner, not the disease — a notorious case had a pneumonia model keying on a portable-X-ray metadata token that appeared mostly on sicker patients. This is why **external validation** on a genuinely different site is the gold standard, not internal cross-validation, which only ever tests on data from the same source.
 
-**Bias** is the second peril, and it is not abstract. If a dermatology model is trained mostly on light skin, it underperforms on dark skin; if a risk algorithm uses healthcare *spending* as a proxy for *need*, it will under-flag populations that historically received less care, baking the inequity into the model. **Interpretability** is the third: a clinician will not — and ethically should not — act on a black-box "cancer: 0.83" without knowing what drove it (covered in depth in Chapter 36).
+**Bias** is the second peril, and it is not abstract. If a dermatology model is trained mostly on light skin, it underperforms on dark skin; if a risk algorithm uses healthcare *spending* as a proxy for *need*, it will under-flag populations that historically received less care, baking the inequity into the model. **Interpretability** is the third: a clinician will not — and ethically should not — act on a black-box "cancer: 0.83" without knowing what drove it (covered in depth in [Chapter 36](ch36.html)).
 
 ### 28.2.1 — Computing the metrics with scikit-learn
 
@@ -346,7 +348,7 @@ Reporting accuracy on an imbalanced medical dataset is the single most common wa
 
 Some ML applications are not tied to one industry at all — they show up everywhere, from streaming to banking to e-commerce to enterprise security. Two stand out as **cross-industry workhorses**, and recognizing them as reusable patterns rather than bespoke projects saves enormous effort.
 
-**Recommender systems** answer "what should this user see next?" — products on a retailer, films on a streaming service, posts in a feed, securities in a robo-advisor, even job postings. The same core machinery — **collaborative filtering** (recommend what similar users liked), **matrix factorization** (compress the user-item history into dense **embeddings**, learned numeric vectors that place similar users and items near each other), and ranking models — is retargeted per domain. The full treatment is in Chapter 26; the cross-industry lesson is that any business with users, items, and a history of interactions has a recommendation problem hiding in it, and the engineering patterns transfer almost wholesale.
+**Recommender systems** answer "what should this user see next?" — products on a retailer, films on a streaming service, posts in a feed, securities in a robo-advisor, even job postings. The same core machinery — **collaborative filtering** (recommend what similar users liked), **matrix factorization** (compress the user-item history into dense **embeddings**, learned numeric vectors that place similar users and items near each other), and ranking models — is retargeted per domain. The full treatment is in [Chapter 26](ch26.html); the cross-industry lesson is that any business with users, items, and a history of interactions has a recommendation problem hiding in it, and the engineering patterns transfer almost wholesale.
 
 **Security and fraud detection** answer "is this event anomalous or malicious?" — fraudulent payments, account takeovers, network intrusions, insurance fraud, fake reviews. Architecturally this is **anomaly detection** (learn what normal looks like, flag departures from it) plus imbalanced classification, and the same toolkit serves a bank's transaction monitor and a security team's intrusion-detection system. Chapter 27 owns the mechanics; the recurring shape is shown below.
 
@@ -522,7 +524,7 @@ This single formula is why the naive `predict()` default of 0.5 is almost always
 
 ## 28.5 — Genomics and Computational Biology: Deep Learning on the Sequence of Life
 
-A genome is text. Four letters — A, C, G, T — strung into a sequence three billion characters long in humans, with a grammar we only partially understand. Some stretches code for proteins; far more do not, yet still control *when* and *where* genes switch on. The central problem of computational genomics is reading that grammar: given a stretch of DNA, what does it *do*? Deep learning earns its place here for the same reason it does in language modeling — the input is a long sequence with local motifs and long-range dependencies, and we have lots of it.
+A genome is text. Four letters — A, C, G, T — strung into a sequence three billion characters long in humans, with a grammar we only partially understand. Some stretches code for proteins; far more do not, yet still control *when* and *where* genes switch on. The central problem of computational genomics is reading that grammar: given a stretch of DNA, what does it *do*? Deep learning earns its place here for the same reason it does in [language modeling](ch20.html) — the input is a long sequence with local motifs and long-range dependencies, and we have lots of it.
 
 The intuition to hold onto: a convolutional or attention model sliding over DNA is doing exactly what it does over text or images. It learns short patterns (a transcription-factor binding site is like a misspelled keyword), composes them, and maps the composition to an outcome (this region is open chromatin; this variant disrupts a regulatory site). The biology supplies the labels; the architecture is mostly borrowed.
 
@@ -592,7 +594,7 @@ This is the lineage worth knowing:
 | Basset / Basenji | 2016–18 | up to 100 kb | CNN + dilated conv | chromatin accessibility, expression tracks |
 | Enformer | 2021 | ~200 kb | CNN + transformer | thousands of expression / epigenetic tracks |
 
-The arc is one of *reach*. DeepBind reads a binding site. DeepSEA reads a kilobase and predicts a panel of regulatory states. Enformer attends across 200,000 bases so a model can connect an enhancer to the gene it regulates a hundred kilobases away — a dependency far too long for convolutions alone, which is precisely why attention entered the field.
+The arc is one of *reach*. DeepBind reads a binding site. DeepSEA reads a kilobase and predicts a panel of regulatory states. Enformer attends across 200,000 bases so a model can connect an enhancer to the gene it regulates a hundred kilobases away — a dependency far too long for convolutions alone, which is precisely why [attention](ch17.html) entered the field.
 
 ### A from-scratch motif scanner
 
@@ -918,7 +920,31 @@ print("ECE (overconfident):  ", round(ece(probs**0.5, labels), 3))  # inflated -
 
 A low ECE is what lets a clinician read a model's "0.9" as a genuine 90% — the difference between a number and a *trustworthy* number.
 
-## 28.9 — Key takeaways
+## 28.9 — Quick reference
+
+| Term / formula | What it means | When / why it matters |
+|---|---|---|
+| Non-stationarity | The feature→target relationship drifts over time | The core hazard in finance; forces time-aware validation and retraining |
+| Walk-forward split (`TimeSeriesSplit`) | Train only on the past, test on the genuine future | The only honest evaluation when data is time-ordered |
+| Lookahead bias | Future information leaks into training | The deadliest finance bug — a brilliant backtest that loses money live |
+| VaR$_\alpha$ | The loss level not exceeded on $\alpha$ of days | Sizes positions / regulatory capital; ignores how bad the tail gets |
+| Expected Shortfall | Average loss *beyond* the VaR cutoff | Tail-aware risk; Basel's preferred measure post-2008 |
+| Sharpe ratio | Excess return ÷ volatility, annualized by $\sqrt{T}$ | Risk-adjusted reward; backtests >2 usually signal a leak |
+| Sensitivity / Specificity / PPV | Caught / cleared / truly-sick-among-flagged | Replace accuracy on imbalanced medical data |
+| Bayes' rule for PPV | PPV depends on prevalence, not just test quality | Why a great test still floods rare-disease screening with false alarms |
+| External validation | Test on a genuinely different site/source | Catches models that learned the scanner, not the disease |
+| PSI | Symmetric (Jeffreys) distance between train & live histograms | Cheap drift alarm: <0.1 stable, 0.1–0.25 watch, >0.25 act |
+| Distribution shift (covariate / label / concept) | Inputs, base rates, or the input→output rule change | The default in production; demands monitoring, not a one-time fit |
+| Cost-sensitive threshold $C_{FP}/(C_{FP}+C_{FN})$ | Flag when probability clears a cost-set cutoff | Why 0.5 is almost always wrong when miss vs. false-alarm costs differ |
+| One-hot DNA → Conv1d | Each base a 4-vector; a filter is a learned motif (PWM) | The base unit of genomics deep learning |
+| Evolutionary coupling (MSA mutual info) | Co-varying alignment columns hint at 3-D contact | The signal AlphaFold exploits to fold proteins |
+| Variant effect = pred(var) − pred(ref) | Difference in a sequence model's output | Zero-shot scoring of mutations; no disease labels needed |
+| Chromosome-level split | Hold out whole chromosomes for test | Random splits leak via genomic correlation and inflate accuracy |
+| ECE | Mean gap between claimed confidence and real accuracy | Turns a model's "0.9" into a trustworthy 90% for clinical use |
+| Goodhart's law | A targeted measure stops being a good measure | Why optimizing a proxy (clicks, catch-rate) corrupts the real goal |
+| A/B test | Randomized live comparison of old vs. new model | Gold standard for proving a model moves the business metric |
+
+## 28.10 — Key takeaways
 
 - The hard part of applied ML is almost never the model — it is data quality, distribution shift, regulation, and aligning evaluation with the real business goal.
 - **Finance** is dominated by **non-stationarity** and **regulation**: use walk-forward (time-ordered) validation, fear lookahead bias, prefer interpretable models where the law demands explanations, and size risk with tail-aware measures (VaR and Expected Shortfall).
@@ -928,16 +954,16 @@ A low ECE is what lets a clinician read a model's "0.9" as a genuine 90% — the
 - **Genomics & biology** reuse the sequence-model toolkit (one-hot → CNN/attention) but demand chromosome-level splits, calibrated confidence, and attribution-based interpretability — the explanation *is* the deliverable.
 - Always evaluate against the **business metric**, ideally via a live A/B test, and beware **Goodhart's law** when optimizing proxies.
 
-## 28.10 — See also
+## 28.11 — See also
 
-- **Anomaly & Fraud Detection** — the mechanics behind the security/fraud workhorse.
-- **Recommender Systems** — the full treatment of the recommendation workhorse.
-- **Time Series & Forecasting** — walk-forward validation and non-stationarity in depth.
-- **Model Evaluation & Tuning** — metrics, confusion matrices, calibration, and validation strategy.
-- **Explainable AI & Interpretability** — the interpretability demanded by finance and healthcare.
-- **AI Ethics, Fairness & Safety** — bias, fairness constraints, and high-stakes accountability.
-- **MLOps & Deployment** — monitoring, drift detection, and retraining in production.
-- **Causal Inference** — A/B testing and reasoning about interventions versus correlations.
+- **[Anomaly & Fraud Detection](ch27.html)** — the mechanics behind the security/fraud workhorse.
+- **[Recommender Systems](ch26.html)** — the full treatment of the recommendation workhorse.
+- **[Time Series & Forecasting](ch22.html)** — walk-forward validation and non-stationarity in depth.
+- **[Model Evaluation & Tuning](ch12.html)** — metrics, confusion matrices, calibration, and validation strategy.
+- **[Explainable AI & Interpretability](ch36.html)** — the interpretability demanded by finance and healthcare.
+- **[AI Ethics, Fairness & Safety](ch38.html)** — bias, fairness constraints, and high-stakes accountability.
+- **[MLOps & Deployment](ch29.html)** — monitoring, drift detection, and retraining in production.
+- **[Causal Inference](ch37.html)** — A/B testing and reasoning about interventions versus correlations.
 
 ------------------------------------------------------------------------
 

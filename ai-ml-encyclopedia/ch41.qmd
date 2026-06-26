@@ -111,6 +111,8 @@ A robot is a machine that senses, decides, and acts in a physical world that nev
 🧭 **In context:** autonomous systems — mobile robots, manipulators, self-driving — all run the same loop: perceive → estimate → plan → act, closed continuously under uncertainty. Perception leans on computer vision (Ch 16–18), estimation on probabilistic models (Ch 12), control and learning on RL & control (Ch 25), and SLAM back-ends on optimization (Ch 06). This chapter is the glue that wires them into something that moves.
 :::
 
+> 💡 **Remember this:** autonomy is one closed loop — perceive → estimate → plan → act — run forever under uncertainty, and a robot's reliability comes from *how fast and how surely* it closes that loop, not from any single algorithm in it.
+
 ## 41.1 The autonomy stack: perceive → estimate → plan → act
 
 The intuition is a loop, not a pipeline. A robot does not perceive once and then drive forever; it re-senses every few milliseconds and corrects. Think of walking across a dark room: you take a step, feel where you are, adjust, step again. Robots formalize that instinct into four repeating stages.
@@ -169,7 +171,7 @@ flowchart LR
     style W fill:#1a2a3a,stroke:#4a90d9,color:#fff
 ```
 
-Each stage maps to later sections: perception leans on Chapters 16–18 (computer vision); estimation is §41.4–41.5; planning is §41.6–41.7; acting is §41.3. The loop runs at different rates — a low-level control loop at 1 kHz, a planner at 10 Hz, perception at 30 Hz — and a real system is really *nested* loops, a fast inner control loop wrapped by slow outer planning.
+Each stage maps to later sections: perception leans on [computer vision](ch19.html) (and the [CNN](ch15.html) backbones behind detection and depth); estimation is §41.4–41.5; planning is §41.6–41.7; acting is §41.3. The loop runs at different rates — a low-level control loop at 1 kHz, a planner at 10 Hz, perception at 30 Hz — and a real system is really *nested* loops, a fast inner control loop wrapped by slow outer planning.
 
 ::: {.callout-tip}
 The single most useful robotics question is "what rate does this loop close at, and what is its latency?" A perfect plan delivered 200 ms late can be worse than a rough plan delivered now. Autonomy is a real-time discipline before it is an AI discipline.
@@ -190,7 +192,7 @@ Each sensor has strengths and blind spots, and good autonomy *fuses* complementa
 | Wheel encoder | wheel rotation | simple odometry | slips, drifts (§41.2) |
 | GPS/GNSS | global position | absolute, no drift | ~meters, blocked indoors/urban canyons |
 
-A **coordinate frame** is a local set of axes attached to something — the world, the robot body, the camera, a gripper. A pose is always *of one frame, expressed in another*: "the camera frame in the world frame." The bookkeeping that relates them is a rigid transform — a rotation $R$ plus a translation $t$ — composed as you hop from frame to frame. A point $p$ known in the camera frame becomes, in the world frame,
+A **coordinate frame** is a local set of axes attached to something — the world, the robot body, the camera, a gripper. A pose is always *of one frame, expressed in another*: "the camera frame in the world frame." The bookkeeping that relates them is a rigid transform from [linear algebra](ch01.html) — a rotation $R$ plus a translation $t$ — composed as you hop from frame to frame. A point $p$ known in the camera frame becomes, in the world frame,
 
 $$p^{\text{world}} = R^{\text{world}}_{\text{cam}}\, p^{\text{cam}} + t^{\text{world}}_{\text{cam}}.$$
 
@@ -229,7 +231,7 @@ The doodle below shows that trick: a disk robot near a wall (left) becomes a poi
 
 ### The Jacobian: from joint speeds to tip speeds
 
-There is a layer between FK and full dynamics that does the day-to-day work of controlling an arm: the **Jacobian**. Intuition first — FK tells you *where* the hand is for a given pose; the Jacobian tells you *which way the hand drifts* when you nudge each joint a little. It is the dictionary that translates joint-space velocities into workspace velocities.
+There is a layer between FK and full dynamics that does the day-to-day work of controlling an arm: the **Jacobian**. Intuition first — FK tells you *where* the hand is for a given pose; the Jacobian tells you *which way the hand drifts* when you nudge each joint a little. It is the dictionary that translates joint-space velocities into workspace velocities, built from the partial derivatives of [calculus](ch02.html).
 
 $$\dot{x} = J(q)\,\dot{q}, \qquad J(q) = \frac{\partial f}{\partial q}.$$
 
@@ -367,14 +369,14 @@ print(round(ctrl.step(1.0, 0.0), 3))   # first command toward target
 
 PID treats the system as roughly linear near the setpoint. Real robots are **nonlinear** — the unicycle's $\cos\theta$, an arm's coupled inertias. Two ideas tame this:
 
-**Feedback linearization** cancels the nonlinearity with the control law itself. If the dynamics are $\dot{x} = f(x) + g(x)u$, choose $u = g(x)^{-1}(-f(x) + v)$, leaving the clean linear system $\dot{x} = v$, which you then control with PID or LQR. It is exact only if your model $f, g$ is exact — model error leaks straight through.
+**Feedback linearization** cancels the nonlinearity with the control law itself. If the dynamics are $\dot{x} = f(x) + g(x)u$, choose $u = g(x)^{-1}(-f(x) + v)$, leaving the clean linear system $\dot{x} = v$, which you then control with PID or LQR — itself a small [optimization](ch03.html) over feedback gains. It is exact only if your model $f, g$ is exact — model error leaks straight through.
 
 **In words:** measure the messy nonlinear part of the dynamics and deliberately push back exactly enough to erase it, so what's left behaves like a simple straight-line system you already know how to control.
 **Also written:** substituting the chosen $u$ into $\dot x = f(x)+g(x)u$ gives $\dot x = f(x) - f(x) + v = v$.
 
 **Differential flatness** is a structural gift some systems have: all states and inputs can be written as functions of a few *flat outputs* and their derivatives. A quadrotor is flat in $(x,y,z,\text{yaw})$ — pick a smooth trajectory for those four and *every* motor command is determined algebraically, no integration of dynamics needed. This is why aggressive drone-trajectory planners work: plan a smooth curve in flat space, recover controls in closed form.
 
-For the optimal-control treatment of the linearized system — **LQR**, which picks the feedback gains that minimize a quadratic cost on error and effort — see Chapter 25 (RL & control). PID is the hand-tuned cousin; LQR is its principled, model-based sibling.
+For the optimal-control treatment of the linearized system — **LQR**, which picks the feedback gains that minimize a quadratic cost on error and effort — see [reinforcement learning & control](ch25.html). PID is the hand-tuned cousin; LQR is its principled, model-based sibling.
 
 ### Model-predictive control (MPC): planning a few steps ahead
 
@@ -414,7 +416,7 @@ MPC's selling point is that it handles **constraints** natively — speed caps, 
 
 ## 41.4 State estimation and the recursive Bayes filter
 
-Odometry drifts (§41.2) and every sensor is noisy. **State estimation** answers "what is the state, given everything I've sensed?" not as a point but as a *probability distribution* — the **belief** $bel(x_t)$. Maintaining a distribution, not a guess, is what lets a robot know *how sure* it is and fuse a fresh measurement with the right weight.
+Odometry drifts (§41.2) and every sensor is noisy. **State estimation** answers "what is the state, given everything I've sensed?" not as a point but as a *[probability distribution](ch04.html)* — the **belief** $bel(x_t)$. Maintaining a distribution, not a guess, is what lets a robot know *how sure* it is and fuse a fresh measurement with the right weight.
 
 The **recursive Bayes filter** is the master algorithm behind Kalman and particle filters alike. Each cycle has two steps:
 
@@ -601,7 +603,7 @@ The intuition is **loop closure.** A robot drives a long loop; odometry drift me
   <text x="255" y="170" fill="#8e8">start = end</text>
 </svg>
 
-Modern SLAM is posed as a **graph optimization** (pose-graph / factor-graph): nodes are robot poses and landmarks, edges are noisy constraints (odometry between consecutive poses, observations of landmarks, loop closures). Solving means finding the configuration of all nodes that best satisfies all constraints — a big nonlinear least-squares problem, optimized with the techniques of Chapter 06. Front-ends differ by sensor (visual SLAM from cameras, LiDAR SLAM from point clouds), but the back-end is this same graph squeezed to consistency.
+Modern SLAM is posed as a **graph optimization** (pose-graph / factor-graph): nodes are robot poses and landmarks, edges are noisy constraints (odometry between consecutive poses, observations of landmarks, loop closures). Solving means finding the configuration of all nodes that best satisfies all constraints — a big nonlinear least-squares problem, optimized with the techniques of [optimization](ch03.html). Front-ends differ by sensor (visual SLAM from cameras, LiDAR SLAM from point clouds), but the back-end is this same graph squeezed to consistency.
 
 The objective the back-end minimizes makes "best satisfies all constraints" precise:
 
@@ -620,7 +622,7 @@ Given a map and a goal, **planning** finds a collision-free path through C-space
 
 ### Search on a graph: Dijkstra and A*
 
-Discretize C-space into a grid (or roadmap) and search it. **Dijkstra** expands outward from the start by cheapest-cost-so-far $g(n)$, guaranteeing the shortest path but exploring blindly in all directions. **A\*** adds a *heuristic* $h(n)$ — an optimistic estimate of remaining cost (e.g., straight-line distance to goal) — and expands by $f(n) = g(n) + h(n)$, steering the search toward the goal.
+Discretize C-space into a grid (or roadmap) and run a graph [search](ch32.html) on it. **Dijkstra** expands outward from the start by cheapest-cost-so-far $g(n)$, guaranteeing the shortest path but exploring blindly in all directions. **A\*** adds a *heuristic* $h(n)$ — an optimistic estimate of remaining cost (e.g., straight-line distance to goal) — and expands by $f(n) = g(n) + h(n)$, steering the search toward the goal.
 
 $$f(n) = g(n) + h(n).$$
 
@@ -773,7 +775,7 @@ Force closure is a *geometric* guarantee that assumes your friction coefficient,
 
 Hand-engineering every behavior does not scale to dexterous, contact-rich, or visually complex tasks. Learning fills the gap, in three complementary modes.
 
-**Imitation learning (IL)** teaches from demonstrations. The simplest form, *behavioral cloning*, is plain supervised learning: record an expert's (observation → action) pairs and fit a policy. Its notorious failure is **covariate shift / compounding error** — the policy makes a small mistake, drifts to states the expert never visited, and has no idea what to do, so errors snowball. Fixes include DAgger (query the expert on the policy's own visited states) and richer demonstration coverage. The deeper RL/IL treatment lives in Chapter 25; here the point is that demonstrations are often the cheapest way to specify a hard-to-reward behavior.
+**Imitation learning (IL)** teaches from demonstrations. The simplest form, *behavioral cloning*, is plain [supervised learning](ch05.html): record an expert's (observation → action) pairs and fit a policy. Its notorious failure is **covariate shift / compounding error** — the policy makes a small mistake, drifts to states the expert never visited, and has no idea what to do, so errors snowball. Fixes include DAgger (query the expert on the policy's own visited states) and richer demonstration coverage. The deeper RL/IL treatment lives in [reinforcement learning](ch25.html); here the point is that demonstrations are often the cheapest way to specify a hard-to-reward behavior.
 
 A behavioral-cloning policy is just a supervised regressor from observations to actions — a few lines in PyTorch:
 
@@ -810,7 +812,7 @@ flowchart LR
     style Sim fill:#1a2a3a,stroke:#4a90d9,color:#fff
 ```
 
-A newer current worth naming: **end-to-end and foundation-model policies.** Instead of the hand-built perceive→estimate→plan→act stack, a single large network maps pixels (and language instructions) straight to actions — *vision-language-action* models trained on huge multi-robot demonstration datasets, aiming for one policy that generalizes across tasks and embodiments. They trade the interpretability and verifiability of the classical stack for breadth; in practice the two coexist, with a safety layer (§41.10) underneath either. Chapter 39 covers this frontier in depth.
+A newer current worth naming: **end-to-end and foundation-model policies.** Instead of the hand-built perceive→estimate→plan→act stack, a single large network maps pixels (and language instructions) straight to actions — *vision-language-action* models — a [multimodal](ch24.html) policy trained on huge multi-robot demonstration datasets, aiming for one policy that generalizes across tasks and embodiments. They trade the interpretability and verifiability of the classical stack for breadth; in practice the two coexist, with a safety layer (§41.10) underneath either. [Frontier directions](ch39.html) cover this in depth.
 
 The unifying theme: learning shifts effort from *coding behaviors* to *specifying objectives and providing data/experience* — powerful, but it inherits all of ML's data and distribution-shift pitfalls, now with a robot that can physically break.
 
@@ -896,7 +898,30 @@ The takeaway: the algorithms in this chapter rarely ship as standalone scripts �
 When a ROS system "freezes" or behaves erratically, suspect the *plumbing* before the algorithm: a topic nobody publishes (a subscriber waiting forever), a queue depth so small that messages are dropped under load, a node publishing in the wrong frame, or two nodes fighting over `/cmd_vel`. Tools like `ros2 topic hz`, `ros2 topic echo`, and `rqt_graph` tell you what is *actually* flowing — check that the graph matches the one in your head before touching any math.
 :::
 
-## 41.1 — Key takeaways
+## 41.1 — Quick reference
+
+| Term / formula | Meaning in one line | When / why it matters |
+|---|---|---|
+| Perceive → estimate → plan → act | The four-stage autonomy loop, run continuously | The master pattern of every autonomous system (§41.1) |
+| Rigid transform $T=\begin{bmatrix}R & t\\0&1\end{bmatrix}$ | Pose of one frame in another; chains by matrix product | Relate camera ↔ body ↔ world; a wrong hop is the classic bug |
+| Configuration $q$ / C-space | Minimal coordinates of the whole robot; obstacles inflated by footprint | Plan as a *point* among grown obstacles, not a shape (§41.2) |
+| Jacobian $\dot x = J(q)\dot q$ | Maps joint speeds to tip speeds; columns = per-joint tip motion | Iterative IK via $\Delta q = J^{+}\Delta x$; watch singularities |
+| Unicycle $\dot x=v\cos\theta,\ \dot y=v\sin\theta,\ \dot\theta=\omega$ | Wheeled-robot kinematics; can drive/turn, not slide | Nonholonomic: fewer controls than DOF, so not every path works |
+| PID $u=K_p e+K_i\!\int e+K_d\dot e$ | Feedback from present, accumulated, and changing error | The workhorse tracker; clamp integral to avoid windup (§41.3) |
+| MPC (receding horizon) | Optimize $N$ steps, apply the first, re-solve | Handles constraints (limits, clearance) PID cannot |
+| Bayes filter (predict / update) | Belief widens on motion, narrows on measurement | The recursion behind every filter below (§41.4) |
+| Kalman gain $K=P/(P+R)$ | Fraction of the surprise to trust the measurement | Optimal fusion in the linear-Gaussian case |
+| EKF / UKF | Linearize (Jacobian) or sigma-points for nonlinear models | Keeps Kalman machinery when motion/sensors curve |
+| Particle filter | Belief as weighted samples: move, weight, resample | Multi-modal / global localization; costly in high dimensions |
+| SLAM + loop closure | Estimate trajectory and map jointly; snap returns taut | One loop closure bounds otherwise-unbounded drift (§41.6) |
+| A* $f(n)=g(n)+h(n)$ | Cost-so-far plus admissible guess-to-go | Optimal grid path with far fewer expansions than Dijkstra |
+| RRT / RRT* | Sample-and-extend tree; RRT* rewires toward optimal | High-DOF planning where grids explode (§41.7) |
+| Force closure / friction cone $\lVert f_t\rVert\le\mu f_n$ | Contacts span all disturbance directions; push-only, bounded friction | Whether a grasp holds under twist and load (§41.8) |
+| Domain randomization | Vary sim physics/rendering so reality is "just another sample" | The standard sim-to-real transfer remedy (§41.9) |
+| Safety layer | Simple, verified monitor vetoes the smart stack | Trust the verifiable layer; planner proposes, monitor disposes (§41.10) |
+| ROS 2 node / topic / tf2 | Pub-sub graph of processes sharing a live frame tree | The architecture you actually debug (§41.11) |
+
+## 41.2 — Key takeaways
 
 - Autonomy is a **closed loop** — perceive → estimate → plan → act — run continuously and in *nested* loops at different rates; latency and loop-closure rate matter as much as algorithmic quality.
 - Sensors are **complementary** (camera, LiDAR, radar, IMU, GPS), and everything is expressed in **coordinate frames** chained by rigid transforms; a wrong transform is the classic robotics bug.
@@ -910,7 +935,7 @@ When a ROS system "freezes" or behaves erratically, suspect the *plumbing* befor
 - **Safety** is a simple verifiable layer under the smart stack; **HRI** demands legible, predictable motion; and **calibration/units/frames/time-sync** errors masquerade as algorithm bugs more often than not.
 - Real systems are built as a graph of **ROS 2 nodes** communicating over topics, services, and actions — the algorithms ship as composable nodes, not standalone scripts.
 
-## 41.2 — See also
+## 41.3 — See also
 
 - **Chapter 06 — Optimization:** nonlinear least-squares behind SLAM back-ends and bundle adjustment.
 - **Chapters 16–18 — Computer vision:** the perception front-end (detection, depth, visual features) feeding estimation.

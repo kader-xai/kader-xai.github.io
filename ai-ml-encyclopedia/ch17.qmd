@@ -105,11 +105,13 @@ toc-expand: true
 
 ------------------------------------------------------------------------
 
-Almost every state-of-the-art model you have heard of — GPT, BERT, Stable Diffusion's text encoder, AlphaFold's Evoformer — runs on one idea: **attention**. Attention lets a model decide, for each piece of its input, which other pieces matter and pull in exactly that information. The **Transformer** is the architecture built entirely from attention (plus a couple of ordinary layers), and it displaced the recurrent networks that dominated sequence modeling because it trains faster and reasons across longer distances. This chapter sits at the heart of modern Deep Learning: it is the bridge from the sequence models of Chapter 16 to the Large Language Models of Chapter 23.
+Almost every state-of-the-art model you have heard of — GPT, BERT, Stable Diffusion's text encoder, AlphaFold's Evoformer — runs on one idea: **attention**. Attention lets a model decide, for each piece of its input, which other pieces matter and pull in exactly that information. The **Transformer** is the architecture built entirely from attention (plus a couple of ordinary layers), and it displaced the recurrent networks that dominated sequence modeling because it trains faster and reasons across longer distances. This chapter sits at the heart of modern Deep Learning: it is the bridge from the [sequence models of Chapter 16](ch16.html) to the [Large Language Models of Chapter 23](ch23.html).
 
 ::: {.callout-note appearance="simple"}
 🧭 **In context:** Deep Learning architectures · used to model sequences, language, vision, and almost everything else · the one key idea is **attention as a learned, dynamic weighted lookup over the whole input at once**.
 :::
+
+> 💡 **Remember this:** Attention is a similarity-weighted average of values — a query scores every key, softmax turns those scores into weights, and the output blends the values; everything else (heads, masking, position, the KV cache) is engineering around that one operation.
 
 ## 17.1 — The attention mechanism
 
@@ -121,7 +123,7 @@ Three roles, all just vectors:
 - **Key (k)** — what each position *advertises* about itself, used for matching.
 - **Value (v)** — the actual *content* each position will hand over if attended to.
 
-The match score between a query and a key is their **dot product** $q \cdot k$: large and positive when the vectors point the same way, near zero when orthogonal. We score the query against all keys, turn those scores into a probability distribution with **softmax** (so the weights are positive and sum to 1), and use that distribution to take a weighted average of the values.
+The match score between a query and a key is their **dot product** $q \cdot k$: large and positive when the vectors point the same way, near zero when orthogonal. We score the query against all keys, turn those scores into a probability distribution with [softmax](ch14.html) (so the weights are positive and sum to 1), and use that distribution to take a weighted average of the values.
 
 For a whole sequence we stack the queries into a matrix $Q$ (one row per position), and likewise $K$ and $V$. The entire operation is one formula — **scaled dot-product attention**:
 
@@ -232,7 +234,7 @@ $$
 **In words:** the same input $X$ is run through three different learned "lenses" — one that asks (Q), one that advertises (K), one that carries content (V).
 **Also written:** row-wise, $q_t = W_Q^\top x_t$, $k_t = W_K^\top x_t$, $v_t = W_V^\top x_t$ for each token $x_t$.
 
-where $W_Q, W_K, W_V$ are weight matrices learned by gradient descent. "Self" means every position attends to every position in the *same* sequence — so the word "it" can reach back and pull meaning from "the animal" earlier in the sentence. This is how a Transformer builds context: each token's new representation is a blend of all tokens, weighted by relevance.
+where $W_Q, W_K, W_V$ are weight matrices learned by [gradient descent](ch03.html). "Self" means every position attends to every position in the *same* sequence — so the word "it" can reach back and pull meaning from "the animal" earlier in the sentence. This is how a Transformer builds context: each token's new representation is a blend of all tokens, weighted by relevance.
 
 The picture below traces one token's query fanning out to every key in its own sequence, then collapsing back into one context-rich output vector.
 
@@ -301,7 +303,7 @@ out, attn_weights = mha(x, x, x)             # query=key=value=x -> self-attenti
 print(out.shape, attn_weights.shape)         # (2,10,512)  (2,10,10)
 ```
 
-**Cross-attention.** Self-attention takes $Q$, $K$, $V$ from one sequence. **Cross-attention** takes the queries from one sequence and the keys/values from *another*. This is how a decoder consults an encoder: in translation, each output position (query) looks over the entire source sentence (keys/values) to decide what to attend to. Same formula, two sources — it is the mechanism that lets one modality or sequence read from another (and reappears in Multimodal AI, Chapter 24). In `nn.MultiheadAttention` above, you get cross-attention simply by passing a different sequence as the query: `mha(decoder_x, encoder_x, encoder_x)`.
+**Cross-attention.** Self-attention takes $Q$, $K$, $V$ from one sequence. **Cross-attention** takes the queries from one sequence and the keys/values from *another*. This is how a decoder consults an encoder: in translation, each output position (query) looks over the entire source sentence (keys/values) to decide what to attend to. Same formula, two sources — it is the mechanism that lets one modality or sequence read from another (and reappears in [Multimodal AI, Chapter 24](ch24.html)). In `nn.MultiheadAttention` above, you get cross-attention simply by passing a different sequence as the query: `mha(decoder_x, encoder_x, encoder_x)`.
 
 | Variant | Queries from | Keys / values from | Typical use |
 |---|---|---|---|
@@ -329,7 +331,7 @@ $$\text{FFN}(x) = \max(0,\ xW_1 + b_1)\,W_2 + b_2$$
 **In words:** blow each token's vector up to a wider space, keep only the positive parts (ReLU), then squeeze it back down — a per-token nonlinear transformation.
 **Also written:** $\text{FFN}(x) = \text{ReLU}(xW_1 + b_1)W_2 + b_2$; modern models often swap ReLU for GELU or a gated SwiGLU unit, $\text{FFN}(x) = \big(\text{SiLU}(xW_g) \odot (xW_1)\big)W_2$.
 
-The **residual connection** ($x + \text{sublayer}(x)$) gives gradients a clean highway straight through the network, which is what makes stacking dozens of blocks trainable (the same idea as ResNet, Chapter 15). **Layer normalization** rescales each token's vector to zero mean and unit variance across its features, stabilizing the distribution that each sublayer sees. Stack $N$ identical blocks and you have the body of a Transformer.
+The **residual connection** ($x + \text{sublayer}(x)$) gives gradients a clean highway straight through the network, which is what makes stacking dozens of blocks trainable (the same idea as [ResNet, Chapter 15](ch15.html)). **Layer normalization** rescales each token's vector to zero mean and unit variance across its features, stabilizing the distribution that each sublayer sees. Stack $N$ identical blocks and you have the body of a Transformer.
 
 **A note on Pre-LN vs Post-LN.** The original Transformer placed layer norm *after* each residual add (Post-LN). Modern Transformers (GPT-2 onward) put it *before* each sublayer (Pre-LN: $x + \text{sublayer}(\text{LN}(x))$), which keeps the residual path completely clean and makes very deep stacks trainable without a learning-rate warmup crutch. The diagram below shows the common Pre-LN arrangement.
 
@@ -370,7 +372,7 @@ print(TransformerBlock()(torch.randn(2, 10, 512)).shape)   # (2, 10, 512)
 
 **Worked example — the shapes.** Take $d_{\text{model}}=512$, FFN hidden $=2048$, sequence length $n=10$. The input is $X \in \mathbb{R}^{10\times512}$. Self-attention keeps the shape at $10\times512$. The FFN lifts each of the 10 token vectors $512 \to 2048$, applies ReLU, projects $2048 \to 512$ — back to $10\times512$. Every sublayer is shape-preserving, which is exactly why blocks stack: the output of block $k$ is a drop-in input to block $k{+}1$.
 
-**Encoder vs decoder.** The original Transformer had two stacks. The **encoder** reads the whole input at once with unmasked self-attention — every token sees every other token, ideal for *understanding* tasks (BERT is an encoder). The **decoder** generates output one token at a time and adds two things: **causal masking** in its self-attention, and a **cross-attention** sublayer that reads the encoder's output. Three families result: encoder-only (BERT, classification/embedding), decoder-only (GPT, generation — Chapter 23), and encoder-decoder (T5, original translation Transformer).
+**Encoder vs decoder.** The original Transformer had two stacks. The **encoder** reads the whole input at once with unmasked self-attention — every token sees every other token, ideal for *understanding* tasks (BERT is an encoder). The **decoder** generates output one token at a time and adds two things: **causal masking** in its self-attention, and a **cross-attention** sublayer that reads the encoder's output. Three families result: encoder-only (BERT, classification/embedding), decoder-only (GPT, generation — [Chapter 23](ch23.html)), and encoder-decoder (T5, original translation Transformer).
 
 ```{mermaid}
 flowchart LR
@@ -420,7 +422,7 @@ $$
   <text x="200" y="95" fill="#c44">pink = masked −∞ (future)</text>
 </svg>
 
-**Why it beat RNNs.** Two reasons dominate. *Parallelism:* an RNN processes a sequence step by step — token $t$ must wait for token $t{-}1$ — so training cannot be parallelized over the time axis. Self-attention computes all positions' interactions in one big matrix multiply, fully parallel on a GPU, which is why Transformers scale to billions of parameters. *Long-range dependencies:* in an RNN, information from token 1 must survive being squeezed through every intermediate hidden state to reach token 1000 — a path of length 1000 where signal decays (the vanishing-gradient problem of Chapter 16). In self-attention, *any* two tokens are connected by a single step: the path length is $O(1)$ regardless of distance. The cost is that attention is $O(n^2)$ in sequence length $n$ — every pair is compared — which is the central efficiency challenge addressed in Chapter 30.
+**Why it beat RNNs.** Two reasons dominate. *Parallelism:* an RNN processes a sequence step by step — token $t$ must wait for token $t{-}1$ — so training cannot be parallelized over the time axis. Self-attention computes all positions' interactions in one big matrix multiply, fully parallel on a GPU, which is why Transformers scale to billions of parameters. *Long-range dependencies:* in an RNN, information from token 1 must survive being squeezed through every intermediate hidden state to reach token 1000 — a path of length 1000 where signal decays (the vanishing-gradient problem of [Chapter 16](ch16.html)). In self-attention, *any* two tokens are connected by a single step: the path length is $O(1)$ regardless of distance. The cost is that attention is $O(n^2)$ in sequence length $n$ — every pair is compared — which is the central efficiency challenge addressed in [Chapter 30](ch30.html).
 
 | Property | RNN / LSTM | Transformer (self-attention) |
 |---|---|---|
@@ -626,6 +628,17 @@ Because the bias is a simple linear function of distance, it keeps working at an
 | ALiBi | Subtract a linear distance penalty from scores | Yes | Strong, built for it |
 | T5 relative bias | Add a learned bias per distance bucket | Yes | Limited by bucket range |
 | NoPE | Nothing explicit — relies on the causal mask | Implicit | Surprisingly decent at small scale |
+
+**Which position method should I use?**
+
+```{mermaid}
+flowchart TD
+  A{New decoder-only LLM?} -->|Yes| B{Need long-context<br/>extrapolation?}
+  A -->|No, encoder for<br/>understanding| E[Learned or sinusoidal<br/>e.g. BERT-style]
+  B -->|Yes, mostly via<br/>relative distance| C[RoPE + PI / NTK / YaRN<br/>the default for Llama/Mistral/Qwen]
+  B -->|Yes, want train-short<br/>infer-long, simplest| D[ALiBi<br/>linear distance bias]
+  B -->|No, fixed length is fine| C
+```
 
 ## 17.7 — Inference: the KV cache and attention variants that shrink it
 
@@ -1125,10 +1138,32 @@ print("attention onto token 0 (sink), avg over heads/queries:",
 ```
 
 ::: {.callout-warning}
-**"Attention is not explanation."** A well-known line of work showed you can often *alter* a model's attention weights substantially without changing its prediction, and that different attention patterns can yield the same output. The lesson: attention maps are evidence about information *routing*, not a faithful account of *why* the model decided. For trustworthy explanations, pair attention inspection with gradient attributions, activation patching, and the broader mechanistic-interpretability toolkit (Chapter 33). Use attention maps to form hypotheses, then *test* them — do not quote them as proof.
+**"Attention is not explanation."** A well-known line of work showed you can often *alter* a model's attention weights substantially without changing its prediction, and that different attention patterns can yield the same output. The lesson: attention maps are evidence about information *routing*, not a faithful account of *why* the model decided. For trustworthy explanations, pair attention inspection with gradient attributions, activation patching, and the broader mechanistic-interpretability toolkit ([Chapter 33](ch33.html)). Use attention maps to form hypotheses, then *test* them — do not quote them as proof.
 :::
 
-## 17.14 — Key takeaways
+## 17.14 — Quick reference
+
+| Term / formula | Meaning in one line | When / why it matters |
+|---|---|---|
+| Scaled dot-product attention $\text{softmax}(QK^\top/\sqrt{d_k})V$ | Similarity-weighted average of values | The single operation every Transformer is built from |
+| $\sqrt{d_k}$ scaling | Rescales scores to unit variance before softmax | Without it softmax saturates and gradients vanish at large $d_k$ |
+| Self-attention | $Q,K,V$ all projected from the same sequence | Builds context: every token blends in all others |
+| Cross-attention | Queries from one sequence, keys/values from another | Decoder reads encoder; text reads image (Ch 24) |
+| Multi-head | $h$ attention ops in parallel subspaces, concat + $W_O$ | Each head specializes (syntax, coreference, position) |
+| FFN $\max(0,xW_1{+}b_1)W_2{+}b_2$ | Per-token MLP, usually $4\times$ width then back | Adds per-token nonlinearity attention lacks |
+| Residual + LayerNorm | $x + \text{sublayer}(\text{LN}(x))$ (Pre-LN) | Clean gradient highway; makes deep stacks trainable |
+| Causal mask | Set future scores to $-\infty$ before softmax | Stops a decoder peeking at tokens it must predict |
+| Positional encoding | Inject order into a permutation-equivariant set | Mandatory — without it "dog bites man" = "man bites dog" |
+| RoPE | Rotate $q,k$ by angle $\propto$ position | Attention score depends only on relative distance; today's default |
+| ALiBi | Subtract $-s(i{-}j)$ distance penalty from scores | Cheap relative position, strong length extrapolation |
+| KV cache | Store past $k,v$; recompute only the new token's | Turns generation from $O(t^2)$ to $O(t)$ per step |
+| GQA / MQA | Query heads share fewer K/V heads | Shrinks the KV cache, the real long-context memory wall |
+| Linear attention | $Q(K^\top V)$ instead of $(QK^\top)V$ | $O(n)$ via associativity; approximates softmax |
+| State-space (S4 / Mamba) | Linear recurrence = parallel conv (train) + scan (infer) | Subquadratic long context; trades exact recall for cheap scaling |
+| Next-token cross-entropy $-\frac1n\sum_t\log P(x_{t+1}\mid x_{\le t})$ | Negative log-prob of the true next token | The self-supervised objective that pretrains every LLM |
+| Attention sink | First token soaks up "leftover" attention weight | Keep sink tokens in cache or streaming inference collapses |
+
+## 17.15 — Key takeaways
 
 - **Attention is a soft, learned dictionary lookup**: a query is compared against all keys, softmax turns the match scores into weights, and the output is a weighted average of the values — $\text{softmax}(QK^\top/\sqrt{d_k})V$.
 - **The $\sqrt{d_k}$ scaling** keeps dot-product magnitudes from growing with dimension and pushing softmax into saturated, no-gradient regions.
@@ -1143,7 +1178,7 @@ print("attention onto token 0 (sink), avg over heads/queries:",
 - **The full model** sandwiches the block stack between an embedding layer and an unembedding head, and trains by next-token cross-entropy — one causal forward pass yields $n$ supervised predictions at once.
 - **Attention maps are a lens, not a confession**: heads specialize legibly (positional, syntactic, induction), and quirks like attention sinks matter for serving — but "attention is not explanation," so test hypotheses rather than quoting weights as proof.
 
-## 17.15 — See also
+## 17.16 — See also
 
 - **Chapter 16 — Recurrent & Sequence Models**: the RNN/LSTM approach Transformers replaced, and the vanishing-gradient problem attention sidesteps.
 - **Chapter 14 — Neural Networks (Core)**: residual connections, layer normalization, and the feed-forward MLP inside each block.

@@ -105,11 +105,13 @@ toc-expand: true
 
 ------------------------------------------------------------------------
 
-Probabilistic graphical models (PGMs) are the bridge between probability theory and graph theory: they let you draw a picture of how random variables depend on one another, and then read off — and compute — the answers to questions like "given what I observed, what's likely true about what I didn't?" They matter because real systems are full of uncertainty and structure at the same time, and a PGM captures both: the graph encodes which variables interact, and the probabilities quantify how strongly. This chapter sits in the Probabilistic Models part of the roadmap, downstream of probability and statistics and upstream of the deep generative models that inherit its vocabulary (latent variables, inference, the ELBO).
+Probabilistic graphical models (PGMs) are the bridge between probability theory and graph theory: they let you draw a picture of how random variables depend on one another, and then read off — and compute — the answers to questions like "given what I observed, what's likely true about what I didn't?" They matter because real systems are full of uncertainty and structure at the same time, and a PGM captures both: the graph encodes which variables interact, and the probabilities quantify how strongly. This chapter sits in the Probabilistic Models part of the roadmap, downstream of [probability and statistics](ch04.html) and upstream of the deep [generative models](ch18.html) that inherit its vocabulary (latent variables, inference, the ELBO).
 
 ::: {.callout-note appearance="simple"}
 🧭 **In context:** Probabilistic Models · used for reasoning under uncertainty, structured prediction, and modeling hidden causes · the one key idea: *a graph factorizes a giant joint distribution into small, local pieces you can actually compute with.*
 :::
+
+> 💡 **Remember this:** the graph's missing edges *are* the model — they declare which variables are conditionally independent, and those independencies are exactly what shrink an intractable joint distribution into small local factors you can compute and infer with.
 
 ## 13.1 — Bayesian Networks
 
@@ -204,7 +206,7 @@ The three patterns drawn side by side make the logic visible — the dot marks t
 </svg>
 
 ::: {.callout-tip}
-Arrows are about *direct dependence*, not literal causation — though if you draw them causally, the d-separation rules line up with how interventions behave (see the Causal Inference chapter). Rule of thumb: a fork or chain leaks information until you observe the middle; a collider is sealed until you observe the bottom.
+Arrows are about *direct dependence*, not literal causation — though if you draw them causally, the d-separation rules line up with how interventions behave (see [Causal Inference](ch37.html)). Rule of thumb: a fork or chain leaks information until you observe the middle; a collider is sealed until you observe the bottom.
 :::
 
 In practice you rarely hand-roll a Bayes net. The `pgmpy` library lets you declare the structure and CPTs, then query and even d-separation-check for you:
@@ -355,7 +357,7 @@ print(clf.classes_, clf.predict(X))               # -> ['ham' 'spam'] correctly
 ```
 
 ::: {.callout-tip}
-Naive Bayes is the **generative** sibling of **logistic regression** (which models $P(y\mid\mathbf x)$ directly). Same fan-out picture, opposite arrow philosophy — and it foreshadows the generative-vs-discriminative split you just saw between HMMs and CRFs. With infinite data, the discriminative model usually wins; with little data, the generative one's built-in assumptions can win.
+Naive Bayes is the **generative** sibling of [**logistic regression**](ch09.html) (which models $P(y\mid\mathbf x)$ directly). Same fan-out picture, opposite arrow philosophy — and it foreshadows the generative-vs-discriminative split you just saw between HMMs and CRFs. With infinite data, the discriminative model usually wins; with little data, the generative one's built-in assumptions can win.
 :::
 
 ## 13.4 — Markov Random Fields
@@ -552,7 +554,7 @@ A **Conditional Random Field (CRF)** is the **discriminative** answer, and it is
 $$P(\mathbf{y} \mid \mathbf{x}) = \frac{1}{Z(\mathbf{x})} \exp\!\Big(\sum_t \sum_k w_k\, f_k(y_{t-1}, y_t, \mathbf{x}, t)\Big)$$
 
 **In words:** add up weighted "votes" from features that each inspect a label-pair-plus-context, exponentiate the total into a score, then normalize over all possible label sequences.
-**Also written:** as a softmax over label paths, $P(\mathbf{y}\mid\mathbf{x}) = \mathrm{softmax}_{\mathbf y}\big(\mathbf{w}^{\top}\mathbf{F}(\mathbf{x},\mathbf{y})\big)$ with $\mathbf{F} = \sum_t \mathbf{f}(y_{t-1},y_t,\mathbf{x},t)$ the summed feature vector — a logistic-regression-over-sequences.
+**Also written:** as a [softmax](ch14.html) over label paths, $P(\mathbf{y}\mid\mathbf{x}) = \mathrm{softmax}_{\mathbf y}\big(\mathbf{w}^{\top}\mathbf{F}(\mathbf{x},\mathbf{y})\big)$ with $\mathbf{F} = \sum_t \mathbf{f}(y_{t-1},y_t,\mathbf{x},t)$ the summed feature vector — a logistic-regression-over-sequences.
 
 Think of each feature as a hiring panelist: one shouts "+3, this word ends in *-ing* so it's probably a verb," another "+5, previous tag was a determiner so a noun fits here." The CRF tallies all the panelists' weighted votes for *every* candidate labeling of the sentence and picks the labeling with the highest total — but, crucially, panelists may look at the whole résumé ($\mathbf{x}$), not just the one word.
 
@@ -581,7 +583,7 @@ The contrast in one table:
 | Trained to | explain the data | get the labels right |
 | Cost | cheap, closed-form counts | needs gradient optimization |
 
-For sequence labeling — named-entity recognition, POS tagging — CRFs historically beat HMMs because they exploit rich, overlapping features. Today a CRF layer often sits *on top* of a neural network (the **BiLSTM-CRF**) to enforce valid label transitions (for example, an `I-PER` tag cannot follow a `B-LOC` tag); the network proposes per-word scores and the CRF picks the best globally-consistent label sequence with Viterbi.
+For sequence labeling — named-entity recognition, POS tagging — CRFs historically beat HMMs because they exploit rich, overlapping features. Today a CRF layer often sits *on top* of a [neural network](ch14.html) (the **BiLSTM-CRF**, built on the [recurrent sequence models](ch16.html) that succeeded HMMs) to enforce valid label transitions (for example, an `I-PER` tag cannot follow a `B-LOC` tag); the network proposes per-word scores and the CRF picks the best globally-consistent label sequence with Viterbi.
 
 A linear-chain CRF for sequence labeling is a few lines with `sklearn-crfsuite`, where features are just dictionaries of whatever clues you can dream up per token:
 
@@ -674,7 +676,7 @@ graph LR
     Conv -->|yes| Done[done]
 ```
 
-EM is exactly how you fit a Gaussian mixture (§13.10); it is *soft* k-means. It never decreases the likelihood, but it can get stuck in local optima — so restart it from several initializations and keep the best. In scikit-learn the whole E/M loop is hidden behind `.fit`:
+EM is exactly how you fit a Gaussian mixture (§13.10); it is *soft* [k-means](ch11.html). It never decreases the likelihood, but it can get stuck in local optima — so restart it from several initializations and keep the best. In scikit-learn the whole E/M loop is hidden behind `.fit`:
 
 ```python
 import numpy as np
@@ -750,7 +752,7 @@ $$k(x, x') = \sigma^2 \exp\!\Big(-\frac{(x-x')^2}{2\ell^2}\Big),$$
 
 says "nearby inputs give similar outputs," with the **lengthscale** $\ell$ tuning how fast that correlation decays (small $\ell$ = wiggly functions, large $\ell$ = smooth ones). Conditioning the joint Gaussian on the observed points yields a closed-form posterior mean and variance at any new $x_*$ — no iterative training, just linear algebra.
 
-A concrete feel for $\ell$: with $\sigma^2 = 1$ and $\ell = 1$, two inputs one unit apart have correlation $\exp(-1^2 / 2) \approx 0.61$; two units apart, $\exp(-4/2) \approx 0.14$; three units apart, $\exp(-9/2) \approx 0.011$ — effectively nothing. So at $\ell = 1$ the GP "forgets" a point's influence within about three units. Shrink $\ell$ to $0.5$ and that same three-unit gap drops to $\exp(-9/0.5) \approx 10^{-8}$: the curve is now free to wiggle wildly between points that close. This is exactly why GPs are the engine behind **hyperparameter tuning** services and **A/B-test sample-efficient experimentation** — places where each data point is expensive and you must squeeze a calibrated guess out of a handful of them.
+A concrete feel for $\ell$: with $\sigma^2 = 1$ and $\ell = 1$, two inputs one unit apart have correlation $\exp(-1^2 / 2) \approx 0.61$; two units apart, $\exp(-4/2) \approx 0.14$; three units apart, $\exp(-9/2) \approx 0.011$ — effectively nothing. So at $\ell = 1$ the GP "forgets" a point's influence within about three units. Shrink $\ell$ to $0.5$ and that same three-unit gap drops to $\exp(-9/0.5) \approx 10^{-8}$: the curve is now free to wiggle wildly between points that close. This is exactly why GPs are the engine behind [**hyperparameter tuning**](ch12.html) services and **A/B-test sample-efficient experimentation** — places where each data point is expensive and you must squeeze a calibrated guess out of a handful of them.
 
 Here is what a GP posterior looks like: a mean line threading the data, wrapped in an **uncertainty band** that balloons between and beyond observations.
 
@@ -830,7 +832,7 @@ The same template, with a different choice of latent variable, gives a whole zoo
 | Hidden Markov Model | the hidden state at each step | the emissions |
 | Variational autoencoder | a latent *code* vector | images, etc. |
 
-**Latent Dirichlet Allocation (LDA)** treats each document as a mixture of a few hidden topics, and each topic as a distribution over words. The latents — the document's topic proportions, and each word's topic assignment — are never observed; you infer them (by EM-like or variational methods) and out fall interpretable themes ("sports," "finance") that nobody labeled. **Factor analysis** assumes a handful of unseen continuous factors drive many correlated measurements — the statistical ancestor of PCA (see the Dimensionality Reduction chapter), differing in that it is an explicit probabilistic generative model with a noise term.
+**Latent Dirichlet Allocation (LDA)** treats each document as a mixture of a few hidden topics, and each topic as a distribution over words — a workhorse of classical [natural language processing](ch20.html). The latents — the document's topic proportions, and each word's topic assignment — are never observed; you infer them (by EM-like or variational methods) and out fall interpretable themes ("sports," "finance") that nobody labeled. **Factor analysis** assumes a handful of unseen continuous factors drive many correlated measurements — the statistical ancestor of [PCA](ch07.html), differing in that it is an explicit probabilistic generative model with a noise term.
 
 ### Plate notation: drawing models with repetition
 
@@ -1105,7 +1107,32 @@ The root $\{C,D\}$ multiplies its own potential by this and sums out $C$ to get 
 On a tree-structured model the junction tree's two sweeps are exact and cost $O(m\,k^{w+1})$ — the same bound as one elimination, but amortized across *all* marginals. Run the identical message rule on a graph *with* loops and you get **loopy belief propagation**, which is no longer exact (messages double-count evidence around cycles) but is often a good, cheap approximation — the bridge to the approximate-inference methods covered earlier in this chapter.
 :::
 
-## 13.16 — Key takeaways
+## 13.16 — Quick reference
+
+| Term / formula | Meaning in one line | When / why it matters |
+|---|---|---|
+| **Factorization** $P(\mathbf x)=\prod_i P(X_i\mid\text{pa}_i)$ | Joint = product of local conditional tables | The whole point of a Bayes net: turns $2^n$ entries into a few small CPTs |
+| **d-separation** | Graphical test for conditional independence | Read independencies off the DAG without touching any number |
+| **Collider / explaining away** | Observing a common effect *couples* its causes | The one trap: conditioning on a child opens a path, not closes it |
+| **Markov blanket** | A node's neighbors (parents, children, co-parents) | The only nodes you need to resample a variable in Gibbs / MRFs |
+| **Partition function** $Z$ | Normalizer summing the product over all states | Why undirected (MRF) inference is hard; Bayes nets avoid it |
+| **Naive Bayes** $\hat y=\arg\max_y P(y)\prod_i P(x_i\mid y)$ | Class node fanning to independent features | Fast, strong baseline for bag-of-words text |
+| **Markov property** $P(s_t\mid s_{1:t-1})=P(s_t\mid s_{t-1})$ | Present screens off the past | Foundation of Markov chains, HMMs, MCMC |
+| **Forward** $\alpha_t(j)$ | $P(o_{1:t},s_t{=}j)$ by left-to-right DP | Likelihood of an HMM observation sequence |
+| **Viterbi** | Forward recursion with $\max$ + backpointers | Single globally-best hidden path (not per-step argmax) |
+| **Baum–Welch** | EM specialized to HMMs | Learn $A,B,\pi$ from unlabeled emissions |
+| **CRF** $P(\mathbf y\mid\mathbf x)$ | Discriminative, undirected counterpart to HMM | Sequence labeling with rich overlapping features |
+| **Variable elimination** | Push sums inside the product, one var at a time | Exact inference; cost set by largest factor built |
+| **Treewidth** $w$ | Min over orders of (largest clique $-1$) | Exact inference is $O(m\,k^{w+1})$ — high $w$ = hopeless |
+| **Junction tree** | Clique tree caching elimination's factors | Two sweeps give *every* marginal at once |
+| **MCMC / Gibbs** | Random walk whose stationary dist = posterior | Approximate inference when graph is too tangled |
+| **$\hat R$ (Gelman–Rubin)** | Within- vs between-chain variance ratio | $\approx 1.0$ = chains converged; $\gg 1$ = keep sampling |
+| **ELBO** $\le\log p(x)$ | Tractable lower bound, gap = $\mathrm{KL}(q\|p)$ | EM and VI both climb it; tight when $q$ = true posterior |
+| **EM** (E-step / M-step) | Soft-assign hidden vars, then re-fit params | MLE with latent variables; how GMMs are fit |
+| **GP kernel** $k(x,x')$ | Encodes output similarity vs input distance | Distribution over functions with calibrated uncertainty, $O(n^3)$ |
+| **Plate notation** | Box = "repeat $N$ times" for shared structure | Compact drawing of GMM, LDA, hierarchical models |
+
+## 13.17 — Key takeaways
 
 - A graph **factorizes** a giant joint distribution into small local pieces: **directed** (Bayesian networks, parent→child CPTs) or **undirected** (Markov random fields, clique potentials).
 - **Conditional independence** is read off the graph: by **d-separation** in directed models (the collider / "explaining away" pattern is the trap — observing a common effect couples its causes) and by simple **graph separation given neighbors** in undirected ones.
@@ -1119,7 +1146,7 @@ On a tree-structured model the junction tree's two sweeps are exact and cost $O(
 - **Gaussian Processes** are distributions over functions defined by a kernel; their gift is **calibrated uncertainty** that widens away from data, at $O(n^3)$ cost.
 - **Latent variable models** (GMM, LDA, factor analysis, HMM, VAE) all share one template — posit a hidden cause that makes the data simple, then infer it.
 
-## 13.17 — See also
+## 13.18 — See also
 
 - **Probability & Statistics** — the Bayes' rule, distributions, and KL divergence this chapter builds on.
 - **Dimensionality Reduction** — PCA and factor analysis as latent-factor models.

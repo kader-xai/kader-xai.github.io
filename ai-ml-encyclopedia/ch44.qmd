@@ -105,11 +105,13 @@ toc-expand: true
 
 ------------------------------------------------------------------------
 
-Chapter 23 told you what a large language model *is* — a Transformer decoder trained to predict the next token. This chapter is about the machinery that makes one actually exist: how raw text becomes tokens, why a GPU spends most of its time waiting on memory rather than computing, how you split a trillion-parameter model across thousands of chips, and how you serve it without melting your budget. The model architecture is the easy part; the systems around it are where frontier labs spend their effort.
+[Chapter 23](ch23.html) told you what a large language model *is* — a Transformer decoder trained to predict the next token. This chapter is about the machinery that makes one actually exist: how raw text becomes tokens, why a GPU spends most of its time waiting on memory rather than computing, how you split a trillion-parameter model across thousands of chips, and how you serve it without melting your budget. The model architecture is the easy part; the systems around it are where frontier labs spend their effort.
 
 ::: {.callout-note appearance="simple"}
 🧭 **In context:** LLM engineering / infrastructure · used to train and serve frontier language models · key idea: the bottleneck is rarely the math — it is memory bandwidth, data quality, and how you shard the work.
 :::
+
+> 💡 **Remember this:** building an LLM is a systems problem, not a math problem — the wins come from moving fewer bytes (tokenization, FlashAttention, KV cache, quantization), sharding work across many GPUs, and feeding the model clean data, not from a cleverer architecture.
 
 ## 44.1 Tokenization: turning text into integers
 
@@ -295,7 +297,7 @@ The same picture drawn against the hardware ceiling is the **roofline**: below t
 
 ## 44.3 FlashAttention: making attention IO-aware
 
-Standard self-attention is a textbook example of a needlessly memory-bound operation. For a sequence of length $N$, the naive implementation computes the score matrix $S = QK^\top$ (size $N \times N$), writes it to HBM, reads it back to apply softmax, writes the probabilities, reads them again to multiply by $V$. That $N \times N$ matrix is the problem: for $N = 8192$ it is 67 million entries, written and re-read several times. The expensive part is not the math — it is shuttling that giant matrix in and out of HBM.
+Standard [self-attention](ch17.html) is a textbook example of a needlessly memory-bound operation. For a sequence of length $N$, the naive implementation computes the score matrix $S = QK^\top$ (size $N \times N$), writes it to HBM, reads it back to apply [softmax](ch14.html), writes the probabilities, reads them again to multiply by $V$. That $N \times N$ matrix is the problem: for $N = 8192$ it is 67 million entries, written and re-read several times. The expensive part is not the math — it is shuttling that giant matrix in and out of HBM.
 
 **Intuition first:** imagine grading a giant pile of exams where you only need the class average and the top scorer. The wasteful way is to lay every exam out on a huge table (you need a warehouse), then walk the whole table again to average. The smart way is to process exams in small stacks that fit on your desk, keeping just a running total and a running maximum — you never need the whole pile spread out at once, and you get the exact same answer. FlashAttention is that running-total trick applied to attention.
 
@@ -411,7 +413,7 @@ $$ L(N, D) = E + \frac{A}{N^{\alpha}} + \frac{B}{D^{\beta}} $$
 
 **In words:** the loss you reach is an unbeatable floor $E$ (the inherent randomness of language) plus a penalty for having too few parameters plus a penalty for having seen too little data — and both penalties shrink as smooth power laws. **Also written:** in log space the two penalty terms are straight lines, $\log(L - E) \approx \log A - \alpha \log N$ when data is plentiful (and symmetrically $\log B - \beta \log D$ when parameters are plentiful) — which is why scaling-law plots are log-log straight lines.
 
-with fitted constants where $\alpha \approx 0.34$ and $\beta \approx 0.28$ are close enough that the optimal allocation splits compute roughly evenly between growing $N$ and growing $D$. $E$ is the entropy of natural text you can never train away.
+with fitted constants where $\alpha \approx 0.34$ and $\beta \approx 0.28$ are close enough that the optimal allocation splits compute roughly evenly between growing $N$ and growing $D$. $E$ is the [entropy](ch04.html) of natural text you can never train away.
 
 The governing approximation everyone uses for the compute cost is the FLOP count for a dense Transformer:
 
@@ -515,7 +517,7 @@ Every form of parallelism above is built on a handful of **collective operations
 
 ### ZeRO / FSDP: sharding the optimizer state
 
-Even with the model replicated, a huge hidden cost is the **optimizer state**. Training with Adam in mixed precision, each parameter drags along: an fp32 master copy of the weight (4 bytes), an fp32 momentum (4 bytes), and an fp32 variance (4 bytes) — 12 bytes of optimizer state per parameter, on top of the bf16 weight and gradient. For a 7B model that is ~84 GB of optimizer state alone, far past a single GPU.
+Even with the model replicated, a huge hidden cost is the **optimizer state**. Training with [Adam](ch03.html) in mixed precision, each parameter drags along: an fp32 master copy of the weight (4 bytes), an fp32 momentum (4 bytes), and an fp32 variance (4 bytes) — 12 bytes of optimizer state per parameter, on top of the bf16 weight and gradient. For a 7B model that is ~84 GB of optimizer state alone, far past a single GPU.
 
 **ZeRO** (Zero Redundancy Optimizer, from DeepSpeed) and the equivalent **FSDP** (Fully Sharded Data Parallel, in PyTorch) notice that under plain data parallelism every replica stores an *identical* copy of all that state — pure redundancy. They shard it across the data-parallel group instead:
 
@@ -525,7 +527,7 @@ Even with the model replicated, a huge hidden cost is the **optimizer state**. T
 | ZeRO-2 | + gradients | Bigger drop |
 | ZeRO-3 / FSDP | + parameters themselves | Scales with #GPUs |
 
-At ZeRO-3 / FSDP, each GPU permanently holds only $1/k$ of the parameters (for $k$ GPUs); when a layer is needed, its full weights are **all-gathered** just in time, used, then discarded. The tradeoff is more communication for far less memory — letting you train models that would otherwise be impossible, at the cost of bandwidth. (This connects to the distributed-training discussion in Ch 30.)
+At ZeRO-3 / FSDP, each GPU permanently holds only $1/k$ of the parameters (for $k$ GPUs); when a layer is needed, its full weights are **all-gathered** just in time, used, then discarded. The tradeoff is more communication for far less memory — letting you train models that would otherwise be impossible, at the cost of bandwidth. (This connects to the [AI infrastructure discussion in Ch 30](ch30.html).)
 
 In PyTorch this is a thin wrapper around your model — the framework inserts the all-gather/reduce-scatter automatically:
 
@@ -720,7 +722,7 @@ Finally, **mixing**: you don't train on the raw source proportions. Curated high
 
 ## 44.9 Parameter-efficient fine-tuning: adapting without retraining
 
-The 112 GB above was for training a 7B model from scratch — full fine-tuning of an existing model costs the same, because you still hold the optimizer state for *every* parameter. But most people who adapt an open model do not want to move all 7 billion weights; they want to teach it one new skill or style on a modest GPU. **Parameter-efficient fine-tuning (PEFT)** freezes the pretrained weights and trains a tiny number of new ones.
+The 112 GB above was for training a 7B model from scratch — full fine-tuning of an existing model costs the same, because you still hold the optimizer state for *every* parameter. But most people who adapt an open model do not want to move all 7 billion weights; they want to teach it one new skill or style on a modest GPU. **Parameter-efficient fine-tuning (PEFT)** freezes the pretrained weights and trains a tiny number of new ones. ([Chapter 45](ch45.html) is devoted to transfer learning, fine-tuning and PEFT; this section is the systems-level summary.)
 
 **Intuition first:** you don't rewrite an entire textbook to add a chapter of margin notes. PEFT keeps the original "textbook" (the frozen base model) untouched and trains a thin set of "sticky notes" — a few million parameters — that nudge the model's behavior. Because there is no optimizer state for the frozen 99%+ of weights, the memory cost collapses.
 
@@ -772,7 +774,7 @@ model.print_trainable_parameters()
 
 ## 44.10 Post-training: from base model to assistant
 
-A model that has only done next-token prediction is a brilliant *autocomplete*, not an *assistant*: ask it a question and it might continue with more questions, because that is what often follows a question on the web. Turning a pretrained base into something helpful, honest, and harmless is **post-training**, and it has two main stages.
+A model that has only done next-token prediction is a brilliant *autocomplete*, not an *assistant*: ask it a question and it might continue with more questions, because that is what often follows a question on the web. Turning a pretrained base into something helpful, honest, and harmless is **post-training**, and it has two main stages. ([Chapter 46](ch46.html) covers alignment and evaluation in depth.)
 
 **Supervised fine-tuning (SFT).** First you fine-tune on a curated set of (prompt, ideal-response) pairs — high-quality demonstrations of the behavior you want: answering questions, following instructions, refusing harmful requests, using a consistent format. This is ordinary supervised next-token training, just on demonstration data rather than raw web text. It teaches the model the *shape* of being an assistant.
 
@@ -816,7 +818,7 @@ This pairs naturally with PEFT (44.9): SFT and DPO are very often done with LoRA
 
 ## 44.11 Inference systems: serving the model efficiently
 
-Training happens once; inference happens billions of times, so its economics dominate the lifetime cost of a model. LLM inference has a peculiar structure: it runs in two distinct phases. **Prefill** ingests the whole prompt in one parallel forward pass — this is compute-bound and fast per token. **Decode** then emits one token at a time, and each step re-reads the entire model from HBM to produce a single token — this is **memory-bound** and is where the latency lives. Recognizing that decode is memory-bound is the key that unlocks almost every trick below. (These are introduced in Ch 23/Ch 31; here is how they fit the systems picture.)
+Training happens once; inference happens billions of times, so its economics dominate the lifetime cost of a model. LLM inference has a peculiar structure: it runs in two distinct phases. **Prefill** ingests the whole prompt in one parallel forward pass — this is compute-bound and fast per token. **Decode** then emits one token at a time, and each step re-reads the entire model from HBM to produce a single token — this is **memory-bound** and is where the latency lives. Recognizing that decode is memory-bound is the key that unlocks almost every trick below. ([Chapter 47](ch47.html) treats model serving and deployment in full; here is how these pieces fit the systems picture.)
 
 **Everyday analogy for the two phases:** prefill is like *reading* a whole letter at a glance — your eyes take in the page in parallel. Decode is like *writing* the reply by hand, one word at a time, where each word depends on all the words before it. Reading is fast and parallel; writing is serial and slow, and that is where you spend your afternoon.
 
@@ -910,7 +912,50 @@ print(f"~{1/sec_per_tok:.0f} tokens/sec, single stream (memory-bound floor)")
 
 The number is set by *bandwidth divided by bytes read*, not by FLOPs — which is precisely why quantization (fewer bytes) and large batches (amortize the read across many sequences) are the two levers that move it.
 
-## 44.1 — Key takeaways
+## 44.1 — Which parallelism should I use?
+
+When a model or its training state won't fit, the choice of parallelism follows a short decision tree — reach for the cheapest-communication option that solves your actual constraint:
+
+```{mermaid}
+flowchart TD
+    A["Model + optimizer state<br/>won't fit on one GPU?"] -->|"No, just want<br/>faster throughput"| DP["Data Parallel<br/>(replicate, all-reduce grads)"]
+    A -->|"Yes — out of memory"| B{"What overflows?"}
+    B -->|"Optimizer state /<br/>gradients / params"| Z["ZeRO / FSDP<br/>(shard state across DP group)"]
+    B -->|"A single layer's<br/>weights too big"| TP["Tensor Parallel<br/>(intra-node, NVLink)"]
+    B -->|"Whole model too deep<br/>for one node"| PP["Pipeline Parallel<br/>(split by layers, + microbatches)"]
+    B -->|"Activations for a<br/>very long sequence"| SP["Sequence / Context Parallel"]
+    Z -.->|"compose at frontier scale"| TP
+    TP -.-> PP
+```
+
+Rule of thumb: start with FSDP/ZeRO (cheapest to adopt, biggest memory win), add tensor parallelism only inside a fast-NVLink node, and pipeline parallelism only when the model is too deep to fit even sharded — combining all three is **3D parallelism**.
+
+## 44.2 — Quick reference
+
+| Term / formula | Meaning | When / why it matters |
+|----------------|---------|------------------------|
+| Byte-level BPE | Subword tokenizer over 256 bytes; merge frequent pairs | Default tokenizer; guarantees no out-of-vocabulary token |
+| Vocab size ($V \times d_{model}$) | Tokens/word vs. embedding cost vs. rare-token quality | Bigger = shorter sequences but pricier embeddings; ~128K–256K for multilingual |
+| Arithmetic intensity $I=\text{FLOPs}/\text{bytes}$ | Math done per byte read from HBM | $I <$ ridge (~156 on A100) ⇒ memory-bound; the reason to fuse kernels |
+| FlashAttention | Exact attention via SRAM tiling + online softmax | Never stores the $N\times N$ matrix; enables long context, 2–4× faster |
+| Chinchilla $L=E+A/N^\alpha+B/D^\beta$ | Loss = floor + parameter penalty + data penalty | Scaling-law fit; predicts loss from $N$ and $D$ |
+| $C \approx 6ND$ | Training FLOPs ≈ 6 × params × tokens | Project model+data size from a compute budget (~20 tokens/param) |
+| Data / Tensor / Pipeline parallel | Split batch / matrices / layers across GPUs | Compose as 3D parallelism to fit and scale frontier training |
+| Pipeline bubble $\frac{p-1}{m+p-1}$ | Fraction of idle stage time | More microbatches $m$ ⇒ less waste |
+| ZeRO / FSDP | Shard optimizer state, grads, params across DP group | Fit models far larger than one GPU; trade bandwidth for memory |
+| all-reduce / all-gather / reduce-scatter | Collective comm primitives (NCCL) | Underlie DP grad sync, FSDP gather/reduce |
+| MoE $y=\sum_{i\in\text{top-}k} g_i E_i(x)$ | Route each token to a few experts | More params, not more compute/token; needs load-balancing loss |
+| Mixed precision (bf16 / fp8) | Compute in 16/8-bit, fp32 master weights | Halves memory, ~2× throughput; bf16 avoids fp16 loss-scaling |
+| Gradient checkpointing | Recompute activations in backward | ~30% more compute for a big activation-memory cut |
+| Optimizer memory (16 B/param) | bf16 w+g + fp32 master+m+v with Adam | 7B model ≈ 112 GB before activations — why FSDP exists |
+| MinHash + LSH | Estimate Jaccard similarity cheaply | Near-deduplication of web corpora — highest-leverage data step |
+| LoRA $W'=W+\frac{\alpha}{r}BA$ | Train a low-rank update, freeze base | ~250×/matrix fewer trainable params; QLoRA adds 4-bit base |
+| SFT → RLHF / DPO | Demonstrations, then preference optimization | Turns a base autocomplete into a helpful assistant |
+| KV cache ($2 L\,n_{kv} d_{head} N_{tok} b$) | Cache past keys/values to avoid recompute | Top inference optimization; dominates memory at long context |
+| PagedAttention / continuous batching | OS-style paging + in-flight batch swaps | vLLM defaults; raise GPU utilization and throughput |
+| Speculative decoding | Draft proposes, target verifies in one pass | 2–3× latency win, output provably identical |
+
+## 44.3 — Key takeaways
 
 - **Tokenization is foundational and frozen.** Byte-level BPE guarantees no out-of-vocabulary tokens (WordPiece and Unigram/SentencePiece are the alternatives); vocabulary size trades sequence length and embedding cost against rare-token quality. Tokenizer quirks explain a surprising amount of model behavior (bad arithmetic, per-language cost).
 - **Memory bandwidth, not FLOPs, is usually the bottleneck.** The HBM↔SRAM gap means most LLM kernel work is about *moving less data*. Arithmetic intensity versus the roofline ridge decides whether an op is compute- or memory-bound.
@@ -924,13 +969,15 @@ The number is set by *bandwidth divided by bytes read*, not by FLOPs — which i
 - **Post-training** turns a base model into an assistant: supervised fine-tuning on demonstrations, then preference optimization (RLHF with a reward model + PPO, or the simpler reward-model-free DPO).
 - **Inference** splits into compute-bound prefill and memory-bound decode; KV cache (size it with the formula), PagedAttention/vLLM, continuous batching, quantization, and speculative decoding together trade latency against throughput to make serving affordable.
 
-## 44.2 — See also
+## 44.4 — See also
 
-- **Chapter 23 — Large Language Models:** the Transformer decoder architecture, pretraining objective, and what these systems are built to train and serve.
-- **Chapter 30 — Distributed & Scalable ML:** the general data/model parallelism and collective-communication primitives (all-reduce, all-gather) that 44.5 specializes to LLMs.
-- **Chapter 31 — MLOps & Serving / Inference Optimization:** the broader serving context for the KV cache, batching, and quantization techniques in 44.11.
-- **Chapter 09 — Attention & Transformers:** the attention math that FlashAttention (44.3) rewrites to be IO-aware.
-- **Chapter 03 — Numerical Computing & Hardware:** floating-point formats and the compute/memory tradeoffs underlying mixed precision (44.7).
+- **[Chapter 23 — Large Language Models](ch23.html):** the Transformer decoder architecture, pretraining objective, and what these systems are built to train and serve.
+- **[Chapter 17 — Attention & Transformers](ch17.html):** the attention math that FlashAttention (44.3) rewrites to be IO-aware.
+- **[Chapter 30 — AI Infrastructure & Efficient Inference](ch30.html):** the broader infrastructure context for distributed training (44.5) and the KV-cache/quantization serving techniques in 44.11.
+- **[Chapter 45 — Post-Training I (Transfer / Fine-Tuning / PEFT)](ch45.html):** the full treatment of LoRA/QLoRA and parameter-efficient fine-tuning summarized in 44.9.
+- **[Chapter 46 — Post-Training II (Alignment / Evaluation)](ch46.html):** RLHF, DPO, and the alignment pipeline that 44.10 introduces.
+- **[Chapter 47 — Model Serving & Deployment](ch47.html):** the production-serving context for prefill/decode, PagedAttention, and continuous batching in 44.11.
+- **[Chapter 03 — Optimization](ch03.html):** Adam and the optimizer state whose memory footprint (44.7) drives ZeRO/FSDP.
 
 ------------------------------------------------------------------------
 

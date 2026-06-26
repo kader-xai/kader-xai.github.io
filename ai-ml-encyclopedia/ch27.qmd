@@ -111,6 +111,8 @@ Anomaly detection is the art of finding the needle that does not belong in the h
 🧭 **In context:** Applied ML Systems · used to flag rare, costly, or malicious events (fraud, intrusion, faults, disease) · the one key idea — **model what "normal" looks like, then measure how far each new point strays from it.**
 :::
 
+> 💡 **Remember this:** You can almost never enumerate the anomalies, so model what *normal* looks like, score how far each new point strays from it, and pin the alert threshold to your alert budget.
+
 <style>
 @keyframes c27-needle-pulse { 0%,100% { r: 4; opacity: .55; } 50% { r: 7; opacity: 1; } }
 @keyframes c27-needle-ring  { 0% { r: 5; opacity: .9; } 100% { r: 22; opacity: 0; } }
@@ -154,7 +156,7 @@ flowchart TD
 The common thread across fraud, intrusion, equipment faults, and rare-disease screening is the same statistical shape: a dense mass of normal points and a thin, ill-defined scattering of anomalies you cannot fully enumerate. Because you can describe "normal" far better than you can describe "bad," the whole field tilts toward modeling normality.
 
 ::: {.callout-tip}
-**Rule of thumb:** if you have plenty of clean labels for *both* classes, treat the task as imbalanced *classification* (Chapter 9). Reach for *anomaly detection* methods when the positives are rare, undefined, or unlabeled — when you can describe "normal" far better than you can describe "bad."
+**Rule of thumb:** if you have plenty of clean labels for *both* classes, treat the task as imbalanced [classification](ch09.html) (Chapter 9). Reach for *anomaly detection* methods when the positives are rare, undefined, or unlabeled — when you can describe "normal" far better than you can describe "bad."
 :::
 
 ## 27.2 — Statistical Methods: z-score, Gaussian, EWMA
@@ -279,7 +281,7 @@ A value of $\text{LOF}(p) \approx 1$ means "about as dense as my neighborhood" (
   <text x="205" y="158" font-size="9" fill="#888">sparse cluster</text>
 </svg>
 
-The third tool, **DBSCAN**, is a clustering algorithm (Chapter 11) that moonlights as an outlier detector. It grows clusters outward from dense *core* points — those with at least `min_samples` neighbors inside a radius `eps` — and absorbs everything density-reachable from them. Whatever cannot join any dense region is left over and labeled **noise** (label $-1$). Those leftovers are your anomalies, delivered for free, with no need to specify the number of clusters in advance.
+The third tool, **DBSCAN**, is a [clustering algorithm](ch11.html) (Chapter 11) that moonlights as an outlier detector. It grows clusters outward from dense *core* points — those with at least `min_samples` neighbors inside a radius `eps` — and absorbs everything density-reachable from them. Whatever cannot join any dense region is left over and labeled **noise** (label $-1$). Those leftovers are your anomalies, delivered for free, with no need to specify the number of clusters in advance.
 
 ```python
 from sklearn.neighbors import LocalOutlierFactor
@@ -290,7 +292,7 @@ y = lof.fit_predict(X)          # -1 = outlier, 1 = inlier
 print("flagged:", np.where(y==-1)[0])  # includes index 100, the [6,6] point
 ```
 
-All three methods lean on a *meaningful distance*, and that is their Achilles' heel. In high dimensions the **curse of dimensionality** flattens every pairwise distance toward the same value, so "far" stops meaning anything, and the naive algorithms scale as $O(n^2)$. The standard remedies are to standardize the features first and to reduce dimensionality before measuring distances (Chapter 7).
+All three methods lean on a *meaningful distance*, and that is their Achilles' heel. In high dimensions the **curse of dimensionality** flattens every pairwise distance toward the same value, so "far" stops meaning anything, and the naive algorithms scale as $O(n^2)$. The standard remedies are to standardize the features first and to [reduce dimensionality](ch07.html) before measuring distances (Chapter 7).
 
 ## 27.4 — Isolation Forest
 
@@ -356,7 +358,7 @@ The `contamination` parameter sets the expected fraction of anomalies and theref
 
 ## 27.5 — One-Class SVM
 
-When you happen to have a clean sample of *only normal* data and want to wrap a tight boundary around it, the **One-Class SVM** is the classic instrument. It is the support-vector machine (Chapter 9) bent into a one-class world: rather than separating two labeled classes, it learns a single frontier that encloses the normal data, treating the **origin** as the lone "outlier" that everything else should be pushed away from.
+When you happen to have a clean sample of *only normal* data and want to wrap a tight boundary around it, the **One-Class SVM** is the classic instrument. It is the [support-vector machine](ch09.html) (Chapter 9) bent into a one-class world: rather than separating two labeled classes, it learns a single frontier that encloses the normal data, treating the **origin** as the lone "outlier" that everything else should be pushed away from.
 
 Using the **kernel trick** — typically an RBF kernel — it maps the points into a high-dimensional space and finds the maximum-margin hyperplane that separates the data from the origin *there*. Back in the original feature space, that hyperplane corresponds to a flexible, possibly non-convex contour drawn snugly around the normal region. Any new point that lands outside the contour scores as an anomaly.
 
@@ -391,7 +393,7 @@ The "clean normals only" promise quietly fails if your training set is *not* cle
 
 ## 27.6 — Reconstruction-Based Methods: Autoencoder Error
 
-Once the data is high-dimensional or richly structured — images, windows of sensor readings, sequences of events — the geometry-based methods stall, and deep learning takes over. An **autoencoder** (Chapter 18) is a neural network trained to copy its input to its output through a deliberately narrow **bottleneck**. That squeeze is the whole point: forced to pass everything through a few numbers, the network can only succeed by learning the underlying regularities of the data and discarding the rest.
+Once the data is high-dimensional or richly structured — images, windows of sensor readings, sequences of events — the geometry-based methods stall, and deep learning takes over. An [autoencoder](ch18.html) (Chapter 18) is a neural network trained to copy its input to its output through a deliberately narrow **bottleneck**. That squeeze is the whole point: forced to pass everything through a few numbers, the network can only succeed by learning the underlying regularities of the data and discarding the rest.
 
 The trick that turns it into a detector is to train it *only on normal data*. It becomes an expert at reconstructing normal patterns and a klutz at everything else. Feed it an anomaly whose shape it has never seen, and it reconstructs the input badly. The **reconstruction error** $\lVert x - \hat{x}\rVert^2$ is therefore the anomaly score, and you raise an alert whenever it exceeds a threshold.
 
@@ -441,7 +443,7 @@ thr = torch.quantile(((ae(X_val) - X_val) ** 2).mean(dim=1), 0.99)
 anomalies = err > thr                     # boolean mask of flagged points
 ```
 
-The same principle extends well beyond plain autoencoders: convolutional autoencoders handle images, LSTM autoencoders handle sequences (Chapter 16), and **variational autoencoders** replace the raw error with a probabilistic reconstruction likelihood, giving a more principled anomaly score.
+The same principle extends well beyond plain autoencoders: convolutional autoencoders handle images, LSTM autoencoders handle [sequences](ch16.html) (Chapter 16), and **variational autoencoders** replace the raw error with a probabilistic reconstruction likelihood, giving a more principled anomaly score.
 
 ::: {.callout-tip}
 The threshold matters as much as the model itself. Plot the distribution of reconstruction errors on a clean validation set and choose a percentile (the 99th, say) tied to how many alerts your team can realistically review per day. A perfect scorer with a badly placed threshold is still a bad detector.
@@ -451,7 +453,7 @@ The threshold matters as much as the model itself. Plot the distribution of reco
 
 How much labeled data you actually have decides the entire approach, and there are three distinct regimes to recognize.
 
-The **supervised** regime applies when you have labeled examples of *both* normals and anomalies. Here you train an ordinary classifier — often gradient-boosted trees (Chapter 10) — paired with imbalance handling such as class weights, focal loss, or careful resampling. This is the most accurate option *when labels are plentiful and the anomaly types are stable*, but it carries a fundamental blind spot: it can only recognize the kinds of fraud it has already seen, and is helpless against a genuinely novel attack pattern.
+The **supervised** regime applies when you have labeled examples of *both* normals and anomalies. Here you train an ordinary classifier — often [gradient-boosted trees](ch10.html) (Chapter 10) — paired with imbalance handling such as class weights, focal loss, or careful resampling. This is the most accurate option *when labels are plentiful and the anomaly types are stable*, but it carries a fundamental blind spot: it can only recognize the kinds of fraud it has already seen, and is helpless against a genuinely novel attack pattern.
 
 The **unsupervised** regime applies when you have no labels at all. You lean on the core assumption that anomalies are rare and different, and let the data reveal them through Isolation Forest, LOF, DBSCAN, or statistical scores. The upside is that no labels are needed; the downsides are that you must scrape together whatever ground truth you can for validation, and that "rare and different" will sometimes flag a perfectly benign novelty.
 
@@ -507,7 +509,7 @@ Anomalies come in three different *kinds*, and matching the detection method to 
 
 A **point anomaly** is a single instance that is odd entirely on its own — a \$50,000 charge on a card that has never once exceeded \$500. This is the simplest case, and it is exactly what z-scores, Isolation Forest, and kNN target directly.
 
-A **contextual anomaly** is a value that is perfectly normal in general but abnormal *in its particular context*, where the context is usually time or location. Spending \$200 on heating is unremarkable in January but strange in July; a London login is fine for a London user but suspicious moments after that same user logged in from Tokyo. The raw value alone is innocent — only the context exposes it. You handle these by engineering context features (hour, season, location, the user's own baseline) or by modeling per-context, for instance one EWMA per user or a seasonal baseline (Chapter 22).
+A **contextual anomaly** is a value that is perfectly normal in general but abnormal *in its particular context*, where the context is usually time or location. Spending \$200 on heating is unremarkable in January but strange in July; a London login is fine for a London user but suspicious moments after that same user logged in from Tokyo. The raw value alone is innocent — only the context exposes it. You handle these by engineering context features (hour, season, location, the user's own baseline) or by modeling per-context, for instance one EWMA per user or a [seasonal baseline](ch22.html) (Chapter 22).
 
 A **collective anomaly** is a *sequence or group* that is anomalous taken together even though every individual member looks normal. A single network packet is fine, but a burst of thousands within one second is a DDoS attack; one small transfer is fine, but a rapid chain of them is *structuring* to dodge reporting limits. The oddity lives in the pattern, not in any one element, so you detect these with sequence models or windowed aggregates rather than per-point scores.
 
@@ -733,7 +735,7 @@ Drift monitoring and baseline poisoning (Section 27.11) pull in opposite directi
 
 A detector that fires without saying *why* is operationally useless: an analyst staring at a flagged transaction needs a reason before they can confirm, dispute, or escalate it, and a customer whose card is declined deserves a defensible explanation. The intuition is that a score is a verdict, but an investigation needs evidence — so a production system must turn each high score into a short, human-readable story of which features drove it.
 
-The practical tool is **per-prediction attribution**. For supervised models, **SHAP** values decompose a single score into additive per-feature contributions, so an alert arrives annotated: "+0.4 from amount being 12× the 30-day mean, +0.3 from a new device, +0.2 from impossible travel." For the unsupervised side, the same idea applies more crudely — report which features had the largest standardized deviation, or for Isolation Forest, which splits isolated the point fastest.
+The practical tool is **per-prediction attribution**. For supervised models, [SHAP](ch36.html) values decompose a single score into additive per-feature contributions, so an alert arrives annotated: "+0.4 from amount being 12× the 30-day mean, +0.3 from a new device, +0.2 from impossible travel." For the unsupervised side, the same idea applies more crudely — report which features had the largest standardized deviation, or for Isolation Forest, which splits isolated the point fastest.
 
 ```python
 import shap
@@ -749,7 +751,29 @@ Beyond the single alert, two operational realities shape the whole system. The f
 Treat explanations as part of the model's output, not an afterthought. An alert shipped with its top three driving features is one an analyst can action in seconds; a bare score is one they must reverse-engineer — and under a tight alert budget, that difference decides whether the system is usable at all.
 :::
 
-## 27.16 — Key takeaways
+## 27.16 — Quick reference
+
+| Term / method | What it is | When / why to use it |
+|---|---|---|
+| z-score $z=(x-\mu)/\sigma$ | Steps from the mean, flag $\lvert z\rvert>3$ | One roughly Gaussian feature; fastest possible alarm |
+| Robust z / MAD | Median + scaled MAD in place of mean + $\sigma$ | Skewed, heavy-tailed features where a few extremes wreck $\sigma$ |
+| Mahalanobis $D_M$ | Distance after whitening by $\Sigma^{-1}$ | Correlated features; catches *joint* oddities per-axis z misses |
+| EWMA $s_t=\alpha x_t+(1-\alpha)s_{t-1}$ | Running mean/variance that forgets old data | Streaming signals where "normal" drifts over time |
+| kNN distance | Distance to $k$-th nearest neighbor | Simple geometric outliers under a single global density |
+| LOF | Local density ratio vs. neighbors | Clusters of *different* densities; finds *local* outliers |
+| DBSCAN | Density clustering; noise points = anomalies | Free outliers, no cluster count needed |
+| Isolation Forest $s=2^{-E[h(x)]/c(n)}$ | Short random-tree path length = anomaly | Default first try on tabular data; linear time, no metric |
+| One-Class SVM ($\nu$) | RBF frontier wrapped around normals | Small, clean, normal-only sets; catches novel anomalies |
+| Autoencoder error $\lVert x-\hat x\rVert^2$ | Reconstruction error after training on normals | High-dim / structured data (images, sequences) |
+| SMOTE + class weights / focal loss | Imbalance handling in the supervised layer | When both classes are labeled but positives are rare |
+| Point / contextual / collective | Odd alone / odd-in-context / odd-as-sequence | Match detector to the anomaly *type* before scoring |
+| PR-AUC, precision, recall | Honest metrics under extreme imbalance | Always judge by these, never accuracy or ROC-AUC |
+| Conformal p-value $p=\frac{1+\#\{s_i\ge s\}}{n+1}$ | Right-tail rank vs. clean calibration scores | Distribution-free guarantee: flag $p\le\alpha$, FP rate $\le\alpha$ |
+| KS test / PSI on scores | Two-sample drift test on the score distribution | Label-free trigger to re-baseline before recall collapses |
+| Active learning | Query the points nearest the boundary | Spend a scarce label budget where it sharpens the threshold |
+| SHAP / top deviations | Per-feature attribution for one alert | Turn a bare score into an analyst-actionable story |
+
+## 27.17 — Key takeaways
 
 - Anomaly detection means **modeling normal and measuring deviation** — reach for it when positives are rare, undefined, or unlabeled, precisely where ordinary classification breaks.
 - **Statistical methods** (z-score, Gaussian/Mahalanobis, EWMA) are simple, fast, and often enough; log-transform or use robust stats (median/MAD) on skewed, heavy-tailed data.
@@ -764,21 +788,21 @@ Treat explanations as part of the model's output, not an afterthought. An alert 
 - **Watch for drift** in the score distribution itself (KS test / PSI) so you re-baseline before recall quietly collapses, and spend scarce labels with **active learning** on the uncertain points near the boundary.
 - Ship each alert with an **explanation** (SHAP or top deviating features) and a **graded action tier**, since an unexplained, all-or-nothing alert is rarely usable under a real review budget.
 
-## 27.17 — See also
+## 27.18 — See also
 
-- **Classification Algorithms** — supervised detectors, support-vector machines, and decision boundaries.
-- **Ensemble Methods** — gradient-boosted trees for the supervised fraud layer, and the forest idea behind Isolation Forest.
-- **Clustering & Unsupervised Learning** — DBSCAN and density estimation repurposed as detection tools.
-- **Model Evaluation & Tuning** — precision, recall, PR/ROC curves, and threshold selection under imbalance.
-- **Dimensionality Reduction** — taming high-dimensional feature spaces before distance-based detection.
-- **Generative Models** — autoencoders and variational autoencoders for reconstruction-based scoring.
-- **Recurrent & Sequence Models** — LSTM autoencoders and sequence models for collective and temporal anomalies.
-- **Time Series & Forecasting** — seasonal baselines and contextual anomalies over time.
-- **Interpretability & Explainability** — SHAP and per-prediction attribution for turning scores into actionable alerts.
-- **ML Across Industries** — fraud, security, and fault detection deployed in real production settings.
-- **MLOps & Deployment** — streaming inference, monitoring, drift handling, and retraining loops.
-- **Uncertainty & Calibration** — conformal prediction and distribution-free p-values for turning raw scores into guaranteed error rates.
-- **Active Learning** — querying the most informative points to spend a scarce labeling budget where it sharpens the model most.
+- [Classification Algorithms](ch09.html) — supervised detectors, support-vector machines, and decision boundaries.
+- [Ensemble Methods](ch10.html) — gradient-boosted trees for the supervised fraud layer, and the forest idea behind Isolation Forest.
+- [Clustering & Unsupervised Learning](ch11.html) — DBSCAN and density estimation repurposed as detection tools.
+- [Model Evaluation & Tuning](ch12.html) — precision, recall, PR/ROC curves, and threshold selection under imbalance.
+- [Dimensionality Reduction](ch07.html) — taming high-dimensional feature spaces before distance-based detection.
+- [Generative Models](ch18.html) — autoencoders and variational autoencoders for reconstruction-based scoring.
+- [Recurrent & Sequence Models](ch16.html) — LSTM autoencoders and sequence models for collective and temporal anomalies.
+- [Time Series & Forecasting](ch22.html) — seasonal baselines and contextual anomalies over time.
+- [Explainable AI & Interpretability](ch36.html) — SHAP and per-prediction attribution for turning scores into actionable alerts.
+- [ML Across Industries](ch28.html) — fraud, security, and fault detection deployed in real production settings.
+- [MLOps & Deployment](ch29.html) — streaming inference, monitoring, drift handling, and retraining loops.
+- [Probability & Statistics](ch04.html) — the distributions and tail reasoning behind statistical detectors and conformal p-values.
+- [Data Preprocessing](ch06.html) — feature engineering, scaling, and the context features that make detection work.
 
 ------------------------------------------------------------------------
 

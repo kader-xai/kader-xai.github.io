@@ -111,6 +111,8 @@ Explainable AI (XAI) is the study of how to make a model's behaviour understanda
 🧭 **In context:** Responsible AI & Frontier · used to inspect, debug, audit, and justify model predictions · the one key idea — an explanation is a *separate model of the model*, useful only as far as it is faithful.
 :::
 
+> 💡 **Remember this:** An explanation is a separate, approximate model *of* the model — only trust it as far as you have tested that it faithfully reflects what the model actually does.
+
 ## 36.1 — Why explainability matters (trust, debugging, regulation, fairness)
 
 Before any technique, ask the prior question: *why bother explaining at all?* A model that scores 0.99 AUC on a held-out set has already "proven" itself — hasn't it? Not quite. A test score tells you the model is right on average on data that looks like the past. It tells you nothing about *why* it is right, whether it will stay right when the world shifts, or whether it is right for a reason you would endorse.
@@ -123,7 +125,7 @@ Four concrete pressures drive the field.
 
 **Regulation.** Laws increasingly require a justifiable decision. The EU's GDPR implies a "right to an explanation" for automated decisions; the EU AI Act mandates transparency for high-risk systems; the US Equal Credit Opportunity Act requires *adverse action notices* — a lender must tell a rejected applicant the principal reasons. You cannot ship a black box into these domains.
 
-**Fairness.** A model can be accurate overall yet discriminatory. Explanation is how you catch a model that leans on a proxy for a protected attribute — e.g. ZIP code standing in for race. Detecting it requires looking inside the decision, not just at the aggregate score.
+**Fairness.** A model can be accurate overall yet discriminatory. Explanation is how you catch a model that leans on a proxy for a protected attribute — e.g. ZIP code standing in for race ([AI Ethics, Fairness & Safety](ch38.html) makes this auditing concern central). Detecting it requires looking inside the decision, not just at the aggregate score.
 
 ```{mermaid}
 flowchart LR
@@ -142,9 +144,9 @@ A good rule of thumb: the stakes of a *wrong* decision set the bar for explanati
 
 There are two roads to an explanation. Either build a model that is *transparent by construction*, or take an opaque model and *explain it after the fact*.
 
-**Intrinsic interpretability** means the model's structure is itself the explanation. A **linear regression** $\hat{y} = w_0 + \sum_j w_j x_j$ tells you directly that increasing $x_j$ by one unit moves the prediction by $w_j$. A short **decision tree** is a flowchart you can read aloud. A small rule list ("if age > 60 and prior_default then deny") is its own justification. The model *is* the explanation — nothing is reconstructed, so nothing can be unfaithful.
+**Intrinsic interpretability** means the model's structure is itself the explanation. A [linear regression](ch08.html) $\hat{y} = w_0 + \sum_j w_j x_j$ tells you directly that increasing $x_j$ by one unit moves the prediction by $w_j$. A short [decision tree](ch09.html) is a flowchart you can read aloud. A small rule list ("if age > 60 and prior_default then deny") is its own justification. The model *is* the explanation — nothing is reconstructed, so nothing can be unfaithful.
 
-**Post-hoc explanation** means you train whatever is most accurate (a gradient-boosted forest, a deep net) and then fit a *second* procedure that approximates its behaviour in human terms — LIME, SHAP, saliency maps, all covered below. The danger is baked in: the explanation is an approximation of the model, and an approximation can be wrong.
+**Post-hoc explanation** means you train whatever is most accurate (a [gradient-boosted forest](ch10.html), a deep net) and then fit a *second* procedure that approximates its behaviour in human terms — LIME, SHAP, saliency maps, all covered below. The danger is baked in: the explanation is an approximation of the model, and an approximation can be wrong.
 
 The two roads, side by side — one path keeps the glass clear all the way through; the other bolts a viewing window onto a sealed box:
 
@@ -209,7 +211,7 @@ A practical workflow uses both: a global view to understand the model's overall 
 
 ## 36.4 — Feature importance and permutation importance
 
-The simplest global question is: *which features does the model actually rely on?* The most reliable model-agnostic answer is **permutation importance**: take a feature, shuffle its values across the dataset to destroy its relationship with the target, and measure how much the model's performance drops. A big drop means the model leaned heavily on that feature; no drop means the model ignored it.
+The simplest global question is: *which features does the model actually rely on?* The most reliable model-agnostic answer is **permutation importance**: take a feature, shuffle its values across the dataset to destroy its relationship with the target, and measure how much the model's performance drops. A big drop means the model leaned heavily on that feature; no drop means the model ignored it. (Held-out [model evaluation](ch12.html) is what makes the measured drop trustworthy.)
 
 The intuition is a stress test. If I scramble `income` and the model's error barely changes, income was not doing real work. If I scramble it and accuracy collapses, income was load-bearing.
 
@@ -274,7 +276,7 @@ for j in r.importances_mean.argsort()[::-1]:
     print(f"{feature_names[j]:<16} {r.importances_mean[j]:.3f} +/- {r.importances_std[j]:.3f}")
 ```
 
-Two caveats decide whether you can trust the numbers. First, **correlated features** split the credit: if `height_cm` and `height_in` both encode the same thing, shuffling one leaves the other to carry the signal, so both look unimportant. Second, prefer to compute importance on a **held-out set** — importance on the training set can reward overfitting. Note also what permutation importance is *not*: it measures importance *to the model*, not a causal effect in the world (see *Causal Inference*).
+Two caveats decide whether you can trust the numbers. First, **correlated features** split the credit: if `height_cm` and `height_in` both encode the same thing, shuffling one leaves the other to carry the signal, so both look unimportant. Second, prefer to compute importance on a **held-out set** — importance on the training set can reward overfitting. Note also what permutation importance is *not*: it measures importance *to the model*, not a causal effect in the world (see [Causal Inference](ch37.html)).
 
 ::: {.callout-warning}
 Tree-based "impurity" importance (the default `feature_importances_` in scikit-learn) is biased toward high-cardinality features (many unique values) — a random ID column can rank near the top. Permutation importance on held-out data does not suffer this and should be preferred.
@@ -517,11 +519,11 @@ Where SHAP gives a smooth, additive attribution and LIME gives a local slope, an
 
 ## 36.9 — Saliency maps / Grad-CAM for vision
 
-For images, the natural question is *where in the picture did the model look?* **Saliency maps** answer it by computing the gradient of the predicted class score with respect to each input pixel: $\big|\partial\, s_c / \partial\, x_{ij}\big|$. A large gradient means nudging that pixel would most change the score — so that pixel mattered. Raw pixel-gradient saliency is fast but noisy and scattered.
+For images, the natural question is *where in the picture did the model look?* This is the core toolkit of [Computer Vision](ch19.html) interpretability. **Saliency maps** answer it by computing the gradient of the predicted class score with respect to each input pixel: $\big|\partial\, s_c / \partial\, x_{ij}\big|$. A large gradient means nudging that pixel would most change the score — so that pixel mattered. Raw pixel-gradient saliency is fast but noisy and scattered.
 
 **In words:** the saliency at a pixel is how sharply the class score would move if you tweaked that pixel a hair — steep sensitivity means the pixel was influential. **Also written:** $M_{ij} = \left\lvert \nabla_{x_{ij}} s_c(x)\right\rvert$, the absolute value of the input-gradient of the class-$c$ logit.
 
-**Grad-CAM** (Gradient-weighted Class Activation Mapping) gives a cleaner, more localised heatmap by working at the *last convolutional layer* rather than raw pixels — the layer where spatial position still survives but features are semantic ("ear", "wheel"). The steps:
+**Grad-CAM** (Gradient-weighted Class Activation Mapping) gives a cleaner, more localised heatmap by working at the *last [convolutional layer](ch15.html)* rather than raw pixels — the layer where spatial position still survives but features are semantic ("ear", "wheel"). The steps:
 
 1. Forward-pass the image; pick the class $c$ to explain.
 2. Backprop $s_c$ to the last conv layer's feature maps $A^k$, getting gradients.
@@ -595,7 +597,7 @@ A pretty heatmap over the right object is *necessary but not sufficient* evidenc
 
 ## 36.10 — Attention as (imperfect) explanation
 
-Transformers compute **attention weights** — for each token, a distribution over other tokens saying "how much I read from each." It is tempting to read these as explanations: the token a head attends to most is "the reason." Attention is convenient because it is produced for free during the forward pass, and it often *looks* meaningful (a pronoun attending to its antecedent).
+[Transformers](ch17.html) compute **attention weights** — for each token, a distribution over other tokens saying "how much I read from each." It is tempting to read these as explanations: the token a head attends to most is "the reason." Attention is convenient because it is produced for free during the forward pass, and it often *looks* meaningful (a pronoun attending to its antecedent).
 
 But the field's consensus, after the "Attention is not Explanation" / "Attention is not *not* Explanation" debate, is cautious. The core problems:
 
@@ -722,7 +724,7 @@ The same cautions apply as for probing (§36.13): a concept needs enough clean e
 
 ## 36.13 — Mechanistic interpretability and probing for deep nets/LLMs
 
-All the methods so far treat the network as a black box and study its inputs and outputs. **Mechanistic interpretability** takes the opposite, more ambitious stance: open the box and *reverse-engineer the internal algorithm* — the specific neurons, attention heads, and weight pathways (**circuits**) that implement a behaviour. The aspiration is to understand a network the way you understand a decompiled program.
+All the methods so far treat the network as a black box and study its inputs and outputs. **Mechanistic interpretability** takes the opposite, more ambitious stance: open the box and *reverse-engineer the internal algorithm* — the specific neurons, attention heads, and weight pathways (**circuits**) that implement a behaviour. This is an active frontier for [Large Language Models](ch23.html). The aspiration is to understand a network the way you understand a decompiled program.
 
 A milder, widely-used cousin is **probing**. The idea in one line: *if you can read a fact off a layer with a simple ruler, the layer must already be storing it.* So you freeze the model, grab its hidden activations for a batch of inputs, and train a tiny classifier (the **probe**) to predict some concept — part of speech, sentiment, whether a chess position is winning — from those activations alone. If the probe scores high, the information was sitting there, ready to be read; if it scores at chance, the layer isn't holding that concept (at least not in a simple, linear form).
 
@@ -848,7 +850,29 @@ Finally, the **limits of explanation** — the disclaimer the whole chapter has 
 
 An explanation is a tool for a human to *reason about* a model, not a certificate of its correctness. Use it to form hypotheses and catch bugs; verify those hypotheses with controlled tests.
 
-## 36.16 — Key takeaways
+## 36.16 — Quick reference
+
+| Term / method | What it means | When / why to use |
+|---|---|---|
+| Intrinsic interpretability | Model structure *is* the explanation (linear, short tree, rule list, GAM) | High-stakes decisions where exact faithfulness beats a few accuracy points |
+| Post-hoc explanation | A second procedure approximates a trained black box | You need the accuracy of a complex model but still owe a reason |
+| Global vs local | Whole-model behaviour vs one prediction | Global to catch systemic bias; local to justify/audit a single decision |
+| Permutation importance | Shuffle a feature, measure error rise: $\text{Imp}(j)=e_{\text{perm},j}-e_{\text{orig}}$ | Model-agnostic global ranking; compute on held-out data |
+| PDP / ICE | Average (PDP) or per-row (ICE) predicted output as one feature is swept | See the *shape* of a feature's effect, not just its magnitude |
+| ALE | Accumulated local effects within realistic data regions | Correlation-robust replacement for PDP when features are tangled |
+| LIME | Local sparse linear fit to perturbed neighbours of $x$ | Quick, intuitive local explanation; check stability (it is noisy) |
+| SHAP | Shapley values: average marginal contribution; $f(x)=\mathbb{E}[f]+\sum_j\phi_j$ | When you need consistency and attributions that *sum to* the prediction |
+| Anchors | High-precision IF-THEN rule that locks the prediction | A rule a regulator/officer can state aloud; report precision + coverage |
+| Saliency / Grad-CAM | Gradient-based heatmap of *where* a vision model looked | Debug shortcut learning (e.g. snow ⇒ wolf); not proof of correctness |
+| Attention weights | Per-token read distribution from a transformer | A routing *hint* only — high weight ≠ high influence |
+| Counterfactual | Closest input $x'$ with $f(x')=\text{desired}$ | Actionable "what to change" advice; doubles as a fairness probe |
+| TCAV | Fraction of class examples whose score rises along a concept vector | Explain in a human-chosen vocabulary (stripes, irregular borders) |
+| Probing / activation patching | Read a concept off a layer; causally restore a cached activation | Open the box: probing is correlational, patching is causal evidence |
+| Faithfulness (AOPC) | Mean score drop as top-ranked features are deleted | Test whether the explanation matches what the model actually does |
+| Stability | Worst-case explanation change over a small input neighbourhood | Reject methods that flip explanations for near-identical inputs |
+| GAM / EBM | Additive per-feature shape functions: $g(\mathbb{E}[y])=\beta_0+\sum_j f_j(x_j)$ | Glass-box accuracy on tabular data — often no real tradeoff |
+
+## 36.17 — Key takeaways
 
 - Explainability serves four needs: **trust**, **debugging** (catching shortcut learning), **regulation**, and **fairness** auditing — and the stakes of a wrong decision set how much you need.
 - Choose **intrinsic** (model = explanation, exactly faithful) over **post-hoc** (approximate) when stakes are high and accuracy permits.
@@ -861,7 +885,7 @@ An explanation is a tool for a human to *reason about* a model, not a certificat
 - Always **evaluate** an explanation: test **faithfulness** (deletion/insertion) and **stability** (robustness to small input changes) before trusting it.
 - The **accuracy–interpretability tradeoff** is real but often small; **GAMs/EBMs** can be both. No explanation proves correctness — verify, don't trust.
 
-## 36.17 — See also
+## 36.18 — See also
 
 - **Regression** — linear/logistic models as the canonical intrinsically interpretable family.
 - **Ensemble Methods** — the gradient-boosted trees that post-hoc methods most often explain (and TreeSHAP targets).

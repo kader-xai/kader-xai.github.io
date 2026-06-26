@@ -111,13 +111,15 @@ Most of the models in this book see one kind of thing: pixels, or text, or audio
 🧭 **In context:** Applied AI · used for cross-modal search, captioning, visual question answering, text-to-image/video, voice assistants · the one key idea — **map every modality into one shared embedding space, then learn relationships across them**.
 :::
 
+> 💡 **Remember this:** Multimodal AI works by mapping every kind of input — pixels, words, sound — into one shared vector space, so that comparing, retrieving, or generating across modalities all reduce to measuring distance between vectors.
+
 ## 24.1 — The Shared Embedding Space Idea
 
 Imagine a library where every book, song, and photograph is placed on a shelf by *meaning* rather than by format. A photo of a beach and the phrase "sandy shore at sunset" end up next to each other; a picture of a stock chart and the word "finance" land in a different aisle. That single organizing principle — **one coordinate system for all modalities** — is the foundation of nearly everything in this chapter.
 
-Concretely, a **shared embedding space** (or **joint embedding space**) is a vector space $\mathbb{R}^d$ into which we map inputs of different types using a separate **encoder** per modality. An image encoder $f_{\text{img}}$ turns a picture into a vector; a text encoder $f_{\text{txt}}$ turns a sentence into a vector of the *same* dimension $d$. The whole point is that **distance means semantic similarity** regardless of where a point came from. If $f_{\text{img}}(\text{cat photo})$ sits close to $f_{\text{txt}}(\text{"a cat"})$, the model has learned to align the two modalities.
+Concretely, a **shared embedding space** (or **joint [embedding](ch07.html) space**) is a vector space $\mathbb{R}^d$ into which we map inputs of different types using a separate **encoder** per modality. An image encoder $f_{\text{img}}$ turns a picture into a vector; a text encoder $f_{\text{txt}}$ turns a sentence into a vector of the *same* dimension $d$. The whole point is that **distance means semantic similarity** regardless of where a point came from. If $f_{\text{img}}(\text{cat photo})$ sits close to $f_{\text{txt}}(\text{"a cat"})$, the model has learned to align the two modalities.
 
-Closeness is measured with **cosine similarity** — the cosine of the angle between two vectors, which ignores their length and cares only about direction:
+Closeness is measured with **[cosine similarity](ch01.html)** — the cosine of the angle between two vectors, which ignores their length and cares only about direction:
 
 $$\text{sim}(\mathbf{u}, \mathbf{v}) = \frac{\mathbf{u} \cdot \mathbf{v}}{\|\mathbf{u}\|\,\|\mathbf{v}\|}$$
 
@@ -199,7 +201,7 @@ The famous model that made the shared space practical at scale is **CLIP** (Cont
 
 **Intuition first.** Picture a speed-dating event with $N$ images on one side and their $N$ captions on the other. Every image was secretly written *for* exactly one caption. The training game: for each image, pick its true caption out of the lineup. To win, the encoders must learn what genuinely makes an image and a sentence "about the same thing" — and the other $N-1$ captions in the room act as free **negative examples** that the model must learn to push away. No human labels are needed; the *pairing itself* is the supervision.
 
-The training mechanism is **contrastive learning**. Take a batch of $N$ image–text pairs. Encode all images and all texts, then form the $N \times N$ matrix of cosine similarities between every image and every text. The **diagonal** entries are the *true* pairs (image $i$ with its caption $i$); the **off-diagonal** entries are mismatches. CLIP's loss pushes the diagonal up and the off-diagonal down — a softmax over each row and each column, the **InfoNCE** objective:
+The training mechanism is **contrastive learning**. Take a batch of $N$ image–text pairs. Encode all images and all texts, then form the $N \times N$ matrix of cosine similarities between every image and every text. The **diagonal** entries are the *true* pairs (image $i$ with its caption $i$); the **off-diagonal** entries are mismatches. CLIP's loss pushes the diagonal up and the off-diagonal down — a [softmax](ch14.html) over each row and each column, the **InfoNCE** objective:
 
 $$\mathcal{L} = -\frac{1}{N}\sum_{i=1}^{N} \log \frac{\exp(\text{sim}(I_i, T_i)/\tau)}{\sum_{j=1}^{N}\exp(\text{sim}(I_i, T_j)/\tau)}$$
 
@@ -272,7 +274,7 @@ sim = np.array([[.9,.1,.2],[.15,.85,.05],[.25,0,.8]])
 print(round(info_nce(sim), 3))     # ~0.10  small loss, good alignment
 ```
 
-The payoff is **zero-shot classification**. CLIP can classify images into categories it was never explicitly trained on, because classification becomes a similarity lookup. To label a photo, you write each candidate class as a sentence — "a photo of a *dog*", "a photo of a *cat*" — encode all of them, encode the image, and pick the class whose text vector is closest.
+The payoff is **zero-shot [classification](ch09.html)**. CLIP can classify images into categories it was never explicitly trained on, because classification becomes a similarity lookup. To label a photo, you write each candidate class as a sentence — "a photo of a *dog*", "a photo of a *cat*" — encode all of them, encode the image, and pick the class whose text vector is closest.
 
 ```python
 # zero-shot: no labeled training, just compare image to class prompts
@@ -345,9 +347,9 @@ The practical payoff is **cross-modal arithmetic and retrieval you never trained
 
 ## 24.4 — Vision-Language Models & Multimodal LLMs
 
-CLIP can *match* an image to text but cannot *talk* about it. To get fluent description and reasoning, we bolt vision onto a language model, producing a **vision-language model (VLM)** — also called a **multimodal LLM**. The core question is mechanical: an LLM consumes a sequence of token embeddings, so **how do we turn an image into tokens the LLM will accept?**
+CLIP can *match* an image to text but cannot *talk* about it. To get fluent description and reasoning, we bolt vision onto a [language model](ch23.html), producing a **vision-language model (VLM)** — also called a **multimodal LLM**. The core question is mechanical: an LLM consumes a sequence of token embeddings, so **how do we turn an image into tokens the LLM will accept?**
 
-The standard answer has three parts. First, a **vision encoder** (usually a pretrained CLIP-style Vision Transformer; see Chapter 17) splits the image into patches and produces a grid of patch embeddings — say $256$ vectors for a $16\times16$ grid. Second, a small **projector** (a linear layer or tiny MLP, as in the LLaVA models, or a learned **resampler** that compresses many patches into a few **query tokens**, as in Flamingo/BLIP-2's Q-Former) maps those vision vectors into the LLM's embedding dimension. Third, those projected vectors are **inserted into the token stream** as if they were ordinary word embeddings, and the LLM proceeds exactly as it would on text.
+The standard answer has three parts. First, a **vision encoder** (usually a pretrained CLIP-style [Vision Transformer](ch19.html); see [Attention & Transformers](ch17.html)) splits the image into patches and produces a grid of patch embeddings — say $256$ vectors for a $16\times16$ grid. Second, a small **projector** (a linear layer or tiny MLP, as in the LLaVA models, or a learned **resampler** that compresses many patches into a few **query tokens**, as in Flamingo/BLIP-2's Q-Former) maps those vision vectors into the LLM's embedding dimension. Third, those projected vectors are **inserted into the token stream** as if they were ordinary word embeddings, and the LLM proceeds exactly as it would on text.
 
 ```{mermaid}
 flowchart LR
@@ -405,7 +407,7 @@ Training is typically two-stage. First **alignment pretraining**: freeze the vis
 
 ## 24.5 — Text-to-Image and Text-to-Video
 
-Run the shared space in reverse and you get **generation**: instead of mapping an image *to* text, you synthesize an image *from* text. Modern **text-to-image** systems are overwhelmingly **diffusion models** (the full mechanism — forward noising, the denoising network, samplers, and latent diffusion — is the subject of Chapter 18). Here we cover only the multimodal hinge: **how the words steer the pixels.**
+Run the shared space in reverse and you get **generation**: instead of mapping an image *to* text, you synthesize an image *from* text. Modern **text-to-image** systems are overwhelmingly **[diffusion models](ch18.html)** (the full mechanism — forward noising, the denoising network, samplers, and latent diffusion — is the subject of Chapter 18). Here we cover only the multimodal hinge: **how the words steer the pixels.**
 
 The animation below shows the loop: random noise on the left, gradually denoised into a picture on the right, with the text prompt pulling each step toward the target.
 
@@ -515,7 +517,7 @@ Push the guidance scale too high and images "burn" — garish colors, fried cont
 
 ## 24.6 — Audio-Language and Any-to-Any Models
 
-Sound fits the shared-space recipe just as cleanly as images. The trick is to make audio *look like* something a transformer already eats. Most systems first convert a waveform into a **spectrogram** — a 2-D image of frequency (vertical) versus time (horizontal) — and then treat it almost exactly like a picture (the audio front-end, spectrograms, and speech specifics live in Chapter 21).
+Sound fits the shared-space recipe just as cleanly as images. The trick is to make audio *look like* something a transformer already eats. Most systems first convert a waveform into a **spectrogram** — a 2-D image of frequency (vertical) versus time (horizontal) — and then treat it almost exactly like a picture (the audio front-end, spectrograms, and speech specifics live in [Speech & Audio Processing](ch21.html)).
 
 A **spectrogram** is the bridge: it redraws sound as a picture, so the same vision machinery applies. The doodle below shows a sound's energy shimmering across frequency (up) and time (right) — a 2-D image a transformer can read patch by patch, just like a photo.
 
@@ -642,7 +644,7 @@ flowchart LR
   G --> A[📝 Grounded answer]
 ```
 
-The pipeline has two halves. **Index (offline):** encode every catalog image, document page, and caption with a CLIP-style encoder and store the vectors in an approximate-nearest-neighbor index (FAISS, a vector DB). **Query (online):** encode the user's query into the *same* space, retrieve the top-$k$ neighbors, and splice them into the VLM's prompt as context. Because everything shares one space, a text query can retrieve images and vice versa — true cross-modal recall.
+The pipeline has two halves. **Index (offline):** encode every catalog image, document page, and caption with a CLIP-style encoder and store the vectors in an approximate-nearest-neighbor index (FAISS, a vector DB; see [Information Retrieval & Data Mining](ch43.html)). **Query (online):** encode the user's query into the *same* space, retrieve the top-$k$ neighbors, and splice them into the VLM's prompt as context. Because everything shares one space, a text query can retrieve images and vice versa — true cross-modal recall.
 
 ```python
 # multimodal RAG: index images, retrieve by text query, then generate
@@ -732,7 +734,30 @@ Mitigations attack the imbalance between priors and evidence: stronger visual gr
 A multimodal model's fluency is *not* evidence of faithfulness. The most dangerous failure is a perfectly worded sentence about something that isn't there. Always ask whether a claim is **grounded** in the actual input before trusting it.
 :::
 
-## 24.11 — Key Takeaways
+## 24.11 — Quick reference
+
+| Term / method | One-line meaning | When / why |
+|---------------|------------------|------------|
+| Shared embedding space | One vector space $\mathbb{R}^d$ holding every modality | The foundation — turns cross-modal tasks into nearest-neighbor lookups |
+| Cosine similarity | $\frac{\mathbf{u}\cdot\mathbf{v}}{\|\mathbf{u}\|\|\mathbf{v}\|}$ — direction match, ignores length | Scoring how close two embeddings are, across any modality |
+| Modality gap | Image and text vectors form separate clumps that point the same way | Harmless for ranking; never *average* an image and a text vector |
+| CLIP / InfoNCE | Contrastive loss pulling true image–text pairs together, mismatches apart | Building a shared space from web pairs; powers zero-shot classification |
+| Temperature $\tau$ | Learned scale that sharpens/softens the contrastive softmax | Lower $\tau$ = sharper separation of the diagonal |
+| Zero-shot classification | Label an image by nearest class-prompt text vector | Classify novel categories with no labeled training data |
+| ImageBind (anchor binding) | Bind every modality to one hub (images); cross-alignment emerges free | Adding many modalities without all-pairs aligned data |
+| Soft tokens | Image patches projected into the LLM's embedding dim, spliced into the prompt | How a VLM lets an LLM "see"; resamplers compress them to cut cost |
+| Projector / Q-Former | Small learned bridge mapping vision vectors → LLM space | Train this cheap part first (alignment), then instruction-tune |
+| Cross-attention conditioning | Denoiser/text attends across modalities at each layer | Steering pixels by a prompt in text-to-image; fine-grained VQA |
+| Classifier-free guidance $w$ | $\hat\epsilon=\epsilon_\varnothing+w(\epsilon_{\text{text}}-\epsilon_\varnothing)$ | The main text-to-image knob; faithfulness vs. diversity, don't max it |
+| Spectrogram | Sound redrawn as a frequency × time image | Lets vision/transformer machinery process audio (CLAP, Whisper) |
+| VQ tokenization | Encode image/audio chunks as integer codes from a codebook | Any-to-any models: one transformer over one shared vocabulary |
+| Early / Late / Cross fusion | Mix at input / output / middle layers | Late = cacheable retrieval; cross = fine-grained; early = max-power, costly |
+| Multimodal RAG | Retrieve cross-modal items from a shared-space index, then generate | Fresh/private knowledge, attribution, less hallucination, no retraining |
+| Recall@K / CLIPScore / FID | Retrieval hit-rate / image-caption fit / image distribution distance | Evaluation — pair an overlap metric with a grounding-aware one |
+| Grounding | Tying a word to the specific thing it denotes | Failures = wrong counts, confused spatial relations |
+| Cross-modal hallucination | Language prior overrides the pixels (umbrella in the rain) | Treat fluent multimodal output as a draft to verify |
+
+## 24.12 — Key Takeaways
 
 - **Shared embedding space** is the unifying idea: map every modality into one vector space where distance = semantic similarity, then cross-modal tasks become nearest-neighbor lookups.
 - **CLIP** trains two encoders contrastively on web image–text pairs (pull true pairs together, push mismatches apart via InfoNCE), enabling **zero-shot classification** by comparing an image to text prompts; the other items in the batch are the negatives, so big batches help.
@@ -745,7 +770,7 @@ A multimodal model's fluency is *not* evidence of faithfulness. The most dangero
 - **Evaluation** is two-sided: discriminative tasks use accuracy and Recall@K; generative tasks need overlap metrics (BLEU/CIDEr), grounding-aware scores (CLIPScore, FID), and human judgment — never a single number.
 - **Grounding** (tying words to referents) and **cross-modal hallucination** (language priors overriding pixels) are the central open challenges; treat fluent multimodal output as a draft to verify.
 
-## 24.12 — See also
+## 24.13 — See also
 
 - **Attention & Transformers** — the attention mechanism behind cross-attention fusion and VLM backbones.
 - **Generative Models (Diffusion)** — the full diffusion machinery underlying text-to-image and text-to-video.

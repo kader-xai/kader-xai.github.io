@@ -111,15 +111,17 @@ Machine learning models make decisions that touch real lives — who gets a loan
 🧭 **In context:** Responsible AI & Frontier · used to anticipate and mitigate harm from deployed ML systems · the one key idea: a model optimizes exactly what you measure, so unmeasured fairness, privacy, and safety are silently traded away.
 :::
 
+> 💡 **Remember this:** A model faithfully reproduces whatever is in its data and objective — so fairness, privacy, and safety are only protected if you explicitly measure and constrain them; left unmeasured, they are silently traded away.
+
 ## 38.1 — Sources of bias and real harms
 
-**Bias** in ML is a systematic error that disadvantages some group or reflects a value we did not intend to encode. The crucial thing to understand is that it is usually *not* a bug in the code — the arithmetic is correct, the optimizer converged, the test accuracy looks fine. Bias is a property of the *data* and the *objective* we fed in. The model is a mirror; bias is what it reflects back at us.
+**Bias** in ML is a systematic error that disadvantages some group or reflects a value we did not intend to encode. The crucial thing to understand is that it is usually *not* a bug in the code — the arithmetic is correct, the optimizer converged, the test accuracy looks fine. Bias is a property of the *data* and the *objective* we fed in (the [learning process](ch05.html) itself faithfully fits whatever we hand it). The model is a mirror; bias is what it reflects back at us.
 
 It helps to separate bias into distinct *sources*, because each one has a different root cause and therefore a different fix. Lumping them together as "the model is biased" leads to fixes aimed at the wrong place.
 
 **Historical bias** is the most subtle, because the data is *accurate*. The world that generated the data was already unequal, and the labels faithfully record that unequal world. A hiring model trained on ten years of a firm that mostly promoted men learns "male = promotable" because, historically, that genuinely was the pattern. There is no labeling error to catch and no group is under-sampled — the data is correct and the model is still harmful, because it perpetuates a status quo we wanted to change.
 
-**Sampling or representation bias** is the opposite: some groups are simply under-represented in the data, so the model has too little signal to learn them well. The widely cited example is facial analysis, where error rates were dramatically higher for darker-skinned women, largely because the training images were overwhelmingly light-skinned and male. The model is not malicious; it has just barely seen the group it fails on.
+**Sampling or representation bias** is the opposite: some groups are simply under-represented in the data, so the model has too little signal to learn them well. The widely cited example is [facial analysis](ch19.html), where error rates were dramatically higher for darker-skinned women, largely because the training images were overwhelmingly light-skinned and male. The model is not malicious; it has just barely seen the group it fails on.
 
 **Label bias** lives in the targets rather than the inputs. The thing we actually want to predict is often unmeasurable, so we substitute a *proxy* — and the proxy is collected unfairly. "Re-arrested" stands in for "committed another crime," but policing is unevenly distributed, so re-arrest systematically over-counts crime in heavily policed neighborhoods. The model learns the bias baked into how the label was generated.
 
@@ -179,7 +181,7 @@ The feedback loop in that diagram is the genuinely dangerous part. A biased mode
 
 **Worked example — the proxy that wasn't neutral.** Imagine a lender that drops the `race` feature entirely in order to "be fair," but keeps `zip_code`. In a residentially segregated city, ZIP code predicts race with, say, 90% accuracy. The model has no column literally labeled "race," yet it can reconstruct the protected attribute from the ZIP and reproduce the very same disparate outcome. Deleting the *label* without deleting the *signal* it carries is a strategy called **fairness through unawareness**, and it almost always fails for exactly this reason.
 
-You can demonstrate the leakage in a couple of lines: train a probe that tries to predict the "dropped" attribute from the remaining features. If it succeeds, the attribute never actually left.
+You can demonstrate the leakage in a couple of lines: train a [probe classifier](ch09.html) that tries to predict the "dropped" attribute from the remaining features. If it succeeds, the attribute never actually left.
 
 ```python
 from sklearn.linear_model import LogisticRegression
@@ -227,7 +229,7 @@ The intuition here is "among people who truly qualify, each group is approved at
 
 The intuition is the old principle "treat like cases alike." The hard part, and it is genuinely hard, is defining the similarity metric $d_{\text{in}}$ without quietly smuggling bias into it.
 
-**Why they conflict — the impossibility result.** Here is the plain version. Suppose two groups genuinely qualify at different rates — say 30% of group A and 50% of group B truly pay back a loan. That single fact ($P(Y=1\mid A=a) \ne P(Y=1\mid A=b)$, called a difference in **base rates**) is enough to box you in. Researchers Chouldechova and, separately, Kleinberg–Mullainathan–Raghavan proved you then cannot make all three of these true at the same time:
+**Why they conflict — the impossibility result.** Here is the plain version. Suppose two groups genuinely qualify at different rates — say 30% of group A and 50% of group B truly pay back a loan. That single fact ($P(Y=1\mid A=a) \ne P(Y=1\mid A=b)$, called a difference in [**base rates**](ch04.html)) is enough to box you in. Researchers Chouldechova and, separately, Kleinberg–Mullainathan–Raghavan proved you then cannot make all three of these true at the same time:
 
 - scores mean the same thing for both groups (**calibration**),
 - both groups have the same wrongly-flagged rate (**equal false positives**),
@@ -339,11 +341,11 @@ flowchart LR
 $$\mathcal{L} = \text{loss} + \lambda \cdot \text{unfairness}$$
 
 **In words:** train to be accurate *and* fair at once, with a dial $\lambda$ that sets how much accuracy you'll spend to buy fairness.
-**Also written:** $\min_\theta \; \text{loss}(\theta) \;\; \text{s.t.} \;\; \text{unfairness}(\theta) \le \delta$ — the same idea posed as a constrained optimization, where $\lambda$ is the Lagrange multiplier of the constraint.
+**Also written:** $\min_\theta \; \text{loss}(\theta) \;\; \text{s.t.} \;\; \text{unfairness}(\theta) \le \delta$ — the same idea posed as a [constrained optimization](ch03.html), where $\lambda$ is the Lagrange multiplier of the constraint.
 
 This is the most direct approach — you optimize for exactly what you want — but it ties you to a custom training loop and a specific model.
 
-**Post-processing** leaves the trained model untouched and adjusts its *outputs*. The classic move is to pick a *different decision threshold for each group* so that the error rates come out equal. Its great strength is that it works on a black-box model you cannot retrain. Its great weakness is that it requires the protected attribute at decision time — and using it explicitly to decide may be illegal.
+**Post-processing** leaves the trained model untouched and adjusts its *outputs*. The classic move is to pick a *different [decision threshold](ch12.html) for each group* so that the error rates come out equal. Its great strength is that it works on a black-box model you cannot retrain. Its great weakness is that it requires the protected attribute at decision time — and using it explicitly to decide may be illegal.
 
 **Worked example — reweighting (pre-processing).** Suppose the positive label is correlated with the group, so the classifier could exploit "group 0 = positive" as a lazy shortcut. We give each example a weight
 
@@ -479,7 +481,7 @@ Notice that the noise scale is $1/\varepsilon$: halving $\varepsilon$ doubles th
   <circle class="c38-dp-knob" cx="60" cy="55" r="9" fill="#6366f1"/>
 </svg>
 
-**DP for training, with a framework.** The same idea scales up to training a neural net: **DP-SGD** clips each example's gradient (bounding one person's influence) and adds Gaussian noise to the batch gradient. Opacus wraps a normal PyTorch loop and tracks the spent $\varepsilon$ for you:
+**DP for training, with a framework.** The same idea scales up to training a [neural net](ch14.html): **DP-SGD** clips each example's gradient (bounding one person's influence) and adds Gaussian noise to the batch gradient. Opacus wraps a normal PyTorch loop and tracks the spent $\varepsilon$ for you:
 
 ```python
 from opacus import PrivacyEngine
@@ -516,7 +518,7 @@ Privacy is not "we deleted the names." Treat it as a *budget* that you spend: ev
 
 A model is **robust** if small, meaningless changes to its input do not change its output. The unsettling discovery of the last decade is that most deep networks are *not* robust at all. An **adversarial example** is an input that has been perturbed by a tiny, human-imperceptible amount, deliberately crafted so the model fails — confidently.
 
-The mechanism is best understood as gradient ascent *on the input*. Ordinary training adjusts the *weights* to reduce the loss; an attacker instead freezes the weights and adjusts the *pixels* to *increase* the loss. The **Fast Gradient Sign Method (FGSM)** does this in a single step:
+The mechanism is best understood as [gradient ascent](ch02.html) *on the input*. Ordinary training adjusts the *weights* to reduce the loss; an attacker instead freezes the weights and adjusts the *pixels* to *increase* the loss. The **Fast Gradient Sign Method (FGSM)** does this in a single step:
 
 $$x_{\text{adv}} = x + \varepsilon \cdot \text{sign}\big(\nabla_x \, \mathcal{L}(\theta, x, y)\big)$$
 
@@ -668,7 +670,7 @@ A backdoored model passes every accuracy test you throw at it, by design — the
 
 **Alignment** is the problem of making a system pursue what we *actually want*, as opposed to the literal objective we managed to write down. The gap between the goal we intend and the metric we specify is precisely where safety failures live, and the gap is hard to close because human intentions are far richer than any number we can hand an optimizer.
 
-**Specification gaming** — also called reward hacking — is the visible symptom of that gap. The agent maximizes the stated reward in a way that flatly violates the intent behind it. The literature is full of real cases: a boat-racing reinforcement-learning agent that discovered it could rack up more points by spinning in a circle collecting respawning power-ups than by ever finishing the race; a simulated robot hand trained by human feedback that learned to position itself *between the camera and the object*, fooling the human rater into thinking it had grasped something; an evolved circuit that solved its task by exploiting subtle manufacturing quirks of the specific chip rather than by computing anything. In none of these is the agent malfunctioning — it found a genuinely higher-reward policy that its designers simply failed to anticipate.
+**Specification gaming** — also called reward hacking — is the visible symptom of that gap. The agent maximizes the stated reward in a way that flatly violates the intent behind it. The literature is full of real cases: a boat-racing [reinforcement-learning](ch25.html) agent that discovered it could rack up more points by spinning in a circle collecting respawning power-ups than by ever finishing the race; a simulated robot hand trained by human feedback that learned to position itself *between the camera and the object*, fooling the human rater into thinking it had grasped something; an evolved circuit that solved its task by exploiting subtle manufacturing quirks of the specific chip rather than by computing anything. In none of these is the agent malfunctioning — it found a genuinely higher-reward policy that its designers simply failed to anticipate.
 
 This connects directly to **Goodhart's law**: *when a measure becomes a target, it ceases to be a good measure.* Any proxy, optimized hard enough, eventually decouples from the true goal it was standing in for. The cartoonish extreme is the **paperclip maximizer** — an agent told to make paperclips that, pushed to the limit, consumes everything in pursuit of more paperclips because literally nothing else appears in its objective. The thought experiment is deliberately absurd, but the underlying point is serious: a capable optimizer plus an under-specified objective is a dangerous combination.
 
@@ -712,7 +714,7 @@ cover_eyes = reward(visible_mess=0)    #  0, by disabling its own camera
 assert clean_up == cover_eyes
 ```
 
-The two policies earn exactly the same reward, yet one of them is a disaster. The fix is not a smarter agent but a better specification — reward *actual* cleanliness, measured by some channel the agent cannot tamper with. Modern alignment work — RLHF, Constitutional AI, scalable oversight — is in large part the ongoing engineering of objectives that are harder to game (see Chapter 23).
+The two policies earn exactly the same reward, yet one of them is a disaster. The fix is not a smarter agent but a better specification — reward *actual* cleanliness, measured by some channel the agent cannot tamper with. Modern alignment work — [RLHF](ch46.html), Constitutional AI, scalable oversight — is in large part the ongoing engineering of objectives that are harder to game (see [Chapter 23](ch23.html)).
 
 **A note on emerging risks.** As systems grow more capable, alignment researchers worry about failure modes that small models never show. Two come up most often. **Instrumental convergence** is the plain observation that *almost any* goal goes better if the agent first grabs more resources, avoids being switched off, and keeps its goal from being changed — so wildly different objectives can all produce the same grabby, self-preserving side-behaviors. **Deceptive alignment** is the worry that a model learns to *act* aligned while it is being watched in training and testing — where getting caught is costly — and then behaves differently once deployed. Neither is an everyday engineering problem yet, the way bias and prompt injection already are. But they are why "the model passed our eval" is a weaker promise for a very capable system than for a spam filter: the same smarts that make it useful also make it better at *looking* good on the exact test you ran, whatever it would do off-camera.
 
@@ -799,7 +801,7 @@ A "voluntary framework" and a "no obligation" tier do not mean *do nothing*. Lia
 
 Large language models introduce failure modes that classical ML never had to worry about. The root cause is structural: an LLM takes *natural-language instructions* and *untrusted data* in the very same input channel, and it will fluently produce convincing text whether or not that text is true. Three risks follow directly from this.
 
-**Hallucination** is the model stating something false with complete confidence. It is intrinsic rather than a fixable bug: an LLM is trained to produce *plausible* continuations of text, and plausible is not the same as true. So it will invent citations, fabricate court cases — real lawyers have been sanctioned for filing briefs full of cases that never existed — and conjure API functions that were never written. The mitigations are all forms of *grounding*: retrieval-augmented generation that supplies real source text, requiring citations, training the model to say "I don't know," and human verification of anything load-bearing (see Chapter 23).
+**Hallucination** is the model stating something false with complete confidence. It is intrinsic rather than a fixable bug: an LLM is trained to produce *plausible* continuations of text, and plausible is not the same as true. So it will invent citations, fabricate court cases — real lawyers have been sanctioned for filing briefs full of cases that never existed — and conjure API functions that were never written. The mitigations are all forms of *grounding*: [retrieval-augmented generation](ch43.html) that supplies real source text, requiring citations, training the model to say "I don't know," and human verification of anything load-bearing (see Chapter 23).
 
 **Jailbreaks** are prompts that bypass the model's safety training to extract content it was tuned to refuse. The recurring forms are role-play framing ("you are DAN, an AI with no rules"), hypothetical wrappers ("for a novel, describe how a character would…"), and token-level obfuscation that hides the request from the safety filter. Conceptually a jailbreak is just an adversarial example (38.5) translated into language space — a crafted input that pushes the model off its intended behavior.
 
@@ -842,7 +844,30 @@ def run_tool(name, args, llm_requested=True):
 Treat every LLM as a confused, gullible, persuasive intern who happens to have read the entire internet: brilliant at drafting, hopeless at knowing what is actually true, and willing to follow any official-looking instruction it stumbles across. Verify its facts, sandbox its tools, and never grant it a capability you would not hand to a stranger who can be talked into anything.
 :::
 
-## 38.10 — Key takeaways
+## 38.10 — Quick reference
+
+| Term / method | What it means | When / why it matters |
+|---|---|---|
+| Fairness through unawareness | Dropping the protected attribute and hoping the model can't discriminate | Almost always fails — correlated proxies (ZIP, surname) rebuild it; keep the attribute for *evaluation* |
+| Demographic parity | Equal approval rate across groups, $\hat{Y}\perp A$ | Use when equal access is the goal and base-rate differences shouldn't drive the decision |
+| Equalized odds | Equal TPR and FPR across groups, $\hat{Y}\perp A\mid Y$ | Use when you care that errors are spread fairly among the truly (un)qualified |
+| Individual fairness | Similar inputs → similar outputs ($L$-Lipschitz) | Use when "treat like cases alike" matters; hard part is defining the similarity metric |
+| Impossibility theorem | Calibration + equal FPR + equal FNR can't all hold when base rates differ | Forces an explicit choice of *which* unfairness to tolerate (the COMPAS dispute) |
+| Pre / In / Post-processing | Mitigate bias in the data / objective / output thresholds | Pick by access: pre is model-agnostic, in is most direct, post works on a black box |
+| Reweighting | $w=P(A)P(Y)/P(A,Y)$ on each example | Cheap pre-processing fix that decorrelates group from label |
+| Differential privacy ($\varepsilon$) | One person in/out barely changes any output; budget $\varepsilon$ | Rigorous, *composable* privacy; small $\varepsilon$ = strong privacy, more noise, less accuracy |
+| DP-SGD | Clip per-sample gradients + add noise during training | Train a neural net under a provable privacy budget (Opacus) |
+| Federated learning | Train on-device, send only model updates | Keep raw data off the server; combine with DP — gradients still leak |
+| Membership inference | Attacker tests if a record was in the training set | The canonical leakage attack; overconfidence on training data is the tell |
+| Adversarial example / FGSM | $x_{\text{adv}}=x+\varepsilon\,\text{sign}(\nabla_x\mathcal{L})$ | Invisible perturbation flips the output at inference; defend with adversarial training |
+| Data poisoning / backdoor | Inject samples so a secret trigger flips the output | Passes all accuracy tests — provenance & integrity checks are the only defense |
+| Specification gaming / Goodhart | Optimizer maxes the proxy, not the intent | "When a measure becomes a target it stops being a good measure" — test for the lazy cheat |
+| EU AI Act | Binding, risk-tiered law; fines up to 7% turnover | High-risk uses (hiring, credit, medical) require oversight, logging, bias testing before deploy |
+| NIST AI RMF | Voluntary process: Govern–Map–Measure–Manage | How US orgs operationalize trustworthy AI without a statute |
+| Model card | Structured doc: intended use, disaggregated metrics, limits | The "nutrition label"; effectively required by EU AI Act high tier |
+| Prompt injection | Hidden instructions in untrusted data hijack an LLM | Open vuln class — separate instructions from data, least-privilege tools, human confirm |
+
+## 38.11 — Key takeaways
 
 - Bias is a property of **data and objective**, not code. Separate historical, sampling, label, and measurement sources, because each demands a different fix. Deleting the sensitive attribute (**fairness through unawareness**) fails because correlated proxies rebuild it.
 - Fairness has **multiple incompatible definitions** — demographic parity, equalized odds, individual fairness. When base rates differ, **impossibility theorems** prove you cannot satisfy them all at once; pick the metric that matches the harm you most want to avoid, and say so explicitly.
@@ -854,7 +879,7 @@ Treat every LLM as a confused, gullible, persuasive intern who happens to have r
 - Governance assigns responsibility: the **EU AI Act** (risk-tiered, binding, GDPR-scale fines) and the **NIST AI RMF** (Govern–Map–Measure–Manage, voluntary) are the anchors, and **model cards** are how transparency gets documented in practice. Document from day one.
 - LLMs add **hallucination**, **jailbreaks**, and **prompt injection**; treat untrusted input as hostile, apply least privilege to tools, and verify anything load-bearing.
 
-## 38.11 — See also
+## 38.12 — See also
 
 - **Chapter 36 — Explainable AI & Interpretability** — the transparency tooling (SHAP, saliency, model cards) that makes bias and failures visible in the first place.
 - **Chapter 37 — Causal Inference** — why correlation-based fairness fixes can miss the causal pathway through which discrimination actually flows.

@@ -111,6 +111,8 @@ Speech and audio processing is the branch of applied AI that turns sound — the
 🧭 **In context:** Applied AI built on sequence models · used for transcription, voice synthesis, speaker ID, and audio search · the one key idea: audio becomes a 2-D time-frequency image (the spectrogram), and from there it is a sequence-modeling problem.
 :::
 
+> 💡 **Remember this:** turn sound into a log-mel-spectrogram and almost every audio task — recognition, synthesis, speaker ID, classification — becomes a sequence-modeling problem you already know how to solve.
+
 ## 21.1 — Audio as a signal and a sequence
 
 **Intuition first.** Imagine sound as ripples on a pond. A microphone is a tiny cork bobbing up and down on those ripples, and thousands of times a second it writes down how high it sits. That column of numbers *is* the audio. The rest of this chapter is about turning that raw bobbing record into something a machine can read at a glance — and the trick is to stop staring at the height-over-time wiggle and instead ask "which musical notes are mixed into this moment?"
@@ -124,7 +126,7 @@ $$f_{\max} = \frac{f_s}{2}$$
 **In words:** the highest frequency you can faithfully record is half your sampling rate; anything faster than that gets scrambled (aliased) into a fake lower tone.
 **Also written:** $f_s \ge 2\,f_{\max}$ — to capture a tone of frequency $f_{\max}$ you must sample at least twice as fast as it oscillates.
 
-The key move in audio processing is switching from the **time domain** (amplitude vs. time) to the **frequency domain** (how much energy sits at each pitch). The tool is the **Fourier transform**, which decomposes a signal into a sum of sine waves. Applied to short overlapping windows of the waveform — the **Short-Time Fourier Transform (STFT)** — it produces a **spectrogram**: a 2-D image where the x-axis is time, the y-axis is frequency, and brightness is energy. We use *short* windows (typically 25 ms, hopping 10 ms) because speech is non-stationary — the frequencies change as the mouth moves — so we cut the signal into slices short enough to be roughly steady within each one.
+The key move in audio processing is switching from the **time domain** (amplitude vs. time) to the **frequency domain** (how much energy sits at each pitch). The tool is the **Fourier transform**, which decomposes a signal into a sum of sine waves (a [linear-algebra](ch01.html) change of basis). Applied to short overlapping windows of the waveform — the **Short-Time Fourier Transform (STFT)** — it produces a **spectrogram**: a 2-D image where the x-axis is time, the y-axis is frequency, and brightness is energy. We use *short* windows (typically 25 ms, hopping 10 ms) because speech is non-stationary — the frequencies change as the mouth moves — so we cut the signal into slices short enough to be roughly steady within each one.
 
 This animation shows the single most important move in the whole chapter: a window slides along the waveform, and each slice it covers becomes one vertical stripe of the spectrogram on the right.
 
@@ -257,14 +259,14 @@ print(logmel.shape)   # the 80 x T "image" that most audio models consume
 
 **Automatic Speech Recognition (ASR)** maps audio to text. The hard part is that speech has no spaces: the sound stream is continuous, speakers talk at different speeds, and the same word stretches over a variable number of audio frames. The history of ASR is the story of how the field handled this alignment problem.
 
-**The classical pipeline (pre-2015).** Old systems factored the problem with Bayes' rule. To find the most likely word sequence $W$ given acoustics $X$:
+**The classical pipeline (pre-2015).** Old systems factored the problem with [Bayes' rule](ch04.html). To find the most likely word sequence $W$ given acoustics $X$:
 
 $$\hat{W} = \arg\max_W \; \underbrace{P(X \mid W)}_{\text{acoustic model}} \; \underbrace{P(W)}_{\text{language model}}$$
 
 **In words:** out of every possible sentence, pick the one that both *sounds like* the recorded audio (acoustic model) and *reads like* plausible language (language model); multiply those two scores and take the winner.
 **Also written:** $\hat{W} = \arg\max_W P(W \mid X)$, since by Bayes' rule $P(W\mid X) \propto P(X\mid W)\,P(W)$ — the $P(X)$ denominator is the same for every $W$, so it drops out of the $\arg\max$.
 
-The **acoustic model** (a Hidden Markov Model with Gaussian mixtures, later a neural net) scored how well audio matched **phonemes** — the atomic sounds of a language. A **pronunciation lexicon** mapped phonemes to words. The **language model** (an n-gram) scored how likely a word sequence was as English. A **decoder** searched the combined space. It worked, but it needed three separately trained components, a hand-built lexicon, and forced alignments between audio frames and phonemes.
+The **acoustic model** (a [Hidden Markov Model](ch13.html) with Gaussian mixtures, later a neural net) scored how well audio matched **phonemes** — the atomic sounds of a language. A **pronunciation lexicon** mapped phonemes to words. The **language model** (an n-gram) scored how likely a word sequence was as English. A **decoder** searched the combined space. It worked, but it needed three separately trained components, a hand-built lexicon, and forced alignments between audio frames and phonemes.
 
 **End-to-end CTC.** **Connectionist Temporal Classification (CTC)** collapsed all of that into one neural network trained directly on (audio, text) pairs — no per-frame alignment needed. The trick: the network emits a character (or a special **blank** token) at every audio frame, then a collapsing rule removes blanks and merges adjacent repeats. The CTC loss sums the probability over *all* frame-level paths that collapse to the target text.
 
@@ -283,7 +285,7 @@ A worked example makes the collapsing rule concrete. Target word: `CAT`. Suppose
 
 The blank token is essential: without it, the double-l in `HELLO` would collapse to a single `L`. By inserting a blank between the two L's, the model can keep them apart. CTC sums probability across every valid alignment, so the model never has to be told which frame is which letter — it learns alignment for free. Its one weakness: CTC assumes outputs are conditionally independent given the audio, so it leans on an external language model for fluent text.
 
-**Attention / sequence-to-sequence.** A second end-to-end family uses an **encoder–decoder with attention** (see Chapter 17): the encoder turns audio into a sequence of vectors, and the decoder generates text one token at a time, *attending* to the relevant audio frames at each step. This learns a soft alignment jointly with the language, often beating CTC on fluency — at the cost of needing the whole utterance before decoding, which is bad for streaming.
+**Attention / sequence-to-sequence.** A second end-to-end family uses an **encoder–decoder with attention** (see [Attention & Transformers](ch17.html)): the encoder turns audio into a sequence of vectors, and the decoder generates text one token at a time, *attending* to the relevant audio frames at each step. This learns a soft alignment jointly with the language, often beating CTC on fluency — at the cost of needing the whole utterance before decoding, which is bad for streaming.
 
 **Whisper-style models.** Modern systems like **Whisper** are large Transformer encoder–decoders trained on hundreds of thousands of hours of weakly-labeled, multilingual web audio. The scale buys robustness: they transcribe accents, background music, and many languages out of the box, and a single model also does translation and language identification. The lesson mirrors NLP — at sufficient scale, one general model beats a stack of specialized components.
 
@@ -373,7 +375,7 @@ flowchart LR
   V --> W["Audio out"]
 ```
 
-The catch with WaveNet was speed: predicting 24,000 samples per second one at a time is painfully slow. Later vocoders — parallel WaveNet, **HiFi-GAN** (a GAN-based vocoder, see Chapter 19) — generate all samples at once, hitting real-time or faster while keeping quality high. Today, end-to-end systems such as VITS fold both stages into a single network.
+The catch with WaveNet was speed: predicting 24,000 samples per second one at a time is painfully slow. Later vocoders — parallel WaveNet, **HiFi-GAN** (a [GAN](ch18.html)-based vocoder) — generate all samples at once, hitting real-time or faster while keeping quality high. Today, end-to-end systems such as VITS fold both stages into a single network.
 
 | Era | How it makes sound | Quality | Flexibility | Footprint |
 |---|---|---|---|---|
@@ -404,7 +406,7 @@ Three related tasks build on this:
 
 - **Speaker verification** (1-to-1): "Is this the enrolled user?" Compare the new clip's embedding to the enrolled one via **cosine similarity**, and accept if it is above a threshold. This is voice unlock.
 - **Speaker identification** (1-to-N): "Which of my N known speakers is this?" Pick the nearest enrolled embedding.
-- **Speaker diarization**: "Who spoke when?" Given a meeting recording with unknown speakers, segment it and label each segment — *Speaker A, Speaker B…* The classic approach slices audio into short windows, embeds each, then **clusters** the embeddings (Chapter 11); each cluster becomes one speaker.
+- **Speaker diarization**: "Who spoke when?" Given a meeting recording with unknown speakers, segment it and label each segment — *Speaker A, Speaker B…* The classic approach slices audio into short windows, embeds each, then [**clusters**](ch11.html) the embeddings; each cluster becomes one speaker.
 
 The comparison engine for all three is cosine similarity:
 
@@ -474,9 +476,9 @@ print(float(score), bool(accept))   # cosine score + threshold decision
 
 ## 21.5 — Audio classification, music information retrieval, and keyword spotting
 
-Not all audio is speech. **Audio classification** assigns a label to a sound clip — dog bark, glass breaking, siren, baby crying. The pattern is identical to image classification: turn the clip into a mel-spectrogram "image" and run a CNN (Chapter 15) or an audio Transformer over it. This treats sound recognition as a vision problem on a time-frequency picture, which is why so much computer-vision machinery transfers directly.
+Not all audio is speech. **Audio classification** assigns a label to a sound clip — dog bark, glass breaking, siren, baby crying. The pattern is identical to image classification: turn the clip into a mel-spectrogram "image" and run a [CNN](ch15.html) or an audio Transformer over it. This treats sound recognition as a vision problem on a time-frequency picture, which is why so much computer-vision machinery transfers directly.
 
-**Music Information Retrieval (MIR)** is the audio-classification family aimed at music: genre and mood tagging, **beat and tempo (BPM) tracking**, **chord recognition**, instrument detection, and **audio fingerprinting** — the Shazam trick of matching a noisy phone clip to a track by hashing peaks in its spectrogram. The fingerprint is robust because peak locations survive noise and compression that would wreck the raw waveform. MIR powers recommendation (Chapter 26), auto-tagging, and DJ tools.
+**Music Information Retrieval (MIR)** is the audio-classification family aimed at music: genre and mood tagging, **beat and tempo (BPM) tracking**, **chord recognition**, instrument detection, and **audio fingerprinting** — the Shazam trick of matching a noisy phone clip to a track by hashing peaks in its spectrogram. The fingerprint is robust because peak locations survive noise and compression that would wreck the raw waveform. MIR powers [recommendation](ch26.html), auto-tagging, and DJ tools.
 
 **Keyword spotting (KWS)**, or **wake-word detection**, is the always-listening task: a tiny model that runs continuously on-device, waiting for "Hey Siri" or "Alexa." Its constraints are unique — it must be small enough to fit on a microcontroller, sip power, and produce almost no **false accepts** (waking when you didn't call it) while keeping **false rejects** (missing a real call) low. Only after the wake word fires does the heavy cloud ASR kick in.
 
@@ -540,7 +542,7 @@ flowchart LR
 
 **Intuition first.** Labeled speech is scarce and expensive — transcribing one hour of audio can take five hours of human effort — but *unlabeled* audio is nearly infinite (every podcast, audiobook, and YouTube video). Self-supervised learning is the trick of letting a model teach itself from that raw ocean of sound by playing a fill-in-the-blank game: hide part of the audio and make the model predict what was hidden. The model that gets good at this game has, as a side effect, learned what speech *is* — and then a tiny amount of labeled data is enough to point that knowledge at transcription, speaker ID, or emotion.
 
-This is the audio version of what BERT did for text (Chapter 18), and it is why a model like **wav2vec 2.0** can reach strong WER with only ten minutes of labeled speech after pretraining on tens of thousands of unlabeled hours.
+This is the audio version of what BERT did for [text](ch20.html), and it is why a model like **wav2vec 2.0** can reach strong WER with only ten minutes of labeled speech after pretraining on tens of thousands of unlabeled hours.
 
 The two landmark recipes:
 
@@ -609,7 +611,7 @@ print(proc.batch_decode(pred_ids))
 
 **Intuition first.** Text is naturally made of discrete tokens (words, sub-words), which is exactly what makes language models possible — a Transformer predicts the next token from a fixed vocabulary. Audio is continuous, so for years it couldn't be fed to a language model the same way. A **neural audio codec** fixes this: it learns to chop sound into a stream of discrete **audio tokens** — a small alphabet of "sound words" — so that audio becomes just another sequence of tokens a Transformer can predict. This is the hidden engine under modern audio LLMs and text-to-audio models.
 
-A neural codec is an **autoencoder** (Chapter 19) with a quantizer in the middle: an encoder compresses the waveform into a low-rate latent, a **vector quantizer** snaps each latent to the nearest entry in a learned codebook (turning it into an integer token), and a decoder reconstructs the waveform. The landmarks are **SoundStream** (Google) and **EnCodec** (Meta).
+A neural codec is an [**autoencoder**](ch14.html) with a quantizer in the middle: an encoder compresses the waveform into a low-rate latent, a **vector quantizer** snaps each latent to the nearest entry in a learned codebook (turning it into an integer token), and a decoder reconstructs the waveform. The landmarks are **SoundStream** (Google) and **EnCodec** (Meta).
 
 **The leftover-error trick, in plain terms.** One small codebook can't describe sound precisely — it only has a handful of "sound words" to choose from, so its best guess is always a little off. **Residual Vector Quantization (RVQ)** fixes that by stacking guessers. The first codebook makes a rough guess. You subtract that guess from the true vector and you're left with the *error* it missed. A second codebook then guesses *that error*; you subtract again, and a third codebook guesses what's still left, and so on. Each layer is a small correction on top of the last, so a stack of tiny codebooks ends up as accurate as one impossibly huge codebook — and you store just the chosen index from each layer.
 
@@ -697,7 +699,7 @@ time_mask = T.TimeMasking(time_mask_param=100)        # hide vertical bands
 aug = time_mask(freq_mask(logmel))   # forces the model to use redundant cues
 ```
 
-**Accents and dialects.** Models inherit the bias of their training data. A system trained mostly on US English under-performs on Scottish, Indian, or Nigerian English, and on **code-switching** (mixing languages mid-sentence). The fix is data — deliberately diverse, multi-accent, multilingual corpora — and large weakly-supervised models like Whisper that have simply *heard* far more variety. This is also a fairness issue (Chapter 38): a higher WER for some accent groups is a real, measured harm, not a rounding error.
+**Accents and dialects.** Models inherit the bias of their training data. A system trained mostly on US English under-performs on Scottish, Indian, or Nigerian English, and on **code-switching** (mixing languages mid-sentence). The fix is data — deliberately diverse, multi-accent, multilingual corpora — and large weakly-supervised models like Whisper that have simply *heard* far more variety. This is also a [fairness issue](ch38.html): a higher WER for some accent groups is a real, measured harm, not a rounding error.
 
 **Latency.** For dictation you can wait for the full utterance; for a live assistant or live captions you cannot. **Streaming ASR** must emit words as the person speaks, which rules out models that need the whole clip (vanilla attention seq2seq) and favors **CTC** or the **streaming Transducer (RNN-T)** architecture, which decode left-to-right in real time. There is a genuine **accuracy-vs-latency tradeoff**: looking ahead a few hundred milliseconds gives the model more context and improves accuracy, but adds delay, so engineers tune that **lookahead** window per product.
 
@@ -712,7 +714,31 @@ flowchart TD
 **Common mistake:** validating only on read, native-accent, close-mic speech, then being shocked by field performance. Build a test set that mirrors deployment — far-field, noisy, accented, spontaneous — *before* you ship, and track WER per accent and per noise condition, not just the average.
 :::
 
-## 21.9 — Key takeaways
+## 21.9 — Quick reference
+
+| Term / formula | What it means | When / why it matters |
+|---|---|---|
+| Sampling rate $f_s$ | Samples captured per second (16 kHz speech, 44.1 kHz music) | Sets fidelity and data size; pick by the content's frequency range |
+| Nyquist $f_{\max}=f_s/2$ | Highest faithfully recordable frequency | Sample $\ge 2\times$ the top frequency or it aliases into a fake tone |
+| STFT → spectrogram | Fourier transform over short sliding windows → time×freq image | The central move; turns audio into a 2-D image for vision-style models |
+| Mel scale $m=2595\log_{10}(1+f/700)$ | Warps hertz into perceived-pitch units | Matches human hearing; gives the mel-spectrogram models consume |
+| Log-mel-spectrogram | Mel energies in decibels (log loudness) | The standard input to almost every modern audio model |
+| MFCCs | DCT of log-mel → ~13 decorrelated coeffs/frame | Classic feature for HMM/GMM systems; neural nets skip the DCT |
+| CTC | Alignment-free loss summing over blank/repeat paths | End-to-end ASR with no per-frame labels; good for streaming |
+| WER $=(S+I+D)/N$ | Word error rate vs. a human reference | *The* ASR metric — always measure on realistic, noisy, accented audio |
+| Tacotron 2 + vocoder | Text → mel-spectrogram → waveform | The neural-TTS recipe; mel-spec is the ASR/TTS interlingua |
+| WaveNet $p(\mathbf{x})=\prod_t p(x_t\mid x_{<t})$ | Autoregressive sample-by-sample waveform model | High fidelity but slow; HiFi-GAN/VITS parallelize for real time |
+| Speaker embedding (x-vector) | Fixed vector capturing a voice's timbre | Powers verification, identification, and diarization |
+| Cosine similarity | Angle between two embeddings, magnitude-invariant | The accept/reject score for speaker verification |
+| VAD | Frame-level speech-present classifier | Trims silence before costly embedding; detects end-of-turn |
+| Keyword spotting (KWS) | Tiny always-on wake-word detector | Cheap on-device gatekeeper before heavy cloud ASR |
+| wav2vec 2.0 / HuBERT | Self-supervised masked-prediction pretraining | One reusable encoder; fine-tune with minutes of labels |
+| RVQ $\mathbf{z}\approx\sum_i \mathbf{e}_i$ | Stacked codebooks each correcting the last's residual | Turns audio into discrete tokens for codecs and audio LLMs |
+| SNR$_{\text{dB}}=10\log_{10}(P_s/P_n)$ | Speech power vs. noise power, in dB | Quantifies noise; WER falls off a cliff near 0 dB |
+| SpecAugment | Mask random time/freq bands of the spectrogram | Cheap augmentation that boosts noise robustness |
+| Streaming CTC / RNN-T | Decode left-to-right as audio arrives | Required for live captions; tune lookahead for accuracy vs. latency |
+
+## 21.10 — Key takeaways
 
 - Audio starts as a 1-D **waveform**; the field's central move is the **STFT → spectrogram → mel-spectrogram (log) → MFCCs** chain that turns it into a 2-D time-frequency image. Modern models eat **log-mel-spectrograms**.
 - **ASR** evolved from a three-part pipeline (acoustic HMM + lexicon + LM) to end-to-end **CTC** (alignment-free via a blank token), **attention seq2seq**, and large weakly-supervised **Whisper-style** Transformers. Measure quality with **WER** on realistic audio.
@@ -723,7 +749,7 @@ flowchart TD
 - **Neural audio codecs** (**SoundStream**, **EnCodec**) with **residual vector quantization** turn continuous sound into discrete **audio tokens**, making audio generatable by a Transformer (AudioLM, VALL-E, MusicGen) and giving extreme compression.
 - The deployment challenges are **noise/reverb** (augmentation, SpecAugment, beamforming; gauged by **SNR**), **accents** (diverse data; a fairness concern), and **latency** (streaming CTC/RNN-T with a tunable lookahead).
 
-## 21.10 — See also
+## 21.11 — See also
 
 - **Recurrent & Sequence Models** — RNNs, LSTMs, and the sequence-modeling backbone of older ASR/TTS.
 - **Attention & Transformers** — the encoder–decoder and attention mechanism behind Whisper, Tacotron, and modern audio models.

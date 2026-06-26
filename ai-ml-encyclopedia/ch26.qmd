@@ -111,6 +111,8 @@ Recommender systems are the algorithms that decide what shows up next: the films
 🧭 **In context:** Applied ML Systems · used to predict which items a user will like and rank them · the one key idea: learn from the *pattern* of past interactions, not just item content — taste is contagious across similar users and items.
 :::
 
+> 💡 **Remember this:** a recommender is just smart guesses at the blanks in a sparse who-liked-what matrix, then a fast retrieve-then-rank funnel that shows each person the top few — judged on the *order* of that list, not the raw scores.
+
 **The big picture first.** Imagine a giant spreadsheet where every row is a person and every column is a movie, and almost every cell is blank because nobody watches everything. A recommender's whole job is to make smart guesses about the blanks, then show each person the items it guessed they'd love most. Every technique in this chapter — from averaging your neighbors' opinions, to factoring the spreadsheet into hidden "taste axes," to billion-item neural retrieval — is a different strategy for filling those blanks well and ranking the top few fast.
 
 ```{mermaid}
@@ -226,7 +228,7 @@ $$
 
 **Also written:** $\hat R_{ui}=p_u^\top q_i=\langle p_u, q_i\rangle$; stacked over all users and items this is the matrix product $\hat R = PQ^\top$.
 
-We learn $p,q$ only from *observed* entries by minimizing squared error with regularization (this is the famous form from the Netflix Prize):
+We learn $p,q$ only from *observed* entries by minimizing squared error with regularization (this is the famous form from the Netflix Prize), typically via [SGD or alternating least squares](ch03.html):
 
 $$
 \min_{p,q}\sum_{(u,i)\in\text{observed}}\big(R_{ui}-p_u\cdot q_i\big)^2+\lambda\big(\lVert p_u\rVert^2+\lVert q_i\rVert^2\big).
@@ -250,7 +252,7 @@ print((P@Q.T).round(1))          # full matrix, blanks now filled
 # Ann x Alien predicts ~0.x (low) — she clusters with the family-film crowd
 ```
 
-The magic: two users who never rated the *same* film can still match, because both map to nearby latent vectors. MF generalizes where neighborhood methods see no overlap. Under the hood this is the same low-rank idea as the SVD in **Dimensionality Reduction** — we are finding a few hidden axes that explain most of the rating variance, just fit only on the cells we actually observed.
+The magic: two users who never rated the *same* film can still match, because both map to nearby latent vectors. MF generalizes where neighborhood methods see no overlap. Under the hood this is the same low-rank idea as the [SVD in Dimensionality Reduction](ch07.html) — we are finding a few hidden axes that explain most of the rating variance, just fit only on the cells we actually observed.
 
 In practice you rarely hand-roll SGD. A library like `surprise` (or `implicit` for the implicit case in §26.4) gives you a tuned, bias-aware SVD in a few lines:
 
@@ -280,7 +282,7 @@ Rule of thumb: start item-based and MF-based for warm users, but always keep a n
 
 ## 26.2 — Content-based filtering
 
-**Content-based filtering** ignores the crowd and looks at the *items themselves*. Each item gets a feature vector — genres, tags, the TF-IDF of its description, brand, price band — and each user gets a **profile** built from the features of items they liked. Recommend items whose feature vectors are closest to the profile.
+**Content-based filtering** ignores the crowd and looks at the *items themselves*. Each item gets a feature vector — genres, tags, the [TF-IDF](ch20.html) of its description, brand, price band — and each user gets a **profile** built from the features of items they liked. Recommend items whose feature vectors are closest to the profile.
 
 **Intuition first.** This is the "you liked sci-fi, here's more sci-fi" friend — the one who recommends based on *what a thing is*, not who else liked it. It builds a little dossier of your tastes ("loves animated family films, hates horror") and matches new items against that dossier, never needing a single other person's opinion.
 
@@ -475,7 +477,7 @@ When you have rich features and huge catalogs, neural networks take over. Four a
 
 **Neural collaborative filtering (NCF)** replaces MF's dot product with a learned function: embed user and item, concatenate, pass through an MLP that outputs the score. It can model interactions a linear dot product cannot — at higher cost and with more overfitting risk.
 
-**Two-tower retrieval** is the workhorse of large-scale retrieval. A **user tower** maps user features to an embedding, an **item tower** maps item features to an embedding in the *same* space, and relevance is their dot product. The trick: item embeddings are computed offline for the whole catalog and stored in an **approximate nearest neighbor (ANN)** index, so at request time you embed the user once and fetch the nearest items in milliseconds — even from a billion-item catalog.
+**Two-tower retrieval** is the workhorse of large-scale retrieval. A **user tower** maps user features to an embedding, an **item tower** maps item features to an [embedding](ch14.html) in the *same* space, and relevance is their dot product. The trick: item embeddings are computed offline for the whole catalog and stored in an **approximate nearest neighbor (ANN)** index, so at request time you embed the user once and fetch the nearest items in milliseconds — even from a billion-item catalog.
 
 ```{mermaid}
 flowchart LR
@@ -530,7 +532,7 @@ top = scores.topk(10).indices
   <circle r="3.5" fill="#22c55e" class="c26-tt-dot" style="offset-path:path('M325 66 L200 114'); animation:c26-tt-flow 3.2s linear infinite .4s"/>
 </svg>
 
-**Sequence / session-based** models treat your recent activity as an ordered sequence and predict the next item — RNNs (GRU4Rec) or, now dominant, self-attention (SASRec, BERT4Rec, borrowing the machinery of **Attention & Transformers**). These shine when intent is *temporal*: what you want next depends on what you just did, even within an anonymous session with no long-term profile.
+**Sequence / session-based** models treat your recent activity as an ordered sequence and predict the next item — [RNNs](ch16.html) (GRU4Rec) or, now dominant, self-attention (SASRec, BERT4Rec, borrowing the machinery of [Attention & Transformers](ch17.html)). These shine when intent is *temporal*: what you want next depends on what you just did, even within an anonymous session with no long-term profile.
 
 **Wide-and-deep** trains two halves jointly: a **wide** linear part that memorizes specific feature crosses ("installed app X *and* viewing app Y"), and a **deep** part that generalizes via embeddings. Memorization plus generalization in one model — Google's recipe for app and play-store ranking.
 
@@ -548,7 +550,7 @@ You cannot score a billion items per request with a heavy model. Production reco
 
 **Candidate generation (retrieval)** cheaply narrows billions to a few hundred — two-tower ANN lookups, item-based co-occurrence, simple recall rules. Optimized for *recall*: don't miss good items; a few junk ones are fine.
 
-**Ranking** then applies an expensive, feature-rich model (wide-and-deep, gradient-boosted trees, large neural nets) to just those few hundred, producing the precise order shown to the user. Optimized for *precision at the top*. Often a third **re-ranking** stage adds business rules and diversity.
+**Ranking** then applies an expensive, feature-rich model (wide-and-deep, [gradient-boosted trees](ch10.html), large neural nets) to just those few hundred, producing the precise order shown to the user. Optimized for *precision at the top*. Often a third **re-ranking** stage adds business rules and diversity.
 
 ```{mermaid}
 flowchart LR
@@ -631,7 +633,7 @@ print(round(ndcg_at_k(['A','B','C','D','F'], {'B','D','E'}, 5), 2))  # 0.5
 
 ### Pitfalls: popularity bias, filter bubbles, feedback loops
 
-Good offline numbers can hide structural rot. **Popularity bias**: the easiest way to score well is to recommend blockbusters everyone likes, which buries the long tail and makes the system useless for niche taste. **Filter bubbles**: content-based and over-tuned personalization keep narrowing what you see until you're trapped in your own echo. **Feedback loops** are the deepest trap — the model recommends an item, that recommendation *causes* the click, the click becomes training data confirming the model, and the bias compounds. The system trains on data it generated. Counter with diversity terms, exploration (showing uncertain items to gather honest signal), de-biasing of logged data, and — non-negotiably — **online A/B tests**, because offline metrics computed on biased logs flatter the very behavior that produced them.
+Good offline numbers can hide structural rot. **Popularity bias**: the easiest way to score well is to recommend blockbusters everyone likes, which buries the long tail and makes the system useless for niche taste. **Filter bubbles**: content-based and over-tuned personalization keep narrowing what you see until you're trapped in your own echo. **Feedback loops** are the deepest trap — the model recommends an item, that recommendation *causes* the click, the click becomes training data confirming the model, and the bias compounds. The system trains on data it generated. Counter with diversity terms, [exploration](ch25.html) (showing uncertain items to gather honest signal), de-biasing of logged data, and — non-negotiably — [online A/B tests](ch12.html), because offline metrics computed on biased logs flatter the very behavior that produced them.
 
 ```{mermaid}
 flowchart LR
@@ -692,7 +694,29 @@ A practical refinement: subtract each user's mean rating before taking cosine (*
 Pick the metric to match the data: centered cosine (Pearson) for explicit ratings to cancel rater bias; plain cosine or Jaccard for implicit binary clicks where there is no scale to center.
 :::
 
-## 26.10 — Key takeaways
+## 26.10 — Quick reference
+
+| Term / formula | Meaning | When / why |
+|---|---|---|
+| User–item matrix $R$ | Rows = users, cols = items, $R_{ui}$ = rating; mostly empty | The substrate of all CF; recommendation = filling its blanks |
+| Matrix completion | Predict missing cells, recommend highest empty ones | Reframes "recommend" as a concrete numeric task |
+| User-based / item-based CF | Similarity-weighted average of neighbor ratings | Item-based preferred in prod: stabler, smaller, cacheable |
+| Matrix factorization $\hat R_{ui}=p_u\cdot q_i$ | Users & items as $k$-dim latent vectors; dot product scores | Generalizes across users with no shared items |
+| Bias terms $\mu+b_u+b_i+p_u\cdot q_i$ | Separate "generous rater" / "loved item" offsets from taste | Removes systematic rating shifts before fitting taste |
+| Cold-start | New user/item has an empty row/column | Fall back to content features or popularity defaults |
+| Content-based filtering | Match item feature vectors to a user profile | Handles new items; no crowd needed, but over-specializes |
+| Hybrid (weighted / switching) | Blend or switch between CF and content scores | Each family fails where the other works |
+| Implicit feedback + confidence $c_{ui}=1+\alpha r_{ui}$ | Preference 0/1 with engagement-scaled confidence | Clicks/plays have no true negatives; never treat 0 as dislike |
+| BPR (pairwise) | Score positive item above a sampled negative | Default learning-to-rank loss for implicit data |
+| LambdaMART (listwise) | GBDT driven by NDCG-aware gradients | Wins when you can optimize the served metric directly |
+| Two-tower retrieval | User & item towers into shared space; ANN lookup | Recall over billion-item catalogs in milliseconds |
+| Candidate generation → ranking | Cheap recall stage, then expensive precision stage | Compute economics: heavy model only on a few hundred items |
+| Precision@k / Recall@k | Clean shortlist vs catching the good ones | Evaluate only the top-$k$ a user actually sees |
+| NDCG@k | Rank-discounted gain, normalized to $[0,1]$ | Rewards putting hits earlier; the gold-standard order metric |
+| Cosine / centered cosine | Angle between preference vectors (Pearson cancels rater bias) | Shared primitive under neighborhood CF & content filtering |
+| Feedback loop | Recommendations cause clicks that train the next model | Why offline metrics flatter; confirm lift with online A/B tests |
+
+## 26.11 — Key takeaways
 
 - Collaborative filtering learns from the **user–item matrix** alone; recommendation is **matrix completion** over a very sparse matrix.
 - **Matrix factorization** maps users and items into a shared **latent space**; a dot product predicts ratings and generalizes across users with no overlapping items.
@@ -703,7 +727,7 @@ Pick the metric to match the data: centered cosine (Pearson) for explicit rating
 - Evaluate on the top-$k$ list with **precision@k, recall@k, MAP, NDCG** — but offline scores are corrupted by **popularity bias and feedback loops**, so confirm lift with **online A/B tests**.
 - **Cosine / centered-cosine similarity** is the shared primitive under neighborhood CF and content filtering.
 
-## 26.11 — See also
+## 26.12 — See also
 
 - **[Dimensionality Reduction]** — matrix factorization and latent factors are the same SVD-flavored idea applied to ratings.
 - **[Attention & Transformers]** — the engine behind modern sequence/session recommenders (SASRec, BERT4Rec).

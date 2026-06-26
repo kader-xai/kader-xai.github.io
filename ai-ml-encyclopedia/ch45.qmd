@@ -111,9 +111,11 @@ A pretrained base model knows a staggering amount about language but has no idea
 🧭 **In context:** Model adaptation / post-training · turning a base LLM into a task-specific or instruction-following model without retraining from scratch · reuse learned representations, then nudge them cheaply with small trainable deltas.
 :::
 
+> 💡 **Remember this:** Post-training reshapes a base model's *behavior*, not its *knowledge* — so use the cheapest tool that closes your gap (prompt → RAG → LoRA/QLoRA → full fine-tune) and almost never train all the weights.
+
 ## 45.1 — From pretraining to post-training
 
-Pretraining is brute-force pattern absorption. A transformer (Ch 23) is shown trillions of tokens of web text, code, and books, and trained on a single objective: predict the next token. Formally it minimizes the cross-entropy
+Pretraining is brute-force pattern absorption. A [transformer](ch17.html) is shown trillions of tokens of web text, code, and books, and trained on a single objective: predict the next token. Formally it minimizes the cross-entropy
 
 $$\mathcal{L}_{\text{pre}} = -\sum_t \log p_\theta(x_t \mid x_{<t})$$
 
@@ -123,7 +125,7 @@ over the corpus. The result — the *base model* — is an extraordinary autocom
 
 **Also written:** as an expectation over the data, $\mathcal{L}_{\text{pre}} = -\mathbb{E}_{x\sim\mathcal{D}}\big[\sum_t \log p_\theta(x_t\mid x_{<t})\big]$, or equivalently minimizing the average per-token negative log-likelihood (the log of perplexity).
 
-Post-training installs intent. It is a much smaller, much more curated phase that reshapes behavior rather than adding raw knowledge. The canonical recipe has three stages: **supervised fine-tuning (SFT)** teaches the model the format of being an assistant by imitating high-quality demonstrations; **preference optimization** (RLHF, DPO — Ch 46) sharpens *which* of two valid answers humans prefer; and **distillation** can compress a large aligned teacher into a smaller deployable student. The intuition: pretraining gives the model a vocabulary of skills; post-training selects and arranges them into helpful behavior.
+Post-training installs intent. It is a much smaller, much more curated phase that reshapes behavior rather than adding raw knowledge. The canonical recipe has three stages: **supervised fine-tuning (SFT)** teaches the model the format of being an assistant by imitating high-quality demonstrations; **preference optimization** ([RLHF, DPO — Ch 46](ch46.html)) sharpens *which* of two valid answers humans prefer; and **distillation** can compress a large aligned teacher into a smaller deployable student. The intuition: pretraining gives the model a vocabulary of skills; post-training selects and arranges them into helpful behavior.
 
 ```{mermaid}
 flowchart LR
@@ -169,7 +171,7 @@ There are two ways to transfer. **Feature extraction** freezes the pretrained *b
   <defs><marker id="ar" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6 Z" fill="currentColor"/></marker></defs>
 </svg>
 
-Why does transfer work at all? Because the lower layers of a deep network learn *general* features (in vision: edges then textures; in language: morphology then syntax then semantics) that are useful across many tasks, while only the top layers are task-specific. PEFT methods (45.5 onward) are essentially a third path: keep the backbone frozen *and* adapt the features, by injecting tiny trainable modules instead of either a head-only or a full unfreeze.
+Why does transfer work at all? Because the lower layers of a deep network learn *general* features (in [vision](ch19.html): edges then textures; in language: morphology then syntax then semantics) that are useful across many tasks, while only the top layers are task-specific. PEFT methods (45.5 onward) are essentially a third path: keep the backbone frozen *and* adapt the features, by injecting tiny trainable modules instead of either a head-only or a full unfreeze.
 
 **Discriminative vs generative transfer.** Classic transfer learning in vision (e.g. taking an ImageNet-pretrained ResNet and bolting a new classifier head on it) and the modern LLM story are the *same idea* applied to different shapes of problem. In the vision case the new head is a literal `nn.Linear` mapping features to your class labels. In the LLM case the "head" is already the language-model output and the task is itself expressed in text, so "feature extraction" looks more like linear probing of hidden states, while "full fine-tuning" and PEFT dominate. The principle is identical: cheap reuse of a frozen general encoder, with optional adaptation of the features themselves.
 
@@ -189,7 +191,7 @@ preds = clf.predict(encoder.encode(test_texts))
 
 ## 45.3 — Fine-tune vs RAG vs prompt
 
-Before spending a single GPU-hour, ask the cheapest question first: do you even need to change the weights? Three tools sit on a ladder of increasing cost and commitment. **Prompting** (including few-shot examples) steers an off-the-shelf model with words alone — zero training, instant iteration. **RAG** (retrieval-augmented generation, Ch 23) injects fresh or private *knowledge* at inference time by retrieving documents into the context. **Fine-tuning** changes the weights to bake in *behavior, format, or style* that prompting can't reliably hold.
+Before spending a single GPU-hour, ask the cheapest question first: do you even need to change the weights? Three tools sit on a ladder of increasing cost and commitment. **Prompting** (including few-shot examples) steers an off-the-shelf model with words alone — zero training, instant iteration. **RAG** ([retrieval-augmented generation](ch23.html), Ch 23) injects fresh or private *knowledge* at inference time by retrieving documents into the context. **Fine-tuning** changes the weights to bake in *behavior, format, or style* that prompting can't reliably hold.
 
 The decisive question is *what kind of gap* you are closing. A knowledge gap ("the model doesn't know our 2026 product catalog") is a RAG problem — fine-tuning is a terrible way to store facts, since they go stale and updating means retraining. A behavior gap ("we need every answer as valid JSON in our house tone") is a fine-tuning problem — no amount of retrieved context reliably enforces format. And many gaps are just a prompting problem you haven't solved yet.
 
@@ -231,7 +233,7 @@ The pragmatic order is *prompt → RAG → fine-tune*, and you stop at the first
 
 SFT is the first and most important post-training step. The mechanism is simple: take the base model and continue next-token training, but now on curated *(instruction, response)* pairs instead of raw web text. By imitating thousands of high-quality demonstrations of an assistant answering well, the model learns the *format* of being helpful — that a question expects a direct answer, not another question. When the demonstrations span many task types, this is called **instruction tuning**, and it produces the striking ability to follow instructions on tasks never seen during fine-tuning.
 
-Two details make SFT work in practice. First, **chat templates**: the raw text is wrapped in role markers so the model learns turn structure, e.g. `<|user|> ... <|assistant|> ...`. Second — and this is the subtle one — **loss masking**. You do not want to train the model to *generate the user's question*; you only want it to learn the assistant's *response*. So the loss is computed on completion tokens only; prompt tokens are masked out (their loss is multiplied by zero and contributes no gradient).
+Two details make SFT work in practice. First, **chat templates** (the role-marker structure unique to instruction-tuned [language models](ch20.html)): the raw text is wrapped in role markers so the model learns turn structure, e.g. `<|user|> ... <|assistant|> ...`. Second — and this is the subtle one — **loss masking**. You do not want to train the model to *generate the user's question*; you only want it to learn the assistant's *response*. So the loss is computed on completion tokens only; prompt tokens are masked out (their loss is multiplied by zero and contributes no gradient).
 
 The SFT objective is the same cross-entropy as pretraining, but with a per-token mask $m_t$ that switches the loss on only for assistant tokens:
 
@@ -288,7 +290,7 @@ trainer.train()
 
 ## 45.5 — Parameter-Efficient Fine-Tuning (PEFT)
 
-Full fine-tuning has a brutal memory bill, and here is the surprise: the model's weights are the *small* part. The optimizer is the hog. Picture every single parameter dragging an entourage: for each one weight you actually use, Adam in mixed precision also keeps around its gradient, a high-precision (fp32) backup copy of the weight, and *two* more fp32 bookkeeping numbers (Adam's running averages $m$ and $v$). So one number to use balloons into roughly five-to-nine numbers to store. Do the arithmetic.
+Full fine-tuning has a brutal memory bill, and here is the surprise: the model's weights are the *small* part. The optimizer is the hog. Picture every single parameter dragging an entourage: for each one weight you actually use, Adam in mixed precision also keeps around its gradient, a high-precision (fp32) backup copy of the weight, and *two* more fp32 bookkeeping numbers ([Adam](ch03.html)'s running averages $m$ and $v$). So one number to use balloons into roughly five-to-nine numbers to store. Do the arithmetic.
 
 > **Worked memory math (7B params, Adam, mixed precision).** Per the standard mixed-precision accounting (2 bytes for fp16 tensors, 4 bytes for fp32):
 > | Tensor | Precision | Bytes/param | Size (7B) |
@@ -409,7 +411,7 @@ model.print_trainable_parameters()
 
 Practical knobs: **rank $r$** trades capacity for size (start at 8–16, raise if underfitting); **$\alpha$** sets the scaling — the *actual* multiplier on the update is $\alpha/r$, so the original practice was to fix $\alpha$ and tune $r$, though many recipes now just pin $\alpha = 2r$ (giving an effective scale of 2); and **target modules** decide which weight matrices get adapters — attention projections (`q_proj`, `v_proj`) are the usual minimum, and adapting the MLP layers too tends to help. At deploy time you can fold $\frac{\alpha}{r}BA$ back into $W$, so LoRA adds **zero inference latency**.
 
-A few notable descendants are worth knowing by name. **DoRA** (weight-decomposed LoRA) splits each weight into a magnitude and a direction and lets LoRA adapt the direction, often closing the small remaining gap to full fine-tuning. **rsLoRA** (rank-stabilized) rescales by $\alpha/\sqrt{r}$ instead of $\alpha/r$ so that high ranks stop being effectively under-scaled. And **multi-LoRA serving** keeps the base resident once and hot-swaps many tiny adapters per request — the operational payoff of LoRA's portability, letting one GPU serve dozens of fine-tuned "personalities" at near-zero extra memory.
+A few notable descendants are worth knowing by name. **DoRA** (weight-decomposed LoRA) splits each weight into a magnitude and a direction and lets LoRA adapt the direction, often closing the small remaining gap to full fine-tuning. **rsLoRA** (rank-stabilized) rescales by $\alpha/\sqrt{r}$ instead of $\alpha/r$ so that high ranks stop being effectively under-scaled. And **multi-LoRA serving** ([Ch 47](ch47.html)) keeps the base resident once and hot-swaps many tiny adapters per request — the operational payoff of LoRA's portability, letting one GPU serve dozens of fine-tuned "personalities" at near-zero extra memory.
 
 ## 45.7 — QLoRA
 
@@ -494,7 +496,7 @@ Reach for PEFT+TRL when you want code-level control, Axolotl when you want repro
 
 Distillation transfers the behavior of a big, capable **teacher** into a smaller **student**. The insight is that a teacher's full probability distribution carries far more information than the single correct label. Told an image is a "dog", a hard label says nothing else; the teacher's *soft* distribution might say 85% dog, 12% wolf, 3% cat — encoding that wolves look more dog-like than cats do. These relative probabilities ("dark knowledge") are a much richer training signal.
 
-To expose that structure you soften the distributions with a **temperature** $T$ in the softmax: $p_i = \frac{\exp(z_i/T)}{\sum_j \exp(z_j/T)}$. Higher $T$ flattens the distribution, amplifying the small probabilities that carry the inter-class similarity. The student is trained to match the teacher's soft targets via KL divergence (often blended with the ordinary hard-label loss):
+To expose that structure you soften the distributions with a **temperature** $T$ in the softmax: $p_i = \frac{\exp(z_i/T)}{\sum_j \exp(z_j/T)}$. Higher $T$ flattens the distribution, amplifying the small probabilities that carry the inter-class similarity. The student is trained to match the teacher's soft targets via [KL divergence](ch04.html) (often blended with the ordinary hard-label loss):
 
 $$\mathcal{L} = (1-\lambda)\,\mathcal{L}_{\text{CE}}(y,\,p_s) + \lambda\,T^2\,\mathrm{KL}\!\left(p_t^{T}\,\|\,p_s^{T}\right)$$
 
@@ -710,6 +712,28 @@ assert after["general_acc"] >= before["general_acc"] - 0.03, \
 ```
 
 If the task improved but the general score collapsed, you over-fit: lower the learning rate, shrink the LoRA rank, mix some general-purpose data back into the training set ("replay"), or train for fewer epochs. A fine-tune that wins your task and loses everything else is usually a worse product than the model you started with.
+
+## 45.14 — Quick reference
+
+| Term / formula | Meaning in one line | When / why it matters |
+|---|---|---|
+| Pretraining loss $\mathcal{L}_{\text{pre}}=-\sum_t\log p_\theta(x_t\mid x_{<t})$ | Next-token cross-entropy over a web-scale corpus | Builds the base model's knowledge; post-training never repeats this |
+| Transfer learning | Reuse pretrained representations for a new task | The premise of all fine-tuning — start from a billion-dollar run, not random weights |
+| Feature extraction | Freeze backbone, train only a new head | Cheapest, overfit-proof; limited because features are fixed |
+| Full fine-tuning | Unfreeze and update all weights | Most powerful, but huge memory cost and risks catastrophic forgetting |
+| Catastrophic forgetting | New-task gradients overwrite general capability | Why you always eval on a broad held-out set, not just the target task |
+| Prompt vs RAG vs fine-tune | Steering gap / knowledge gap / behavior gap | Match the tool to the *gap*; climb the cost ladder, stop at the first rung that works |
+| SFT loss $\mathcal{L}_{\text{SFT}}=-\sum_t m_t\log p_\theta(x_t\mid x_{<t})$ | Cross-entropy masked to assistant tokens ($m_t$) | Teaches the model to *answer*, not to generate the user's question |
+| Loss masking / ignore-index $-100$ | Zero out loss on prompt + template tokens | The subtle detail that makes instruction tuning work |
+| Optimizer-state cost | Adam keeps fp32 master + $m$ + $v$ per weight | ~112 GB for a 7B model — the *optimizer*, not the weights, is the memory hog |
+| PEFT | Freeze base, train ~0.1% new params | Shrinks optimizer state ~1000×; yields tiny swappable adapters |
+| LoRA $h=Wx+\frac{\alpha}{r}BAx$ | Low-rank update $\Delta W=BA$ in parallel to frozen $W$ | Effective scale $\alpha/r$; merges into $W$ → zero inference latency |
+| Rank $r$ / $\alpha$ | Capacity knob / scaling constant | Start $r=8$–16; many recipes pin $\alpha=2r$ |
+| QLoRA | 4-bit (NF4) frozen base + double quant + paged optimizers | Fits a ~65–70B fine-tune on a single 48 GB GPU |
+| Distillation $\mathcal{L}=(1-\lambda)\mathcal{L}_{\text{CE}}+\lambda T^2\mathrm{KL}(p_t^T\|p_s^T)$ | Student mimics teacher's softened (temperature-$T$) distribution | "Dark knowledge" compresses a frontier teacher into a small student |
+| Pruning (structured / unstructured / N:M) | Remove weights instead of shrinking precision | Structured = faster on GPU; unstructured = sparser; 2:4 = accelerable middle |
+| Model merging / task vector $\tau=\theta_{\text{ft}}-\theta_{\text{base}}$ | Combine same-base checkpoints by weight arithmetic | Multi-skill model for free, no training (soups, SLERP, TIES, DARE) |
+| RAFT | Fine-tune to read retrieved oracle + distractor docs | Makes a model a robust RAG reader instead of a distractible one |
 
 ## 45.x — Key takeaways
 

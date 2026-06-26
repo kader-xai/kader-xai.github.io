@@ -111,6 +111,8 @@ Natural Language Processing (NLP) is the part of AI that teaches machines to rea
 🧭 **In context:** Applied AI · turning human language into representations a model can compute on, then predicting/generating language · the one key idea: **meaning lives in context, so good NLP is the art of encoding context numerically.**
 :::
 
+> 💡 **Remember this:** every NLP system is the same two-step recipe — turn text into vectors that capture meaning from context, then do math on those vectors to predict, label, or generate.
+
 The whole chapter is one climb — raw text gets steadily richer representations, and a small animated pulse runs along that ladder here to set the map in your head:
 
 <style>
@@ -315,7 +317,7 @@ print(X.toarray().round(3))            # rows = documents, columns = words
 TF-IDF vectors plug directly into cosine similarity for search and into linear classifiers for text classification. They are a strong, interpretable baseline — but they know nothing about word *meaning*: "car" and "automobile" are as unrelated as "car" and "banana". That gap is what embeddings close.
 
 ::: {.callout-warning}
-BoW/TF-IDF throw away word order. "Dog bites man" and "man bites dog" get identical vectors. When order or negation matters, you need sequence models (Recurrent & Sequence Models) or transformers (Attention & Transformers).
+BoW/TF-IDF throw away word order. "Dog bites man" and "man bites dog" get identical vectors. When order or negation matters, you need sequence models ([Recurrent & Sequence Models](ch16.html)) or transformers ([Attention & Transformers](ch17.html)).
 :::
 
 ### 20.2b — n-grams: putting a little order back
@@ -384,7 +386,7 @@ flowchart LR
   end
 ```
 
-In skip-gram, the model wants the dot product of a center word's vector $v_c$ and a true context word's vector $u_o$ to be large; the softmax over the vocabulary gives the probability
+In skip-gram, the model wants the dot product of a center word's vector $v_c$ and a true context word's vector $u_o$ to be large; the [softmax](ch14.html) over the vocabulary gives the probability
 
 $$
 P(o \mid c) = \frac{\exp(u_o^\top v_c)}{\sum_{w \in V} \exp(u_w^\top v_c)}.
@@ -395,7 +397,7 @@ $$
 
 Because that denominator sums over the whole vocabulary, real implementations use **negative sampling**: for each true (center, context) pair, sample a few random "negative" words and just train the model to say *yes* to the real pair and *no* to the fakes — a handful of cheap logistic-regression updates instead of a giant softmax.
 
-**GloVe** (Global Vectors) reaches a similar place from a different angle: it factorizes a global word **co-occurrence matrix**, fitting vectors so that $v_i^\top v_j$ approximates $\log$ of how often words $i$ and $j$ co-occur. word2vec is "predictive/local," GloVe is "count-based/global"; in practice they yield comparably useful vectors.
+**GloVe** (Global Vectors) reaches a similar place from a different angle: it [factorizes](ch07.html) a global word **co-occurrence matrix**, fitting vectors so that $v_i^\top v_j$ approximates $\log$ of how often words $i$ and $j$ co-occur. word2vec is "predictive/local," GloVe is "count-based/global"; in practice they yield comparably useful vectors.
 
 The famous payoff is that **analogies become vector arithmetic**. The vector offset from *man* to *woman* turns out to be roughly the same as *king* to *queen*, so:
 
@@ -571,7 +573,7 @@ The transition matrix is doing real work: even a mediocre per-token classifier i
 
 **Text classification** assigns a whole document to one of a fixed set of categories: spam vs. ham, topic = {sports, politics, tech}, or — the canonical example — **sentiment analysis**, labeling text as positive, negative, or neutral. It is the workhorse of applied NLP: review monitoring, content moderation, support-ticket routing.
 
-The pipeline is the general supervised-learning loop (Supervised Learning) wearing a text costume: turn each document into a vector (TF-IDF or embeddings), then train any classifier (logistic regression, Naive Bayes, an LSTM, or a fine-tuned transformer).
+The pipeline is the general supervised-learning loop ([AI, ML & the Learning Process](ch05.html)) wearing a text costume: turn each document into a vector (TF-IDF or embeddings), then train any [classifier](ch09.html) (logistic regression, Naive Bayes, an LSTM, or a fine-tuned transformer).
 
 **Naive Bayes** is the classic, fast sentiment baseline. The "naive" intuition: pretend each word votes on the sentiment independently, ignoring how words combine, then tally the votes weighted by how strongly each word leans positive or negative. It applies Bayes' rule and "naively" assumes words are independent given the class:
 
@@ -630,7 +632,7 @@ print(sentiment("This movie was not great at all."))
 # [{'label': 'NEGATIVE', 'score': 0.99}]  <- handles the negation BoW misses
 ```
 
-The trap in sentiment is **negation and sarcasm**: "not great" flips polarity but a bag-of-words model sees the positive word "great". Word-order-aware models (LSTM, transformer) handle this far better, which is why fine-tuned transformers now dominate sentiment benchmarks. For evaluating these classifiers — accuracy, precision, recall, F1 — see Section 20.11 and Model Evaluation & Tuning.
+The trap in sentiment is **negation and sarcasm**: "not great" flips polarity but a bag-of-words model sees the positive word "great". Word-order-aware models (LSTM, transformer) handle this far better, which is why fine-tuned transformers now dominate sentiment benchmarks. For evaluating these classifiers — accuracy, precision, recall, F1 — see Section 20.11 and [Model Evaluation & Tuning](ch12.html).
 
 ::: {.callout-warning}
 Multiplying many small probabilities underflows to zero on real documents. Always work in **log space**: sum $\log P(w\mid c)$ instead of multiplying. The toy example above is short enough to skip it, but production code must not.
@@ -745,7 +747,7 @@ BLEU is meaningful only as a *corpus-level* average against the *same* reference
 
 ## 20.9 — Text generation & decoding (summarization, sampling)
 
-Translation is one instance of a much broader family: **conditional text generation**, where a model produces an output sequence from some input. **Summarization** is the other everyday member — condensing a long document into a short one — and it splits into two styles. **Extractive** summarization *copies* the most important sentences verbatim (safe, never hallucinates, but choppy); **abstractive** summarization *rewrites* the gist in new words with a seq2seq or LLM (fluent, but can invent facts). The same encoder–decoder machinery from translation powers abstractive summarization; only the training data changes (document → summary instead of source → target).
+Translation is one instance of a much broader family: **conditional text generation** ([Generative Models](ch18.html)), where a model produces an output sequence from some input. **Summarization** is the other everyday member — condensing a long document into a short one — and it splits into two styles. **Extractive** summarization *copies* the most important sentences verbatim (safe, never hallucinates, but choppy); **abstractive** summarization *rewrites* the gist in new words with a seq2seq or LLM (fluent, but can invent facts). The same encoder–decoder machinery from translation powers abstractive summarization; only the training data changes (document → summary instead of source → target).
 
 Whatever the task, once the model gives you a probability distribution over the next token, you still have to *choose* a token — and that choice, the **decoding strategy**, matters as much as the model. The intuition: the model hands you a ranked menu of next words each step; decoding is your policy for ordering off that menu. Greedy always orders the top item; sampling rolls dice weighted by the menu; beam search keeps several half-finished plates and serves the best.
 
@@ -879,7 +881,7 @@ User: "Book a flight to Tokyo on Friday."'''
 # {"intent": "book_flight", "slots": {"destination": "Tokyo", "date": "Friday"}}
 ```
 
-For the LLM techniques behind modern chatbots — instruction tuning, RAG, function calling — see Large Language Models.
+For the LLM techniques behind modern chatbots — instruction tuning, RAG, function calling — see [Large Language Models](ch23.html).
 
 ::: {.callout-tip}
 Choose by risk tolerance: retrieval (or RAG) when wrong answers are costly and must stay on-brand; pure generation when open-ended fluency matters more than guaranteed correctness.
@@ -1036,7 +1038,32 @@ print(s["rougeL"].fmeasure)   # longest-common-subsequence F-measure
 
 The point is reflexive metric hygiene: pick the metric that matches the task (Section 20.11), compute it with a trusted library, slice it by subgroup (Section 20.13), and only then trust the number.
 
-## 20.15 — Key takeaways
+## 20.15 — Quick reference
+
+| Term / formula | One-line meaning | When / why |
+|----------------|------------------|------------|
+| **Tokenization** | Slice text into tokens (word / subword / char) | Always first; subword (BPE/WordPiece) for neural models |
+| **BPE** | Greedily merge the most frequent adjacent token pair | Builds a subword vocab that has no out-of-vocabulary words |
+| **Bag of Words** | Count each vocab word, ignore order | Sparse baseline vector for search / linear classifiers |
+| **TF-IDF** $=\text{tf}\cdot\text{idf}$ | Weight up words frequent here but rare across the corpus | Surfaces a document's distinctive words; needs many docs |
+| **n-gram** | Count adjacent runs of $n$ words | Cheaply puts a little word-order back into BoW |
+| **Word embedding** | Dense vector; similar-context words land near each other | Captures meaning; analogies become vector arithmetic |
+| **Cosine similarity** $\frac{a\cdot b}{\lVert a\rVert\lVert b\rVert}$ | Angle between two vectors, ignoring length | Standard way to compare embeddings / rank search hits |
+| **Language model** $P(w_i\mid w_{<i})$ | Probability of the next word given history | Powers autocomplete, ASR, translation, LLMs |
+| **Perplexity** $\exp(-\frac1N\sum\ln P)$ | Effective number of choices per word; lower better | Scores an LM; only comparable within one tokenizer |
+| **Smoothing (add-1)** | Give unseen pairs a starter count so $P\neq 0$ | Stops a single unseen n-gram zeroing a sentence |
+| **BIO / CRF** | Span tags + label-transition scoring | Sequence labeling (NER, POS) with legal transitions |
+| **Naive Bayes** | Each word votes independently via Bayes' rule | Fast, interpretable sentiment/text-classification baseline |
+| **LDA** | Docs = mixtures of topics, topics = word distributions | Unsupervised topic discovery on unlabeled corpora |
+| **seq2seq + attention** | Encoder reads source, decoder writes target | Neural translation/summarization; attention beats the bottleneck |
+| **BLEU** $=\text{BP}\cdot\prod p_n^{w_n}$ | n-gram precision $\times$ brevity penalty | Corpus-level MT metric; misses paraphrases |
+| **Decoding** | Policy for choosing the next token | Beam for one-right-answer; temperature/top-p for creativity |
+| **Temperature** $\text{softmax}(z/T)$ | Flatten ($T{>}1$) or sharpen ($T{<}1$) the distribution | Tunes randomness of sampled generation |
+| **RAG** | Retrieve relevant docs, then generate grounded answer | Combines retrieval's facts with generation's fluency |
+| **Semantic search** | Embed query + corpus, rank by cosine | Matches meaning, not keywords; scale with vector DBs / ANN |
+| **F1** $\frac{2PR}{P+R}$ | Harmonic mean of precision and recall | Default labeling/classification metric on imbalanced data |
+
+## 20.16 — Key takeaways
 
 - **Text must become numbers first.** Tokenization (increasingly **subword** BPE/WordPiece) plus optional stemming/lemmatization/stop-word handling is the unavoidable front door of every NLP pipeline.
 - **Representations climbed a ladder of meaning:** raw counts (BoW) → frequency-weighted counts (TF-IDF) → dense semantic vectors (**word2vec/GloVe**) → contextual vectors (transformers); **n-grams** add a little local word-order back to the order-blind models.
@@ -1048,7 +1075,7 @@ The point is reflexive metric hygiene: pick the metric that matches the task (Se
 - **Dialogue** spans retrieval (safe, fixed) to generative (fluent, risky), with **RAG** blending them; task bots decompose into **intent + slots**.
 - **Match the metric to the task**: F1 for labeling, BLEU for translation, ROUGE for summarization, and human/LLM judgment as the real ground truth — and always slice metrics by **subgroup** to catch fairness failures aggregate numbers hide.
 
-## 20.16 — See also
+## 20.17 — See also
 
 - **Recurrent & Sequence Models** — the RNN/LSTM backbone behind seq2seq, BiLSTM tagging, and neural LMs.
 - **Attention & Transformers** — contextual embeddings and the architecture that now dominates NLP.

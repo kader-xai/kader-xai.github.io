@@ -111,6 +111,8 @@ This chapter is about the classical, symbolic side of AI: getting a machine to *
 🧭 **In context:** Classical & Symbolic AI · used for automated decision-making, scheduling, puzzle-solving, and game agents · the one key idea: structure the world as states, actions, and constraints, then *search* smartly instead of trying everything.
 :::
 
+> 💡 **Remember this:** planning, constraint satisfaction, and game playing are all the same move — turn the problem into states/variables/constraints, then search that space cleverly with pruning and heuristics instead of trying every possibility.
+
 The three problems are really three flavours of the same activity — turning a tangled question into a shape a search algorithm can chew on. The map below shows where each lives and which engine drives it.
 
 <svg viewBox="0 0 640 230" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif" font-size="12">
@@ -137,7 +139,7 @@ The three problems are really three flavours of the same activity — turning a 
 
 **Automated planning** asks a deceptively simple question: given where I am now, where I want to be, and what actions I can take, what *sequence* of actions gets me there? Think of packing for a trip. The fridge is empty, the goal is a packed suitcase by the door, and your actions are things like "fold shirt," "zip bag," "find passport." You cannot zip the bag before the shirts are in, and you cannot pack the passport before you find it. Planning is the discipline of working out those orderings automatically.
 
-The classic framing is **STRIPS** (Stanford Research Institute Problem Solver). A **state** is simply a set of facts that are currently true — a snapshot of the world. An **action** has three parts: **preconditions** (facts that must already hold before you can apply it), an **add list** (facts the action makes true), and a **delete list** (facts the action makes false). The **goal** is a set of facts you want to be true at the end. A **plan** is an ordered list of actions that transforms the initial state into one satisfying the goal.
+The classic framing is **STRIPS** (Stanford Research Institute Problem Solver). A **state** is simply a [set of facts](ch33.html) that are currently true — a snapshot of the world. An **action** has three parts: **preconditions** (facts that must already hold before you can apply it), an **add list** (facts the action makes true), and a **delete list** (facts the action makes false). The **goal** is a set of facts you want to be true at the end. A **plan** is an ordered list of actions that transforms the initial state into one satisfying the goal.
 
 **PDDL** (Planning Domain Definition Language) is the standard text format for writing all this down. A *domain* file declares the action schemas (the rules of the world), and a *problem* file gives the specific objects, initial state, and goal. Separating the two is what makes planning reusable: one "blocks world" domain can be paired with thousands of different starting configurations without rewriting the rules each time.
 
@@ -241,7 +243,7 @@ There are two directions you can search. **Forward (progression) planning** star
 | Forward (progression) | initial state | high (all applicable actions) | states are concrete, heuristics easy | explores many irrelevant actions |
 | Backward (regression) | goal | lower (only goal-relevant actions) | ignores irrelevant actions | partial-state reasoning is tricky |
 
-In practice, modern planners overwhelmingly run **forward** search guided by powerful, automatically-derived heuristics. The most famous is the **relaxed plan heuristic**: temporarily pretend actions have *no* delete lists (so nothing ever becomes false), solve that much easier problem, and use its length as an estimate of the true distance to the goal. Because the relaxed problem can only be easier, the estimate never overshoots — exactly the *admissibility* property A\* needs. The A\*/heuristic-search machinery these planners reuse lives in Chapter 32.
+In practice, modern planners overwhelmingly run **forward** search guided by powerful, automatically-derived heuristics. The most famous is the **relaxed plan heuristic**: temporarily pretend actions have *no* delete lists (so nothing ever becomes false), solve that much easier problem, and use its length as an estimate of the true distance to the goal. Because the relaxed problem can only be easier, the estimate never overshoots — exactly the *admissibility* property A\* needs. The [A\*/heuristic-search machinery](ch32.html) these planners reuse lives in Chapter 32.
 
 ### Partial-order and hierarchical planning
 
@@ -335,7 +337,7 @@ def backtrack(assignment, vars, domains, neighbors):
     return None
 ```
 
-Naive backtracking can explore a tree of size up to $d^n$ for $n$ variables of domain size $d$, so the entire art lies in *ordering* the choices and *pruning* doomed branches early. Two cheap, high-impact heuristics carry most of the weight. **MRV** (Minimum Remaining Values) says: assign the most-constrained variable first — the one with the fewest legal values left — because if it is going to fail, you want to find out now rather than after a thousand pointless assignments. **LCV** (Least Constraining Value) says: among the values for the variable you picked, try the one that rules out the *fewest* options for its neighbors, keeping your future flexibility as high as possible. MRV chooses *where* to look next; LCV chooses *what* to try first there.
+Naive backtracking can explore a tree of size up to $d^n$ for $n$ variables of domain size $d$, so the entire art lies in *ordering* the choices and *pruning* doomed branches early. Two cheap, high-impact heuristics carry most of the weight. **MRV** (Minimum Remaining Values) says: assign the most-constrained variable first — the one with the fewest legal values left — because if it is going to fail, you want to find out now rather than after a thousand pointless assignments. (When a CSP is too big to search systematically, [metaheuristic local search](ch35.html) takes over — see Chapter 35.) **LCV** (Least Constraining Value) says: among the values for the variable you picked, try the one that rules out the *fewest* options for its neighbors, keeping your future flexibility as high as possible. MRV chooses *where* to look next; LCV chooses *what* to try first there.
 
 ### Constraint propagation and arc-consistency
 
@@ -653,7 +655,7 @@ $$ \text{UCT} = \underbrace{\frac{w_i}{n_i}}_{\text{exploit: win rate}} + \; c\,
 
 **In words:** prefer a move that has been winning a lot, *plus* a bonus for moves you've barely tried — so nothing promising goes unexamined just because it was unlucky early.
 
-**Also written:** $\text{UCT}_i = \hat{\mu}_i + c\sqrt{\ln N / n_i}$, where $\hat{\mu}_i = w_i/n_i$ is the empirical win rate — this is the UCB1 bandit formula (Chapter 25) applied at every tree node.
+**Also written:** $\text{UCT}_i = \hat{\mu}_i + c\sqrt{\ln N / n_i}$, where $\hat{\mu}_i = w_i/n_i$ is the empirical win rate — this is the [UCB1 bandit formula](ch25.html) (Chapter 25) applied at every tree node.
 
 Here $w_i$ is the number of wins recorded through child $i$, $n_i$ is how many times child $i$ has been visited, $N$ is how many times the parent has been visited, and $c$ is an exploration constant (a common choice is $\sqrt{2}$). The first term rewards moves with a strong track record. The second term inflates the score of moves that have been tried only a few times (small $n_i$), guaranteeing every move gets its day in court. As a move accumulates visits its exploration bonus steadily shrinks, so the search's attention drifts naturally toward the genuinely strongest options.
 
@@ -701,7 +703,7 @@ def select(node):
     return node
 ```
 
-**Why MCTS beats minimax for Go** comes down to three properties. It needs *no* domain-specific evaluation function, because the random rollouts supply the value signal directly. It is **anytime**: you can stop the moment you run out of thinking time and immediately return the best move found so far, with quality that degrades gracefully. And it concentrates computation on the promising lines instead of searching every branch uniformly. AlphaGo's breakthrough was to replace the two weakest pieces — purely random rollouts and uniform expansion — with **neural networks**: a *policy network* that biases selection toward strong moves, and a *value network* that evaluates positions without needing a full rollout. That marriage of MCTS with deep learning (Chapters 14–15) and reinforcement learning (Chapter 25) is what cracked Go.
+**Why MCTS beats minimax for Go** comes down to three properties. It needs *no* domain-specific evaluation function, because the random rollouts supply the value signal directly. It is **anytime**: you can stop the moment you run out of thinking time and immediately return the best move found so far, with quality that degrades gracefully. And it concentrates computation on the promising lines instead of searching every branch uniformly. AlphaGo's breakthrough was to replace the two weakest pieces — purely random rollouts and uniform expansion — with **neural networks**: a *policy network* that biases selection toward strong moves, and a *value network* that evaluates positions without needing a full rollout. That marriage of MCTS with [deep learning](ch14.html) (Chapters 14–15) and reinforcement learning (Chapter 25) is what cracked Go.
 
 In **AlphaZero**, the UCT formula is replaced by a **PUCT** variant that folds in the policy network's prior $P(i)$ for each move:
 
@@ -900,12 +902,49 @@ def min_conflicts(csp, max_steps=10000):
 The classic demonstration is $n$-queens. Place eight queens, one per column, and count attacking pairs. Pick a column whose queen is attacked, slide it to the row with the fewest attacks, repeat. Min-conflicts solves the million-queens problem in roughly fifty steps on average — a result that feels impossible until you see that most random starting positions are only a few moves from a solution, and the heuristic walks straight downhill toward it.
 
 ::: {.callout-warning}
-Min-conflicts is hill-climbing, so it can stall on a *plateau* or in a local minimum where every single-variable move increases or ties the conflict count. The standard escapes are random restarts (begin again from a fresh assignment) and random sideways moves or noise (occasionally accept an equal-conflict move to drift off a plateau). It is also incomplete: it cannot prove a CSP unsatisfiable — it just runs until the step budget expires.
+Min-conflicts is [hill-climbing](ch03.html), so it can stall on a *plateau* or in a local minimum where every single-variable move increases or ties the conflict count. The standard escapes are random restarts (begin again from a fresh assignment) and random sideways moves or noise (occasionally accept an equal-conflict move to drift off a plateau). It is also incomplete: it cannot prove a CSP unsatisfiable — it just runs until the step budget expires.
 :::
 
 The practical takeaway is a layered toolkit: backtracking with MRV, degree, and LCV for systematic search; forward checking and AC-3 to prune domains as you go; and min-conflicts local search when the problem is too large to enumerate but solutions are dense. Real solvers mix them — propagate to shrink, branch with heuristics, and fall back to local search at scale.
 
-## 34.9 — Key takeaways
+**Which search method should I use?**
+
+```{mermaid}
+flowchart TD
+    A{"Problem type?"} -->|"reach a goal via<br/>a sequence of actions"| B["Planning:<br/>forward search + relaxed-plan<br/>heuristic, or SAT/GraphPlan"]
+    A -->|"assign values<br/>under constraints"| C{"Too large to<br/>search a tree?"}
+    A -->|"play vs an opponent"| D{"Good cheap<br/>evaluation function?"}
+    C -->|"no"| E["Backtracking + MRV/degree/LCV,<br/>maintain AC-3 (MAC)"]
+    C -->|"yes, but solutions dense"| F["Local search:<br/>min-conflicts"]
+    C -->|"pure Boolean / huge"| G["Off-the-shelf SAT (CDCL)<br/>or CP-SAT / Z3"]
+    D -->|"yes (e.g. chess)"| H["Minimax + alpha-beta<br/>+ quiescence"]
+    D -->|"no (e.g. Go)"| I["MCTS / UCT<br/>(+ neural nets → AlphaZero)"]
+```
+
+## 34.9 — Quick reference
+
+| Term / method | What it means | When / why to use it |
+|---|---|---|
+| **STRIPS action** | Preconditions + add list + delete list — a "diff" on the set of true facts | Modeling planning domains; `Result(s,a)=(s∖Del)∪Add` when `Pre⊆s` |
+| **PDDL** | Standard text format: a *domain* file (action schemas) + a *problem* file (objects, init, goal) | Feeding planners like Fast Downward; reuse one domain across many problems |
+| **Forward vs backward** | Progression from the start state vs regression from the goal | Forward (concrete states, easy heuristics) dominates in practice |
+| **Relaxed-plan heuristic** | Drop all delete lists, solve the easy problem, use its length as a distance estimate | Admissible guide for A\*-style forward planners |
+| **Frame problem** | Anything not in an action's add/delete list is assumed unchanged | Under-specify an effect and you build impossible plans — always ask "what stops being true?" |
+| **GraphPlan / SATPlan** | Layered planning graph with mutexes / compile a length-$k$ plan into one CNF formula | Let propagation and SAT solvers do the combinatorics |
+| **CSP** | Variables + domains + constraints; find an assignment violating none | Scheduling, timetabling, coloring, configuration — order doesn't matter |
+| **Backtracking** | DFS over partial assignments; undo on a dead end | Baseline CSP solver; pairs with ordering heuristics |
+| **MRV / degree / LCV** | Fewest legal values first / most-constrained tie-break / value ruling out fewest neighbor options | Pick the variable likely to *fail* fast, the value likely to *succeed* |
+| **AC-3 (arc consistency)** | Delete domain values with no supporting partner; cascade; $O(e\,d^3)$ | Prune before/during search (MAC); sound but incomplete |
+| **Forward checking** | On assignment, strike the value from unassigned neighbors' domains | Cheaper than AC-3; feeds the counts MRV reads |
+| **Min-conflicts** | Start complete, repeatedly move a conflicted variable to its fewest-conflict value | Huge CSPs with dense solutions (million-queens in ~50 steps); incomplete |
+| **SAT / CDCL** | Boolean satisfiability in CNF; conflict-driven clause learning | NP-complete archetype; solvers (MiniSat, Glucose, Z3) handle millions of vars |
+| **Minimax** | MAX maximizes, MIN minimizes, backed up the game tree | Two-player zero-sum perfect-information games |
+| **Alpha-beta** | Prune branches that can't change the result; $O(b^{d/2})$ with good ordering | Same value as minimax, roughly doubles search depth |
+| **Evaluation + quiescence** | Estimate non-terminal positions; keep searching forcing moves to beat the horizon effect | Depth-limited engines (chess); learned weights = NNUE |
+| **Expectimax** | Chance nodes take the probability-weighted average of children | Games with randomness (dice, shuffled decks); needs meaningful magnitudes |
+| **MCTS / UCT** | Random rollouts + $\frac{w_i}{n_i}+c\sqrt{\ln N/n_i}$ explore/exploit selection | No eval function, anytime; huge branching (Go); add nets → AlphaZero PUCT |
+
+## 34.10 — Key takeaways
 
 - **Planning** models the world as states + actions (STRIPS/PDDL: preconditions, add list, delete list) and searches for an action sequence from the initial state to the goal. Forward search keeps states concrete; backward search stays goal-focused; partial-order and HTN methods shrink the space by committing late and planning hierarchically.
 - The **frame problem** is the classic planning trap: everything not in an action's delete list is assumed unchanged, so a missing effect silently produces impossible plans.
@@ -915,7 +954,7 @@ The practical takeaway is a layered toolkit: backtracking with MRV, degree, and 
 - **Minimax** solves perfect-information zero-sum games by assuming an optimal opponent; **alpha-beta pruning** returns the identical value while skipping provably irrelevant branches, roughly doubling reachable depth with good move ordering. **Expectimax** handles chance, and **evaluation functions** (plus quiescence search to beat the horizon effect) make deep games tractable.
 - **MCTS/UCT** replaces hand-crafted evaluation with random rollouts and a principled explore/exploit rule, is anytime and domain-light, and — fused with neural networks via the PUCT rule — became the engine of AlphaGo and AlphaZero.
 
-## 34.10 — See also
+## 34.11 — See also
 
 - **Chapter 32 — Search & Problem Solving** — the uninformed and heuristic search (BFS, DFS, A\*) that planning and CSP backtracking build directly upon.
 - **Chapter 33 — Knowledge Representation & Reasoning** — the logic and symbolic facts that STRIPS states and SAT clauses encode.

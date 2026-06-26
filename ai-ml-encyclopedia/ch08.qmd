@@ -111,6 +111,8 @@ Regression is the corner of machine learning that answers "how much?" rather tha
 🧭 **In context:** Classical supervised learning · used to predict continuous values and model relationships between variables · the one key idea is *fit a function by minimizing a loss between predictions and truth, then control its complexity*.
 :::
 
+> 💡 **Remember this:** Every model here fits a weighted sum of features by minimizing a chosen loss, then trades a little bias for less variance to generalize — that single recipe (loss + regularization) underlies all of regression.
+
 <style>
 @keyframes c8-ball-roll {
   0%   { offset-distance: 4%; }
@@ -182,11 +184,11 @@ $$ \hat{\beta} = (X^\top X)^{-1} X^\top y $$
 
 **In words:** the best coefficients are found by "undoing" the feature correlations ($X^\top X$) applied to how each feature lines up with the target ($X^\top y$).
 
-**Also written:** $\hat{\beta} = X^{+} y$, where $X^{+} = (X^\top X)^{-1}X^\top$ is the **Moore–Penrose pseudoinverse** — the same solution stated as a single projection of $y$ onto the column space of $X$.
+**Also written:** $\hat{\beta} = X^{+} y$, where $X^{+} = (X^\top X)^{-1}X^\top$ is the **Moore–Penrose pseudoinverse** — the same solution stated as a single projection of $y$ onto the column space of $X$ (see [Linear Algebra](ch01.html) for the projection geometry).
 
 This is exact and needs no tuning, but inverting $X^\top X$ costs roughly $O(p^3)$ and the matrix can be ill-conditioned when features are collinear. It shines for small-to-medium $p$.
 
-**Gradient descent** instead walks downhill: start anywhere, repeatedly nudge $\beta$ opposite the gradient $-2X^\top(y - X\beta)$ scaled by a learning rate. It costs $O(np)$ per step and scales to millions of features, but you must choose the step size and number of iterations. (See **Optimization** for the full theory.)
+**Gradient descent** instead walks downhill: start anywhere, repeatedly nudge $\beta$ opposite the gradient $-2X^\top(y - X\beta)$ scaled by a learning rate. It costs $O(np)$ per step and scales to millions of features, but you must choose the step size and number of iterations. (See [Optimization](ch03.html) for the full theory.)
 
 ```python
 import numpy as np
@@ -279,7 +281,7 @@ The picture below shows the same noisy points fit three ways — the stiff line,
   <text x="270" y="38" font-size="9" fill="#805ad5">overfit</text>
 </svg>
 
-The fix is not "never use high degree" but "test on data the model never saw." Choose the degree by cross-validation; the right complexity is the one that minimizes error on a held-out set, not on the training set. (Full treatment in **Model Evaluation & Tuning**.)
+The fix is not "never use high degree" but "test on data the model never saw." Choose the degree by cross-validation; the right complexity is the one that minimizes error on a held-out set, not on the training set. (Full treatment in [Model Evaluation & Tuning](ch12.html).)
 
 In scikit-learn, the clean way to do polynomial regression is to chain feature expansion and a linear fit in a `Pipeline`, so the squared/cubed columns are generated automatically and consistently at predict time:
 
@@ -374,7 +376,7 @@ The decomposition explains the whole over/underfitting story as a tug-of-war: si
   <text x="150" y="44" font-size="9" fill="#22c55e">sweet spot</text>
 </svg>
 
-A small worked feel for the numbers: suppose at some test point your model is biased by $+3$ (predicts 3 too high on average), its predictions vary with standard deviation $4$ (variance $16$), and the data noise has $\sigma^2 = 5$. Expected squared error $= 3^2 + 16 + 5 = 9 + 16 + 5 = 30$. Halve the variance (e.g. by adding mild regularization, accepting bias rising to $4$) and you get $4^2 + 8 + 5 = 29$ — a *net win* even though you made the model more biased. That single trade is the entire justification for Ridge, Lasso, and bagging.
+A small worked feel for the numbers: suppose at some test point your model is biased by $+3$ (predicts 3 too high on average), its predictions vary with standard deviation $4$ (variance $16$), and the data noise has $\sigma^2 = 5$. Expected squared error $= 3^2 + 16 + 5 = 9 + 16 + 5 = 30$. Halve the variance (e.g. by adding mild regularization, accepting bias rising to $4$) and you get $4^2 + 8 + 5 = 29$ — a *net win* even though you made the model more biased. That single trade is the entire justification for Ridge, Lasso, and bagging (the variance-cutting workhorse of [Ensemble Methods](ch10.html)).
 
 ```python
 import numpy as np
@@ -414,7 +416,7 @@ $$ \min_\beta \; \lVert y - X\beta \rVert^2 + \lambda \sum_j \beta_j^2 $$
 
 The strength $\lambda \ge 0$ is a knob: $\lambda = 0$ recovers OLS, large $\lambda$ shrinks all coefficients smoothly toward zero (but never exactly to zero). Ridge even has a closed form, $\hat\beta = (X^\top X + \lambda I)^{-1}X^\top y$ — the added $\lambda I$ also cures the non-invertibility that breaks OLS under collinearity.
 
-**Lasso (L1)** penalizes the sum of *absolute* values, $\lambda \sum_j |\beta_j|$. The kink in the absolute value at zero does something Ridge cannot: it drives many coefficients to *exactly* zero, performing automatic **feature selection** — the model hands you a shorter, sparser equation.
+**Lasso (L1)** penalizes the sum of *absolute* values, $\lambda \sum_j |\beta_j|$. The kink in the absolute value at zero does something Ridge cannot: it drives many coefficients to *exactly* zero, performing automatic **feature selection** — the model hands you a shorter, sparser equation (a lightweight cousin of the methods in [Dimensionality Reduction](ch07.html)).
 
 **In words:** Lasso adds up the raw sizes (no squaring) of the coefficients and penalizes that, which has the side effect of switching weak features fully off.
 
@@ -475,8 +477,24 @@ print(model[-1].alpha_)           # the λ chosen by cross-validation
 Rule of thumb: reach for **Lasso** when you suspect most features are useless and want an interpretable subset; reach for **Ridge** when many features each contribute a little and are correlated; reach for **Elastic Net** when you want both and are unsure.
 :::
 
+**Which penalty should I use?** This chooser folds the rule of thumb above into a quick decision path:
+
+```{mermaid}
+flowchart TD
+  A["Coefficients unstable<br/>or too many features?"] -->|no| OLS["plain OLS — no penalty"]
+  A -->|yes| B{"Want a sparse model<br/>(features switched off)?"}
+  B -->|no| Ridge["Ridge (L2)<br/>shrink all, keep all"]
+  B -->|yes| C{"Features correlated<br/>in groups?"}
+  C -->|no| Lasso["Lasso (L1)<br/>zero out weak features"]
+  C -->|yes| EN["Elastic Net<br/>sparse + group-stable"]
+  style OLS fill:#bee3f8,stroke:#2b6cb0
+  style Ridge fill:#c6f6d5,stroke:#22543d
+  style Lasso fill:#fed7d7,stroke:#742a2a
+  style EN fill:#fefcbf,stroke:#744210
+```
+
 ::: {.callout-warning}
-Regularization penalties depend on feature scale, so you *must* standardize features first — otherwise the penalty silently punishes large-unit features (like "income in dollars") far more than small-unit ones. Also, never penalize the intercept.
+Regularization penalties depend on feature scale, so you *must* standardize features first (see [Data Preprocessing](ch06.html)) — otherwise the penalty silently punishes large-unit features (like "income in dollars") far more than small-unit ones. Also, never penalize the intercept.
 :::
 
 ## 8.5 — Logistic regression
@@ -508,7 +526,7 @@ The **log-odds** view makes the coefficients interpretable. Rearranging the sigm
 
 The **decision boundary** is where $\hat p = 0.5$, i.e. $x^\top\beta = 0$ — a straight line (hyperplane) in feature space. Logistic regression is therefore a *linear* classifier: points on one side are predicted positive, the other side negative.
 
-We do not fit it with least squares; we maximize the likelihood of the observed labels, equivalently minimizing the **cross-entropy** (log) loss, which is convex and solved by gradient descent:
+We do not fit it with least squares; we maximize the likelihood of the observed labels (see [Probability & Statistics](ch04.html)), equivalently minimizing the **cross-entropy** (log) loss — the same loss that trains [neural network](ch14.html) classifiers — which is convex and solved by gradient descent:
 
 $$ \mathcal{L}(\beta) = -\sum_i \big[ y_i \log \hat p_i + (1-y_i)\log(1-\hat p_i) \big] $$
 
@@ -551,7 +569,7 @@ print(clf.coef_, clf.intercept_)    # slope = log-odds per study hour
 **A concrete odds-ratio read.** Suppose a credit-default model gives feature "missed payments last year" a coefficient of $\beta = 0.7$. Then $e^{0.7}\approx 2.0$: each extra missed payment *doubles the odds* of default. Going from 0.7 to 1.4 (two coefficients' worth) multiplies the odds by $e^{1.4}\approx 4$. This multiplicative-on-odds reading is why logistic coefficients are so loved in medicine and credit scoring — you report "doubles the odds," not an abstract slope.
 
 ::: {.callout-warning}
-Logistic regression outputs probabilities, but with imbalanced classes the default 0.5 threshold can be terrible. Tune the threshold to your costs, and judge with ROC-AUC or precision/recall, not raw accuracy (see **Classification Algorithms** and **Model Evaluation & Tuning**).
+Logistic regression outputs probabilities, but with imbalanced classes the default 0.5 threshold can be terrible. Tune the threshold to your costs, and judge with ROC-AUC or precision/recall, not raw accuracy (see [Classification Algorithms](ch09.html) and Model Evaluation & Tuning).
 :::
 
 ## 8.6 — Generalized Linear Models
@@ -996,7 +1014,31 @@ print(glm.summary())     # std errors, deviance, p-values for free
 IRLS can diverge or stall when the model is near-separable (logistic data perfectly split by a feature) or when extreme fitted means make weights overflow. Watch for coefficients sprinting toward $\pm\infty$, add a tiny ridge penalty to $\mathbf{X}^\top\mathbf{W}\mathbf{X}$, or fall back to a damped Newton step. These are not flaws in the data so much as the likelihood honestly reporting that the maximum lies at infinity.
 :::
 
-## 8.10 — Key takeaways
+## 8.10 — Quick reference
+
+| Term / formula | Meaning in one line | When / why to use |
+|---|---|---|
+| OLS — $\hat\beta=(X^\top X)^{-1}X^\top y$ | Line minimizing squared residuals; closed-form normal equation | Small $p$, baseline fit, interpretable coefficients |
+| Gradient descent | Walk $\beta$ downhill on the loss | Many features/rows where inverting $X^\top X$ is too costly |
+| Coefficient $\beta_j$ | Change in $y$ per unit of feature $j$, others fixed | Reading effect sizes — only meaningful on standardized features |
+| Residual $y_i-\hat y_i$ | What the model failed to explain at point $i$ | Diagnose fit; flat band = good, fan/curve = broken assumption |
+| Polynomial features $x,x^2,\dots,x^d$ | Bend the fit while staying linear-in-$\beta$ | Curved relationships; pick degree by held-out error |
+| Bias²+Var+$\sigma^2$ | Expected test error splits into 3 parts | Mental model for every over/underfit decision |
+| Ridge (L2) — $\lambda\sum\beta_j^2$ | Shrink all coefficients smoothly toward 0 | Many correlated features each contributing a little |
+| Lasso (L1) — $\lambda\sum|\beta_j|$ | Drives weak coefficients to exactly 0 | Sparse/interpretable model; automatic feature selection |
+| Elastic Net | Blend of L1 + L2 penalties | Sparsity wanted but features come in correlated groups |
+| Sigmoid $\sigma(z)=1/(1+e^{-z})$ | Squash a linear score into a $[0,1]$ probability | Logistic regression's link to class probability |
+| Log-odds / odds ratio $e^{\beta_j}$ | Each unit multiplies the odds by $e^{\beta_j}$ | Interpreting logistic coefficients (medicine, credit) |
+| Cross-entropy loss | Penalize confident wrong probabilities heavily | Training logistic regression / classifiers |
+| GLM — $g(\mathbb{E}[y])=x^\top\beta$ | Linear predictor + link + target distribution | Counts (Poisson/log), positive skewed (Gamma), binary (logit) |
+| Canonical link $g(\mu)=\theta$ | Link that makes $\eta$ equal the natural parameter | Convenient ML fit; identity/logit/log for Gaussian/Bernoulli/Poisson |
+| IRLS | Fit a GLM as repeated weighted OLS steps | The one solver behind all maximum-likelihood GLM fits |
+| Pinball loss $\mathcal{L}_\tau$ | Asymmetric absolute loss targeting the $\tau$-quantile | Predicting percentiles (p95 latency, demand bands) |
+| Huber loss | Squared near 0, linear past $\delta$ | Robust fit when a few outliers would hijack OLS |
+| RMSE / MAE | Typical error size in real units | Report "how wrong on average"; gap signals outliers |
+| $R^2$ / adjusted $R^2$ | Fraction of variance explained (adj. taxes extra features) | Compare to mean-baseline; adjusted when models differ in size |
+
+## 8.11 — Key takeaways
 
 - **OLS** fits a hyperplane by minimizing squared residuals; solve it exactly via the **normal equation** $(X^\top X)^{-1}X^\top y$ for small $p$, or by **gradient descent** at scale.
 - A **coefficient** is the change in the target per one-unit change in its feature, others held fixed — interpretable only when features are comparably scaled.
@@ -1008,7 +1050,7 @@ IRLS can diverge or stall when the model is near-separable (logistic data perfec
 - **Quantile regression** (pinball loss) predicts percentiles, not means; **robust regression** (Huber loss) keeps outliers from hijacking the fit.
 - Evaluate with **RMSE/MAE** (real units), **$R^2$** (variance explained), and **adjusted $R^2$** when comparing models of different size.
 
-## 8.11 — See also
+## 8.12 — See also
 
 - **Optimization** — gradient descent, convexity, and the machinery behind fitting these losses.
 - **Linear Algebra** — matrices, projections, and the normal equation's geometry.

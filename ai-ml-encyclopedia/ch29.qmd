@@ -111,6 +111,8 @@ A trained model sitting in a notebook is worth nothing; a model serving predicti
 🧭 **In context:** Production engineering for ML · used to deploy, scale, monitor, and continuously retrain models · the key idea is that a model is a *living artifact* — versioned, observed, and re-shipped like any other software, but with data and the model as extra moving parts.
 :::
 
+> 💡 **Remember this:** a model in production is a living artifact that silently rots as the world drifts, so the real work is the loop around it — version it, serve it, watch it, and re-ship it the moment the data moves.
+
 The full lifecycle ties the whole chapter together:
 
 ```{mermaid}
@@ -163,9 +165,9 @@ The same loop, animated — watch the artifact flow from data, through serving, 
 
 **Deployment** is the act of making a trained model available to produce predictions for real consumers. The first and most consequential design choice is *batch versus online serving*.
 
-**Batch (offline) serving** runs predictions on a schedule over a large set of inputs and stores the results. Think of a churn model that scores every customer every night and writes a `churn_score` column to a table; the app just reads the table. It is simple, cheap, and throughput-optimized, but predictions are stale between runs and you cannot score an input the system has never seen.
+**Batch (offline) serving** runs predictions on a schedule over a large set of inputs and stores the results. Think of a churn [classifier](ch09.html) that scores every customer every night and writes a `churn_score` column to a table; the app just reads the table. It is simple, cheap, and throughput-optimized, but predictions are stale between runs and you cannot score an input the system has never seen.
 
-**Online (real-time) serving** loads the model behind a service that answers one request at a time with low latency. Think of a fraud model scoring a card swipe in 40 ms while the customer waits. It is fresh and handles novel inputs, but you now own a live service with latency budgets, autoscaling, and uptime.
+**Online (real-time) serving** loads the model behind a service that answers one request at a time with low latency. Think of a [fraud](ch27.html) model scoring a card swipe in 40 ms while the customer waits. It is fresh and handles novel inputs, but you now own a live service with latency budgets, autoscaling, and uptime.
 
 Here is the same input flowing through both paths, so the contrast is concrete:
 
@@ -259,7 +261,7 @@ def predict(req: Req):
 
 For dedicated ML serving, **BentoML**, **TensorFlow Serving**, **TorchServe**, and **NVIDIA Triton** add dynamic request batching (coalescing many concurrent calls into one GPU forward pass), model versioning, and GPU scheduling out of the box — the difference between a demo endpoint and one that holds a latency SLA under load.
 
-There is also a third path between the two extremes worth naming: **streaming (near-real-time) serving**. Instead of a request/response service *or* a once-a-night job, predictions are produced continuously as events flow through a stream (Kafka, Kinesis, Flink). Think of an IoT pipeline scoring sensor readings the moment they land, or a recommendation system updating as a user clicks. It gives you freshness close to online serving without a synchronous latency budget on the user's critical path — the consumer reads the latest score from a topic or cache.
+There is also a third path between the two extremes worth naming: **streaming (near-real-time) serving**. Instead of a request/response service *or* a once-a-night job, predictions are produced continuously as events flow through a stream (Kafka, Kinesis, Flink). Think of an IoT pipeline scoring sensor readings the moment they land, or a [recommendation system](ch26.html) updating as a user clicks. It gives you freshness close to online serving without a synchronous latency budget on the user's critical path — the consumer reads the latest score from a topic or cache.
 
 | Mode | Trigger | Latency | Example |
 |---|---|---|---|
@@ -542,7 +544,7 @@ with mlflow.start_run():
 
 A **model registry** is the versioned store of trained model artifacts with stage tags (`Staging`, `Production`, `Archived`); a **data registry / feature store** does the same for datasets and features. Together they make a deployment *reproducible*: prod model `v7` ⇄ training run `#142` ⇄ dataset `d-2026-06`. When a prediction looks wrong six weeks later, this chain is what lets you pull the *exact* model, code, and data that produced it instead of guessing.
 
-**Drift detection** is the early-warning system. **Data drift** is the input distribution shifting (a new device sends sensor values in a new range); **concept drift** is the input→output relationship itself changing (post-pandemic, the same customer features now imply different churn). You detect it by comparing the live feature distribution against the training distribution.
+**Drift detection** is the early-warning system. **Data drift** is the input [distribution](ch04.html) shifting (a new device sends sensor values in a new range); **concept drift** is the input→output relationship itself changing (post-pandemic, the same customer features now imply different churn). You detect it by comparing the live feature distribution against the training distribution.
 
 ```{mermaid}
 flowchart LR
@@ -588,7 +590,7 @@ $$\text{PSI} = \sum_i (a_i - e_i)\,\ln\!\frac{a_i}{e_i}$$
 
 **In words:** for each bin, multiply *how much its share changed* by *the log of how many times it grew or shrank*, then add up the bins — a single number that is big only when a bin moved a lot both in absolute share and in ratio.
 
-**Also written:** $\text{PSI} = D_{\mathrm{KL}}(a\Vert e) + D_{\mathrm{KL}}(e\Vert a)$. Plainly: PSI measures the "distance" between the live histogram and the training one in *both directions* and adds them up. Measuring both directions is what makes it symmetric — you get the same number whether you call the live or the training set the reference. (Each $D_{\mathrm{KL}}$ is the standard KL divergence; their sum is the Jeffreys divergence.)
+**Also written:** $\text{PSI} = D_{\mathrm{KL}}(a\Vert e) + D_{\mathrm{KL}}(e\Vert a)$. Plainly: PSI measures the "distance" between the live histogram and the training one in *both directions* and adds them up. Measuring both directions is what makes it symmetric — you get the same number whether you call the live or the training set the reference. (Each $D_{\mathrm{KL}}$ is the standard [KL divergence](ch04.html); their sum is the Jeffreys divergence.)
 
 with $e_i$ the expected (training) fraction in bin $i$ and $a_i$ the actual (live) fraction. Rule of thumb: $<0.1$ stable, $0.1$–$0.25$ moderate, $>0.25$ significant — retrain.
 
@@ -659,7 +661,7 @@ When a model or its dataset outgrows a single machine, you split the work across
 
 The intuition: imagine eight students each grading a different stack of the same exam, then meeting to average their grading adjustments so everyone's answer key stays identical. Each works in parallel on their own pile; the meeting (the all-reduce) keeps them in sync.
 
-**Data parallelism** is the common one: replicate the *full model* on every GPU, give each a different shard of the batch, compute gradients locally, then **all-reduce** (average) the gradients so every replica applies the same update and stays in sync. It scales throughput nearly linearly until communication cost dominates, and works whenever the model fits on one device.
+**Data parallelism** is the common one: replicate the *full model* on every GPU, give each a different shard of the batch, compute [gradients](ch02.html) locally, then **all-reduce** (average) the gradients so every replica applies the same update and stays in sync. It scales throughput nearly linearly until communication cost dominates, and works whenever the model fits on one device.
 
 Here is the all-reduce that keeps them synced, animated: each GPU computes its own gradient (different colors), they meet in the middle to average, and every GPU walks away holding the *same* averaged gradient (one color). That convergence is what keeps the replicas in lock-step:
 
@@ -708,7 +710,7 @@ $$\bar{g} = \frac{1}{K}\sum_{k=1}^{K} g_k$$
 
 **Also written:** $\bar{g} = \frac{1}{K}\big(g_1 + g_2 + \cdots + g_K\big)$, which is mathematically identical to computing one gradient over the full concatenated batch — data parallelism is exact, not an approximation.
 
-**Model parallelism** is for when the model itself does *not* fit on one device (think very large networks). You split the model's layers/tensors across GPUs; an input flows through GPU 0's layers, then GPU 1's, and so on. It removes the memory ceiling but adds cross-device traffic and can leave GPUs idle waiting on each other (pipeline bubbles).
+**Model parallelism** is for when the model itself does *not* fit on one device (think very large [neural networks](ch14.html)). You split the model's layers/tensors across GPUs; an input flows through GPU 0's layers, then GPU 1's, and so on. It removes the memory ceiling but adds cross-device traffic and can leave GPUs idle waiting on each other (pipeline bubbles).
 
 ```{mermaid}
 flowchart TB
@@ -1073,7 +1075,7 @@ Feature store and model store answer the two halves of reproducibility. The feat
 
 ## 29.9 — Serving generative models: LLMOps
 
-**The intuition:** everything so far assumed a model takes a feature vector and returns one number, fast and cheap. A large language model breaks all three assumptions at once — it takes *variable-length text*, returns *one token at a time* in a loop, and a single answer can cost a hundred forward passes instead of one. Serving it well is a different sport, and the practice has its own name: **LLMOps**.
+**The intuition:** everything so far assumed a model takes a feature vector and returns one number, fast and cheap. A [large language model](ch23.html) breaks all three assumptions at once — it takes *variable-length text*, returns *one token at a time* in a loop, and a single answer can cost a hundred forward passes instead of one. Serving it well is a different sport, and the practice has its own name: **LLMOps**.
 
 Why the classic serving playbook strains:
 
@@ -1185,7 +1187,7 @@ The big levers, cheapest-effort first:
 | **Right-size the instance** | match GPU/CPU/memory to the actual model | stop paying for an A100 to serve a logistic regression |
 | **Dynamic batching** | coalesce concurrent requests into one forward pass | 5–20× throughput per GPU |
 | **Autoscale to zero** | spin replicas down when idle (serverless containers) | pay only for traffic, not for 3 a.m. silence |
-| **Quantization / distillation** | smaller, faster model artifact (see *Efficient Inference*) | 2–4× latency + cost cut |
+| **Quantization / distillation** | smaller, faster model artifact (see [Efficient Inference](ch30.html)) | 2–4× latency + cost cut |
 | **Spot / preemptible nodes** | cheap interruptible compute for *batch* and *training* | 60–90% off, never for latency-critical online |
 | **Caching** | memoize repeated identical requests | free hits on hot inputs |
 
@@ -1223,7 +1225,7 @@ A deployed model is software exposed to the internet, *plus* a data asset, *plus
 
 **The ML-specific threats.** Beyond ordinary API security (auth, rate limits, input validation — never skip these at the trust boundary), models face attacks aimed at the *model itself*:
 
-- **Adversarial examples** — inputs perturbed just enough to flip the prediction (a few pixels change a "stop sign" into "speed limit" to the model). Mitigation: input sanitization, adversarial training, anomaly detection on inputs.
+- **Adversarial examples** — inputs perturbed just enough to flip the prediction (a few pixels change a "stop sign" into "speed limit" to the [computer-vision](ch19.html) model). Mitigation: input sanitization, adversarial training, anomaly detection on inputs.
 - **Data / model poisoning** — an attacker injects crafted samples into your *training* data (easy when you scrape the web or accept user feedback), planting a backdoor that survives into the deployed model. Mitigation: provenance tracking, training-data validation, anomaly filtering.
 - **Model extraction / inversion** — by querying your endpoint enough, an adversary reconstructs the model or recovers private training records. Mitigation: rate limits, query monitoring, differential privacy.
 - **Prompt injection / jailbreaks** (for LLM-backed services) — untrusted text in the input hijacks the model's instructions. Mitigation: input/output filtering, privilege separation, never trusting model output as a command.
@@ -1241,7 +1243,7 @@ flowchart LR
 
 - **Model cards** — a short document shipped *with* each model stating its intended use, training data, evaluation results broken down **by subgroup** (so disparate performance is visible, not hidden in an aggregate), and known limitations.
 - **Lineage / audit logs** — the registry chain from §29.4 (`prod v7 ⇄ run #142 ⇄ dataset d-2026-06`) is also a compliance artifact: it is what lets you reproduce and explain a contested decision months later.
-- **Bias & fairness checks as a pipeline gate** — fairness is not a one-time audit but a *test in the CI pipeline* that blocks promotion if a subgroup metric regresses, exactly like a unit test (see *Ethics & Responsible AI*).
+- **Bias & fairness checks as a pipeline gate** — fairness is not a one-time audit but a *test in the CI pipeline* that blocks promotion if a subgroup metric regresses, exactly like a unit test (see [AI Ethics, Fairness & Safety](ch38.html)).
 - **Access control & PII handling** — who can read the feature store, deploy a model, or pull training data; encryption and minimization for sensitive fields.
 
 A tiny worked illustration of why subgroup evaluation is non-negotiable: a model can post **92% overall accuracy** yet be **96% accurate on group A** (80% of traffic) and only **76% on group B** (20% of traffic). The aggregate looks healthy; group B is being failed one time in four. Only the disaggregated number — the kind a model card forces you to publish — surfaces it.
@@ -1264,7 +1266,31 @@ $$\text{acc}_{\text{overall}} = \sum_g w_g\,\text{acc}_g$$
 Treat the model registry as an **audit log, not just a convenience store**. The same lineage chain that helps you debug a bad prediction is what you hand a regulator after one. Build it before you need it — reconstructing "which model decided this" after the fact is usually impossible.
 :::
 
-## 29.12 — Key takeaways
+## 29.12 — Quick reference
+
+| Term / formula | One-line meaning | When / why it matters |
+|---|---|---|
+| Batch vs online serving | scheduled bulk scoring vs per-request low-latency service | default to batch; pay for online only when freshness is required |
+| Model gateway | single routed entry point for many model versions | auth, logging, and canary/shadow traffic splits in one place |
+| p50 / p95 / p99 | latency percentiles | hold an **SLO** on the tail (p99), never on the mean |
+| SLO | promised bound on a metric ("p99 < 150 ms") | what the serving stack is tuned to satisfy |
+| DAG + orchestrator | tasks as a dependency graph, run by Airflow/Kubeflow/Prefect | runs independent branches in parallel, retries, resumes |
+| Idempotency | rerunning a step gives the same result | overwrite-by-partition / upsert makes aggressive retries safe |
+| Container / image | code + deps + artifact frozen into immutable bytes (Docker) | kills "works on my machine"; ship the exact bytes you tested |
+| Kubernetes reconciliation | declare desired replicas; K8s closes the desired-vs-observed gap | self-healing fleet, readiness probes gate traffic |
+| Experiment tracking + registry | log run code/data/params/metrics, version artifacts by stage | answers "which run/data made prod v7?" during an incident |
+| $\text{PSI}=\sum_i (a_i-e_i)\ln\frac{a_i}{e_i}$ | symmetric drift score between live and training histograms | $<0.1$ stable, $0.1$–$0.25$ watch, $>0.25$ retrain |
+| Covariate / label / concept drift | $P(X)$ / $P(Y)$ / $P(Y\mid X)$ moves | inputs warn early (unlabeled); concept needs labels to confirm |
+| Continuous training (CT) | auto-retrain + validate + promote on drift/schedule | the third CI/CD pipeline that ships a *model* when data moves |
+| Shadow / canary / blue-green | log-only / small-% / instant-swap release | bound blast radius and keep rollback instant |
+| Champion / challenger | incumbent serves; rivals evaluated on live traffic, promoted on a win | the evergreen form of safe testing-in-production |
+| Training–serving skew | a feature computed differently offline vs online | the top reason an offline-good model fails live; fix with a **feature store** |
+| Data parallelism + all-reduce $\bar g=\frac1K\sum_k g_k$ | replicate model, shard batch, average gradients | scales most training; exact, until communication dominates |
+| KV cache / continuous batching / PagedAttention | reuse attention state, swap requests per decode step | the throughput levers of LLM serving (vLLM/TGI) |
+| TTFT / TPOT | time to first token / time per output token | streaming UX feels fast on low TTFT even for long answers |
+| Cost per 1,000 predictions | inference unit-cost as a first-class metric | inference dominates lifetime cost; close reserved-vs-used gap |
+
+## 29.13 — Key takeaways
 
 - **Deployment splits into batch vs online**; default to batch, pay for online only when real-time freshness is required. Front multiple models with a **gateway**.
 - **Latency is a tail, not a mean** — hold an SLO on **p99**, and remember batching trades median for tail unless you bound the batch window.
@@ -1279,7 +1305,7 @@ Treat the model registry as an **audit log, not just a convenience store**. The 
 - **Inference dominates lifetime cost**; close the reserved-vs-used gap with right-sizing, **dynamic batching**, autoscale-to-zero, and quantization, and track **cost per 1,000 predictions** (or per-token) as a first-class metric.
 - A deployed model adds ML-specific attack surfaces (**adversarial examples, poisoning, extraction, prompt injection**) and governance duties — ship **model cards with subgroup metrics**, keep the registry as an **audit log**, and gate promotion on fairness checks.
 
-## 29.13 — See also
+## 29.14 — See also
 
 - **AI Infrastructure & Efficient Inference** — serving optimizations, quantization, and inference hardware that this chapter's endpoints run on.
 - **Tools & Frameworks** — the broader library/framework landscape these pipelines are built from.

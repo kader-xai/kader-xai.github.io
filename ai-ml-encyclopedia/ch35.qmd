@@ -105,11 +105,13 @@ toc-expand: true
 
 ------------------------------------------------------------------------
 
-Some optimization problems hand you no gradient: the search space is a tangle of discrete choices, the objective is a black-box simulation, or the landscape is riddled with local optima that would trap any hill-climber. **Metaheuristics** are general-purpose, gradient-free search strategies — many inspired by nature (evolution, swarms, annealing metal) — that explore such landscapes by sampling, recombining, and perturbing candidate solutions. They rarely promise the global optimum, but they routinely find excellent solutions where calculus cannot even start. This chapter sits in Classical & Symbolic AI: it is the toolbox you reach for when the smooth machinery of Chapter 03 (Optimization) does not apply.
+Some optimization problems hand you no gradient: the search space is a tangle of discrete choices, the objective is a black-box simulation, or the landscape is riddled with local optima that would trap any hill-climber. **Metaheuristics** are general-purpose, gradient-free search strategies — many inspired by nature (evolution, swarms, annealing metal) — that explore such landscapes by sampling, recombining, and perturbing candidate solutions. They rarely promise the global optimum, but they routinely find excellent solutions where calculus cannot even start. This chapter sits in Classical & Symbolic AI: it is the toolbox you reach for when the smooth machinery of [Optimization](ch03.html) does not apply.
 
 ::: {.callout-note appearance="simple"}
 🧭 **In context:** Classical & Symbolic AI · used for gradient-free, black-box, and combinatorial optimization · the one key idea is *explore a population of candidate solutions and let selection + variation steer them toward better regions, no derivatives required*.
 :::
+
+> 💡 **Remember this:** when there's no usable gradient, keep a set of candidate solutions and let selection plus random variation push them toward better regions — every method here is just a different way to balance exploring widely against refining the best find so far.
 
 **The two-knob picture.** Before any specific algorithm, hold one image in your head. Every metaheuristic is balancing two opposing urges: **exploration** (wander widely, sample new regions, don't commit) and **exploitation** (zoom in on the best thing found so far, refine it). Too much exploration and you never settle; too much exploitation and you get stuck in the first decent valley you find. Each method in this chapter is, at heart, a different gadget for tuning that one dial over time.
 
@@ -293,7 +295,7 @@ The roulette wheel below makes those four slices visible — fitness $6$ owns mo
 
 ## 35.2 — Genetic Programming
 
-**Genetic programming (GP)** is a GA whose individuals are *programs* rather than fixed-length vectors. Instead of evolving a string of bits, you evolve a **syntax tree** — internal nodes are functions ($+$, $\times$, `if`, `sin`), leaves are inputs and constants. Fitness measures how well the program's output matches a target (e.g. how closely an evolved formula fits a dataset). The astonishing part: GP can invent the *form* of a solution, not just tune its parameters, which makes it a tool for **symbolic regression** — discovering an equation that explains data.
+**Genetic programming (GP)** is a GA whose individuals are *programs* rather than fixed-length vectors. Instead of evolving a string of bits, you evolve a **syntax tree** — internal nodes are functions ($+$, $\times$, `if`, `sin`), leaves are inputs and constants. Fitness measures how well the program's output matches a target (e.g. how closely an evolved formula fits a dataset). The astonishing part: GP can invent the *form* of a solution, not just tune its parameters, which makes it a tool for **symbolic regression** — discovering an equation that explains data (an evolutionary cousin of the fitted models in [Regression](ch08.html)).
 
 Consider evolving a formula for the points $(1,2),(2,6),(3,12),(4,20)$ — the true law is $x^2 + x$. A candidate program is the tree below, which encodes $(x \times x) + x$:
 
@@ -402,7 +404,7 @@ GP shines when you want an *interpretable* model — a human-readable equation o
 
 ## 35.3 — Evolution Strategies & Neuroevolution
 
-**Evolution strategies (ES)** are an evolutionary family built for **real-valued vectors**, where mutation — not crossover — is the engine. The hallmark is **self-adaptive Gaussian mutation**: each individual carries its own step size $\sigma$, and you perturb a parent by adding noise $\mathcal{N}(0, \sigma^2)$. The notation $(\mu, \lambda)$ means $\mu$ parents generate $\lambda$ children and the next generation is chosen *only* from the children; $(\mu + \lambda)$ keeps parents and children together (an elitist variant).
+**Evolution strategies (ES)** are an evolutionary family built for **real-valued vectors**, where mutation — not crossover — is the engine. The hallmark is **self-adaptive Gaussian mutation**: each individual carries its own step size $\sigma$, and you perturb a parent by adding [Gaussian](ch04.html) noise $\mathcal{N}(0, \sigma^2)$. The notation $(\mu, \lambda)$ means $\mu$ parents generate $\lambda$ children and the next generation is chosen *only* from the children; $(\mu + \lambda)$ keeps parents and children together (an elitist variant).
 
 The **1/5 success rule** is just an automatic step-size thermostat. Watch how often your random tweaks actually help. If they help *often* (more than 1 in 5), you're in easy terrain — take bigger steps to move faster. If they help *rarely* (fewer than 1 in 5), you're near the target overshooting — take smaller steps to fine-tune. That's the whole rule: success is plentiful, grow the step; success is scarce, shrink it. It's a gradient-free version of an adaptive learning rate. The code below measures that success rate over a sliding window of trials (matching the math, rather than the per-step shortcut):
 
@@ -482,7 +484,7 @@ A two-sample taste, with $\sigma = 1$: probe $\epsilon_1 = +1$ earns reward $f =
 
 This is the engine of **OpenAI's "Evolution Strategies as a Scalable Alternative to RL"** (2017): no backprop through the environment, every worker just evaluates one perturbed policy and reports a scalar reward, and the workers need only share random seeds — embarrassingly parallel.
 
-**Neuroevolution** applies these ideas to neural networks: the genome *is* the network. The simplest form evolves the weight vector of a fixed architecture with ES — surprisingly competitive with reinforcement learning on control tasks because it parallelizes trivially (every worker evaluates one perturbation, no backprop needed). The more ambitious form, **NEAT** (NeuroEvolution of Augmenting Topologies), evolves the *structure* too — starting minimal and adding nodes and connections, using historical "innovation numbers" to align genomes during crossover and **speciation** to protect young topologies from being out-competed before they mature.
+**Neuroevolution** applies these ideas to [neural networks](ch14.html): the genome *is* the network. The simplest form evolves the weight vector of a fixed architecture with ES — surprisingly competitive with [reinforcement learning](ch25.html) on control tasks because it parallelizes trivially (every worker evaluates one perturbation, no backprop needed). The more ambitious form, **NEAT** (NeuroEvolution of Augmenting Topologies), evolves the *structure* too — starting minimal and adding nodes and connections, using historical "innovation numbers" to align genomes during crossover and **speciation** to protect young topologies from being out-competed before they mature.
 
 ```{mermaid}
 flowchart TD
@@ -583,11 +585,11 @@ assert f(g) < 1e-2                        # swarm must reach near the origin
 print(g, f(g))
 ```
 
-**Ant Colony Optimization (ACO)** solves *combinatorial* problems — classically the Traveling Salesman Problem — by imitating how ants find short paths using **pheromone**. Each artificial ant builds a tour, choosing the next city probabilistically from a blend of the **pheromone** $\tau$ on an edge (learned desirability) and a **heuristic** $\eta = 1/\text{distance}$ (greedy nearness):
+**Ant Colony Optimization (ACO)** solves *combinatorial* problems — classically the Traveling Salesman Problem (the kind of constraint-laden combinatorial search covered in [Planning, CSP & Game Playing](ch34.html)) — by imitating how ants find short paths using **pheromone**. Each artificial ant builds a tour, choosing the next city probabilistically from a blend of the **pheromone** $\tau$ on an edge (learned desirability) and a **heuristic** $\eta = 1/\text{distance}$ (greedy nearness):
 
 $$P(i \to j) \;=\; \frac{\tau_{ij}^{\alpha}\,\eta_{ij}^{\beta}}{\sum_{k \in \text{allowed}} \tau_{ik}^{\alpha}\,\eta_{ik}^{\beta}}$$
 
-**In words:** the chance an ant at city $i$ steps to city $j$ is the "attractiveness" of edge $i\!\to\!j$ (its pheromone raised to power $\alpha$, times its nearness raised to power $\beta$) divided by the summed attractiveness of every city the ant could still go to — so it's a softmax over edge desirability.
+**In words:** the chance an ant at city $i$ steps to city $j$ is the "attractiveness" of edge $i\!\to\!j$ (its pheromone raised to power $\alpha$, times its nearness raised to power $\beta$) divided by the summed attractiveness of every city the ant could still go to — so it's a [softmax](ch14.html) over edge desirability.
 
 **Also written (proportionality form):** $P(i \to j) \propto \tau_{ij}^{\alpha}\,\eta_{ij}^{\beta}$, normalized over the unvisited cities; $\alpha$ weights *experience* (pheromone), $\beta$ weights *greed* (nearness).
 
@@ -720,7 +722,7 @@ res = dual_annealing(f, bounds=[(-5, 5)])
 print(round(res.x[0], 3), round(res.fun, 3))     # global basin, not the nearest one
 ```
 
-**Tabu search** is greedy hill-climbing made smart with *memory*. Plain hill-climbing always moves to the best neighbor and gets stuck oscillating around a local optimum. Tabu search forces continued movement by keeping a **tabu list** — a short-term memory of recently visited solutions (or recent moves) that are forbidden, so the search cannot immediately backtrack. It always takes the best *allowed* neighbor, even if that means temporarily worsening, and the tabu list pushes it into unexplored territory. An **aspiration criterion** overrides the ban if a tabu move would yield a new all-time best.
+**Tabu search** is greedy [hill-climbing](ch32.html) made smart with *memory*. Plain hill-climbing always moves to the best neighbor and gets stuck oscillating around a local optimum. Tabu search forces continued movement by keeping a **tabu list** — a short-term memory of recently visited solutions (or recent moves) that are forbidden, so the search cannot immediately backtrack. It always takes the best *allowed* neighbor, even if that means temporarily worsening, and the tabu list pushes it into unexplored territory. An **aspiration criterion** overrides the ban if a tabu move would yield a new all-time best.
 
 A short hand-trace makes the memory mechanism vivid. Imagine maximizing over states whose neighbor values are listed below, with a tabu tenure of 2 (a move stays forbidden for two iterations):
 
@@ -971,7 +973,33 @@ The practical reading is not nihilistic: real problems are *not* drawn uniformly
 Don't reach for a genetic algorithm when gradient descent would do. If your loss is differentiable and smooth, a metaheuristic typically needs *orders of magnitude* more evaluations to reach the same point. Metaheuristics are the tool for when calculus *can't* start — not a fashionable substitute for when it can.
 :::
 
-## 35.9 — Key takeaways
+## 35.9 — Quick reference
+
+| Term / formula | Meaning in one line | When / why it matters |
+|---|---|---|
+| Explore ↔ exploit | The single dial: wander widely vs. refine the current best | The lens for understanding *every* method here |
+| Genetic algorithm (GA) | Evolve a population by selection + crossover + mutation + elitism | Discrete/combinatorial or black-box objectives over fixed-length encodings |
+| Tournament selection | Pick $k$ at random, keep the fittest as parent | Robust default; avoids the diversity collapse of roulette selection |
+| Fitness-proportional $P_i = f_i/\sum_j f_j$ | Parent chance = its slice of total fitness | The exact breeding metaphor; fragile to one dominant individual |
+| Elitism | Copy the top few individuals unchanged into the next generation | One line; guarantees best fitness never decreases |
+| Premature convergence | Diversity collapses, search freezes on a local optimum | The classic GA failure — fix with mutation, larger pop, tournament |
+| Genetic programming (GP) | Evolve *program trees* (functions + leaves), score by running them | Symbolic regression — invents the *form* of a solution, interpretable |
+| Parsimony pressure $\text{err}+c\cdot\text{size}$ | Penalize tree size in fitness | Fights GP code **bloat**; shorter program wins ties |
+| Evolution strategy (ES) | Mutate real vectors with self-adapting step size $\sigma$ | Continuous, noisy, non-differentiable, low-dimensional objectives |
+| 1/5 success rule | Grow $\sigma$ if >1/5 of tweaks help, shrink otherwise | Gradient-free adaptive step size |
+| CMA-ES | ES that learns the full covariance of the mutation cloud | Strongest off-the-shelf optimizer for expensive low-$d$ continuous problems |
+| ES gradient $\hat g=\frac{1}{n\sigma}\sum f(\theta+\sigma\epsilon_k)\epsilon_k$ | Fake a gradient by reward-weighting random probes | Backprop-free, embarrassingly parallel policy search |
+| NEAT | Neuroevolution that grows network nodes + links (topology) | Evolve small-net structure, not just weights |
+| PSO $v\leftarrow wv + c_1r_1(p-x)+c_2r_2(g-x)$ | Particles pulled by inertia + personal best + swarm best | Simple continuous optimization; easier to code than a GA |
+| ACO $P(i\!\to\!j)\propto\tau^\alpha\eta^\beta$ | Ants pick edges by pheromone × nearness; evaporate + reinforce | Graph/routing problems (TSP, vehicle routing) built step by step |
+| Simulated annealing $P=e^{-\Delta E/T}$ | Accept worse moves with cooling probability | Escape local optima in a single-solution trajectory search |
+| Tabu search | Best *allowed* neighbor; recent moves forbidden via a `deque` | Memory-driven escape; largely deterministic |
+| Membership $\mu(x;a,b,c)$ | Degree of truth in $[0,1]$, triangular ramp up/down | Fuzzy logic — smooth expert-rule control with no training data |
+| Penalty $f-\lambda\sum\max(0,g_i)$ | Dock fitness in proportion to constraint violation | Fold hard constraints into a fitness function softly |
+| Pareto front | Non-dominated trade-offs between conflicting objectives | Multi-objective search (NSGA-II); pick the point *after* seeing options |
+| No-Free-Lunch theorem | No optimizer beats all others averaged over all functions | Match the method's bias to your problem; no silver bullet exists |
+
+## 35.10 — Key takeaways
 
 - **Metaheuristics** are gradient-free, general-purpose search strategies for black-box, combinatorial, and multi-modal problems where calculus cannot start; every one of them is a different way to tune the single **explore ↔ exploit** dial.
 - **Genetic algorithms** evolve a population via selection, crossover, mutation, and elitism; fitness-proportional selection literally weights picks by $f_i / \sum_j f_j$, and watch for premature convergence. **Genetic programming** evolves programs/formulas (scored by running the tree on data) and fights code bloat with parsimony pressure.
@@ -982,12 +1010,12 @@ Don't reach for a genetic algorithm when gradient descent would do. If your loss
 - **Constraints** fold in via penalties, repair, or feasibility-preserving operators; **conflicting objectives** yield a **Pareto front** (NSGA-II), not a single answer.
 - The **No-Free-Lunch theorem** means no optimizer is universally best — match the method's inductive bias to your problem's structure, and prefer gradient methods whenever the objective is smooth and differentiable.
 
-## 35.10 — See also
+## 35.11 — See also
 
 - **Optimization** — gradient descent, convexity, and the smooth-objective methods these metaheuristics complement.
 - **Reinforcement Learning** — neuroevolution and ES are competitive, gradient-free alternatives for policy search.
-- **Calculus & Differentiation** — why differentiability is the dividing line that sends you to gradient methods or metaheuristics.
-- **Search & Problem Solving** — classical and heuristic search (A*, hill-climbing) that trajectory-based metaheuristics generalize.
+- **[Calculus & Differentiation](ch02.html)** — why differentiability is the dividing line that sends you to gradient methods or metaheuristics.
+- **[Search & Problem Solving](ch32.html)** — classical and heuristic search (A*, hill-climbing) that trajectory-based metaheuristics generalize.
 - **Planning, Constraint Satisfaction & Game Playing** — combinatorial problems where GA, ACO, and tabu search are routinely applied.
 - **Neural Networks (Core)** — the backprop-trained networks that neuroevolution offers an alternative path to.
 

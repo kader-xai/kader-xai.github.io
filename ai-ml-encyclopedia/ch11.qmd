@@ -105,11 +105,13 @@ toc-expand: true
 
 ------------------------------------------------------------------------
 
-Most of the data in the world arrives without labels: customers without segments, documents without topics, sensor readings without categories. **Unsupervised learning** is the branch of machine learning that finds structure in such unlabeled data — and **clustering**, its largest sub-area, groups points so that members of a group resemble one another more than they resemble outsiders. It sits inside Classical Machine Learning as the counterpart to the supervised methods of Chapters 8–10: same feature vectors, but no target column to predict. This chapter walks through the seven workhorse families — partition-based, hierarchical, density-based, graph-based, probabilistic, rule-based, and neural — each with a worked example you can follow by hand.
+Most of the data in the world arrives without labels: customers without segments, documents without topics, sensor readings without categories. **Unsupervised learning** is the branch of machine learning that finds structure in such unlabeled data — and **clustering**, its largest sub-area, groups points so that members of a group resemble one another more than they resemble outsiders. It sits inside Classical Machine Learning as the counterpart to the supervised methods of [Regression](ch08.html), [Classification](ch09.html), and [Ensemble Methods](ch10.html): same feature vectors, but no target column to predict. This chapter walks through the seven workhorse families — partition-based, hierarchical, density-based, graph-based, probabilistic, rule-based, and neural — each with a worked example you can follow by hand.
 
 ::: {.callout-note appearance="simple"}
 🧭 **In context:** Classical Machine Learning · used to discover groups, segments, topics, and patterns in unlabeled data · the one key idea — define a notion of "similarity," then let geometry or probability reveal the groups.
 :::
+
+> 💡 **Remember this:** every clustering method quietly assumes a *shape* for what a cluster is — round balls, dense islands, connected webs, or overlapping ellipses — so the whole game is matching that assumption to your data, not memorising one default.
 
 ## 11.1 — k-Means clustering
 
@@ -245,7 +247,7 @@ print(mbk.inertia_)        # close to full KMeans, computed far faster
 ```
 
 ::: {.callout-warning}
-**Curse of dimensionality.** Every distance-based clusterer here — k-Means, DBSCAN, hierarchical — degrades in very high dimensions, because distances *concentrate*: the gap between the nearest and farthest neighbour shrinks toward zero, so "nearest centroid" stops being meaningful (see Chapter 7). The standard fix is to reduce dimensions first (PCA, UMAP) and cluster in the compact space.
+**Curse of dimensionality.** Every distance-based clusterer here — k-Means, DBSCAN, hierarchical — degrades in very high dimensions, because distances *concentrate*: the gap between the nearest and farthest neighbour shrinks toward zero, so "nearest centroid" stops being meaningful (see [Dimensionality Reduction](ch07.html)). The standard fix is to reduce dimensions first (PCA, UMAP) and cluster in the compact space.
 :::
 
 ## 11.3 — Hierarchical clustering
@@ -440,7 +442,7 @@ $$ w_{ij} = \exp\!\left(-\frac{\lVert x_i - x_j \rVert^2}{2\sigma^2}\right) $$
 
 **In words:** two points are strongly linked (weight near 1) when they sit close together, and the link fades smoothly toward 0 as they get farther apart, with $\sigma$ setting how quickly "far" kicks in.
 
-**Also written:** $w_{ij} = e^{-\gamma\,\lVert x_i - x_j\rVert^2}$ with $\gamma = 1/(2\sigma^2)$ — the same radial-basis (Gaussian) kernel used by RBF-kernel SVMs in Chapter 9.
+**Also written:** $w_{ij} = e^{-\gamma\,\lVert x_i - x_j\rVert^2}$ with $\gamma = 1/(2\sigma^2)$ — the same radial-basis (Gaussian) kernel used by [RBF-kernel SVMs](ch09.html).
 
 ```{mermaid}
 flowchart LR
@@ -498,7 +500,7 @@ $$ p(x) = \sum_{i=1}^{k} \pi_i \, \mathcal{N}(x \mid \mu_i, \Sigma_i), \qquad \s
 
 **In words:** the chance of seeing a point anywhere is a weighted stack of $k$ bell curves — each bell contributes in proportion to its mixing weight $\pi_i$, and the weights sum to 1 because every point must come from *some* component.
 
-**Also written:** as a two-step generative story — first draw a component $z \sim \text{Categorical}(\pi_1,\dots,\pi_k)$, then draw the point $x \sim \mathcal{N}(\mu_z, \Sigma_z)$; marginalising out $z$ gives the sum above.
+**Also written:** as a two-step generative story — first draw a component $z \sim \text{Categorical}(\pi_1,\dots,\pi_k)$, then draw the point $x \sim \mathcal{N}(\mu_z, \Sigma_z)$; marginalising out $z$ gives the sum above. This latent-variable view connects GMMs to [Probabilistic Graphical Models](ch13.html) and the wider family of [Generative Models](ch18.html).
 
 Because the covariance $\Sigma_i$ can be elongated and tilted, GMM clusters can be stretched ellipses, not just k-Means' spheres — a strict generalisation (k-Means is the limiting case of a GMM with identical spherical covariances and hard assignments).
 
@@ -639,7 +641,7 @@ rules = association_rules(freq, metric="lift", min_threshold=1.0)
 print(rules[["antecedents","consequents","support","confidence","lift"]])
 ```
 
-**Where this is used.** The same machinery runs well beyond grocery aisles: e-commerce "frequently bought together" widgets, Netflix-style "people who watched X also watched Y" lists, web-usage mining (which pages get visited in the same session), and even healthcare — flagging sets of symptoms or co-prescribed drugs that co-occur more than chance. Anywhere you have transactions of co-occurring items, support/confidence/lift is the first tool to reach for.
+**Where this is used.** The same machinery runs well beyond grocery aisles: e-commerce "frequently bought together" widgets (a building block of [Recommender Systems](ch26.html)), Netflix-style "people who watched X also watched Y" lists, web-usage mining (which pages get visited in the same session), and even healthcare — flagging sets of symptoms or co-prescribed drugs that co-occur more than chance. Anywhere you have transactions of co-occurring items, support/confidence/lift is the first tool to reach for.
 
 ::: {.callout-warning}
 Confidence alone is misleading: a rule predicting a very common consequent (milk in 80% of baskets) will look "confident" even when the antecedent adds nothing. Always check lift (or the related *conviction*) to confirm a genuine, non-spurious association.
@@ -647,7 +649,7 @@ Confidence alone is misleading: a rule predicting a very common consequent (milk
 
 ## 11.9 — Self-Organizing Maps
 
-A **Self-Organizing Map** (SOM), or Kohonen map, is a small neural network that does clustering *and* dimensionality reduction at once, with a twist the previous methods lack: it preserves **topology**. It lays out a fixed grid (say 10×10) of neurons, each carrying a weight vector the same size as your input. Through training, nearby neurons on the grid come to respond to similar inputs — so the grid becomes a 2-D map where neighbouring cells mean "similar," turning high-dimensional data into a picture you can read.
+A **Self-Organizing Map** (SOM), or Kohonen map, is a small [neural network](ch14.html) that does clustering *and* dimensionality reduction at once, with a twist the previous methods lack: it preserves **topology**. It lays out a fixed grid (say 10×10) of neurons, each carrying a weight vector the same size as your input. Through training, nearby neurons on the grid come to respond to similar inputs — so the grid becomes a 2-D map where neighbouring cells mean "similar," turning high-dimensional data into a picture you can read.
 
 **Plain intuition:** it is like flattening a globe onto a paper map. The globe (your high-dimensional data) gets pressed onto a 2-D sheet of cells, and the press is done so carefully that places near each other on the globe stay near each other on the paper. You lose exact distances but keep the *neighbourhoods* — which is exactly what makes a map readable.
 
@@ -707,7 +709,7 @@ som.train_random(X, num_iteration=1000)
 winners = np.array([som.winner(xi) for xi in X])   # (row,col) grid cell per point
 ```
 
-SOMs shine for *visualising* high-dimensional data (gene expression, document collections, sensor states) on an interpretable 2-D grid, and unlike t-SNE or UMAP (Chapter 7) the trained map can place new points instantly. The cost is that the grid size and shape are hyperparameters, training is stochastic, and the resulting map is qualitative rather than a crisp partition.
+SOMs shine for *visualising* high-dimensional data (gene expression, document collections, sensor states) on an interpretable 2-D grid, and unlike t-SNE or UMAP (see [Dimensionality Reduction](ch07.html)) the trained map can place new points instantly. The cost is that the grid size and shape are hyperparameters, training is stochastic, and the resulting map is qualitative rather than a crisp partition.
 
 ::: {.callout-tip}
 Read a trained SOM like a terrain map: a **U-matrix** colours each cell by how different its weights are from its neighbours', so cluster boundaries show up as "ridges" of high difference between smooth "valleys" of similar cells.
@@ -833,7 +835,30 @@ print(normalized_mutual_info_score(y_true, labels))
 Internal metrics encode their own bias: silhouette and Davies–Bouldin both reward compact, convex clusters, so they will rate a k-Means solution highly even when DBSCAN found the *truer* crescent-shaped clusters. Match the metric to the cluster shape you expect, and never trust a single number alone.
 :::
 
-## 11.12 — Key takeaways
+## 11.12 — Quick reference
+
+| Term / method | Meaning in one line | When / why |
+|---|---|---|
+| WCSS / inertia $J=\sum_i\sum_{x\in C_i}\lVert x-\mu_i\rVert^2$ | total squared distance of points to their centroid | k-Means objective; lower = tighter balls |
+| k-means++ | distance-weighted seeding of initial centroids | default seed; escapes bad random starts |
+| Elbow method | plot WCSS vs $k$, cut at the bend | quick visual pick of $k$ for k-Means |
+| Silhouette $s=(b-a)/\max(a,b)$ | own-cluster vs nearest-rival distance, per point | label-free quality / $k$ check; near 1 = clean |
+| Mini-Batch k-Means | update centroids from small random batches | millions of points or streaming data |
+| Linkage (single/complete/average/Ward) | how to measure distance between two *clusters* | shapes the dendrogram; Ward ≈ round, single ≈ chains |
+| Dendrogram | merge-height tree; cut to choose $k$ | hierarchical clustering without preset $k$ |
+| DBSCAN (eps, minPts) | dense regions are clusters, sparse points are noise | arbitrary shapes + outlier flagging, $k$ unknown |
+| Mean-Shift bandwidth $h$ | window size for climbing to density modes | $k$-free, non-spherical; small data, $O(n^2)$ |
+| Graph Laplacian $L=D-W$ | matrix whose low eigenvectors expose connectivity | spectral clustering of tangled / ringed data |
+| Eigengap | count of near-zero eigenvalues before the jump | tells you a natural $k$ from the graph |
+| GMM $p(x)=\sum_i\pi_i\mathcal N(x\mid\mu_i,\Sigma_i)$ | soft mixture of elliptical Gaussians | overlapping / stretched clusters + uncertainty |
+| EM responsibility $\gamma_{ij}$ | posterior that component $i$ generated point $j$ | the E-step credit; soft membership weight |
+| BIC / AIC | likelihood penalised for extra components | principled $k$ for GMMs (not the elbow) |
+| Support / confidence / lift | popularity / $P(B\mid A)$ / vs-chance ratio | judge association rules; lift > 1 = real link |
+| Downward closure | subset of a frequent set is frequent | Apriori's pruning rule over $2^m$ itemsets |
+| SOM / BMU | grid of neurons; closest one wins and pulls neighbours | topology-preserving 2-D map of high-dim data |
+| ARI / NMI | pair-agreement / shared-info vs ground truth | external validation when labels exist |
+
+## 11.13 — Key takeaways
 
 - **Unsupervised learning finds structure without labels;** clustering is its core task — pick a similarity notion, then let geometry, density, graph connectivity, or probability reveal the groups.
 - **k-Means** is fast and simple but assumes spherical, equal-sized clusters and needs $k$; use k-means++ seeding and the elbow/silhouette to choose $k$.
@@ -848,7 +873,7 @@ Internal metrics encode their own bias: silhouette and Davies–Bouldin both rew
 - **Choosing an algorithm** is choosing an assumption about cluster shape — match the method (and its validation metric) to round blobs, dense islands, or connected webs; run a few and compare.
 - **Validation** has no answer key: use internal scores (silhouette, Davies–Bouldin, Calinski–Harabasz) for structure and external ones (ARI, NMI) when ground truth exists — and match the metric to the expected cluster shape.
 
-## 11.13 — See also
+## 11.14 — See also
 
 - **Dimensionality Reduction** — PCA, t-SNE, and UMAP, the standard preprocessing and visualisation companions to clustering.
 - **AI, ML & the Learning Process** — where unsupervised learning fits among supervised and reinforcement paradigms.

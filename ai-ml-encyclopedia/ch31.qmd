@@ -111,9 +111,11 @@ Every model in this encyclopedia ultimately runs as code on top of a small numbe
 🧭 **In context:** Production, Tooling & Infrastructure · the concrete libraries you write ML in · one key idea — each tool exposes a single core abstraction (the array, the DataFrame, the estimator, the tensor-with-gradient, the pretrained model, the event stream) and everything else is convenience around it.
 :::
 
+> 💡 **Remember this:** every tool here is just convenience wrapped around one core abstraction — learn that abstraction (array, DataFrame, estimator, tensor-with-gradient, pretrained model, event stream) and the API falls out of it.
+
 ## 31.1 — The Python ML stack
 
-Python won machine learning not because it is fast — it is not — but because it is a thin, pleasant scripting layer over fast C and Fortran. The trick is that the *hot loops* live in compiled libraries, and Python just orchestrates: you write `model.fit(X, y)` in a high-level language, and underneath the actual matrix multiplies run in optimized native code. Three libraries form the base of almost every ML project: **NumPy** for numerical arrays, **Pandas** for tabular data, and **scikit-learn** for classical models. They stack cleanly: Pandas is built on NumPy, and scikit-learn consumes both.
+Python won machine learning not because it is fast — it is not — but because it is a thin, pleasant scripting layer over fast C and Fortran. The trick is that the *hot loops* live in compiled libraries, and Python just orchestrates: you write `model.fit(X, y)` in a high-level language, and underneath the actual matrix multiplies run in optimized native code. Three libraries form the base of almost every ML project: **NumPy** for numerical [arrays](ch01.html), **Pandas** for tabular data, and **scikit-learn** for classical models. They stack cleanly: Pandas is built on NumPy, and scikit-learn consumes both.
 
 Think of it like a kitchen. NumPy is the cutting board and knives (raw fast operations on ingredients), Pandas is the labeled pantry with everything in named jars, and scikit-learn is the set of standard recipes that all follow the same steps. You move ingredients up the stack: messy delivery box → labeled pantry → measured bowls → recipe.
 
@@ -222,9 +224,9 @@ scikit-learn's lasting contribution is not its algorithms but its **consistent i
 |---|---|---|
 | `fit(X, y)` | learn parameters from data | every estimator |
 | `predict(X)` | produce outputs for new rows | classifiers, regressors |
-| `transform(X)` | map inputs to a new representation | scalers, encoders, PCA |
+| `transform(X)` | map inputs to a new representation | scalers, encoders, [PCA](ch07.html) |
 
-Because the interface is uniform, you can swap a `LogisticRegression` for a `RandomForestClassifier` by changing one line — the surrounding code does not care. And because transformers and predictors share `fit`, you can chain them into a **Pipeline**: a single estimator that applies each step's `transform` in order, then `fit`/`predict` on the final model. The Pipeline solves a subtle but serious bug — **data leakage**. If you scale using statistics computed over the *whole* dataset before splitting, information from the test rows bleeds into training, and your reported accuracy is optimistically inflated. A Pipeline fit inside cross-validation computes the scaler's mean and standard deviation on the training fold only.
+Because the interface is uniform, you can swap a [`LogisticRegression`](ch09.html) for a `RandomForestClassifier` by changing one line — the surrounding code does not care. And because transformers and predictors share `fit`, you can chain them into a **Pipeline**: a single estimator that applies each step's `transform` in order, then `fit`/`predict` on the final model. The Pipeline solves a subtle but serious bug — **data leakage**. If you scale using statistics computed over the *whole* dataset before splitting, information from the test rows bleeds into training, and your reported accuracy is optimistically inflated. A Pipeline fit inside cross-validation computes the scaler's mean and standard deviation on the training fold only.
 
 ```python
 from sklearn.pipeline import Pipeline
@@ -262,7 +264,7 @@ flowchart LR
 
 ### Mixed columns and hyperparameter search
 
-Real tables mix numeric and categorical columns, and each kind needs a different transform. The everyday picture: a sorting station where number-jars go down one chute (scale them) and word-jars down another (one-hot encode them), and both feed the same model. scikit-learn's **`ColumnTransformer`** is that station, and it composes inside a Pipeline so leakage protection still holds. Tuning is the same uniform interface: **`GridSearchCV`** wraps any estimator (a Pipeline included) and re-fits it for every hyperparameter combination, scoring each by cross-validation.
+Real tables mix numeric and categorical columns, and each kind needs a different transform. The everyday picture: a sorting station where number-jars go down one chute (scale them) and word-jars down another (one-hot encode them), and both feed the same model. scikit-learn's **`ColumnTransformer`** is that station, and it composes inside a Pipeline so leakage protection still holds. Tuning is the same uniform interface: **`GridSearchCV`** wraps any estimator (a Pipeline included) and re-fits it for every hyperparameter combination, scoring each by [cross-validation](ch12.html).
 
 ```python
 from sklearn.compose import ColumnTransformer
@@ -288,7 +290,7 @@ The `clf__n_estimators` double-underscore syntax reaches *into* a named step —
 
 ### Gradient-boosting libraries: the tabular workhorses
 
-Here is a fact that surprises people who arrive from deep learning: on ordinary **tabular** data — the spreadsheets, transaction logs, and customer tables that make up most real business problems — a **gradient-boosted decision tree** usually beats a neural network, trains in seconds, and needs almost no tuning. So while scikit-learn ships its own boosting, three specialized libraries dominate this corner: **XGBoost**, **LightGBM**, and **CatBoost**. They all implement the same core idea (covered in depth in the *Ensemble Methods* chapter): build trees one after another, each new tree correcting the errors the running total still makes.
+Here is a fact that surprises people who arrive from deep learning: on ordinary **tabular** data — the spreadsheets, transaction logs, and customer tables that make up most real business problems — a **gradient-boosted decision tree** usually beats a neural network, trains in seconds, and needs almost no tuning. So while scikit-learn ships its own boosting, three specialized libraries dominate this corner: **XGBoost**, **LightGBM**, and **CatBoost**. They all implement the same core idea (covered in depth in [Ensemble Methods](ch10.html)): build trees one after another, each new tree correcting the errors the running total still makes.
 
 The intuition for *why* they win on tables: trees split on thresholds (`amount > 500?`), so they handle mixed scales, skewed distributions, and irrelevant columns gracefully — no standardization needed, no sensitivity to a feature measured in millions sitting next to one measured in fractions. Boosting then stacks many shallow trees into a strong learner. The three libraries differ mainly in engineering tradeoffs:
 
@@ -319,7 +321,7 @@ print(cross_val_score(clf, X, y, cv=5).mean())
 
 ## 31.2 — Deep learning frameworks
 
-Classical ML stops where you need to hand-build a network and have its gradients computed for you. That is the job of a deep learning framework. Both major frameworks rest on the same two pillars: **tensors** (NumPy-like arrays that also live on GPUs, so the same array math runs thousands of multiplies in parallel) and **autograd** (automatic differentiation that records every operation and replays it backward to compute gradients — the chain rule, mechanized; see the *Calculus & Differentiation* chapter). They differ mainly in *when* the computation graph is built and *where* they are strongest in production.
+Classical ML stops where you need to hand-build a network and have its gradients computed for you. That is the job of a deep learning framework. Both major frameworks rest on the same two pillars: **tensors** (NumPy-like arrays that also live on GPUs, so the same array math runs thousands of multiplies in parallel) and **autograd** (automatic differentiation that records every operation and replays it backward to compute gradients — the chain rule, mechanized; see [Calculus & Differentiation](ch02.html)). They differ mainly in *when* the computation graph is built and *where* they are strongest in production.
 
 The **computation graph** is the central concept: as you compute, the framework builds a directed graph whose nodes are operations and whose edges are tensors. To get gradients, it walks that graph backward. The question that splits the two frameworks is *when* the graph gets built — every step as you run (dynamic), or once up front (static). The intuition: a dynamic graph is like cooking while reading the recipe line by line (you can improvise mid-dish); a static graph is like printing the whole recipe, locking it, then running it on an assembly line a thousand times (no improvising, but fast and shippable).
 
@@ -363,7 +365,7 @@ for epoch in range(100):
     opt.step()                   # 4. param -= lr * param.grad
 ```
 
-The optimizer step that line 4 runs, for plain SGD, is one rule per parameter $\theta$:
+The [optimizer](ch03.html) step that line 4 runs, for plain SGD, is one rule per parameter $\theta$:
 
 $$\theta \leftarrow \theta - \eta\,\nabla_\theta L$$
 
@@ -500,7 +502,7 @@ For most of the last decade, "use a deep model" meant building and training one 
 
 Three libraries matter most:
 
-- **`transformers`** — thousands of pretrained models (BERT, GPT-style, ViT, Whisper) behind one uniform API, plus the high-level `pipeline` that bundles tokenizer + model + post-processing into a single callable.
+- **`transformers`** — thousands of pretrained [Transformer](ch17.html) models (BERT, GPT-style, ViT, Whisper) behind one uniform API, plus the high-level `pipeline` that bundles tokenizer + model + post-processing into a single callable.
 - **`datasets`** — memory-mapped, streamable datasets so you can load something larger than RAM with one line.
 - **`peft`** — parameter-efficient fine-tuning (LoRA and friends), which adapts a giant model by training a tiny number of extra weights.
 
@@ -514,7 +516,7 @@ print(clf("Hugging Face makes this absurdly easy"))
 # [{'label': 'POSITIVE', 'score': 0.9998}]
 ```
 
-When you need control, drop one level to the tokenizer + model pair. The tokenizer turns text into the integer IDs the model expects; the model returns raw scores (**logits**) you convert to probabilities:
+When you need control, drop one level to the tokenizer + model pair. The tokenizer turns text into the integer IDs the model expects; the model returns raw scores (**logits**) you convert to probabilities with [softmax](ch14.html):
 
 ```python
 from transformers import AutoTokenizer, AutoModelForSequenceClassification
@@ -531,7 +533,7 @@ probs  = torch.softmax(logits, dim=-1)        # -> probabilities per class
 
 ### Fine-tuning and LoRA
 
-Fine-tuning a full large model means updating *all* its weights — billions of numbers — which needs heavy GPUs and storage. **LoRA** (Low-Rank Adaptation) is the lazy, effective shortcut: freeze the original weights and inject small trainable matrices alongside them, training only those. The analogy: rather than re-teaching a fluent translator the whole language, you hand them a small phrasebook of your domain's terms.
+Fine-tuning a full [large language model](ch23.html) means updating *all* its weights — billions of numbers — which needs heavy GPUs and storage. **LoRA** (Low-Rank Adaptation) is the lazy, effective shortcut: freeze the original weights and inject small trainable matrices alongside them, training only those. The analogy: rather than re-teaching a fluent translator the whole language, you hand them a small phrasebook of your domain's terms.
 
 The trick is one observation: the *change* a layer needs is usually simple, even when the layer is huge. So instead of learning a full grid of edits, LoRA learns two thin strips and multiplies them to reconstruct that grid.
 
@@ -762,7 +764,32 @@ Two ideas earn their keep here. **Reproducibility**: a run logs not just the mod
 **Rule of thumb:** start logging from your very first serious run, not after the mess. The cost is three lines per run; the payoff is never again wondering which checkpoint produced the number in last month's slide deck.
 :::
 
-## 31.6 — Key takeaways
+## 31.6 — Quick reference
+
+| Tool / term | What it is | When / why |
+|---|---|---|
+| **NumPy `ndarray`** | typed, contiguous n-dim array | fast vectorized math; the base of the whole stack |
+| **Broadcasting** | stretch size-1 dims to match shapes | combine differently-shaped arrays with no copy |
+| **Pandas `DataFrame`** | labeled, index-aligned table | clean/join/group mixed-type tabular data |
+| **`groupby`** | split–apply–combine | per-group aggregates (mean per city, etc.) |
+| **scikit-learn estimator** | object with `fit`/`predict`/`transform` | uniform API; swap models by one line |
+| **`Pipeline`** | chained transformers + estimator | re-fit per fold to prevent data leakage |
+| **`ColumnTransformer`** | per-column-type transforms | scale numerics + one-hot categoricals together |
+| **`GridSearchCV`** | CV over hyperparameter grid | leakage-safe tuning of the whole pipeline |
+| **Gradient boosting** | XGBoost / LightGBM / CatBoost | strongest fast baseline on tabular data |
+| **Tensor** | array on GPU with autograd | the unit of deep-learning compute |
+| **Autograd** | record ops, replay backward | `.backward()` gives every gradient (chain rule) |
+| **PyTorch loop** | `zero_grad→forward→backward→step` | explicit, debuggable; research default |
+| **Keras `fit`** | managed training loop | standard model trained fast; strong edge story |
+| **JAX `grad`/`jit`/`vmap`** | functional autograd + compile | TPU and math-heavy, high-performance research |
+| **ONNX** | framework-agnostic graph + weights | train in one tool, serve in another |
+| **LoRA** $W+BA$ | low-rank adapter, $r(d{+}k)$ params | fine-tune a giant model on a small budget |
+| **Kafka** | durable, replayable append-only log | the event backbone; decouples producers/consumers |
+| **Spark Streaming** | micro-batch compute (~seconds) | already in Spark; second-scale latency is fine |
+| **Flink** | true per-event streaming (~ms) | low latency or correct event-time windows |
+| **MLflow** | log params/metrics/artifacts + registry | reproducible runs; named, versioned deployment |
+
+## 31.7 — Key takeaways
 
 - The Python ML stack layers cleanly: **NumPy** (typed n-dimensional arrays, vectorized via broadcasting) → **Pandas** (labeled, index-aligned tabular data, `groupby` split-apply-combine) → **scikit-learn** (the uniform `fit`/`predict`/`transform` estimator API).
 - A scikit-learn **Pipeline** chains transformers and a final estimator into one object; fitting it per cross-validation fold prevents **data leakage** from preprocessing. **`ColumnTransformer`** routes numeric vs categorical columns, and **`GridSearchCV`** tunes the whole thing leakage-safely.
@@ -774,7 +801,7 @@ Two ideas earn their keep here. **Reproducibility**: a run logs not just the mod
 - The recurring real-time challenge is **feature freshness** and avoiding **train/serve skew** — share one feature definition across batch and stream.
 - **Experiment tracking** (MLflow, W&B) is the lab notebook for ML: log params, metrics, and artifacts per run, and promote versioned models through a **registry** for reproducible, named deployment.
 
-## 31.7 — See also
+## 31.8 — See also
 
 - **Data Preprocessing** — what the Pandas and scikit-learn transformers actually do to features.
 - **Ensemble Methods** — the boosting and bagging theory behind XGBoost, LightGBM, and CatBoost.
