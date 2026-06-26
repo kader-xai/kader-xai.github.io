@@ -389,6 +389,27 @@ print("Extra Trees train acc:", round(et.score(X, y), 3))
 # same API as RandomForestClassifier; usually trains noticeably faster
 ```
 
+The picture: a random forest scans a feature and places the fence at the *best* threshold it can find; Extra Trees just throw the fence down at a *random* spot. Sloppier per tree, but no two trees place their fences alike — and that disagreement is exactly what the averaging cashes in.
+
+<svg viewBox="0 0 420 130" xmlns="http://www.w3.org/2000/svg">
+  <text x="20" y="16" font-size="10" fill="currentColor" opacity=".75">Random Forest: best threshold</text>
+  <line x1="20" y1="95" x2="180" y2="95" stroke="currentColor" stroke-opacity=".35"/>
+  <circle cx="40" cy="88" r="3" fill="#22c55e"/><circle cx="55" cy="90" r="3" fill="#22c55e"/>
+  <circle cx="70" cy="86" r="3" fill="#22c55e"/><circle cx="130" cy="88" r="3" fill="#ec4899"/>
+  <circle cx="150" cy="90" r="3" fill="#ec4899"/><circle cx="165" cy="85" r="3" fill="#ec4899"/>
+  <line x1="100" y1="60" x2="100" y2="105" stroke="#6366f1" stroke-width="2"/>
+  <text x="78" y="55" font-size="8" fill="#6366f1">optimal cut</text>
+  <text x="240" y="16" font-size="10" fill="currentColor" opacity=".75">Extra Trees: random threshold</text>
+  <line x1="240" y1="95" x2="400" y2="95" stroke="currentColor" stroke-opacity=".35"/>
+  <circle cx="260" cy="88" r="3" fill="#22c55e"/><circle cx="275" cy="90" r="3" fill="#22c55e"/>
+  <circle cx="290" cy="86" r="3" fill="#22c55e"/><circle cx="350" cy="88" r="3" fill="#ec4899"/>
+  <circle cx="370" cy="90" r="3" fill="#ec4899"/><circle cx="385" cy="85" r="3" fill="#ec4899"/>
+  <line x1="332" y1="60" x2="332" y2="105" stroke="#f59e0b" stroke-width="2" stroke-dasharray="4 3"/>
+  <line x1="305" y1="60" x2="305" y2="105" stroke="#f59e0b" stroke-width="1" stroke-opacity=".5" stroke-dasharray="3 3"/>
+  <line x1="360" y1="60" x2="360" y2="105" stroke="#f59e0b" stroke-width="1" stroke-opacity=".5" stroke-dasharray="3 3"/>
+  <text x="300" y="55" font-size="8" fill="#f59e0b">a random cut (one of many)</text>
+</svg>
+
 **In words:** Extra Trees trade a little accuracy *per tree* for a lot more disagreement *between* trees, and the averaging cashes that disagreement back in as lower variance.
 
 ::: {.callout-tip}
@@ -411,6 +432,29 @@ flowchart LR
     W3 --> S[Weighted sum<br/>of all learners]
     S --> P[Strong prediction]
 ```
+
+The animation below is the same idea as a ball easing down a slope: each boosting round is one step downhill on the error landscape. Early steps are big and clumsy; later ones are tiny, settling into the valley. Boosting never jumps to the bottom — it *walks* there, one weak learner at a time.
+
+<svg viewBox="0 0 420 160" xmlns="http://www.w3.org/2000/svg">
+  <style>
+    @keyframes c10-boost-roll {
+      0%   { transform: translate(0px,0px); }
+      100% { transform: translate(285px,98px); }
+    }
+    @keyframes c10-boost-fade { 0%,100% { opacity:.5; } 50% { opacity:1; } }
+    .c10-ball { animation: c10-boost-roll 5s cubic-bezier(.45,.05,.55,.95) infinite alternate; }
+    .c10-loss-lbl { animation: c10-boost-fade 5s ease-in-out infinite; }
+    @media (prefers-reduced-motion: reduce) { .c10-ball { animation: none; } }
+  </style>
+  <line x1="35" y1="135" x2="405" y2="135" stroke="currentColor" stroke-opacity=".35"/>
+  <line x1="35" y1="15" x2="35" y2="135" stroke="currentColor" stroke-opacity=".35"/>
+  <text x="6" y="22" font-size="9" fill="currentColor" opacity=".7">loss</text>
+  <text x="300" y="150" font-size="9" fill="currentColor" opacity=".7">rounds →</text>
+  <!-- loss "bowl" the ball rolls down -->
+  <path d="M55,30 Q150,40 200,95 T345,128" fill="none" stroke="#6366f1" stroke-width="2.5"/>
+  <g class="c10-ball"><circle cx="55" cy="30" r="6" fill="#f59e0b"/></g>
+  <text class="c10-loss-lbl" x="250" y="60" font-size="9" fill="#6366f1">each round = one step downhill</text>
+</svg>
 
 Two flavors dominate, and they differ only in *how* "focus on the errors" is implemented:
 
@@ -480,7 +524,9 @@ If AdaBoost is behaving erratically, suspect label noise first. A few wrong labe
 
 ## 10.7 — Gradient boosting (fitting residuals)
 
-**Gradient boosting** reframes boosting as gradient descent — but with a twist that takes a moment to digest: instead of descending in *parameter* space (nudging weights), it descends in *function* space (adding whole new functions). The key insight is that at each round you should fit the new tree to the **negative gradient of the loss** with respect to the current predictions. For ordinary squared-error loss $\tfrac12(y-\hat y)^2$, that negative gradient is simply the **residual** $y - \hat{y}$ — the leftover error. So the abstract idea collapses into a wonderfully concrete recipe: *fit each new tree to the residuals of the ensemble so far, then add a shrunken slice of it.*
+Here is the whole idea in one sentence: **each new tree is trained to predict the leftover error of all the trees so far.** Predict, see what you got wrong, fit a tree to *that* mistake, add a small slice of it, repeat. That leftover error has a name — the **residual** $y - \hat y$ — and chasing it round after round is gradient boosting.
+
+The fancier framing (skip it on a first read) is that this is gradient descent, but in an unusual place. Normal gradient descent nudges *numbers* (weights) downhill on the loss. Gradient boosting instead adds whole *functions* (trees) — it descends in "function space." The link is a small piece of calculus: for squared-error loss $\tfrac12(y-\hat y)^2$, the negative gradient with respect to the prediction works out to be exactly the residual $y-\hat y$. So "fit the next tree to the negative gradient" and "fit the next tree to the residual" are the same instruction whenever the loss is squared error.
 
 The model grows additively:
 
@@ -565,6 +611,8 @@ $$w_j^* = -\frac{\sum_{i\in j} g_i}{\sum_{i\in j} h_i + \lambda}, \qquad \text{G
 **In words:** a leaf's best output is its rows' total gradient divided by their total curvature (plus a smoothing $\lambda$); a split is worth making only if separating the rows into left and right buys more than the per-split toll $\gamma$.
 
 **Also written:** with $G=\sum g_i$ and $H=\sum h_i$ over a node, the leaf weight is $w^*=-G/(H+\lambda)$ and the split gain compares the children's $\tfrac12 G^2/(H+\lambda)$ scores against the parent's.
+
+A quick worked split makes it concrete. Say a node holds rows whose gradients sum to $G_L=4, H_L=2$ on the left and $G_R=-6, H_R=3$ on the right, with $\lambda=1$ and $\gamma=0.5$. The gain is $\tfrac12\big[\tfrac{16}{3}+\tfrac{36}{4}-\tfrac{4}{6}\big]-0.5 = \tfrac12[5.33+9.0-0.67]-0.5 \approx 6.3$. Positive, and well above the $\gamma$ toll — so XGBoost makes this split. Flip the numbers so the two sides have similar gradients and the bracket nearly cancels, the gain dips below $\gamma$, and the split is rejected. That single number is how every candidate split in the library is judged.
 
 **LightGBM** chased raw speed on large datasets with two key ideas. **Histogram binning** buckets each continuous feature into roughly 255 discrete bins, so finding the best split means scanning a few hundred bins instead of every raw value — a massive speedup. **GOSS** (Gradient-based One-Side Sampling) keeps all the high-gradient "hard" examples but randomly subsamples the low-gradient "easy" ones, focusing compute where the error still lives. Crucially, LightGBM grows trees **leaf-wise** rather than level-wise (explained below), which is why it is both faster and somewhat more prone to overfitting.
 
@@ -657,6 +705,33 @@ flowchart TD
     Meta --> P[Final prediction]
 ```
 
+The animation traces one prediction flowing through the stack: data fans out to several different base models, their answers stream into the meta-learner, which fuses them into one final call. The pulses moving along the wires are the predictions in transit.
+
+<svg viewBox="0 0 420 170" xmlns="http://www.w3.org/2000/svg">
+  <style>
+    @keyframes c10-stack-flow { 0% { offset-distance:0%; opacity:0; } 12% { opacity:1; } 88% { opacity:1; } 100% { offset-distance:100%; opacity:0; } }
+    .c10-pulse { fill:#38bdf8; }
+    .c10-w1 { offset-path: path("M70,40 L200,85"); animation: c10-stack-flow 3.2s linear infinite; }
+    .c10-w2 { offset-path: path("M70,85 L200,85"); animation: c10-stack-flow 3.2s linear infinite .4s; }
+    .c10-w3 { offset-path: path("M70,130 L200,85"); animation: c10-stack-flow 3.2s linear infinite .8s; }
+    .c10-w4 { offset-path: path("M255,85 L350,85"); fill:#a855f7; animation: c10-stack-flow 3.2s linear infinite 1.4s; }
+    @media (prefers-reduced-motion: reduce) { .c10-w1,.c10-w2,.c10-w3,.c10-w4 { animation: none; } }
+  </style>
+  <line x1="70" y1="40" x2="200" y2="85" stroke="currentColor" stroke-opacity=".3"/>
+  <line x1="70" y1="85" x2="200" y2="85" stroke="currentColor" stroke-opacity=".3"/>
+  <line x1="70" y1="130" x2="200" y2="85" stroke="currentColor" stroke-opacity=".3"/>
+  <line x1="255" y1="85" x2="350" y2="85" stroke="currentColor" stroke-opacity=".3"/>
+  <g font-size="9" fill="currentColor">
+    <rect x="20" y="30" width="50" height="20" rx="4" fill="#22c55e" fill-opacity=".25" stroke="#22c55e"/><text x="28" y="44">forest</text>
+    <rect x="20" y="75" width="50" height="20" rx="4" fill="#f59e0b" fill-opacity=".25" stroke="#f59e0b"/><text x="26" y="89">XGBoost</text>
+    <rect x="20" y="120" width="50" height="20" rx="4" fill="#ec4899" fill-opacity=".25" stroke="#ec4899"/><text x="30" y="134">logreg</text>
+    <rect x="200" y="72" width="55" height="26" rx="4" fill="#6366f1" fill-opacity=".25" stroke="#6366f1"/><text x="206" y="89">meta</text>
+    <rect x="350" y="74" width="48" height="22" rx="4" fill="currentColor" fill-opacity=".12" stroke="currentColor" stroke-opacity=".5"/><text x="356" y="89">answer</text>
+  </g>
+  <circle class="c10-pulse c10-w1" r="3.5"/><circle class="c10-pulse c10-w2" r="3.5"/>
+  <circle class="c10-pulse c10-w3" r="3.5"/><circle class="c10-pulse c10-w4" r="3.5"/>
+</svg>
+
 The one rule that makes or breaks stacking is *how* you generate the predictions you feed the meta-learner: they must come from **cross-validation**, not from the same rows the base models were trained on. If the meta-learner sees in-sample predictions, the base models look artificially flawless on those rows — they have effectively memorized them — and the meta-learner learns to trust an illusion that evaporates in production. This is a classic case of **data leakage**. Using **out-of-fold** predictions (each row predicted only by base models that did *not* train on it) keeps the whole stack honest.
 
 scikit-learn's `StackingClassifier` does the out-of-fold cross-validation for you — you just list the base models and the meta-learner:
@@ -739,7 +814,7 @@ Every ensemble so far has *predicted* something — a class or a number. **Isola
 
 The intuition is a game of cut-the-data. Repeatedly pick a random feature and a random cut value, slicing the dataset into smaller and smaller boxes, until each point sits alone in its own box. An **outlier** — sitting far out in empty space — gets fenced off after just a few cuts: there is nothing around it, so almost any random slice separates it. A **normal** point, buried in a dense crowd, needs many cuts before it is finally alone, because every slice still leaves neighbors in its box. So the **average number of cuts to isolate a point is itself the anomaly score** — short path means anomaly, long path means normal. No labels, no distance metric, no density estimate required.
 
-<svg viewBox="0 0 420 170" xmlns="http="//www.w3.org/2000/svg http://www.w3.org/2000/svg" xmlns="http://www.w3.org/2000/svg">
+<svg viewBox="0 0 420 170" xmlns="http://www.w3.org/2000/svg">
   <rect x="30" y="25" width="160" height="120" fill="none" stroke="currentColor" stroke-opacity=".4"/>
   <!-- dense cluster -->
   <circle cx="80" cy="100" r="3" fill="#6366f1"/><circle cx="90" cy="110" r="3" fill="#6366f1"/>
@@ -855,14 +930,6 @@ The fast heuristic: **is your data a spreadsheet?** If rows-and-columns with mea
 - **Chapter 01 — Linear Algebra** & **Chapter 04 — Probability & Statistics** — the bias–variance math and the bootstrap that underpin the whole chapter.
 - **Chapter 36 — Explainable AI & Interpretability** — SHAP and permutation importance for opening up these black-box ensembles.
 - **Chapter 37 — Causal Inference** — why feature importance is *not* causal effect.
-
-I caught a typo in an SVG opening tag I wrote (the isolation-forest figure has a malformed `xmlns`). Let me give the corrected version of that one tag so the output is valid:
-
-The isolation-forest `<svg>` opening tag should read exactly:
-
-`<svg viewBox="0 0 420 170" xmlns="http://www.w3.org/2000/svg">`
-
-(Replace the garbled `<svg viewBox="0 0 420 170" xmlns="http="//..."` line in §10.11 with that single clean tag — all inner content is unchanged.)
 
 ------------------------------------------------------------------------
 

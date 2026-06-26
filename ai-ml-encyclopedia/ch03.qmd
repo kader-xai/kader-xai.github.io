@@ -131,20 +131,35 @@ $$\theta_1 = 4 - 0.1\cdot 8 = 3.2,\quad \theta_2 = 3.2 - 0.1\cdot 6.4 = 2.56,\qu
 
 Each step multiplies $\theta$ by $(1 - 2\eta) = 0.8$, so we converge geometrically to $0$. Notice what happens if $\eta = 1.1$: the multiplier is $1 - 2.2 = -1.2$, and $|\theta|$ *grows* every step — divergence. The same simple loss is either tamed or blown up purely by the step size.
 
-The loss surface below shows the path: each step lands lower on the bowl, with steps shrinking as the slope flattens near the bottom.
+The loss surface below shows the path: each step lands lower on the bowl, with steps shrinking as the slope flattens near the bottom. Watch the ball ease downhill and slow as the slope flattens — exactly what the shrinking $0.8\times$ multiplier does.
 
+<style>
+@keyframes c3-roll {
+  0%   { offset-distance: 0%; }
+  85%  { offset-distance: 100%; }
+  100% { offset-distance: 100%; }
+}
+@keyframes c3-pulse {
+  0%, 100% { r: 6; opacity: 1; }
+  50%      { r: 8; opacity: 0.7; }
+}
+.c3-ball {
+  offset-path: path("M 400 200 Q 210 -120 20 200");
+  offset-rotate: 0deg;
+  animation: c3-roll 5s cubic-bezier(.45,.05,.2,1) infinite;
+}
+@media (prefers-reduced-motion: reduce) { .c3-ball { animation: none; } }
+</style>
 <svg viewBox="0 0 420 220" xmlns="http://www.w3.org/2000/svg">
-  <path d="M20,200 Q210,-120 400,200" fill="none" stroke="#888" stroke-width="2"/>
-  <line x1="210" y1="20" x2="210" y2="210" stroke="#bbb" stroke-dasharray="4 4"/>
-  <circle cx="360" cy="118" r="5" fill="#e45756"/>
-  <circle cx="330" cy="78" r="5" fill="#e45756"/>
-  <circle cx="300" cy="50" r="5" fill="#e45756"/>
-  <circle cx="270" cy="33" r="5" fill="#e45756"/>
-  <circle cx="240" cy="24" r="5" fill="#e45756"/>
-  <circle cx="210" cy="20" r="6" fill="#4c78a8"/>
-  <text x="358" y="138" font-size="11" fill="#e45756">θ₀</text>
-  <text x="196" y="16" font-size="11" fill="#4c78a8">θ*</text>
-  <text x="30" y="40" font-size="12" fill="#555">L(θ)</text>
+  <path d="M20,200 Q210,-120 400,200" fill="none" stroke="currentColor" stroke-width="2" opacity="0.5"/>
+  <line x1="210" y1="20" x2="210" y2="210" stroke="currentColor" stroke-dasharray="4 4" opacity="0.3"/>
+  <circle cx="210" cy="20" r="6" fill="#22c55e"/>
+  <circle class="c3-ball" cx="0" cy="0" r="6" fill="#ec4899">
+    <animate attributeName="r" values="6;8;6" dur="1.6s" repeatCount="indefinite"/>
+  </circle>
+  <text x="358" y="138" font-size="11" fill="#ec4899">θ₀ (start)</text>
+  <text x="196" y="16" font-size="11" fill="#22c55e">θ*</text>
+  <text x="30" y="40" font-size="12" fill="currentColor">L(θ)</text>
 </svg>
 
 ```python
@@ -226,6 +241,34 @@ $$\theta_{t+1} = \theta_t - \eta \,\frac{1}{B}\sum_{i\in \mathcal{B}_t} \nabla \
   <polyline points="160,160 200,120 195,140 235,108 250,120 270,96 285,104 295,98 300,100" fill="none" stroke="#e45756" stroke-width="1.6"/>
   <text x="150" y="34" font-size="11" fill="#4c78a8">GD (smooth)</text>
   <text x="150" y="175" font-size="11" fill="#e45756">SGD (noisy)</text>
+</svg>
+
+A mini-batch is just a small handful of examples drawn from the dataset, averaged into one cheap gradient, then fed to the update. The pipeline below shows examples streaming in, getting bundled into a batch, and producing one step:
+
+<style>
+@keyframes c3-flow {
+  0%   { transform: translateX(0); opacity: 0; }
+  10%  { opacity: 1; }
+  80%  { opacity: 1; }
+  100% { transform: translateX(150px); opacity: 0; }
+}
+@media (prefers-reduced-motion: reduce) { .c3-dot { animation: none !important; } }
+</style>
+<svg viewBox="0 0 440 120" xmlns="http://www.w3.org/2000/svg">
+  <rect x="10" y="35" width="70" height="50" rx="6" fill="#38bdf8" fill-opacity="0.15" stroke="#38bdf8"/>
+  <text x="45" y="64" font-size="10" fill="currentColor" text-anchor="middle">dataset</text>
+  <g>
+    <circle class="c3-dot" cx="90" cy="60" r="5" fill="#6366f1" style="animation: c3-flow 3s linear infinite;"/>
+    <circle class="c3-dot" cx="90" cy="60" r="5" fill="#a855f7" style="animation: c3-flow 3s linear infinite 1s;"/>
+    <circle class="c3-dot" cx="90" cy="60" r="5" fill="#ec4899" style="animation: c3-flow 3s linear infinite 2s;"/>
+  </g>
+  <rect x="250" y="35" width="80" height="50" rx="6" fill="#a855f7" fill-opacity="0.15" stroke="#a855f7"/>
+  <text x="290" y="58" font-size="10" fill="currentColor" text-anchor="middle">batch of B</text>
+  <text x="290" y="72" font-size="9" fill="currentColor" text-anchor="middle" opacity="0.7">avg gradient</text>
+  <path d="M330 60 H385" stroke="currentColor" stroke-width="1.5" marker-end="url(#c3-arrow)" opacity="0.6"/>
+  <rect x="385" y="40" width="45" height="40" rx="6" fill="#22c55e" fill-opacity="0.18" stroke="#22c55e"/>
+  <text x="407" y="64" font-size="11" fill="currentColor" text-anchor="middle">θ←</text>
+  <defs><marker id="c3-arrow" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6 z" fill="currentColor" opacity="0.6"/></marker></defs>
 </svg>
 
 ```python
@@ -478,6 +521,32 @@ $$\eta_t = \eta_{\min} + \tfrac{1}{2}(\eta_0-\eta_{\min})\left(1+\cos\frac{\pi t
   <text x="250" y="142" font-size="10" fill="#e45756">cyclical</text>
 </svg>
 
+The dot below rides the warmup-then-cosine-decay curve: it climbs fast during warmup, then glides smoothly down toward zero — the shape every large-model recipe uses.
+
+<style>
+@keyframes c3-lr {
+  0%   { offset-distance: 0%; }
+  90%  { offset-distance: 100%; }
+  100% { offset-distance: 100%; }
+}
+.c3-lrdot {
+  offset-path: path("M 40 150 L 80 40 Q 220 60 360 130");
+  animation: c3-lr 6s ease-in-out infinite;
+}
+@media (prefers-reduced-motion: reduce) { .c3-lrdot { animation: none; } }
+</style>
+<svg viewBox="0 0 420 180" xmlns="http://www.w3.org/2000/svg">
+  <line x1="40" y1="150" x2="400" y2="150" stroke="currentColor" opacity="0.4"/>
+  <line x1="40" y1="20" x2="40" y2="150" stroke="currentColor" opacity="0.4"/>
+  <text x="8" y="30" font-size="10" fill="currentColor">η</text>
+  <text x="360" y="168" font-size="10" fill="currentColor">step</text>
+  <path d="M 40 150 L 80 40 Q 220 60 360 130" fill="none" stroke="#6366f1" stroke-width="2"/>
+  <line x1="80" y1="40" x2="80" y2="150" stroke="#f59e0b" stroke-dasharray="3 3" opacity="0.6"/>
+  <text x="50" y="34" font-size="9" fill="#f59e0b">warmup</text>
+  <text x="200" y="48" font-size="9" fill="#6366f1">cosine decay →</text>
+  <circle class="c3-lrdot" cx="0" cy="0" r="5" fill="#ec4899"/>
+</svg>
+
 ```python
 import math
 def cosine_warmup(step, base=1e-3, warmup=500, total=10000):
@@ -569,6 +638,8 @@ $$L(\theta_t + \alpha d_t)\ \le\ L(\theta_t) + c_1\,\alpha\, \nabla L(\theta_t)^
 
 **Also written:** with $\phi(\alpha)=L(\theta_t+\alpha d_t)$ and slope $\phi'(0)=\nabla L^\top d_t<0$, the condition is $\phi(\alpha)\le\phi(0)+c_1\alpha\,\phi'(0)$.
 
+**Worked example (backtracking).** Minimize $L=\theta^2$ at $\theta_t=2$, so $L=4$ and the descent direction is $d_t=-L'=-4$; take $c_1=0.1$. The predicted-decrease slope is $\phi'(0)=L'(\theta_t)\,d_t = 4\cdot(-4) = -16$. Try $\alpha=1$: the new point is $2 + 1\cdot(-4) = -2$ with $L=4$ — no decrease at all, so reject (the Armijo target was $4 + 0.1\cdot1\cdot(-16)=2.4$, and $4 > 2.4$). Halve to $\alpha=0.5$: new point $2 - 2 = 0$, $L=0$, target $4 + 0.1\cdot0.5\cdot(-16)=3.2$, and $0 \le 3.2$ — accept. Backtracking found the good step in two tries, no derivative of the step size required.
+
 **Conjugate gradient (CG)** answers "which direction?". The problem with steepest descent on an elongated quadratic is that consecutive gradient directions undo each other's progress. CG instead picks directions that are **conjugate** with respect to the Hessian $A$ — meaning $d_i^\top A\, d_j = 0$ for $i\neq j$ — so that optimizing along a new direction never spoils the gains from previous ones. The remarkable result: CG minimizes an $n$-dimensional quadratic in at most $n$ steps, using only gradients and vector operations (never forming $A^{-1}$). Each new direction blends the current gradient with the previous direction:
 
 $$d_{t+1} = -g_{t+1} + \beta_t d_t, \qquad \beta_t = \frac{g_{t+1}^\top g_{t+1}}{g_t^\top g_t}\ \text{(Fletcher–Reeves)}$$
@@ -617,7 +688,7 @@ A problem is **convex** if its objective is a convex function over a convex feas
 
 Many cornerstone ML models are convex in their parameters — linear and ridge regression, logistic regression, SVMs (in the dual), LASSO — which is exactly why they are reliable and well-understood: solvers find the unique optimum every time.
 
-**Duality** is the deep idea that every (primal) minimization problem has a shadow **dual** maximization problem. The dual is built by folding the constraints into the objective with multipliers (next section), and its optimum is always a *lower bound* on the primal optimum — this is **weak duality**. For convex problems satisfying a mild regularity condition (Slater's), **strong duality** holds: the two optima are *equal*, and the gap closes to zero. Duality is not just theory: it gives certifiable bounds on how good a solution is, often yields an easier problem to solve, and is the machinery behind the "kernel trick" in SVMs.
+**Duality** is the idea that every minimization problem (the **primal**) comes with a paired maximization problem (the **dual**). Think of it as attacking the same target from two sides: the primal pushes a ceiling *down*, the dual pushes a floor *up*. The dual's answer can never exceed the primal's — it is always a valid lower bound — so the two close in on the true optimum like a vise. That guarantee is **weak duality**, and it always holds. For convex problems (with a mild technical caveat called Slater's condition) the floor and ceiling actually *meet*: the two answers are equal and the gap shrinks to zero. This is **strong duality**. Why care? The lower bound *certifies* how good a solution is, the dual is sometimes far easier to solve than the primal, and this exact machinery is what makes the "kernel trick" in SVMs work.
 
 ::: {.callout-tip}
 **Why ML practitioners care:** if you can cast your problem as convex, you get guarantees — a unique global optimum, reproducible results, and a duality gap that *certifies* optimality. Deep learning gives those up in exchange for expressive power.

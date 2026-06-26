@@ -192,6 +192,30 @@ Neighborhood methods compare raw rows or columns. **Matrix factorization (MF)** 
 
 **Intuition first.** Instead of comparing whole rows of the spreadsheet, MF guesses a handful of *hidden dials* behind everyone's taste — say a "how much action vs. drama" dial and a "mainstream vs. niche" dial. Each person is a setting of those dials, and so is each movie. If your dials and a movie's dials line up, you'll probably like it. MF learns both sets of dials at once, using only the cells we actually observed.
 
+<style>
+@keyframes c26-mf-user { 0%,100% { transform: rotate(-18deg);} 50% { transform: rotate(34deg);} }
+@keyframes c26-mf-item { 0%,100% { transform: rotate(40deg);} 50% { transform: rotate(30deg);} }
+@keyframes c26-mf-glow { 0%,100% { opacity:.25;} 50% { opacity:.9;} }
+@media (prefers-reduced-motion: reduce){ .c26-mf-needle, .c26-mf-spark { animation: none !important; } }
+</style>
+<svg viewBox="0 0 360 170" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif" font-size="11">
+  <text x="180" y="16" text-anchor="middle" fill="currentColor">when the user dial and the item dial align → high predicted rating</text>
+  <!-- user dial -->
+  <circle cx="90" cy="95" r="42" fill="#6366f1" fill-opacity="0.12" stroke="currentColor"/>
+  <line x1="90" y1="95" x2="90" y2="58" stroke="#6366f1" stroke-width="3" stroke-linecap="round"
+        class="c26-mf-needle" style="transform-origin:90px 95px; animation:c26-mf-user 5s ease-in-out infinite"/>
+  <text x="90" y="150" text-anchor="middle" fill="currentColor">user p_u</text>
+  <!-- item dial -->
+  <circle cx="270" cy="95" r="42" fill="#22c55e" fill-opacity="0.12" stroke="currentColor"/>
+  <line x1="270" y1="95" x2="270" y2="58" stroke="#22c55e" stroke-width="3" stroke-linecap="round"
+        class="c26-mf-needle" style="transform-origin:270px 95px; animation:c26-mf-item 5s ease-in-out infinite"/>
+  <text x="270" y="150" text-anchor="middle" fill="currentColor">item q_i</text>
+  <!-- alignment spark -->
+  <text x="180" y="92" text-anchor="middle" font-size="22" fill="#f59e0b"
+        class="c26-mf-spark" style="animation:c26-mf-glow 5s ease-in-out infinite">★</text>
+  <text x="180" y="112" text-anchor="middle" fill="currentColor">p_u · q_i</text>
+</svg>
+
 It assumes each user and each item lives in the same small **latent factor** space of dimension $k$ (think hidden axes like "action ↔ drama," "mainstream ↔ niche"). User $u$ becomes a vector $p_u\in\mathbb{R}^k$, item $i$ a vector $q_i\in\mathbb{R}^k$, and the predicted rating is their dot product:
 
 $$
@@ -333,7 +357,7 @@ This switching pattern is the practical answer to cold-start from §26.1: lean o
 
 **Intuition first.** Explicit feedback is someone telling you "I loved it" (rare but clear). Implicit feedback is watching what they *do* — which is like inferring taste from a security camera: you see them pick up a product, but you can't tell if the products they *walked past* were rejected or simply never noticed. So implicit models trust the strong "did it a lot" signals and stay humble about the silent "never touched it" majority.
 
-So implicit models reframe the task. Instead of predicting a rating value, they predict a **preference** (interacted = 1) weighted by a **confidence** that grows with how much the user engaged. The classic objective (implicit-ALS) is:
+So implicit models change the question. They no longer ask "what star rating?" They ask two simpler things: *did the user interact at all?* (preference = 1 if yes, 0 if no) and *how sure are we?* (a **confidence** that climbs with how often the user engaged). The classic objective (implicit-ALS) is:
 
 $$
 \min_{p,q}\sum_{u,i}c_{ui}\big(\,\text{pref}_{ui}-p_u\cdot q_i\big)^2+\lambda(\dots),\qquad c_{ui}=1+\alpha\,r_{ui},
@@ -346,6 +370,24 @@ where $r_{ui}$ is raw count (plays, clicks) and $\text{pref}_{ui}=\mathbb{1}[r_{
 **Also written:** with $p_{ui}=\mathbb{1}[r_{ui}>0]$ and confidence $c_{ui}=1+\alpha r_{ui}$, minimize $\sum_{u,i} c_{ui}(p_{ui}-x_u^\top y_i)^2+\lambda(\sum_u\lVert x_u\rVert^2+\sum_i\lVert y_i\rVert^2)$ (Hu–Koren–Volinsky).
 
 Concretely with $\alpha=40$: a song played 3 times has confidence $c=1+40(3)=121$; a song played once has $c=41$; a never-played song has $c=1$. All three un-played and lightly-played items push the model, but the heavily-played one pushes ~120× harder — so the fit bends toward getting the strong signals right and barely cares about the ambiguous zeros.
+
+<style>
+@keyframes c26-conf-grow { 0% { transform: scaleY(0.05);} 60%,100% { transform: scaleY(1);} }
+@media (prefers-reduced-motion: reduce){ .c26-conf-bar { animation: none !important; transform: scaleY(1); } }
+</style>
+<svg viewBox="0 0 340 150" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif" font-size="10">
+  <text x="170" y="14" text-anchor="middle" fill="currentColor">confidence c = 1 + α·count — more plays, harder pull</text>
+  <line x1="40" y1="120" x2="320" y2="120" stroke="currentColor"/>
+  <rect x="60"  y="112" width="40" height="8"   fill="#94a3b8" fill-opacity="0.7" stroke="currentColor"
+        class="c26-conf-bar" style="transform-origin:60px 120px; animation:c26-conf-grow 3.5s ease-out infinite"/>
+  <rect x="150" y="84"  width="40" height="36"  fill="#38bdf8" fill-opacity="0.6" stroke="currentColor"
+        class="c26-conf-bar" style="transform-origin:150px 120px; animation:c26-conf-grow 3.5s ease-out infinite .3s"/>
+  <rect x="240" y="34"  width="40" height="86"  fill="#22c55e" fill-opacity="0.6" stroke="currentColor"
+        class="c26-conf-bar" style="transform-origin:240px 120px; animation:c26-conf-grow 3.5s ease-out infinite .6s"/>
+  <text x="80"  y="135" text-anchor="middle" fill="currentColor">0 plays · c=1</text>
+  <text x="170" y="135" text-anchor="middle" fill="currentColor">1 play · c=41</text>
+  <text x="260" y="135" text-anchor="middle" fill="currentColor">3 plays · c=121</text>
+</svg>
 
 ```python
 # Implicit-feedback MF with the `implicit` library (ALS), the production default
@@ -410,6 +452,23 @@ flowchart LR
 
 The rule of thumb: pointwise is the easy baseline, pairwise (BPR) is the implicit-feedback default, and listwise (LambdaMART) wins when you can afford to optimize the served metric end to end.
 
+<style>
+@keyframes c26-ltr-rise { 0%,15% { transform: translateY(72px);} 55%,100% { transform: translateY(0);} }
+@keyframes c26-ltr-fade { 0%,15% { opacity:.35;} 55%,100% { opacity:1;} }
+@media (prefers-reduced-motion: reduce){ .c26-ltr-hit { animation: none !important; transform: translateY(0); opacity:1;} }
+</style>
+<svg viewBox="0 0 300 150" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif" font-size="11">
+  <text x="150" y="14" text-anchor="middle" fill="currentColor">pairwise learning pulls the clicked item above the skipped ones</text>
+  <rect x="100" y="28"  width="100" height="22" rx="4" fill="#94a3b8" fill-opacity="0.25" stroke="currentColor"/>
+  <text x="150" y="43" text-anchor="middle" fill="currentColor">skipped</text>
+  <rect x="100" y="56"  width="100" height="22" rx="4" fill="#94a3b8" fill-opacity="0.25" stroke="currentColor"/>
+  <text x="150" y="71" text-anchor="middle" fill="currentColor">skipped</text>
+  <g class="c26-ltr-hit" style="animation:c26-ltr-rise 4s ease-in-out infinite, c26-ltr-fade 4s ease-in-out infinite">
+    <rect x="100" y="84" width="100" height="22" rx="4" fill="#22c55e" fill-opacity="0.45" stroke="currentColor"/>
+    <text x="150" y="99" text-anchor="middle" fill="currentColor">clicked ★</text>
+  </g>
+</svg>
+
 ## 26.6 — Deep recommenders
 
 When you have rich features and huge catalogs, neural networks take over. Four architectures dominate.
@@ -448,9 +507,34 @@ scores = u_emb @ cat_emb.T                      # ANN index does this at serve t
 top = scores.topk(10).indices
 ```
 
+<style>
+@keyframes c26-tt-flow { 0% { offset-distance:0%; opacity:0;} 12% { opacity:1;} 88% { opacity:1;} 100% { offset-distance:100%; opacity:0;} }
+@media (prefers-reduced-motion: reduce){ .c26-tt-dot { animation: none !important; opacity:.7; } }
+</style>
+<svg viewBox="0 0 380 160" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif" font-size="10">
+  <text x="190" y="14" text-anchor="middle" fill="currentColor">two towers map into one shared space; nearest items win</text>
+  <!-- user side -->
+  <rect x="20" y="40" width="70" height="26" rx="5" fill="#6366f1" fill-opacity="0.25" stroke="currentColor"/>
+  <text x="55" y="57" text-anchor="middle" fill="currentColor">user feats</text>
+  <!-- item side -->
+  <rect x="290" y="40" width="70" height="26" rx="5" fill="#22c55e" fill-opacity="0.25" stroke="currentColor"/>
+  <text x="325" y="57" text-anchor="middle" fill="currentColor">item feats</text>
+  <!-- shared space -->
+  <ellipse cx="190" cy="105" rx="80" ry="34" fill="#38bdf8" fill-opacity="0.12" stroke="currentColor"/>
+  <text x="190" y="108" text-anchor="middle" fill="currentColor">shared embedding space</text>
+  <circle cx="178" cy="120" r="4" fill="#6366f1"/><circle cx="200" cy="118" r="4" fill="#22c55e"/>
+  <!-- flow paths -->
+  <path id="c26-tt-pu" d="M55 66 L178 116" fill="none" stroke="currentColor" stroke-opacity="0.3"/>
+  <path id="c26-tt-pi" d="M325 66 L200 114" fill="none" stroke="currentColor" stroke-opacity="0.3"/>
+  <circle r="3.5" fill="#6366f1" class="c26-tt-dot" style="offset-path:path('M55 66 L178 116'); animation:c26-tt-flow 3.2s linear infinite"/>
+  <circle r="3.5" fill="#22c55e" class="c26-tt-dot" style="offset-path:path('M325 66 L200 114'); animation:c26-tt-flow 3.2s linear infinite .4s"/>
+</svg>
+
 **Sequence / session-based** models treat your recent activity as an ordered sequence and predict the next item — RNNs (GRU4Rec) or, now dominant, self-attention (SASRec, BERT4Rec, borrowing the machinery of **Attention & Transformers**). These shine when intent is *temporal*: what you want next depends on what you just did, even within an anonymous session with no long-term profile.
 
 **Wide-and-deep** trains two halves jointly: a **wide** linear part that memorizes specific feature crosses ("installed app X *and* viewing app Y"), and a **deep** part that generalizes via embeddings. Memorization plus generalization in one model — Google's recipe for app and play-store ranking.
+
+**Where this is used.** Two-tower retrieval is not a toy: YouTube's candidate generator embeds the viewer in one tower and every video in another, then serves nearest neighbors from a catalog of billions in a few milliseconds. The whole point is that the expensive item tower runs *offline* — the catalog is re-embedded on a schedule and dropped into an ANN index — so the live request only pays for one user-tower pass plus a nearest-neighbor lookup.
 
 ::: {.callout-note appearance="simple"}
 🧩 **Where each fits:** NCF and wide-and-deep are usually **ranking** models (precise scores on a short list); two-tower is a **retrieval** model (fast recall over the whole catalog); sequence models can play either role. The next section is the funnel that ties them together.

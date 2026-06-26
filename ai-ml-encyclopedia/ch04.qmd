@@ -111,6 +111,29 @@ Machine learning is, at its heart, reasoning under uncertainty: we never see all
 🧭 **In context:** Mathematical Foundations · used to model uncertainty, fit models, and judge results · the one key idea: a model is a *probability distribution over outcomes*, and learning means choosing the distribution that makes your data most plausible.
 :::
 
+<style>
+@keyframes c4-die-roll { 0%,18% { transform: translateY(0) rotate(0deg); } 24% { transform: translateY(-18px) rotate(-22deg); } 30%,100% { transform: translateY(0) rotate(0deg); } }
+@keyframes c4-pip-cycle { 0%,30% { opacity: 0.25; } 40%,90% { opacity: 1; } 100% { opacity: 0.25; } }
+@media (prefers-reduced-motion: reduce) { .c4-die, .c4-pip-glow { animation: none !important; } }
+</style>
+<svg viewBox="0 0 320 120" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif" font-size="11" role="img" aria-label="A die rolling, settling on an outcome.">
+  <text x="10" y="20" fill="currentColor">a roll → an outcome → a probability</text>
+  <g class="c4-die" style="transform-origin:60px 70px; animation: c4-die-roll 4s ease-in-out infinite;">
+    <rect x="35" y="45" width="50" height="50" rx="9" fill="#6366f1" opacity="0.22" stroke="currentColor" stroke-width="1.5"/>
+    <circle cx="50" cy="60" r="4" fill="currentColor"/>
+    <circle cx="70" cy="60" r="4" fill="currentColor"/>
+    <circle cx="60" cy="70" r="4" fill="currentColor"/>
+    <circle cx="50" cy="80" r="4" fill="currentColor"/>
+    <circle cx="70" cy="80" r="4" fill="currentColor"/>
+  </g>
+  <text x="120" y="74" fill="currentColor">P(even) =</text>
+  <g class="c4-pip-glow" style="animation: c4-pip-cycle 4s ease-in-out infinite;">
+    <rect x="195" y="55" width="34" height="30" rx="6" fill="#22c55e" opacity="0.25" stroke="currentColor"/>
+    <text x="200" y="76" fill="currentColor">3/6</text>
+  </g>
+  <text x="245" y="74" fill="currentColor">= 0.5</text>
+</svg>
+
 ## 4.1 — Probability fundamentals
 
 Start with the smallest building blocks. A **random experiment** is any process whose outcome you cannot predict with certainty — rolling a die, flipping a coin, drawing an email from an inbox. The **sample space** $\Omega$ is the set of all possible outcomes. For one die, $\Omega = \{1,2,3,4,5,6\}$. An **event** is any subset of the sample space — "the roll is even" is the event $E = \{2,4,6\}$.
@@ -185,12 +208,16 @@ $$f(x) = \frac{1}{\sqrt{2\pi\sigma^2}}\exp\!\left(-\frac{(x-\mu)^2}{2\sigma^2}\r
 
 **Also written:** for a standardized score $z=(x-\mu)/\sigma$, the same curve is $f(x)=\frac{1}{\sigma}\phi(z)$ with $\phi(z)=\frac{1}{\sqrt{2\pi}}e^{-z^2/2}$ (the standard normal density).
 
-It dominates ML because of the Central Limit Theorem (§4.8): averages of almost anything end up Gaussian. Here is its shape, centered at $\mu$ with width set by $\sigma$:
+It dominates ML because of the Central Limit Theorem (§4.8): averages of almost anything end up Gaussian. Here is its shape, centered at $\mu$ with width set by $\sigma$ — watch how widening $\sigma$ flattens and spreads the same unit of probability:
 
+<style>
+@keyframes c4-bell-breathe { 0%,100% { transform: scaleX(1) scaleY(1); } 50% { transform: scaleX(1.28) scaleY(0.78); } }
+@media (prefers-reduced-motion: reduce) { .c4-bell { animation: none !important; } }
+</style>
 <svg viewBox="0 0 420 180" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif" font-size="12">
   <line x1="30" y1="150" x2="400" y2="150" stroke="currentColor" stroke-width="1"/>
   <line x1="215" y1="30" x2="215" y2="150" stroke="currentColor" stroke-width="0.8" stroke-dasharray="4 3"/>
-  <path d="M30 150 Q 110 150 140 140 Q 185 120 215 45 Q 245 120 290 140 Q 320 150 400 150" fill="currentColor" opacity="0.15" stroke="currentColor" stroke-width="2"/>
+  <path class="c4-bell" style="transform-origin:215px 150px; animation: c4-bell-breathe 5s ease-in-out infinite;" d="M30 150 Q 110 150 140 140 Q 185 120 215 45 Q 245 120 290 140 Q 320 150 400 150" fill="#38bdf8" opacity="0.18" stroke="currentColor" stroke-width="2"/>
   <text x="208" y="166" fill="currentColor">μ</text>
   <line x1="215" y1="98" x2="275" y2="98" stroke="currentColor" stroke-dasharray="3 3"/>
   <text x="240" y="93" fill="currentColor">σ</text>
@@ -260,7 +287,26 @@ $$P(H\mid E) = \frac{P(E\mid H)\,P(H)}{P(E)},$$
 
 **Also written:** posterior $\propto$ likelihood $\times$ prior, i.e. $P(H\mid E) \propto P(E\mid H)\,P(H)$ — drop the constant denominator $P(E)$ when you only need to compare hypotheses.
 
-read as **posterior** = (**likelihood** × **prior**) / **evidence**. The **prior** $P(H)$ is your belief in hypothesis $H$ before seeing data; the **likelihood** $P(E\mid H)$ is how well that hypothesis explains the evidence $E$; the **evidence** $P(E)$ is the overall probability of the data (the normalizer that makes the posterior sum to 1); and the **posterior** $P(H\mid E)$ is your updated belief. **Bayesian inference** is simply doing this update repeatedly as data arrives — yesterday's posterior becomes today's prior.
+The four pieces each have a plain name. The **prior** $P(H)$ is what you believed before the data. The **likelihood** $P(E\mid H)$ is how well the hypothesis predicts the data you got. The **evidence** $P(E)$ is just a normalizer — the total probability of the data, summed over every hypothesis — that rescales things so all your updated beliefs add to 1. The **posterior** $P(H\mid E)$ is your belief afterward. So the whole formula reads:
+
+$$\underbrace{P(H\mid E)}_{\text{posterior}} = \frac{\overbrace{P(E\mid H)}^{\text{likelihood}}\;\overbrace{P(H)}^{\text{prior}}}{\underbrace{P(E)}_{\text{evidence}}}.$$
+
+**Bayesian inference** is just doing this update over and over as data arrives: yesterday's posterior becomes today's prior.
+
+<style>
+@keyframes c4-bayes-shift { 0%,100% { width: 28px; } 50% { width: 96px; } }
+@keyframes c4-bayes-shrink { 0%,100% { width: 96px; } 50% { width: 28px; } }
+@media (prefers-reduced-motion: reduce) { .c4-prior-bar, .c4-post-bar { animation: none !important; } }
+</style>
+<svg viewBox="0 0 420 130" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif" font-size="11" role="img" aria-label="Evidence reshapes a prior belief into a posterior belief.">
+  <text x="10" y="20" fill="currentColor">prior belief</text>
+  <rect x="10" y="28" width="96" height="16" rx="4" fill="#a855f7" opacity="0.30" stroke="currentColor"/>
+  <rect class="c4-prior-bar" x="10" y="28" height="16" rx="4" fill="#a855f7" opacity="0.65" style="animation: c4-bayes-shift 5s ease-in-out infinite;"/>
+  <text x="150" y="70" fill="currentColor">＋ evidence ⇒ renormalize ⇒</text>
+  <text x="10" y="100" fill="currentColor">posterior belief</text>
+  <rect x="10" y="108" width="96" height="16" rx="4" fill="#22c55e" opacity="0.25" stroke="currentColor"/>
+  <rect class="c4-post-bar" x="10" y="108" height="16" rx="4" fill="#22c55e" opacity="0.7" style="animation: c4-bayes-shrink 5s ease-in-out infinite;"/>
+</svg>
 
 **Worked numeric example — the classic medical test.** A disease affects 1% of people. A test is 99% sensitive ($P(+\mid \text{sick})=0.99$) and has a 5% false-positive rate ($P(+\mid\text{healthy})=0.05$). You test positive. Are you probably sick?
 
@@ -324,6 +370,21 @@ $$\hat\theta_{\text{MLE}} = \arg\max_\theta \sum_{i=1}^N \log P(x_i\mid\theta).$
 **Also written:** $\hat\theta_{\text{MLE}} = \arg\min_\theta \big[-\sum_i \log P(x_i\mid\theta)\big]$ — maximizing log-likelihood is the same as minimizing **negative log-likelihood**, which is what optimizers actually descend.
 
 **Worked example — coin flips.** You flip a coin 10 times and see 7 heads. With unknown bias $p$, the log-likelihood is $\ell(p)=7\log p + 3\log(1-p)$. Set the derivative to zero: $7/p - 3/(1-p) = 0 \Rightarrow p = 7/10 = 0.7$. MLE just recovers the observed frequency — sensible, and it generalizes: minimizing squared error turns out to be MLE under Gaussian noise, and log loss is MLE for classifiers.
+
+The picture below is the likelihood curve $\ell(p)$ for this exact data — a single hill, with a ball settling at its peak $p=0.7$:
+
+<style>
+@keyframes c4-mle-ball { 0% { offset-distance: 0%; } 100% { offset-distance: 64%; } }
+@media (prefers-reduced-motion: reduce) { .c4-mle-ball { animation: none !important; offset-distance: 64% !important; } }
+</style>
+<svg viewBox="0 0 360 170" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif" font-size="11" role="img" aria-label="A ball rolling up to the peak of the log-likelihood curve at p = 0.7.">
+  <line x1="30" y1="145" x2="340" y2="145" stroke="currentColor"/>
+  <path id="c4-ll" d="M40 140 Q 120 130 180 80 Q 230 40 250 38 Q 300 50 330 130" fill="#6366f1" opacity="0.14" stroke="currentColor" stroke-width="2"/>
+  <circle class="c4-mle-ball" r="6" fill="#f59e0b" stroke="currentColor" style="offset-path: path('M40 140 Q 120 130 180 80 Q 230 40 250 38 Q 300 50 330 130'); animation: c4-mle-ball 4s ease-in-out infinite alternate;"/>
+  <line x1="250" y1="38" x2="250" y2="145" stroke="currentColor" stroke-dasharray="3 3" opacity="0.6"/>
+  <text x="238" y="160" fill="currentColor">p̂ = 0.7</text>
+  <text x="40" y="25" fill="currentColor">ℓ(p) = 7·log p + 3·log(1−p)</text>
+</svg>
 
 **Maximum A Posteriori (MAP)** estimation adds a prior. Instead of maximizing the likelihood alone, it maximizes the posterior $P(\theta\mid\text{data}) \propto P(\text{data}\mid\theta)\,P(\theta)$ (Bayes' theorem from §4.3, ignoring the constant denominator):
 
@@ -466,13 +527,13 @@ Pearson only sees **linear** structure. **Spearman correlation** instead correla
 
 <svg viewBox="0 0 460 150" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif" font-size="11">
   <g stroke="currentColor"><line x1="20" y1="120" x2="140" y2="120"/><line x1="20" y1="120" x2="20" y2="20"/></g>
-  <circle cx="35" cy="110" r="3" fill="currentColor"/><circle cx="60" cy="92" r="3" fill="currentColor"/><circle cx="90" cy="68" r="3" fill="currentColor"/><circle cx="120" cy="40" r="3" fill="currentColor"/>
+  <circle cx="35" cy="110" r="3" fill="#22c55e"/><circle cx="60" cy="92" r="3" fill="#22c55e"/><circle cx="90" cy="68" r="3" fill="#22c55e"/><circle cx="120" cy="40" r="3" fill="#22c55e"/>
   <text x="40" y="140" fill="currentColor">r ≈ +1</text>
   <g stroke="currentColor"><line x1="180" y1="120" x2="300" y2="120"/><line x1="180" y1="120" x2="180" y2="20"/></g>
-  <circle cx="195" cy="40" r="3" fill="currentColor"/><circle cx="220" cy="70" r="3" fill="currentColor"/><circle cx="255" cy="95" r="3" fill="currentColor"/><circle cx="285" cy="112" r="3" fill="currentColor"/>
+  <circle cx="195" cy="40" r="3" fill="#ec4899"/><circle cx="220" cy="70" r="3" fill="#ec4899"/><circle cx="255" cy="95" r="3" fill="#ec4899"/><circle cx="285" cy="112" r="3" fill="#ec4899"/>
   <text x="205" y="140" fill="currentColor">r ≈ −1</text>
   <g stroke="currentColor"><line x1="340" y1="120" x2="450" y2="120"/><line x1="340" y1="120" x2="340" y2="20"/></g>
-  <circle cx="355" cy="60" r="3" fill="currentColor"/><circle cx="380" cy="100" r="3" fill="currentColor"/><circle cx="410" cy="45" r="3" fill="currentColor"/><circle cx="435" cy="90" r="3" fill="currentColor"/>
+  <circle cx="355" cy="60" r="3" fill="#f59e0b"/><circle cx="380" cy="100" r="3" fill="#f59e0b"/><circle cx="410" cy="45" r="3" fill="#f59e0b"/><circle cx="435" cy="90" r="3" fill="#f59e0b"/>
   <text x="360" y="140" fill="currentColor">r ≈ 0</text>
 </svg>
 
@@ -485,6 +546,20 @@ spearmanr(x, y).statistic   # 1.0     — ranks line up exactly
 ```
 
 The cardinal warning: **correlation is not causation**. Ice-cream sales correlate with drownings, but neither causes the other — summer heat drives both (a **confounder**, a hidden variable behind both). A correlation is equally consistent with $X\to Y$, $Y\to X$, a hidden common cause, or pure coincidence in a small sample. Untangling which one is true is a separate discipline (see *Causal Inference*).
+
+<svg viewBox="0 0 360 130" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif" font-size="12" role="img" aria-label="A hidden confounder, summer heat, drives both ice-cream sales and drownings.">
+  <circle cx="180" cy="30" r="26" fill="#f59e0b" opacity="0.22" stroke="currentColor"/>
+  <text x="150" y="34" fill="currentColor">heat</text>
+  <circle cx="70" cy="100" r="30" fill="#38bdf8" opacity="0.20" stroke="currentColor"/>
+  <text x="42" y="104" fill="currentColor">ice cream</text>
+  <circle cx="290" cy="100" r="30" fill="#38bdf8" opacity="0.20" stroke="currentColor"/>
+  <text x="262" y="104" fill="currentColor">drownings</text>
+  <path d="M163 48 L92 82" fill="none" stroke="currentColor" marker-end="url(#c4-arr)"/>
+  <path d="M197 48 L268 82" fill="none" stroke="currentColor" marker-end="url(#c4-arr)"/>
+  <path d="M104 110 L256 110" fill="none" stroke="#ec4899" stroke-dasharray="5 4" marker-end="url(#c4-arr)"/>
+  <text x="118" y="125" fill="currentColor">spurious correlation</text>
+  <defs><marker id="c4-arr" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path d="M0 0 L6 3 L0 6 z" fill="currentColor"/></marker></defs>
+</svg>
 
 ::: {.callout-warning}
 **Common mistake:** reporting $r\approx 0$ as "no relationship." Pearson $r$ can be $0$ for a strong but *non-linear* link (e.g. a perfect parabola, which rises then falls). Always look at the scatter plot before concluding anything.
@@ -506,6 +581,18 @@ That surprise is the **p-value**: the probability, under $H_0$, of seeing a resu
 **Worked example.** You suspect a coin is biased toward heads and flip it 20 times, getting 16 heads. Under $H_0: p=0.5$, how unlikely is 16-or-more heads? Sum the Binomial tail:
 $$P(X\ge 16) = \sum_{k=16}^{20}\binom{20}{k}(0.5)^{20} \approx 0.0059.$$
 That is below 0.05, so you reject "fair coin" — the bias looks real.
+
+The p-value is just the shaded tail area — the slice of the null distribution at least as extreme as what you saw:
+
+<svg viewBox="0 0 360 160" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif" font-size="11" role="img" aria-label="A bell-shaped null distribution with a small shaded right tail marking the p-value.">
+  <line x1="30" y1="130" x2="340" y2="130" stroke="currentColor"/>
+  <path d="M40 128 Q 120 128 160 70 Q 185 35 200 35 Q 215 35 240 70 Q 280 128 320 128" fill="#6366f1" opacity="0.12" stroke="currentColor" stroke-width="1.5"/>
+  <path d="M278 128 Q 300 110 320 128 Z" fill="#ec4899" opacity="0.55" stroke="currentColor"/>
+  <line x1="278" y1="35" x2="278" y2="130" stroke="currentColor" stroke-dasharray="3 3" opacity="0.6"/>
+  <text x="250" y="148" fill="currentColor">observed (16 heads)</text>
+  <text x="120" y="25" fill="currentColor">null: p = 0.5</text>
+  <text x="285" y="100" fill="currentColor">p ≈ 0.006</text>
+</svg>
 
 ```python
 from scipy.stats import binom
@@ -566,6 +653,29 @@ $$\bar X_n \;\xrightarrow{\;n\to\infty\;}\; \mathcal{N}\!\left(\mu,\ \frac{\sigm
 **Also written:** the standardized average $\dfrac{\bar X_n - \mu}{\sigma/\sqrt{n}} \xrightarrow{d} \mathcal{N}(0,1)$ converges to a standard normal.
 
 A classic 95% CI for a mean is therefore $\bar x \pm 1.96\,\dfrac{\sigma}{\sqrt n}$, where the 1.96 marks the central 95% of a Gaussian. With $\bar x = 50$, $\sigma=10$, $n=100$: the standard error is $10/\sqrt{100}=1$, so the CI is $50 \pm 1.96 \approx [48.0,\ 52.0]$.
+
+The CLT in one picture: pile up averages from *any* lumpy source distribution and the pile becomes a smooth bell.
+
+<style>
+@keyframes c4-clt-grow { 0% { transform: scaleY(0.05); opacity: 0.2; } 60%,100% { transform: scaleY(1); opacity: 1; } }
+@media (prefers-reduced-motion: reduce) { .c4-clt-bar { animation: none !important; transform: scaleY(1) !important; opacity: 1 !important; } }
+.c4-clt-bar { transform-origin: bottom; }
+</style>
+<svg viewBox="0 0 360 150" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif" font-size="11" role="img" aria-label="Bars of sample averages stacking up into a bell shape.">
+  <line x1="20" y1="125" x2="345" y2="125" stroke="currentColor"/>
+  <g fill="#22c55e" opacity="0.5" stroke="currentColor" stroke-width="0.5">
+    <rect class="c4-clt-bar" x="40"  y="110" width="22" height="15"  style="animation: c4-clt-grow 4s ease-out infinite; animation-delay:0s"/>
+    <rect class="c4-clt-bar" x="66"  y="92"  width="22" height="33"  style="animation: c4-clt-grow 4s ease-out infinite; animation-delay:.15s"/>
+    <rect class="c4-clt-bar" x="92"  y="60"  width="22" height="65"  style="animation: c4-clt-grow 4s ease-out infinite; animation-delay:.3s"/>
+    <rect class="c4-clt-bar" x="118" y="35"  width="22" height="90"  style="animation: c4-clt-grow 4s ease-out infinite; animation-delay:.45s"/>
+    <rect class="c4-clt-bar" x="144" y="60"  width="22" height="65"  style="animation: c4-clt-grow 4s ease-out infinite; animation-delay:.3s"/>
+    <rect class="c4-clt-bar" x="170" y="92"  width="22" height="33"  style="animation: c4-clt-grow 4s ease-out infinite; animation-delay:.15s"/>
+    <rect class="c4-clt-bar" x="196" y="110" width="22" height="15"  style="animation: c4-clt-grow 4s ease-out infinite; animation-delay:0s"/>
+  </g>
+  <path d="M40 112 Q 110 -10 218 112" fill="none" stroke="currentColor" stroke-width="1.5" opacity="0.8"/>
+  <text x="235" y="70" fill="currentColor">averages →</text>
+  <text x="235" y="86" fill="currentColor">Gaussian</text>
+</svg>
 
 ```{mermaid}
 flowchart LR
@@ -637,11 +747,18 @@ inside = (pts[:,0]**2 + pts[:,1]**2 <= 1).mean()
 4 * inside     # ≈ 3.1416
 ```
 
+<style>
+@keyframes c4-dart-pop { 0%,100% { r: 0; opacity: 0; } 10%,80% { r: 2.4; opacity: 1; } }
+@media (prefers-reduced-motion: reduce) { .c4-dart { animation: none !important; r: 2.4; opacity: 1; } }
+</style>
 <svg viewBox="0 0 160 160" xmlns="http://www.w3.org/2000/svg">
   <rect x="20" y="10" width="120" height="120" fill="none" stroke="currentColor"/>
-  <path d="M20 130 A120 120 0 0 1 140 10" fill="currentColor" opacity="0.12" stroke="currentColor"/>
-  <circle cx="55" cy="105" r="2.2" fill="currentColor"/><circle cx="80" cy="70" r="2.2" fill="currentColor"/><circle cx="40" cy="50" r="2.2" fill="currentColor"/>
-  <circle cx="120" cy="40" r="2.2" fill="none" stroke="currentColor"/><circle cx="115" cy="95" r="2.2" fill="none" stroke="currentColor"/>
+  <path d="M20 130 A120 120 0 0 1 140 10" fill="#6366f1" opacity="0.12" stroke="currentColor"/>
+  <circle class="c4-dart" cx="55" cy="105" fill="#22c55e" style="animation: c4-dart-pop 3.5s ease-in-out infinite; animation-delay:0s"/>
+  <circle class="c4-dart" cx="80" cy="70" fill="#22c55e" style="animation: c4-dart-pop 3.5s ease-in-out infinite; animation-delay:.5s"/>
+  <circle class="c4-dart" cx="40" cy="50" fill="#22c55e" style="animation: c4-dart-pop 3.5s ease-in-out infinite; animation-delay:1s"/>
+  <circle class="c4-dart" cx="120" cy="40" fill="#ec4899" style="animation: c4-dart-pop 3.5s ease-in-out infinite; animation-delay:1.5s"/>
+  <circle class="c4-dart" cx="115" cy="95" fill="#ec4899" style="animation: c4-dart-pop 3.5s ease-in-out infinite; animation-delay:2s"/>
   <text x="30" y="150" font-family="sans-serif" font-size="11" fill="currentColor">inside/total × 4 ≈ π</text>
 </svg>
 
@@ -702,10 +819,14 @@ Many chains settle into a **stationary distribution** $\pi$ that no longer chang
 
 **Worked example — weather.** States {Sunny, Rainy}. From sunny: 80% stay sunny, 20% turn rainy. From rainy: 40% turn sunny, 60% stay rainy.
 
+<style>
+@keyframes c4-cloud-drift { 0%,100% { opacity: 0.20; } 50% { opacity: 0.42; } }
+@media (prefers-reduced-motion: reduce) { .c4-sun, .c4-rain { animation: none !important; } }
+</style>
 <svg viewBox="0 0 360 150" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif" font-size="12">
-  <circle cx="90" cy="75" r="34" fill="#f59e0b" opacity="0.20" stroke="currentColor"/>
+  <circle class="c4-sun" cx="90" cy="75" r="34" fill="#f59e0b" opacity="0.20" stroke="currentColor" style="animation: c4-cloud-drift 4s ease-in-out infinite;"/>
   <text x="72" y="79" fill="currentColor">Sunny</text>
-  <circle cx="270" cy="75" r="34" fill="#38bdf8" opacity="0.20" stroke="currentColor"/>
+  <circle class="c4-rain" cx="270" cy="75" r="34" fill="#38bdf8" opacity="0.20" stroke="currentColor" style="animation: c4-cloud-drift 4s ease-in-out infinite; animation-delay:2s;"/>
   <text x="254" y="79" fill="currentColor">Rainy</text>
   <path d="M122 62 Q180 30 240 62" fill="none" stroke="currentColor" marker-end="url(#a)"/>
   <text x="165" y="38" fill="currentColor">0.2</text>
@@ -751,6 +872,21 @@ $$H(p) = -\sum_x p(x)\log_2 p(x).$$
 **Also written:** $H(p) = \mathbb{E}_{x\sim p}[-\log_2 p(x)]$ — the expected surprise.
 
 A fair coin has $H = -2\times 0.5\log_2 0.5 = 1$ bit — maximally uncertain, one full question to resolve. A coin that lands heads 90% of the time has only $H\approx0.47$ bits — more predictable, less surprising. A guaranteed outcome has entropy 0 (no question needed). Entropy is largest when every outcome is equally likely; it is the formal measure of "how much you don't know."
+
+Entropy peaks when a coin is fair and drops to zero as it becomes a sure thing:
+
+<svg viewBox="0 0 360 150" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif" font-size="11" role="img" aria-label="Entropy curve peaking at one bit for a fair coin and dropping to zero at the certain extremes.">
+  <line x1="35" y1="120" x2="340" y2="120" stroke="currentColor"/>
+  <line x1="35" y1="25" x2="35" y2="120" stroke="currentColor"/>
+  <path d="M35 120 Q 110 5 187 5 Q 265 5 340 120" fill="#a855f7" opacity="0.14" stroke="currentColor" stroke-width="2"/>
+  <circle cx="187" cy="6" r="4" fill="#a855f7"/>
+  <text x="160" y="-2" fill="currentColor"> </text>
+  <text x="150" y="20" fill="currentColor">1 bit (fair)</text>
+  <text x="20" y="135" fill="currentColor">p=0</text>
+  <text x="170" y="135" fill="currentColor">p=0.5</text>
+  <text x="315" y="135" fill="currentColor">p=1</text>
+  <text x="8" y="30" fill="currentColor">H</text>
+</svg>
 
 **KL divergence** (relative entropy) measures how different one distribution $q$ is from a reference $p$ — the *extra* bits you waste by encoding data with the wrong distribution $q$ when the truth is really $p$:
 
@@ -806,12 +942,17 @@ $$\mathcal{L} = -\frac{1}{N}\sum_{i=1}^N \Big[y_i\log \hat y_i + (1-y_i)\log(1-\
 
 The shape of $-\log \hat y$ tells the whole story: predict the right class with confidence 1 and the penalty is 0; predict it with probability 0.1 and you pay $-\log 0.1 = 2.3$; predict it with probability near 0 and the loss rockets toward infinity. Being confident *and wrong* is punished savagely — exactly the steep gradient signal you want for fast learning.
 
-<svg viewBox="0 0 320 180" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif" font-size="11">
+<style>
+@keyframes c4-loss-slide { 0%,100% { offset-distance: 4%; } 50% { offset-distance: 92%; } }
+@media (prefers-reduced-motion: reduce) { .c4-loss-ball { animation: none !important; offset-distance: 50% !important; } }
+</style>
+<svg viewBox="0 0 320 180" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif" font-size="11" role="img" aria-label="The negative-log loss curve, with a marker sliding from cheap on the right to costly on the left.">
   <line x1="40" y1="150" x2="300" y2="150" stroke="currentColor"/>
   <line x1="40" y1="20" x2="40" y2="150" stroke="currentColor"/>
-  <path d="M295 150 Q 120 150 70 120 Q 50 100 45 25" fill="none" stroke="currentColor" stroke-width="2"/>
-  <text x="250" y="166" fill="currentColor">p̂ → 1</text>
-  <text x="45" y="166" fill="currentColor">p̂ → 0</text>
+  <path id="c4-loss-curve" d="M295 150 Q 120 150 70 120 Q 50 100 45 25" fill="none" stroke="currentColor" stroke-width="2"/>
+  <circle class="c4-loss-ball" r="5" fill="#ec4899" stroke="currentColor" style="offset-path: path('M295 150 Q 120 150 70 120 Q 50 100 45 25'); animation: c4-loss-slide 5s ease-in-out infinite;"/>
+  <text x="250" y="166" fill="currentColor">p̂ → 1 (cheap)</text>
+  <text x="45" y="166" fill="currentColor">p̂ → 0 (costly)</text>
   <text x="8" y="30" fill="currentColor">loss</text>
   <text x="120" y="60" fill="currentColor">−log p̂</text>
 </svg>

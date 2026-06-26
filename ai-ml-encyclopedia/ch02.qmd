@@ -111,6 +111,29 @@ Calculus is the mathematics of change, and machine learning is the art of changi
 🧭 **In context:** Mathematical Foundations · used to measure how a loss changes when you nudge a parameter, so optimizers know which way to step · the one key idea: the **gradient points uphill, so step against it**.
 :::
 
+Here is the whole chapter in one picture: a ball, placed on a loss curve, rolls *downhill* — each frame it reads the local slope (the derivative) and steps against it until it settles in the valley. Everything below is the machinery that makes this little roll precise.
+
+<style>
+@keyframes c2-roll {
+  0%   { offset-distance: 2%; }
+  100% { offset-distance: 86%; }
+}
+@keyframes c2-pulse {
+  0%, 100% { r: 6; opacity: 1; }
+  50%      { r: 8; opacity: 0.8; }
+}
+.c2-ball { offset-path: path('M 30 40 Q 120 200 210 175 Q 300 150 390 60'); animation: c2-roll 4.5s ease-in-out infinite alternate, c2-pulse 1.5s ease-in-out infinite; fill: #f59e0b; }
+@media (prefers-reduced-motion: reduce) { .c2-ball { animation: none; offset-distance: 50%; } }
+</style>
+<svg viewBox="0 0 420 220" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif" font-size="11">
+  <line x1="20" y1="195" x2="405" y2="195" stroke="currentColor" stroke-opacity="0.4"/>
+  <path d="M 30 40 Q 120 200 210 175 Q 300 150 390 60" fill="none" stroke="#6366f1" stroke-width="2.5"/>
+  <text x="300" y="55" fill="#6366f1">loss(w)</text>
+  <circle cx="210" cy="178" r="3" fill="#22c55e"/>
+  <text x="190" y="210" fill="#22c55e">minimum</text>
+  <circle class="c2-ball" cx="0" cy="0"/>
+</svg>
+
 ## 2.1 — Derivatives & differentiation (slope, rules)
 
 A **derivative** answers one question: if I nudge the input a tiny bit, how much does the output move, and in which direction? It is the **slope** of a function at a point — the steepness of the tangent line that just kisses the curve there.
@@ -202,6 +225,33 @@ $$\frac{dz}{dx} = \frac{dz}{dg} \cdot \frac{dg}{dx}$$
 
 Intuition: rates of change multiply. If revenue grows 2× as fast as users, and users grow 3× as fast as ad spend, then revenue grows $2 \times 3 = 6$× as fast as ad spend. Each link in the chain contributes a multiplier.
 
+The animation below shows a gradient signal flowing *backward* through three links: it enters as $1$ at the loss and gets multiplied by each link's local derivative as it travels left, arriving at the input as the product of all three — that product *is* $dz/dx$.
+
+<style>
+@keyframes c2-flow {
+  0%   { offset-distance: 0%;   opacity: 0; }
+  10%  { opacity: 1; }
+  90%  { opacity: 1; }
+  100% { offset-distance: 100%; opacity: 0; }
+}
+.c2-grad { offset-path: path('M 380 40 L 40 40'); animation: c2-flow 3.2s ease-in-out infinite; fill: #ec4899; }
+@media (prefers-reduced-motion: reduce) { .c2-grad { animation: none; offset-distance: 50%; opacity: 1; } }
+</style>
+<svg viewBox="0 0 420 90" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif" font-size="11">
+  <circle cx="40" cy="40" r="14" fill="#6366f1" fill-opacity="0.3" stroke="currentColor"/>
+  <text x="40" y="68" text-anchor="middle" fill="currentColor">x</text>
+  <circle cx="180" cy="40" r="14" fill="#6366f1" fill-opacity="0.3" stroke="currentColor"/>
+  <text x="180" y="68" text-anchor="middle" fill="currentColor">g</text>
+  <circle cx="320" cy="40" r="14" fill="#6366f1" fill-opacity="0.3" stroke="currentColor"/>
+  <text x="320" y="68" text-anchor="middle" fill="currentColor">a</text>
+  <text x="380" y="68" text-anchor="middle" fill="#ec4899" font-size="10">L=1</text>
+  <line x1="334" y1="40" x2="306" y2="40" stroke="currentColor" stroke-opacity="0.4"/>
+  <line x1="194" y1="40" x2="166" y2="40" stroke="currentColor" stroke-opacity="0.4"/>
+  <text x="250" y="22" text-anchor="middle" fill="currentColor" font-size="9">× da/dg</text>
+  <text x="110" y="22" text-anchor="middle" fill="currentColor" font-size="9">× dg/dx</text>
+  <circle class="c2-grad" cx="0" cy="0" r="5"/>
+</svg>
+
 This is *exactly* how **backpropagation** works. A neural network is a long composition: input → linear layer → activation → linear layer → … → loss. To learn, we need $\partial \text{loss}/\partial w$ for every weight $w$ buried deep inside. The chain rule lets us compute these by starting at the loss and multiplying derivatives backward through the layers, reusing intermediate results.
 
 When variables branch and recombine (one input feeding several paths), you also need the **multivariate chain rule**: sum the contributions over every path. For $z = f(u, v)$ with $u = u(x)$, $v = v(x)$,
@@ -211,6 +261,8 @@ $$\frac{dz}{dx} = \frac{\partial z}{\partial u}\frac{du}{dx} + \frac{\partial z}
 **In words:** when the input reaches the output through more than one route, add up the rate along each route.
 
 **Also written:** $\frac{dz}{dx} = \sum_{k} \frac{\partial z}{\partial u_k}\frac{du_k}{dx}$ — the general "sum over all intermediate variables $u_k$" form, which is precisely what a framework does when a tensor is used in several places.
+
+**Worked example (branching).** Let $u = x^2$ and $v = 3x$, and $z = u + v$. The input $x$ reaches $z$ by *two* routes. Route through $u$: $\frac{\partial z}{\partial u}\frac{du}{dx} = (1)(2x)$. Route through $v$: $\frac{\partial z}{\partial v}\frac{dv}{dx} = (1)(3)$. Add them: $\frac{dz}{dx} = 2x + 3$. Check directly: $z = x^2 + 3x$, so $\frac{dz}{dx} = 2x + 3$. The two routes summed give the right answer — and when a network reuses the same activation in several places, the framework adds up exactly these per-route contributions.
 
 ```{mermaid}
 flowchart LR
@@ -476,6 +528,35 @@ This single formula hides under enormous amounts of ML: the expected loss over t
 
 The catch: most of these integrals have *no closed form*. You cannot solve them with algebra. So ML almost always **approximates** them — most commonly by **Monte Carlo**: replace the integral with an average over random samples, since by the law of large numbers $\frac{1}{N}\sum_i g(x_i) \to \mathbb{E}[g(x)]$ as samples accumulate.
 
+The picture below is Monte Carlo in miniature: dots rain down at random, and the *fraction* that land under the curve estimates its area. More dots, tighter estimate.
+
+<style>
+@keyframes c2-drop {
+  0%   { transform: translateY(-30px); opacity: 0; }
+  15%  { opacity: 1; }
+  100% { transform: translateY(0); opacity: 1; }
+}
+.c2-dot { animation: c2-drop 2.6s ease-in infinite; }
+.c2-dot:nth-child(2) { animation-delay: 0.3s; }
+.c2-dot:nth-child(3) { animation-delay: 0.7s; }
+.c2-dot:nth-child(4) { animation-delay: 1.1s; }
+.c2-dot:nth-child(5) { animation-delay: 1.5s; }
+.c2-dot:nth-child(6) { animation-delay: 1.9s; }
+@media (prefers-reduced-motion: reduce) { .c2-dot { animation: none; opacity: 1; } }
+</style>
+<svg viewBox="0 0 320 180" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif" font-size="11">
+  <line x1="30" y1="150" x2="300" y2="150" stroke="currentColor" stroke-opacity="0.4"/>
+  <path d="M30 150 Q 165 20 300 150" fill="#38bdf8" fill-opacity="0.18" stroke="#38bdf8" stroke-width="2"/>
+  <circle class="c2-dot" cx="90" cy="120" r="3.5" fill="#22c55e"/>
+  <circle class="c2-dot" cx="150" cy="90" r="3.5" fill="#22c55e"/>
+  <circle class="c2-dot" cx="200" cy="105" r="3.5" fill="#22c55e"/>
+  <circle class="c2-dot" cx="120" cy="60" r="3.5" fill="#ec4899"/>
+  <circle class="c2-dot" cx="240" cy="55" r="3.5" fill="#ec4899"/>
+  <circle class="c2-dot" cx="165" cy="130" r="3.5" fill="#22c55e"/>
+  <text x="200" y="170" fill="#22c55e" font-size="10">● under</text>
+  <text x="255" y="170" fill="#ec4899" font-size="10">● over</text>
+</svg>
+
 **Worked example (Monte Carlo).** Estimate $\int_0^1 x^2\,dx$, whose exact value is $1/3$.
 
 ```python
@@ -525,10 +606,12 @@ flowchart TD
 
 **Automatic differentiation** is the winner for deep learning. It records the elementary operations of the forward pass and applies the chain rule mechanically, giving derivatives correct to machine precision at roughly the cost of one extra pass. It is neither a symbolic formula nor an approximation — it is exact arithmetic on the actual computational graph (this is the backprop of section 2.2, generalized).
 
-**Forward vs reverse mode.** Autodiff comes in two flavors, and the choice is about *shape*. Picture the chain rule's product of derivatives: you can multiply it left-to-right or right-to-left, and which is cheaper depends on whether the function fans *out* (few inputs, many outputs) or *in* (many inputs, one output).
+**Forward vs reverse mode.** Autodiff comes in two flavors. The simplest way to see the difference: the chain rule is a chain of multiplications, and you can do them starting from the *input* end or the *output* end. One pass per input end you start from — so you want to start from whichever end has *fewer* things.
 
-- **Forward mode** carries derivatives *forward* alongside the values, input by input. It is cheap when there are few inputs and many outputs ($n \ll m$).
-- **Reverse mode** does one forward pass to record the graph, then sweeps *backward* from the output. It is cheap when there are many inputs and few outputs ($n \gg m$) — which is *exactly* the deep-learning case: millions of parameters, one scalar loss. **Reverse mode is backpropagation.**
+- **Forward mode** starts at an input and carries its derivative forward through every step, one input at a time. One sweep tells you how *all outputs* react to *that one input*. Cheap when there are few inputs and many outputs.
+- **Reverse mode** does one normal forward pass to record the steps, then sweeps *backward* from the output. One sweep tells you how *that one output* reacts to *all inputs*. Cheap when there are many inputs and one output.
+
+Deep learning is the second case to the extreme: millions of parameters in, one scalar loss out. So you run reverse mode — one backward sweep hands you the gradient for every parameter at once. **Reverse mode is backpropagation.**
 
 <svg viewBox="0 0 440 150" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif" font-size="11">
   <text x="10" y="20" fill="currentColor" font-weight="bold">forward mode</text>

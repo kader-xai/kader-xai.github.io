@@ -124,6 +124,29 @@ A few terms recur in every section, so pin them down once:
 
 The intuition for *why error grows with the horizon*: a one-step forecast leans on a value you actually observed; a ten-step forecast must stack guess upon guess, and each guess feeds the next, so uncertainty compounds. This is why every honest long-horizon forecast comes with a *widening* band, never a confident single line.
 
+<style>
+@keyframes c22-fan-grow { 0%,8% { transform: scaleY(0.05); } 55%,100% { transform: scaleY(1); } }
+@keyframes c22-fan-sweep { 0%,8% { stroke-dashoffset: 320; } 70%,100% { stroke-dashoffset: 0; } }
+.c22-fan-band { transform-box: fill-box; transform-origin: left center; animation: c22-fan-grow 5s ease-in-out infinite; }
+.c22-fan-line { stroke-dasharray: 320; animation: c22-fan-sweep 5s ease-in-out infinite; }
+@media (prefers-reduced-motion: reduce){ .c22-fan-band,.c22-fan-line{ animation: none; } }
+</style>
+<svg viewBox="0 0 680 200" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif" font-size="11">
+  <text x="10" y="16" font-weight="bold">Uncertainty compounds: the forecast band fans out with the horizon</text>
+  <line x1="40" y1="110" x2="660" y2="110" stroke="currentColor" stroke-opacity="0.4"/>
+  <line x1="320" y1="20" x2="320" y2="180" stroke="currentColor" stroke-dasharray="3 3" stroke-opacity="0.5"/>
+  <text x="150" y="175" fill="currentColor" opacity="0.7">observed history</text>
+  <text x="430" y="36" fill="#6366f1">forecast origin → horizon h</text>
+  <!-- observed history -->
+  <polyline fill="none" stroke="#38bdf8" stroke-width="2" points="40,120 100,108 160,118 220,96 280,104 320,90"/>
+  <!-- widening band (animated grow) -->
+  <polygon class="c22-fan-band" fill="#6366f1" fill-opacity="0.22"
+    points="320,90 660,55 660,135"/>
+  <!-- median forecast sweeping out -->
+  <polyline class="c22-fan-line" fill="none" stroke="#a855f7" stroke-width="2.2"
+    points="320,90 410,92 500,93 580,94 660,95"/>
+</svg>
+
 There are two ways to push a model multiple steps ahead, and they trade off accuracy against speed:
 
 - **Recursive (iterated)** — forecast one step, feed that forecast back in as if it were real, forecast the next, and so on. Simple, but errors compound as fake inputs pile up.
@@ -388,6 +411,26 @@ $$\ell_t = \alpha\, y_t + (1-\alpha)\,\ell_{t-1}, \qquad \hat y_{t+1} = \ell_t,$
 **Also written:** as an error-correction step, $\ell_t = \ell_{t-1} + \alpha\,(y_t - \ell_{t-1})$ — move the old level a fraction $\alpha$ of the way toward the new observation.
 
 where the **smoothing parameter** $\alpha \in (0,1)$ tunes reactivity — high $\alpha$ chases recent data, low $\alpha$ is sluggish and stable. Unrolling the recursion shows *why* it is called exponential: $\ell_t = \alpha y_t + \alpha(1-\alpha)y_{t-1} + \alpha(1-\alpha)^2 y_{t-2} + \dots$ — every past point contributes, but its weight decays by a factor $(1-\alpha)$ each step back. SES has no notion of trend, so its forecast is a flat line.
+
+The error-correction view in motion — each new observation tugs the running level a fraction $\alpha$ of the way toward it, then it eases over and waits for the next:
+
+<style>
+@keyframes c22-ses-level { 0% { cy: 95; } 22% { cy: 70; } 47% { cy: 108; } 72% { cy: 60; } 100% { cy: 88; } }
+@keyframes c22-ses-pulse { 0%,18% { r: 4; opacity: 0.4; } 24% { r: 9; opacity: 1; } 40% { r: 4; opacity: 0.4; } }
+.c22-ses-level { animation: c22-ses-level 6s ease-in-out infinite; }
+.c22-ses-obs   { animation: c22-ses-pulse 6s ease-in-out infinite; }
+@media (prefers-reduced-motion: reduce){ .c22-ses-level,.c22-ses-obs{ animation: none; } }
+</style>
+<svg viewBox="0 0 680 150" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif" font-size="11">
+  <text x="10" y="16" font-weight="bold">SES: the level eases toward each new point by a step of size α</text>
+  <line x1="40" y1="125" x2="660" y2="125" stroke="currentColor" stroke-opacity="0.3"/>
+  <!-- fixed observations -->
+  <g fill="#38bdf8"><circle cx="120" cy="60" r="4"/><circle cx="260" cy="108" r="4"/><circle cx="400" cy="50" r="4"/><circle cx="540" cy="100" r="4"/></g>
+  <text x="100" y="142" fill="#38bdf8" opacity="0.8">observations yₜ</text>
+  <!-- moving level estimate -->
+  <circle class="c22-ses-level" cx="340" cy="88" r="7" fill="#22c55e"/>
+  <text x="430" y="30" fill="#22c55e">running level ℓₜ</text>
+</svg>
 
 The decaying-weight idea, drawn out — each bar is how much one past observation counts toward today's level:
 
@@ -697,7 +740,7 @@ Deep models are data-hungry and easy to overfit on a single short series. On one
 
 ## 22.7 — State-space models and the Kalman filter
 
-Many of the models above — exponential smoothing, ARIMA, structural time series — are secretly the *same* object wearing different clothes: a **state-space model**. The intuition is a tracking radar. There is a hidden "true state" of the world you cannot see directly (an aircraft's real position and velocity), it evolves by some rule, and you only get noisy measurements. A **state-space model** writes this as two equations: a *transition* equation for how the hidden state moves, and an *observation* equation for how measurements relate to it.
+Many of the models above — exponential smoothing, ARIMA, structural time series — are secretly the *same* object wearing different clothes: a **state-space model**. The intuition is a tracking radar. There is a hidden "true state" you cannot see directly (an aircraft's real position and speed), it drifts forward on its own, and all you actually get are noisy blips. A **state-space model** is just two short sentences about that picture: one says *how the hidden thing moves on its own*, the other says *how a reading relates to it*. In symbols:
 
 $$\underbrace{\mathbf{x}_t = F\,\mathbf{x}_{t-1} + \mathbf{w}_t}_{\text{state transition}}, \qquad \underbrace{y_t = H\,\mathbf{x}_t + v_t}_{\text{observation}}$$
 
@@ -713,6 +756,29 @@ flowchart LR
   C --> D["Refined x̂ₜ<br/>(smaller uncertainty)"]
   D --> A
 ```
+
+The predict→update breathing, animated — the cloud of uncertainty puffs out on *predict*, then snaps tight on *update* when a measurement arrives:
+
+<style>
+@keyframes c22-kal-breathe { 0%,100% { r: 10; opacity: 0.45; } 45% { r: 30; opacity: 0.18; } 60%,90% { r: 8; opacity: 0.55; } }
+@keyframes c22-kal-snap { 0%,55% { cy: 95; } 70%,100% { cy: 70; } }
+@keyframes c22-kal-tick { 0%,55% { opacity: 0; } 62%,80% { opacity: 1; } 100% { opacity: 0; } }
+.c22-kal-cloud { animation: c22-kal-breathe 4s ease-in-out infinite; }
+.c22-kal-est   { animation: c22-kal-snap 4s ease-in-out infinite; }
+.c22-kal-meas  { animation: c22-kal-tick 4s ease-in-out infinite; }
+@media (prefers-reduced-motion: reduce){ .c22-kal-cloud,.c22-kal-est,.c22-kal-meas{ animation: none; } }
+</style>
+<svg viewBox="0 0 680 150" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif" font-size="11">
+  <text x="10" y="16" font-weight="bold">Kalman rhythm: predict puffs uncertainty out, update snaps it back</text>
+  <line x1="40" y1="125" x2="660" y2="125" stroke="currentColor" stroke-opacity="0.3"/>
+  <line x1="340" y1="70" x2="640" y2="70" stroke="#22c55e" stroke-dasharray="4 3" stroke-opacity="0.6"/>
+  <text x="540" y="64" fill="#22c55e">true level</text>
+  <circle class="c22-kal-meas" cx="500" cy="70" r="5" fill="#f59e0b"/>
+  <text x="512" y="74" class="c22-kal-meas" fill="#f59e0b">new reading yₜ</text>
+  <circle class="c22-kal-cloud" cx="240" cy="95" r="10" fill="#6366f1"/>
+  <circle class="c22-kal-est" cx="240" cy="95" r="5" fill="#a855f7"/>
+  <text x="180" y="115" fill="#a855f7">estimate x̂</text>
+</svg>
 
 Why care, when statsmodels hides all this? Three payoffs the framing buys you for free: it handles **missing observations** gracefully (just skip the update step and keep predicting), it naturally produces **uncertainty** at every step, and it lets you build **custom structural models** — declare a local-level + local-trend + seasonal state and let the filter fit it. A worked one-dimensional Kalman filter makes the predict/update rhythm concrete:
 
@@ -826,6 +892,11 @@ Here is the cardinal rule, and the one most often broken: **you may never shuffl
 
 The correct scheme is **rolling-origin** (also called **walk-forward** or **time-series split**) cross-validation: pick an origin, train on everything up to it, test on the next block, then roll the origin forward and repeat. Two flavors: **expanding window** (training set grows each fold, keeping all history) and **sliding window** (training set is a fixed-width window that moves, useful when old data goes stale after a regime change).
 
+<style>
+@keyframes c22-cv-origin { 0%,100% { transform: translateX(0); } 25% { transform: translateX(0); } 30%,45% { transform: translateX(80px); } 50%,65% { transform: translateX(160px); } 70%,90% { transform: translateX(240px); } }
+.c22-cv-marker { animation: c22-cv-origin 8s ease-in-out infinite; }
+@media (prefers-reduced-motion: reduce){ .c22-cv-marker{ animation: none; } }
+</style>
 <svg viewBox="0 0 680 230" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif" font-size="11">
   <text x="10" y="16" font-weight="bold">Expanding-window walk-forward CV — train past, test future, never shuffle</text>
   <!-- fold 1 -->
@@ -844,6 +915,8 @@ The correct scheme is **rolling-origin** (also called **walk-forward** or **time
   <text x="10" y="175">Fold 4</text>
   <rect x="70" y="162" width="420" height="20" fill="#2563eb"/>
   <rect x="490" y="162" width="80" height="20" fill="#dc2626"/>
+  <!-- sweeping origin marker -->
+  <line class="c22-cv-marker" x1="250" y1="36" x2="250" y2="188" stroke="#f59e0b" stroke-width="2.5"/>
   <!-- legend -->
   <rect x="70" y="200" width="16" height="12" fill="#2563eb"/><text x="92" y="210">train (past)</text>
   <rect x="210" y="200" width="16" height="12" fill="#dc2626"/><text x="232" y="210">test (future)</text>

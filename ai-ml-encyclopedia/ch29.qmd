@@ -126,6 +126,39 @@ flowchart LR
   M -->|healthy| Serve
 ```
 
+The same loop, animated — watch the artifact flow from data, through serving, and back around when drift is detected. The whole chapter is one turn of this wheel:
+
+<svg viewBox="0 0 480 130" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Animated MLOps lifecycle loop with an artifact flowing through stages and looping back on drift">
+  <style>
+    .c29loop-lbl { font: 11px sans-serif; fill: currentColor; }
+    .c29loop-box { fill: rgba(99,102,241,0.14); stroke: #6366f1; stroke-width: 1.4; }
+    @keyframes c29loop-flow {
+      0%   { offset-distance: 0%;   fill: #38bdf8; }
+      55%  { offset-distance: 55%;  fill: #22c55e; }
+      80%  { offset-distance: 80%;  fill: #f59e0b; }
+      100% { offset-distance: 100%; fill: #38bdf8; }
+    }
+    .c29loop-dot {
+      offset-path: path('M 60 40 H 180 H 300 H 420 V 90 H 300 H 180 H 60 Z');
+      animation: c29loop-flow 7s linear infinite;
+    }
+    @media (prefers-reduced-motion: reduce) { .c29loop-dot { animation: none; } }
+  </style>
+  <rect x="20"  y="26" width="80" height="28" rx="5" class="c29loop-box"/>
+  <rect x="140" y="26" width="80" height="28" rx="5" class="c29loop-box"/>
+  <rect x="260" y="26" width="80" height="28" rx="5" class="c29loop-box"/>
+  <rect x="380" y="26" width="80" height="28" rx="5" class="c29loop-box"/>
+  <rect x="260" y="76" width="80" height="28" rx="5" class="c29loop-box"/>
+  <rect x="140" y="76" width="80" height="28" rx="5" class="c29loop-box"/>
+  <text x="60"  y="44" text-anchor="middle" class="c29loop-lbl">data</text>
+  <text x="180" y="44" text-anchor="middle" class="c29loop-lbl">train</text>
+  <text x="300" y="44" text-anchor="middle" class="c29loop-lbl">deploy</text>
+  <text x="420" y="44" text-anchor="middle" class="c29loop-lbl">serve</text>
+  <text x="300" y="94" text-anchor="middle" class="c29loop-lbl">monitor</text>
+  <text x="180" y="94" text-anchor="middle" class="c29loop-lbl">retrain</text>
+  <circle r="6" class="c29loop-dot"/>
+</svg>
+
 ## 29.1 — Model deployment & serving
 
 **Deployment** is the act of making a trained model available to produce predictions for real consumers. The first and most consequential design choice is *batch versus online serving*.
@@ -148,6 +181,34 @@ flowchart LR
     Svc -->|40 ms| Resp[score returned live]
   end
 ```
+
+The same contrast, in motion: batch fills a table on a slow nightly heartbeat; online answers each request the instant it arrives. Watch which path keeps the user waiting:
+
+<svg viewBox="0 0 460 150" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Animated comparison of slow batch heartbeat versus fast online request-response">
+  <style>
+    .c29bo-lbl { font: 11px sans-serif; fill: currentColor; }
+    .c29bo-rail { stroke: #6366f1; stroke-width: 2; fill: none; opacity: 0.5; }
+    /* batch: a big slow pulse, once per cycle */
+    @keyframes c29bo-batch { 0%,70% { opacity: 0; } 80% { opacity: 1; } 100% { opacity: 0; } }
+    .c29bo-batch { fill: #38bdf8; animation: c29bo-batch 6s ease-in-out infinite; }
+    /* online: a quick dot zipping across, often */
+    @keyframes c29bo-online { 0% { cx: 150; opacity: 0; } 10% { opacity: 1; } 90% { opacity: 1; } 100% { cx: 430; opacity: 0; } }
+    .c29bo-online { fill: #22c55e; animation: c29bo-online 1.5s ease-in-out infinite; }
+    @media (prefers-reduced-motion: reduce) { .c29bo-batch, .c29bo-online { animation: none; } }
+  </style>
+  <text x="10" y="20" class="c29bo-lbl" font-weight="700">batch — slow heartbeat, stale between runs</text>
+  <line x1="150" y1="45" x2="430" y2="45" class="c29bo-rail"/>
+  <text x="10" y="49" class="c29bo-lbl">nightly job</text>
+  <rect x="150" y="36" width="280" height="18" rx="3" fill="rgba(56,189,248,0.12)"/>
+  <circle cx="430" cy="45" r="9" class="c29bo-batch"/>
+  <text x="345" y="74" class="c29bo-lbl">writes whole table at once</text>
+
+  <text x="10" y="108" class="c29bo-lbl" font-weight="700">online — one request, answered live</text>
+  <line x1="150" y1="128" x2="430" y2="128" class="c29bo-rail"/>
+  <text x="10" y="132" class="c29bo-lbl">per swipe</text>
+  <circle cx="150" cy="128" r="7" class="c29bo-online"/>
+  <text x="345" y="148" class="c29bo-lbl" fill="#22c55e">~40 ms each</text>
+</svg>
 
 | Dimension | Batch | Online |
 |---|---|---|
@@ -234,6 +295,41 @@ This is why production teams quote latency as **percentiles**, written p50 / p95
 | p99.9 | the worst 1-in-1000 | what a power user hits hourly |
 
 **In words:** the p99 is the slowest response among the fastest 99% of requests — the worst case you promise *not* to exceed except one time in a hundred.
+
+The picture below is a latency histogram: a fat cluster of fast requests on the left, and a long thin tail crawling to the right. The mean (orange) sits inside the comfortable bulk; the p99 (pink) lives way out in the tail. That gap is the whole point — you serve the tail, but the mean tells you about the bulk.
+
+<svg viewBox="0 0 460 170" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Latency histogram showing the bulk of fast requests, the mean inside the bulk, and the p99 far out in the long tail">
+  <style>
+    .c29tail-lbl { font: 11px sans-serif; fill: currentColor; }
+    .c29tail-bar { fill: rgba(99,102,241,0.45); stroke: #6366f1; stroke-width: 1; }
+    @keyframes c29tail-p99 { 0%,100% { opacity: 0.45; } 50% { opacity: 1; } }
+    .c29tail-p99 { stroke: #ec4899; stroke-width: 2; animation: c29tail-p99 3.5s ease-in-out infinite; }
+    @media (prefers-reduced-motion: reduce) { .c29tail-p99 { animation: none; } }
+  </style>
+  <!-- axis -->
+  <line x1="30" y1="135" x2="445" y2="135" stroke="currentColor" stroke-width="1" opacity="0.5"/>
+  <text x="30" y="155" class="c29tail-lbl">faster</text>
+  <text x="410" y="155" class="c29tail-lbl">slower →</text>
+  <!-- bulk bars (heights fall off, then a long thin tail) -->
+  <rect class="c29tail-bar" x="40"  y="70"  width="18" height="65"/>
+  <rect class="c29tail-bar" x="60"  y="40"  width="18" height="95"/>
+  <rect class="c29tail-bar" x="80"  y="55"  width="18" height="80"/>
+  <rect class="c29tail-bar" x="100" y="85"  width="18" height="50"/>
+  <rect class="c29tail-bar" x="120" y="100" width="18" height="35"/>
+  <rect class="c29tail-bar" x="140" y="112" width="18" height="23"/>
+  <rect class="c29tail-bar" x="160" y="120" width="18" height="15"/>
+  <rect class="c29tail-bar" x="190" y="125" width="14" height="10"/>
+  <rect class="c29tail-bar" x="230" y="128" width="12" height="7"/>
+  <rect class="c29tail-bar" x="280" y="129" width="10" height="6"/>
+  <rect class="c29tail-bar" x="340" y="130" width="9"  height="5"/>
+  <rect class="c29tail-bar" x="400" y="130" width="9"  height="5"/>
+  <!-- mean marker, inside the bulk -->
+  <line x1="105" y1="30" x2="105" y2="135" stroke="#f59e0b" stroke-width="2" stroke-dasharray="3 2"/>
+  <text x="86" y="25" class="c29tail-lbl" fill="#f59e0b">mean</text>
+  <!-- p99 marker, far in the tail -->
+  <line x1="345" y1="30" x2="345" y2="135" class="c29tail-p99" stroke-dasharray="3 2"/>
+  <text x="330" y="25" class="c29tail-lbl" fill="#ec4899">p99</text>
+</svg>
 
 A subtle, costly fact: **batching trades median for tail**. Coalescing requests (§29.9) raises throughput but a request that arrives just as a batch closes must wait for the *next* one, padding the tail. The fix is a bounded batch *window* (e.g. "wait at most 5 ms, then fire") so the tail penalty is capped by design.
 
@@ -366,7 +462,34 @@ flowchart TB
   U[traffic] --> S
 ```
 
-The reconciliation loop is worth making concrete. You declare "3 replicas". A node hosting pod P2 dies. K8s observes that *observed = 2* but *desired = 3*, so it schedules a replacement pod on a healthy node and the load balancer starts routing to it — no human paged, no script run. This control loop, comparing desired against observed and acting on the gap, is the same idea as the orchestrator's "wait for parents" in §29.2, just applied to running containers instead of pipeline steps.
+The reconciliation loop is worth watching: you declare "3 replicas," a pod dies, and K8s notices the gap and conjures a replacement — no human in the loop. The dying pod fades, the count drops to 2, then a fresh pod pops back to 3:
+
+<svg viewBox="0 0 460 130" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Animated Kubernetes self-healing: one of three pods dies and a replacement is created to restore the desired count">
+  <style>
+    .c29k8s-lbl { font: 11px sans-serif; fill: currentColor; }
+    .c29k8s-pod { fill: rgba(34,197,94,0.35); stroke: #22c55e; stroke-width: 1.6; }
+    /* pod 2 dies around mid-cycle */
+    @keyframes c29k8s-die { 0%,40% { opacity: 1; fill: rgba(34,197,94,0.35); } 50% { opacity: 1; fill: rgba(236,72,153,0.45); } 60%,100% { opacity: 0; } }
+    .c29k8s-die { stroke: #ec4899; animation: c29k8s-die 5s ease-in-out infinite; }
+    /* replacement pod appears later */
+    @keyframes c29k8s-born { 0%,65% { opacity: 0; transform: scale(0.4); } 80%,100% { opacity: 1; transform: scale(1); } }
+    .c29k8s-born { transform-box: fill-box; transform-origin: center; animation: c29k8s-born 5s ease-in-out infinite; }
+    @keyframes c29k8s-count { 0%,40% {} 55% {} 75% {} 100% {} }
+    @media (prefers-reduced-motion: reduce) { .c29k8s-die, .c29k8s-born { animation: none; opacity: 1; } }
+  </style>
+  <text x="20" y="22" class="c29k8s-lbl" font-weight="700">Deployment: desired = 3 replicas — K8s reconciles toward it</text>
+  <text x="20" y="115" class="c29k8s-lbl">healthy</text>
+  <text x="170" y="115" class="c29k8s-lbl" fill="#ec4899">dies →</text>
+  <text x="300" y="115" class="c29k8s-lbl" fill="#22c55e">replacement created</text>
+  <rect class="c29k8s-pod" x="40"  y="45" width="70" height="46" rx="6"/>
+  <rect class="c29k8s-pod c29k8s-die" x="170" y="45" width="70" height="46" rx="6"/>
+  <rect class="c29k8s-pod c29k8s-born" x="170" y="45" width="70" height="46" rx="6"/>
+  <rect class="c29k8s-pod" x="300" y="45" width="70" height="46" rx="6"/>
+  <text x="75"  y="73" text-anchor="middle" class="c29k8s-lbl">pod</text>
+  <text x="335" y="73" text-anchor="middle" class="c29k8s-lbl">pod</text>
+</svg>
+
+The reconciliation loop, in words: you declare "3 replicas." A node hosting pod P2 dies. K8s observes that *observed = 2* but *desired = 3*, so it schedules a replacement pod on a healthy node and the load balancer starts routing to it — no human paged, no script run. This control loop, comparing desired against observed and acting on the gap, is the same idea as the orchestrator's "wait for parents" in §29.2, just applied to running containers instead of pipeline steps.
 
 The mental model: **Docker** makes one box reproducible; **Kubernetes** keeps a fleet of those boxes alive and balanced.
 
@@ -430,13 +553,42 @@ flowchart LR
   Cmp -->|PSI > 0.25| Retrain[significant: retrain]
 ```
 
+Here is the comparison the metric measures, as a picture: the training histogram is the faint reference; the live one slides to the right as the world moves. PSI is just a number that grows as the orange bars pull away from the blue:
+
+<svg viewBox="0 0 460 160" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Animated drift: a live distribution sliding rightward away from the frozen training reference distribution">
+  <style>
+    .c29drift-lbl { font: 11px sans-serif; fill: currentColor; }
+    .c29drift-ref { fill: rgba(99,102,241,0.18); stroke: #6366f1; stroke-width: 1; }
+    @keyframes c29drift-slide { 0%,15% { transform: translateX(0); } 70%,100% { transform: translateX(70px); } }
+    .c29drift-live { fill: rgba(245,158,11,0.5); stroke: #f59e0b; stroke-width: 1; animation: c29drift-slide 6s ease-in-out infinite alternate; }
+    @media (prefers-reduced-motion: reduce) { .c29drift-live { animation: none; transform: translateX(35px); } }
+  </style>
+  <line x1="30" y1="125" x2="445" y2="125" stroke="currentColor" stroke-width="1" opacity="0.5"/>
+  <text x="20" y="20" class="c29drift-lbl"><tspan fill="#6366f1" font-weight="700">training (frozen reference)</tspan> vs <tspan fill="#f59e0b" font-weight="700">live (drifting)</tspan></text>
+  <!-- reference bell, fixed -->
+  <rect class="c29drift-ref" x="120" y="95" width="22" height="30"/>
+  <rect class="c29drift-ref" x="142" y="65" width="22" height="60"/>
+  <rect class="c29drift-ref" x="164" y="45" width="22" height="80"/>
+  <rect class="c29drift-ref" x="186" y="65" width="22" height="60"/>
+  <rect class="c29drift-ref" x="208" y="95" width="22" height="30"/>
+  <!-- live bell, slides right -->
+  <g class="c29drift-live">
+    <rect x="120" y="95" width="22" height="30"/>
+    <rect x="142" y="65" width="22" height="60"/>
+    <rect x="164" y="45" width="22" height="80"/>
+    <rect x="186" y="65" width="22" height="60"/>
+    <rect x="208" y="95" width="22" height="30"/>
+  </g>
+  <text x="300" y="148" class="c29drift-lbl">gap grows → PSI rises → retrain</text>
+</svg>
+
 Worked example — Population Stability Index (**PSI**), the workhorse drift metric. Bin a feature, compare training proportions to live proportions:
 
 $$\text{PSI} = \sum_i (a_i - e_i)\,\ln\!\frac{a_i}{e_i}$$
 
 **In words:** for each bin, multiply *how much its share changed* by *the log of how many times it grew or shrank*, then add up the bins — a single number that is big only when a bin moved a lot both in absolute share and in ratio.
 
-**Also written:** $\text{PSI} = \sum_i a_i \ln\frac{a_i}{e_i} + \sum_i e_i \ln\frac{e_i}{a_i} = D_{\mathrm{KL}}(a\Vert e) + D_{\mathrm{KL}}(e\Vert a)$ — PSI is exactly the *symmetric* (Jeffreys) KL divergence between the live and training histograms.
+**Also written:** $\text{PSI} = D_{\mathrm{KL}}(a\Vert e) + D_{\mathrm{KL}}(e\Vert a)$. Plainly: PSI measures the "distance" between the live histogram and the training one in *both directions* and adds them up. Measuring both directions is what makes it symmetric — you get the same number whether you call the live or the training set the reference. (Each $D_{\mathrm{KL}}$ is the standard KL divergence; their sum is the Jeffreys divergence.)
 
 with $e_i$ the expected (training) fraction in bin $i$ and $a_i$ the actual (live) fraction. Rule of thumb: $<0.1$ stable, $0.1$–$0.25$ moderate, $>0.25$ significant — retrain.
 
@@ -508,6 +660,45 @@ When a model or its dataset outgrows a single machine, you split the work across
 The intuition: imagine eight students each grading a different stack of the same exam, then meeting to average their grading adjustments so everyone's answer key stays identical. Each works in parallel on their own pile; the meeting (the all-reduce) keeps them in sync.
 
 **Data parallelism** is the common one: replicate the *full model* on every GPU, give each a different shard of the batch, compute gradients locally, then **all-reduce** (average) the gradients so every replica applies the same update and stays in sync. It scales throughput nearly linearly until communication cost dominates, and works whenever the model fits on one device.
+
+Here is the all-reduce that keeps them synced, animated: each GPU computes its own gradient (different colors), they meet in the middle to average, and every GPU walks away holding the *same* averaged gradient (one color). That convergence is what keeps the replicas in lock-step:
+
+<svg viewBox="0 0 460 150" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Animated all-reduce: four GPUs compute different gradients, average them, and all end up with the same shared gradient">
+  <style>
+    .c29ar-lbl { font: 11px sans-serif; fill: currentColor; }
+    .c29ar-gpu { stroke-width: 1.6; rx: 5; }
+    /* each gpu starts its own color, converges to indigo at the sync */
+    @keyframes c29ar-g0 { 0%,30% { fill: #38bdf8; } 55%,100% { fill: #6366f1; } }
+    @keyframes c29ar-g1 { 0%,30% { fill: #22c55e; } 55%,100% { fill: #6366f1; } }
+    @keyframes c29ar-g2 { 0%,30% { fill: #f59e0b; } 55%,100% { fill: #6366f1; } }
+    @keyframes c29ar-g3 { 0%,30% { fill: #ec4899; } 55%,100% { fill: #6366f1; } }
+    .c29ar-0 { animation: c29ar-g0 5s ease-in-out infinite; }
+    .c29ar-1 { animation: c29ar-g1 5s ease-in-out infinite; }
+    .c29ar-2 { animation: c29ar-g2 5s ease-in-out infinite; }
+    .c29ar-3 { animation: c29ar-g3 5s ease-in-out infinite; }
+    @keyframes c29ar-pulse { 0%,35% { opacity: 0; } 50% { opacity: 1; } 65%,100% { opacity: 0; } }
+    .c29ar-bus { stroke: #6366f1; stroke-width: 2; stroke-dasharray: 4 3; animation: c29ar-pulse 5s ease-in-out infinite; }
+    @media (prefers-reduced-motion: reduce) { .c29ar-0,.c29ar-1,.c29ar-2,.c29ar-3 { animation: none; fill: #6366f1; } .c29ar-bus { animation: none; opacity: 0.6; } }
+  </style>
+  <text x="20" y="20" class="c29ar-lbl" font-weight="700">all-reduce: 4 local gradients → one shared average</text>
+  <!-- gpus -->
+  <rect class="c29ar-gpu c29ar-0" x="30"  y="40" width="70" height="34"/>
+  <rect class="c29ar-gpu c29ar-1" x="130" y="40" width="70" height="34"/>
+  <rect class="c29ar-gpu c29ar-2" x="260" y="40" width="70" height="34"/>
+  <rect class="c29ar-gpu c29ar-3" x="360" y="40" width="70" height="34"/>
+  <text x="65"  y="62" text-anchor="middle" class="c29ar-lbl" fill="#fff">GPU0</text>
+  <text x="165" y="62" text-anchor="middle" class="c29ar-lbl" fill="#fff">GPU1</text>
+  <text x="295" y="62" text-anchor="middle" class="c29ar-lbl" fill="#fff">GPU2</text>
+  <text x="395" y="62" text-anchor="middle" class="c29ar-lbl" fill="#fff">GPU3</text>
+  <!-- sync bus -->
+  <line x1="65" y1="90" x2="395" y2="90" class="c29ar-bus"/>
+  <line x1="65"  y1="74" x2="65"  y2="90" class="c29ar-bus"/>
+  <line x1="165" y1="74" x2="165" y2="90" class="c29ar-bus"/>
+  <line x1="295" y1="74" x2="295" y2="90" class="c29ar-bus"/>
+  <line x1="395" y1="74" x2="395" y2="90" class="c29ar-bus"/>
+  <text x="230" y="115" text-anchor="middle" class="c29ar-lbl">⇅ average gradients ⇅</text>
+  <text x="230" y="135" text-anchor="middle" class="c29ar-lbl">every GPU now holds the same update → weights stay identical</text>
+</svg>
 
 The averaged gradient that every replica applies is just the mean of the $K$ local gradients:
 
@@ -584,6 +775,44 @@ counts = (spark.read.text("s3://logs/*.txt")
     .reduceByKey(lambda a, b: a + b))       # reduce: sum per word
 counts.saveAsTextFile("s3://out/")          # ACTION -> triggers the job
 ```
+
+The map→shuffle→reduce dance is the whole trick, so here it is on `"the cat the"` spread over two machines: each node maps its words to `(word, 1)` pairs, the shuffle drags every matching key onto one reducer, and the reducer sums. Watch the two `the` pairs migrate together:
+
+<svg viewBox="0 0 460 180" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Animated Spark map-shuffle-reduce: two nodes emit word-count pairs, the shuffle gathers matching keys onto one reducer, which sums them">
+  <style>
+    .c29sp-lbl { font: 10px sans-serif; fill: currentColor; }
+    .c29sp-hdr { font: 11px sans-serif; font-weight: 700; fill: currentColor; }
+    .c29sp-pair { stroke-width: 1.4; rx: 4; }
+    /* the two 'the' pairs slide toward the reducer */
+    @keyframes c29sp-move1 { 0%,25% { transform: translate(0,0); } 60%,100% { transform: translate(150px, 70px); } }
+    @keyframes c29sp-move2 { 0%,25% { transform: translate(0,0); } 60%,100% { transform: translate(40px, 12px); } }
+    .c29sp-the1 { animation: c29sp-move1 5s ease-in-out infinite; }
+    .c29sp-the2 { animation: c29sp-move2 5s ease-in-out infinite; }
+    @keyframes c29sp-sum { 0%,60% { opacity: 0; } 75%,100% { opacity: 1; } }
+    .c29sp-sum { animation: c29sp-sum 5s ease-in-out infinite; }
+    @media (prefers-reduced-motion: reduce) { .c29sp-the1,.c29sp-the2,.c29sp-sum { animation: none; } .c29sp-sum { opacity: 1; } }
+  </style>
+  <text x="10" y="16" class="c29sp-hdr">map</text>
+  <text x="200" y="16" class="c29sp-hdr">shuffle →</text>
+  <text x="360" y="16" class="c29sp-hdr">reduce</text>
+  <!-- node 1 -->
+  <text x="10" y="42" class="c29sp-lbl">node A: "the cat"</text>
+  <rect class="c29sp-pair c29sp-the1" x="20" y="50" width="50" height="20" fill="rgba(56,189,248,0.5)" stroke="#38bdf8"/>
+  <text x="45" y="64" text-anchor="middle" class="c29sp-lbl c29sp-the1">the,1</text>
+  <rect class="c29sp-pair" x="80" y="50" width="50" height="20" fill="rgba(245,158,11,0.5)" stroke="#f59e0b"/>
+  <text x="105" y="64" text-anchor="middle" class="c29sp-lbl">cat,1</text>
+  <!-- node 2 -->
+  <text x="10" y="112" class="c29sp-lbl">node B: "the"</text>
+  <rect class="c29sp-pair c29sp-the2" x="20" y="120" width="50" height="20" fill="rgba(56,189,248,0.5)" stroke="#38bdf8"/>
+  <text x="45" y="134" text-anchor="middle" class="c29sp-lbl c29sp-the2">the,1</text>
+  <!-- reducer landing zone -->
+  <rect x="300" y="95" width="150" height="60" rx="6" fill="rgba(34,197,94,0.1)" stroke="#22c55e" stroke-dasharray="3 2"/>
+  <text x="375" y="90" text-anchor="middle" class="c29sp-lbl">reducer</text>
+  <rect class="c29sp-pair c29sp-sum" x="320" y="108" width="56" height="20" fill="rgba(34,197,94,0.55)" stroke="#22c55e"/>
+  <text x="348" y="122" text-anchor="middle" class="c29sp-lbl c29sp-sum">the,2</text>
+  <rect class="c29sp-pair c29sp-sum" x="320" y="132" width="56" height="20" fill="rgba(245,158,11,0.45)" stroke="#f59e0b"/>
+  <text x="348" y="146" text-anchor="middle" class="c29sp-lbl c29sp-sum">cat,1</text>
+</svg>
 
 Trace `"the cat the"` across two partitions: the map stage emits `(the,1) (cat,1)` on one node and `(the,1)` on another; Spark **shuffles** so all `the` pairs land on the same reducer; `reduceByKey` then sums them to `(the,2) (cat,1)`. The shuffle, moving same-key records onto one machine, is both the magic and the cost of distributed aggregation.
 
@@ -751,6 +980,36 @@ flowchart TB
     end
 ```
 
+The canary ramp is the strategy you will reach for most, and it is easier to feel as a slider: traffic creeps from the old model to the new one — 5%, 25%, 50%, 100% — and at any step a bad metric flips it instantly back to zero. Watch the new model's share climb while it stays healthy:
+
+<svg viewBox="0 0 460 130" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Animated canary rollout: traffic share to the new model ramps from 5 percent up to 100 percent in steps">
+  <style>
+    .c29can-lbl { font: 11px sans-serif; fill: currentColor; }
+    @keyframes c29can-ramp {
+      0%   { width: 16px; }
+      25%  { width: 16px; }
+      40%  { width: 80px; }
+      55%  { width: 160px; }
+      70%  { width: 320px; }
+      100% { width: 320px; }
+    }
+    .c29can-new { fill: #22c55e; animation: c29can-ramp 7s ease-in-out infinite; }
+    @keyframes c29can-tag {
+      0%,24% { opacity: 1; } 25%,100% { opacity: 0; }
+    }
+    @media (prefers-reduced-motion: reduce) { .c29can-new { animation: none; width: 160px; } }
+  </style>
+  <text x="20" y="22" class="c29can-lbl" font-weight="700">canary: new model's traffic share, ramping as it stays healthy</text>
+  <rect x="20" y="40" width="320" height="34" rx="5" fill="rgba(99,102,241,0.15)" stroke="#6366f1"/>
+  <rect x="20" y="40" width="16" height="34" rx="5" class="c29can-new"/>
+  <text x="350" y="61" class="c29can-lbl">old → new</text>
+  <text x="20" y="100" class="c29can-lbl">5%</text>
+  <text x="95" y="100" class="c29can-lbl">25%</text>
+  <text x="175" y="100" class="c29can-lbl">50%</text>
+  <text x="320" y="100" class="c29can-lbl">100%</text>
+  <text x="20" y="120" class="c29can-lbl" fill="#ec4899">any bad metric → snap back to 0%</text>
+</svg>
+
 **Shadow (dark launch).** The new model receives a copy of every live request and produces predictions, but its output is *logged, never served*. Zero user risk — you are comparing the two models' outputs on identical real inputs, and surfacing operational problems (latency, crashes, feature-pipeline errors) before any customer is affected. The limit: shadow mode cannot measure *outcomes* that depend on acting on the prediction. A shadow recommender's clicks are unobservable because nobody saw its recommendations.
 
 **Canary.** Route a small slice — say 5% — of real users to the new model and watch their metrics against the 95% control. If error rates or business KPIs degrade, roll back having harmed only a sliver of traffic. You ramp 5% → 25% → 50% → 100% as confidence grows. Canary measures real outcomes, unlike shadow, but exposes real users, so it comes second.
@@ -826,7 +1085,40 @@ Why the classic serving playbook strains:
 | metric = accuracy/AUC | metric = quality, *plus* tokens/sec and \$/1k tokens |
 | cache the prediction | cache the *KV state* and *the prompt prefix* |
 
-**Autoregressive generation** is the root of the difference: the model produces token 1, appends it to the input, produces token 2 from the longer sequence, and so on. The cost of a 500-token answer is roughly 500 sequential forward passes. The single most important optimization is the **KV cache** — the attention keys and values computed for tokens already generated are stored and reused, so each new token is *one* cheap step instead of re-reading the whole sequence. The serving cost then splits cleanly into two phases:
+**Autoregressive generation** is the root of the difference: the model produces token 1, appends it to the input, produces token 2 from the longer sequence, and so on. The cost of a 500-token answer is roughly 500 sequential forward passes. The whole loop is best *felt* — watch each token get emitted, appended, and fed back in as the input to produce the next:
+
+<svg viewBox="0 0 460 130" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Animated autoregressive decoding: tokens are emitted one at a time, each appended and fed back to produce the next">
+  <style>
+    .c29ar2-lbl { font: 11px sans-serif; fill: currentColor; }
+    .c29ar2-tok { font: 12px monospace; fill: currentColor; }
+    .c29ar2-box { fill: rgba(168,85,247,0.18); stroke: #a855f7; stroke-width: 1.4; rx: 4; }
+    @keyframes c29ar2-pop { 0% { opacity: 0; transform: translateY(6px) scale(0.85); } 100% { opacity: 1; transform: translateY(0) scale(1); } }
+    .c29ar2-t1 { transform-box: fill-box; transform-origin: center; animation: c29ar2-pop 0.5s ease-out infinite alternate; animation-delay: 0s; }
+    .c29ar2-t2 { transform-box: fill-box; transform-origin: center; animation: c29ar2-pop 0.5s ease-out infinite alternate; animation-delay: 0.6s; }
+    .c29ar2-t3 { transform-box: fill-box; transform-origin: center; animation: c29ar2-pop 0.5s ease-out infinite alternate; animation-delay: 1.2s; }
+    .c29ar2-t4 { transform-box: fill-box; transform-origin: center; animation: c29ar2-pop 0.5s ease-out infinite alternate; animation-delay: 1.8s; }
+    @keyframes c29ar2-loop { 0%,100% { opacity: 0.3; } 50% { opacity: 1; } }
+    .c29ar2-arrow { stroke: #a855f7; stroke-width: 1.6; fill: none; animation: c29ar2-loop 2.4s ease-in-out infinite; }
+    @media (prefers-reduced-motion: reduce) { .c29ar2-t1,.c29ar2-t2,.c29ar2-t3,.c29ar2-t4 { animation: none; opacity: 1; } .c29ar2-arrow { animation: none; } }
+  </style>
+  <text x="20" y="22" class="c29ar2-lbl" font-weight="700">autoregressive decode — one token per forward pass, fed back in</text>
+  <rect class="c29ar2-box" x="20"  y="45" width="60" height="28"/>
+  <text x="50"  y="63" text-anchor="middle" class="c29ar2-lbl">prompt</text>
+  <rect class="c29ar2-box c29ar2-t1" x="100" y="45" width="50" height="28"/>
+  <text x="125" y="63" text-anchor="middle" class="c29ar2-tok c29ar2-t1">KV</text>
+  <rect class="c29ar2-box c29ar2-t2" x="170" y="45" width="60" height="28"/>
+  <text x="200" y="63" text-anchor="middle" class="c29ar2-tok c29ar2-t2">cache</text>
+  <rect class="c29ar2-box c29ar2-t3" x="250" y="45" width="50" height="28"/>
+  <text x="275" y="63" text-anchor="middle" class="c29ar2-tok c29ar2-t3">is</text>
+  <rect class="c29ar2-box c29ar2-t4" x="320" y="45" width="70" height="28"/>
+  <text x="355" y="63" text-anchor="middle" class="c29ar2-tok c29ar2-t4">reuse</text>
+  <!-- feedback arc -->
+  <path class="c29ar2-arrow" d="M 355 73 q 0 35 -150 35 q -150 0 -150 -28" marker-end="url(#c29ar2-ah)"/>
+  <defs><marker id="c29ar2-ah" markerWidth="7" markerHeight="7" refX="5" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6 Z" fill="#a855f7"/></marker></defs>
+  <text x="200" y="123" text-anchor="middle" class="c29ar2-lbl">each new token appended → becomes input for the next</text>
+</svg>
+
+The single most important optimization is the **KV cache** — the attention keys and values computed for tokens already generated are stored and reused, so each new token is *one* cheap step instead of re-reading the whole sequence. The serving cost then splits cleanly into two phases:
 
 ```{mermaid}
 flowchart LR
@@ -898,6 +1190,8 @@ The big levers, cheapest-effort first:
 | **Caching** | memoize repeated identical requests | free hits on hot inputs |
 
 A worked back-of-envelope makes the batching lever vivid. Suppose one GPU forward pass takes 20 ms whether it processes 1 request or 16 (the GPU is bandwidth-bound, not compute-bound at this size). Serving one-at-a-time, you handle $1000/20 = 50$ requests per second. Batch 16 together and you still spend 20 ms per pass but clear 16 requests in it — $50 \times 16 = 800$ req/s on the *same hardware*. Same bill, 16× the work, which is exactly the gap between reserved and used closing.
+
+A second, real-world worked example — *autoscale-to-zero* on a spiky internal tool. Say an analytics endpoint gets traffic only during business hours: ~8 hours of real load, 16 hours of silence. An always-on GPU replica bills 24 h/day. Scale it to zero when idle and you bill ~8 h/day — a **3× cut** on that line item for one config flag, paid for only by a few seconds of cold-start on the first morning request. This is why "pay for traffic, not for 3 a.m. silence" is the cheapest lever on the table for any service whose load is bursty rather than constant.
 
 <svg viewBox="0 0 460 150" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Utilization gap between reserved and used GPU capacity">
   <style>

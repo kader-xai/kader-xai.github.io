@@ -137,6 +137,24 @@ The simplest idea in all of classification: to label a new point, look at the po
 
 > **Intuition:** it's the "you are who you hang out with" classifier. Drop a new point on the map, find its $k$ closest companions, and let them outvote each other. No formula is learned — the training data *is* the model.
 
+<style>
+@keyframes c9-knn-ring { 0%,100% { r: 30; opacity: 0.55; } 50% { r: 52; opacity: 0.15; } }
+@keyframes c9-knn-q { 0%,100% { transform: scale(1); } 50% { transform: scale(1.18); } }
+@media (prefers-reduced-motion: reduce) { .c9-knn-ring, .c9-knn-q { animation: none; } }
+</style>
+<svg viewBox="0 0 320 180" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif" font-size="10">
+  <circle class="c9-knn-ring" cx="160" cy="90" r="30" fill="rgba(99,102,241,0.10)" stroke="#6366f1" stroke-dasharray="4" style="animation: c9-knn-ring 4s ease-in-out infinite"/>
+  <!-- neighbours inside the growing ring vote -->
+  <circle cx="138" cy="72" r="6" fill="#38bdf8"/><circle cx="182" cy="78" r="6" fill="#38bdf8"/>
+  <circle cx="150" cy="112" r="6" fill="#ec4899"/>
+  <!-- far points, never reached -->
+  <circle cx="60" cy="40" r="6" fill="#ec4899" opacity="0.4"/><circle cx="270" cy="140" r="6" fill="#38bdf8" opacity="0.4"/>
+  <circle cx="70" cy="150" r="6" fill="#38bdf8" opacity="0.4"/>
+  <circle class="c9-knn-q" cx="160" cy="90" r="7" fill="none" stroke="currentColor" stroke-width="2" style="transform-origin:160px 90px; animation: c9-knn-q 4s ease-in-out infinite">?</circle>
+  <text x="160" y="93" text-anchor="middle" font-weight="bold">?</text>
+  <text x="160" y="168" text-anchor="middle" opacity="0.75">ring grows to k neighbours → 2 blue vs 1 pink → predict blue</text>
+</svg>
+
 The whole method rests on a **distance metric**. The default is **Euclidean distance**, the straight-line distance:
 
 $$d(\mathbf{x}, \mathbf{x}') = \sqrt{\sum_{i=1}^{n}(x_i - x'_i)^2}$$
@@ -437,6 +455,18 @@ $$\min_{\mathbf{w},b}\ \tfrac{1}{2}\|\mathbf{w}\|^2 + C\sum_i \xi_i$$
 **In words:** still keep the weights small (wide road), but now pay a penalty $C$ for every point that strays into or across the margin — so $C$ sets how much you care about violations versus width.
 **Also written:** the unconstrained *hinge-loss* form $\min_{\mathbf{w},b}\ \tfrac{1}{2}\|\mathbf{w}\|^2 + C\sum_i \max\!\big(0,\ 1 - y_i(\mathbf{w}\cdot\mathbf{x}_i+b)\big)$.
 
+<style>
+@keyframes c9-svm-road { 0%,100% { stroke-width: 10; opacity: 0.35; } 50% { stroke-width: 34; opacity: 0.18; } }
+@media (prefers-reduced-motion: reduce) { .c9-svm-road { animation: none; } }
+</style>
+<svg viewBox="0 0 360 160" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif" font-size="10">
+  <line class="c9-svm-road" x1="50" y1="140" x2="310" y2="30" stroke="#a855f7" stroke-width="22" style="animation: c9-svm-road 5s ease-in-out infinite"/>
+  <line x1="50" y1="140" x2="310" y2="30" stroke="currentColor" stroke-width="1.5"/>
+  <g fill="#ec4899"><circle cx="70" cy="55" r="5"/><circle cx="110" cy="45" r="5"/><circle cx="120" cy="85" r="5" stroke="currentColor" stroke-width="2"/></g>
+  <g fill="#38bdf8"><circle cx="250" cy="120" r="5"/><circle cx="290" cy="105" r="5"/><circle cx="210" cy="110" r="5" stroke="currentColor" stroke-width="2"/></g>
+  <text x="180" y="150" text-anchor="middle" opacity="0.75">small C lets the road breathe wider · circled points = support vectors</text>
+</svg>
+
 **C tunes the bias–variance tradeoff.** Large $C$ punishes violations hard → narrow margin, fits training data tightly (risk: overfit). Small $C$ tolerates violations → wide margin, smoother (risk: underfit).
 
 | C | margin | training errors | behavior |
@@ -563,6 +593,10 @@ clf.fit(X, y)
 print(clf.coef_, clf.intercept_)   # a separating boundary for AND
 ```
 
+::: {.callout-warning}
+The convergence theorem only promises a boundary when the data is **linearly separable** — on non-separable data the perceptron never settles, it just cycles forever flipping the same few points. Always cap the iterations (`max_iter`), and don't read a stopped-but-not-converged perceptron as having found the "best" line; it merely ran out of patience.
+:::
+
 **Why it cannot solve XOR.** XOR returns 1 for $(0,1)$ and $(1,0)$ but 0 for $(0,0)$ and $(1,1)$. No straight line separates those two diagonal pairs — the classes are **not linearly separable**. This 1969 observation (Minsky & Papert) stalled neural-net research for a decade. The escape is stacking neurons into hidden layers, which the Neural Networks chapter develops.
 
 <svg viewBox="0 0 200 180" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif" font-size="11">
@@ -584,7 +618,7 @@ Discriminant analysis is a **generative** classifier in the same family as Naive
 
 A quick word on **what the covariance buys you.** The covariance matrix $\Sigma$ encodes not just how wide each feature spreads, but how features *co-vary* — whether tall points also tend to be heavy, say. Naive Bayes forces $\Sigma$ to be diagonal (off-diagonal zeros), so its blobs are stuck axis-aligned. Discriminant analysis keeps the full matrix, so a blob can tilt along a diagonal and stretch into an ellipse. That extra freedom is exactly why it can place boundaries Naive Bayes cannot.
 
-**Linear Discriminant Analysis (LDA)** makes one simplifying assumption: all classes **share the same covariance matrix** $\Sigma$ (same shape, just different centers). The math then cancels the quadratic terms, leaving a **linear** decision boundary — a straight line or plane. With *equal priors* the boundary sits exactly halfway (in Mahalanobis distance) between the two class means; when the priors differ, the prior term shifts the boundary *toward the rarer class*, so it is no longer the midpoint. The shape stays linear either way.
+**Linear Discriminant Analysis (LDA)** makes one simplifying assumption: all classes **share the same covariance matrix** $\Sigma$ (same shape, just different centers). Because the blobs are the same shape, the curvy terms in the math cancel and the boundary comes out **straight** — a line in 2-D, a flat plane in higher dimensions. Where does that line sit? If both classes are equally common, it lands right in the middle, halfway between the two class centers. If one class is rarer, the boundary slides *toward the rarer class* — you demand stronger evidence before betting on the long shot. The line stays straight either way; only its position moves.
 
 The score LDA assigns to each class (the **discriminant function**) is:
 
@@ -592,6 +626,8 @@ $$\delta_c(\mathbf{x}) = \mathbf{x}^\top\Sigma^{-1}\boldsymbol\mu_c - \tfrac{1}{
 
 **In words:** reward a point for lining up with class $c$'s center (first term), penalize how far that center is from the origin (second term), and tilt by how common the class is (the prior term); pick the class with the biggest score.
 **Also written:** $\delta_c(\mathbf{x}) = -\tfrac{1}{2}(\mathbf{x}-\boldsymbol\mu_c)^\top\Sigma^{-1}(\mathbf{x}-\boldsymbol\mu_c) + \log P(c) + \text{const}$ — i.e. "negative Mahalanobis distance to the class center, plus log-prior" (the constant is shared, so it drops out of the argmax).
+
+**Worked example — one feature.** Two classes with the *same* spread $\sigma^2=1$ but different centers: $\mu_A=0$, $\mu_B=4$. With equal priors the LDA boundary sits at the midpoint $x=2$ — points below 2 go to A, above go to B. Now make B rarer, $P(B)=0.2$ vs $P(A)=0.8$. The prior term $\log(0.8/0.2)=1.39$ shifts the cutoff to $x = 2 + 1.39/(\mu_B-\mu_A) \cdot \sigma^2 = 2 + 1.39/4 \approx 2.35$ — pushed *toward* the rare class B, exactly as the prose said: you need to be more clearly on B's side before the model bets on the long shot.
 
 **Quadratic Discriminant Analysis (QDA)** drops that assumption: each class gets its **own** covariance $\Sigma_c$. The quadratic terms survive, so the boundary is a **curve** (parabola, ellipse, hyperbola). More flexible, but it estimates many more parameters and needs more data.
 
@@ -660,6 +696,23 @@ $$P(y=c\mid \mathbf{x}) = \frac{e^{z_c}}{\sum_{k} e^{z_k}}, \qquad z_c = \mathbf
 **Also written:** $\mathrm{softmax}(\mathbf{z})_c = \dfrac{\exp(z_c - \max_k z_k)}{\sum_k \exp(z_k - \max_k z_k)}$ — the numerically stable form (subtract the max before exponentiating to avoid overflow); it is the $K$-class generalization of the sigmoid from §9.3.
 
 **Worked example.** Raw scores $z=(2.0,\ 1.0,\ 0.1)$. Exponentiate: $(7.39,\ 2.72,\ 1.11)$, sum $=11.22$. Softmax $=(0.659,\ 0.242,\ 0.099)$ — a clean probability vector; predict class 0. This is the standard output layer of neural-net classifiers.
+
+<style>
+@keyframes c9-sm-a { 0%,100% { height: 20px; y: 110px; } 55%,90% { height: 92px; y: 38px; } }
+@keyframes c9-sm-b { 0%,100% { height: 20px; y: 110px; } 55%,90% { height: 34px; y: 96px; } }
+@keyframes c9-sm-c { 0%,100% { height: 20px; y: 110px; } 55%,90% { height: 14px; y: 116px; } }
+@media (prefers-reduced-motion: reduce) { .c9-sm-a,.c9-sm-b,.c9-sm-c { animation: none; height: 50px; y: 80px; } }
+</style>
+<svg viewBox="0 0 300 150" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif" font-size="10">
+  <line x1="20" y1="130" x2="280" y2="130" stroke="currentColor" opacity="0.4"/>
+  <rect class="c9-sm-a" x="60"  y="110" width="44" height="20" fill="rgba(99,102,241,0.55)" style="animation: c9-sm-a 4.5s ease-in-out infinite"/>
+  <rect class="c9-sm-b" x="128" y="110" width="44" height="20" fill="rgba(56,189,248,0.55)" style="animation: c9-sm-b 4.5s ease-in-out infinite"/>
+  <rect class="c9-sm-c" x="196" y="110" width="44" height="20" fill="rgba(236,72,153,0.55)" style="animation: c9-sm-c 4.5s ease-in-out infinite"/>
+  <text x="82"  y="145" text-anchor="middle">0.66</text>
+  <text x="150" y="145" text-anchor="middle">0.24</text>
+  <text x="218" y="145" text-anchor="middle">0.10</text>
+  <text x="150" y="16" text-anchor="middle" opacity="0.75">raw scores exponentiate &amp; normalise → probabilities (sum = 1)</text>
+</svg>
 
 For **multi-label**, the trick is **binary relevance**: train one independent binary classifier per label and let each fire independently — replace softmax with a per-label **sigmoid** so labels don't compete. When label *combinations* are correlated, **label powerset** treats each observed combination as its own single class (turning multi-label back into multi-class), capturing co-occurrence at the cost of an explosion in classes.
 

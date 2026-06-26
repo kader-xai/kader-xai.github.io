@@ -196,7 +196,13 @@ The intuition here is "among people who truly qualify, each group is approved at
 
 The intuition is the old principle "treat like cases alike." The hard part, and it is genuinely hard, is defining the similarity metric $d_{\text{in}}$ without quietly smuggling bias into it.
 
-**Why they conflict — the impossibility result.** The reason you cannot just "do all of them" is a proven theorem, not an engineering shortfall. Work by Chouldechova and by Kleinberg, Mullainathan, and Raghavan showed that whenever the **base rates differ** across groups — that is, whenever $P(Y=1\mid A=a) \ne P(Y=1\mid A=b)$ — you *cannot* simultaneously have equal calibration, equal false-positive rates, and equal false-negative rates, except in degenerate edge cases. Picking one fairness notion mathematically forces you to give up another.
+**Why they conflict — the impossibility result.** Here is the plain version. Suppose two groups genuinely qualify at different rates — say 30% of group A and 50% of group B truly pay back a loan. That single fact ($P(Y=1\mid A=a) \ne P(Y=1\mid A=b)$, called a difference in **base rates**) is enough to box you in. Researchers Chouldechova and, separately, Kleinberg–Mullainathan–Raghavan proved you then cannot make all three of these true at the same time:
+
+- scores mean the same thing for both groups (**calibration**),
+- both groups have the same wrongly-flagged rate (**equal false positives**),
+- both groups have the same wrongly-cleared rate (**equal false negatives**).
+
+You can get any two; the third is forced out of line. It is a mathematical fact, not a sign you coded it wrong — so picking a fairness goal is unavoidably a choice about *which* unfairness you will tolerate.
 
 **Worked example — COMPAS in miniature.** Consider two groups with genuinely different base rates of reoffending, and a risk score that is **calibrated** — meaning a score of "7" really does correspond to 70% reoffending *in both groups*. Calibration sounds like the obviously fair thing to want. Watch what it forces:
 
@@ -359,7 +365,29 @@ print(round(private_count(true, eps=5.0)))  # near-exact: weak privacy
 # smaller eps -> larger noise -> the one person is hidden
 ```
 
-Notice that the noise scale is $1/\varepsilon$: halving $\varepsilon$ doubles the expected noise. That is the privacy–accuracy tradeoff made concrete in one line.
+Notice that the noise scale is $1/\varepsilon$: halving $\varepsilon$ doubles the expected noise. That is the privacy–accuracy tradeoff made concrete in one line. Picture it as one slider — drag toward small $\varepsilon$ and a single person disappears into a fog of noise; drag toward large $\varepsilon$ and the answer sharpens but that person starts to show through:
+
+<svg viewBox="0 0 460 130" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Privacy budget slider trading noise against accuracy">
+  <title>The privacy budget epsilon</title>
+  <desc>A slider sweeps between strong privacy with heavy noise and weak privacy with a sharp answer, showing the epsilon tradeoff.</desc>
+  <style>
+    @keyframes c38-dp-slide { 0%,100% { cx: 60px; } 50% { cx: 400px; } }
+    @keyframes c38-dp-fog   { 0%,100% { opacity: 0.55; } 50% { opacity: 0.08; } }
+    .c38-dp-knob { animation: c38-dp-slide 6s ease-in-out infinite; }
+    .c38-dp-fog  { animation: c38-dp-fog 6s ease-in-out infinite; }
+    @media (prefers-reduced-motion: reduce) {
+      .c38-dp-knob, .c38-dp-fog { animation: none; }
+    }
+  </style>
+  <line x1="60" y1="55" x2="400" y2="55" stroke="currentColor" stroke-opacity="0.3" stroke-width="4" stroke-linecap="round"/>
+  <text x="60"  y="38" font-size="11" text-anchor="middle" fill="#22c55e">small ε</text>
+  <text x="60"  y="86" font-size="10" text-anchor="middle" fill="currentColor" opacity="0.7">strong privacy</text>
+  <text x="400" y="38" font-size="11" text-anchor="middle" fill="#f59e0b">large ε</text>
+  <text x="400" y="86" font-size="10" text-anchor="middle" fill="currentColor" opacity="0.7">sharp answer</text>
+  <circle class="c38-dp-fog" cx="230" cy="108" r="9" fill="#38bdf8"/>
+  <text x="248" y="112" font-size="10" fill="currentColor" opacity="0.7">← one person, hidden by noise</text>
+  <circle class="c38-dp-knob" cx="60" cy="55" r="9" fill="#6366f1"/>
+</svg>
 
 **DP for training, with a framework.** The same idea scales up to training a neural net: **DP-SGD** clips each example's gradient (bounding one person's influence) and adds Gaussian noise to the batch gradient. Opacus wraps a normal PyTorch loop and tracks the spent $\varepsilon$ for you:
 
@@ -406,6 +434,31 @@ $$x_{\text{adv}} = x + \varepsilon \cdot \text{sign}\big(\nabla_x \, \mathcal{L}
 **Also written:** $x_{\text{adv}} = x + \varepsilon\, g/|g|$ applied component-wise, where $g = \nabla_x \mathcal{L}$ — i.e. step along the *sign* of the input gradient, the steepest move under an $\ell_\infty$ budget.
 
 Each pixel is nudged by a small amount $\varepsilon$ in the direction — given by the sign of the input gradient — that increases the loss most. Choose $\varepsilon$ small enough to be invisible to a human, and a network that was confidently calling an image a "panda" will, on the visually identical image, confidently call it a "gibbon."
+
+Training and attacking are mirror images: training rolls the *weights* **downhill** to shrink the loss; an attack pushes the *input* **uphill** to grow it. The dot below climbs the loss surface — that climb is the whole attack.
+
+<svg viewBox="0 0 460 190" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Adversarial gradient ascent: a dot climbing up a loss curve">
+  <title>Gradient ascent on the input</title>
+  <desc>A dot eases up a loss curve from a low-loss valley to a high-loss peak, illustrating that an adversarial attack increases the loss.</desc>
+  <style>
+    @keyframes c38-adv-climb {
+      0%   { offset-distance: 8%;  }
+      55%  { offset-distance: 92%; }
+      70%  { offset-distance: 92%; }
+      100% { offset-distance: 8%;  }
+    }
+    .c38-adv-dot {
+      offset-path: path('M 30 150 C 130 150, 150 60, 250 60 S 360 40, 430 30');
+      animation: c38-adv-climb 5s ease-in-out infinite;
+    }
+    @media (prefers-reduced-motion: reduce) { .c38-adv-dot { animation: none; offset-distance: 92%; } }
+  </style>
+  <path d="M 30 150 C 130 150, 150 60, 250 60 S 360 40, 430 30" fill="none" stroke="#a855f7" stroke-width="3" stroke-opacity="0.85"/>
+  <circle class="c38-adv-dot" r="7" fill="#ec4899"/>
+  <text x="30" y="172" font-size="11" fill="currentColor" opacity="0.8">low loss · "panda"</text>
+  <text x="430" y="22" font-size="11" text-anchor="end" fill="currentColor" opacity="0.8">high loss · "gibbon"</text>
+  <text x="230" y="185" font-size="11" text-anchor="middle" fill="currentColor" opacity="0.7">attacker nudges the input ↑ the loss surface</text>
+</svg>
 
 <svg viewBox="0 0 520 170" xmlns="http://www.w3.org/2000/svg">
   <rect x="10" y="40" width="90" height="90" fill="#cfe8d8" stroke="#2e7d52"/>

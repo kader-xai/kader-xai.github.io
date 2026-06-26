@@ -111,6 +111,37 @@ Most data in the world arrives as a sequence: words in a sentence, samples of au
 🧭 **In context:** Deep Learning · models for ordered/variable-length data (text, audio, time series) · the one key idea: **a recurring hidden state that summarizes the past so the same weights can be applied at every time step.**
 :::
 
+<style>
+@keyframes c16-flow { 0% { stroke-dashoffset: 40; } 100% { stroke-dashoffset: 0; } }
+@keyframes c16-pulse { 0%,100% { r: 13; opacity: .55; } 50% { r: 16; opacity: .95; } }
+.c16-cell { animation: c16-pulse 3.2s ease-in-out infinite; }
+.c16-cell.c16-d1 { animation-delay: .5s; }
+.c16-cell.c16-d2 { animation-delay: 1s; }
+.c16-cell.c16-d3 { animation-delay: 1.5s; }
+.c16-mem { stroke-dasharray: 8 4; animation: c16-flow 2.4s linear infinite; }
+@media (prefers-reduced-motion: reduce) { .c16-cell, .c16-mem { animation: none; } }
+</style>
+<svg viewBox="0 0 460 130" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif" font-size="11">
+  <text x="10" y="18" fill="currentColor">the hidden state carries memory forward, step by step</text>
+  <line class="c16-mem" x1="40" y1="80" x2="430" y2="80" stroke="#6366f1" stroke-width="3" fill="none"/>
+  <g>
+    <circle class="c16-cell"      cx="70"  cy="80" fill="#6366f1"/>
+    <circle class="c16-cell c16-d1" cx="190" cy="80" fill="#a855f7"/>
+    <circle class="c16-cell c16-d2" cx="310" cy="80" fill="#ec4899"/>
+    <circle class="c16-cell c16-d3" cx="430" cy="80" fill="#22c55e"/>
+  </g>
+  <g fill="currentColor" font-size="11" text-anchor="middle">
+    <text x="70" y="84">h₁</text><text x="190" y="84">h₂</text><text x="310" y="84">h₃</text><text x="430" y="84">h₄</text>
+  </g>
+  <g fill="#38bdf8" opacity="0.85">
+    <rect x="62" y="105" width="16" height="14" rx="2"/><rect x="182" y="105" width="16" height="14" rx="2"/>
+    <rect x="302" y="105" width="16" height="14" rx="2"/><rect x="422" y="105" width="16" height="14" rx="2"/>
+  </g>
+  <g fill="currentColor" font-size="9" text-anchor="middle">
+    <text x="70" y="115">x₁</text><text x="190" y="115">x₂</text><text x="310" y="115">x₃</text><text x="430" y="115">x₄</text>
+  </g>
+</svg>
+
 ## 16.1 — Recurrent Neural Networks
 
 A **recurrent neural network (RNN)** processes a sequence $x_1, x_2, \dots, x_T$ one element at a time, maintaining a **hidden state** $h_t$ — a vector that acts as the network's running memory of everything it has seen so far. At each step it combines the new input with the previous memory to produce a new memory:
@@ -175,7 +206,12 @@ $$\frac{\partial L}{\partial W_{hh}} = \sum_{t=1}^{T} \frac{\partial L_t}{\parti
 **In words:** the recurrent weight is used at every time step, so its total gradient is the pile-up of one gradient per step.
 **Also written:** $\nabla_{W_{hh}} L = \sum_{t=1}^{T} \nabla_{W_{hh}} L_t$ — a sum over the shared parameter's many uses, the same accumulation rule any tied/weight-shared parameter obeys.
 
-This is **BPTT**. Its great weakness lives in how the gradient travels from a late step $T$ back to an early step $1$: at every step it is multiplied by $W_{hh}^\top\,\mathrm{diag}(\tanh')$. In the **scalar case** — a one-dimensional hidden state with recurrent weight $w$ — that factor is just one number $w\cdot\tanh'$, so the gradient reaching step $1$ is roughly that number raised to the $T$-th power. If it is smaller than 1, repeated multiplication drives the gradient toward zero — the **vanishing gradient** — so the RNN effectively forgets distant inputs. If it is larger than 1, the gradient **explodes**. In the full vector case the same thing happens, governed by the largest singular value of $W_{hh}$ instead of a single number. This one problem is the reason gated architectures (next sections) exist.
+This is **BPTT**, and it has one fatal weakness. To learn that step 1 matters for the loss at step $T$, the gradient has to travel all the way back from $T$ to $1$. Every hop backward multiplies it by the *same* recurrent factor. Multiply one number by itself $T$ times and only two things can happen:
+
+- if that number is **less than 1**, the product shrinks toward zero — the gradient **vanishes**, and the RNN simply cannot feel that early inputs mattered;
+- if it is **greater than 1**, the product blows up — the gradient **explodes**, and training destabilizes.
+
+Concretely, in the one-dimensional case (hidden state is a scalar with recurrent weight $w$), the factor is $w\cdot\tanh'$, and the gradient reaching step 1 is roughly that factor raised to the $T$-th power — exactly the runaway-or-die behavior above. In the full vector case the same story holds, governed by the largest singular value of $W_{hh}$ instead of a single number. This one problem is the entire reason gated architectures (next sections) exist.
 
 The two failure modes are easy to picture: trace one number back through the unrolled chain and watch it shrink to nothing or blow up.
 
@@ -224,7 +260,7 @@ Before the gated cells, it helps to name *what* you are asking a recurrent net t
 | **one-to-many** | one vector → sequence | image → caption | feed input once, generate until a stop token |
 | **many-to-one** | sequence → one vector | review → sentiment | run to the end, use the **last** hidden state |
 | **many-to-many (aligned)** | sequence → same-length sequence | tag each word (POS) | emit one output per step |
-| **many-to-many (seq2seq)** | sequence → different-length sequence | translate a sentence | encoder then decoder (§16.5) |
+| **many-to-many (seq2seq)** | sequence → different-length sequence | translate a sentence | encoder then decoder (§16.6) |
 
 ```{mermaid}
 flowchart LR
@@ -242,6 +278,38 @@ flowchart LR
 The lesson is purely about *plumbing*: the cell is the same RNN/LSTM/GRU in every case — what changes is which hidden states you read out and feed back. A sentiment classifier ignores all outputs but the last; a tagger keeps every output; a caption generator feeds each emitted token back as the next input.
 
 **Truncated BPTT.** A document or audio stream can be tens of thousands of steps long. Unrolling that whole thing to compute gradients would blow up memory and run impossibly slowly. **Truncated BPTT** chops the stream into chunks of, say, 100 steps: you backpropagate gradients only *within* a chunk, but you **carry the hidden state forward** (detached from the graph) into the next chunk. So the forward memory still spans the whole sequence, while the backward gradient sees only one chunk.
+
+The picture: the forward pass (top) flows unbroken across the whole stream, but each chunk's backward pass (bottom) stops at the chunk boundary — gradients never cross the dashed "detach" lines.
+
+<svg viewBox="0 0 460 150" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif" font-size="10">
+  <text x="10" y="16" fill="currentColor">forward: hidden state carried across all chunks →</text>
+  <!-- forward arrow across everything -->
+  <g stroke="#22c55e" fill="none" stroke-width="2" marker-end="url(#c16fwd)">
+    <path d="M20 38 H440"/>
+  </g>
+  <!-- chunk boxes -->
+  <g fill="#6366f1" opacity="0.18" stroke="#6366f1">
+    <rect x="20"  y="55" width="120" height="40" rx="4"/>
+    <rect x="170" y="55" width="120" height="40" rx="4"/>
+    <rect x="320" y="55" width="120" height="40" rx="4"/>
+  </g>
+  <g fill="currentColor" text-anchor="middle" font-size="10">
+    <text x="80" y="79">chunk 1</text><text x="230" y="79">chunk 2</text><text x="380" y="79">chunk 3</text>
+  </g>
+  <!-- backward arrows within each chunk only -->
+  <g stroke="#ec4899" fill="none" stroke-width="2" marker-end="url(#c16bwd)">
+    <path d="M132 110 H28"/><path d="M282 110 H178"/><path d="M432 110 H328"/>
+  </g>
+  <text x="10" y="128" fill="#ec4899" font-size="10">← backward: gradient stops at each chunk edge (detach)</text>
+  <!-- detach barriers -->
+  <g stroke="#f59e0b" stroke-dasharray="4 3" opacity="0.9">
+    <line x1="155" y1="50" x2="155" y2="120"/><line x1="305" y1="50" x2="305" y2="120"/>
+  </g>
+  <defs>
+    <marker id="c16fwd" markerWidth="7" markerHeight="7" refX="6" refY="3" orient="auto"><path d="M0 0 L6 3 L0 6 z" fill="#22c55e"/></marker>
+    <marker id="c16bwd" markerWidth="7" markerHeight="7" refX="6" refY="3" orient="auto"><path d="M6 0 L0 3 L6 6 z" fill="#ec4899"/></marker>
+  </defs>
+</svg>
 
 $$\frac{\partial L}{\partial W_{hh}} \;\approx\; \sum_{t=T-k}^{T} \frac{\partial L_t}{\partial W_{hh}}$$
 
@@ -267,6 +335,8 @@ $$g \leftarrow g \cdot \frac{\tau}{\max(\|g\|, \tau)}$$
 **In words:** if the gradient is too long, shrink it back to length $\tau$ without changing where it points; otherwise leave it alone.
 **Also written:** $g \leftarrow \min\!\big(1, \tfrac{\tau}{\|g\|}\big)\, g$ — equivalent, and in PyTorch literally `torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=tau)`.
 
+**Worked example — clipping in numbers.** Say the threshold is $\tau = 5$ and one backward pass produces a gradient with norm $\|g\| = 20$. The scale factor is $\tfrac{5}{\max(20,5)} = \tfrac{5}{20} = 0.25$, so every component is multiplied by $0.25$ — the gradient now has norm exactly $5$ and points in the same direction. A different step with $\|g\| = 3$ gets factor $\tfrac{5}{\max(3,5)} = 1$, so it passes through untouched. Clipping only ever *shrinks* the occasional spike; it never grows or rotates a healthy gradient.
+
 ::: {.callout-tip}
 **Rule of thumb:** vanishing gradients are an *architecture* problem (use a gated cell); exploding gradients are a *training* problem (clip the norm). Reach for the matching tool — clipping a vanilla RNN will not give it long memory.
 :::
@@ -280,6 +350,40 @@ Three **gates** — small sigmoid networks producing values in $[0,1]$ — decid
 - **Forget gate** $f_t$: what to erase from the old cell state.
 - **Input gate** $i_t$: what new information to write.
 - **Output gate** $o_t$: what part of the cell to expose as the hidden state.
+
+<style>
+@keyframes c16-belt { 0% { stroke-dashoffset: 60; } 100% { stroke-dashoffset: 0; } }
+@keyframes c16-gate { 0%,100% { opacity: .35; } 50% { opacity: 1; } }
+.c16-belt { stroke-dasharray: 10 5; animation: c16-belt 3s linear infinite; }
+.c16-gf { animation: c16-gate 4s ease-in-out infinite; }
+.c16-gi { animation: c16-gate 4s ease-in-out infinite 1.3s; }
+.c16-go { animation: c16-gate 4s ease-in-out infinite 2.6s; }
+@media (prefers-reduced-motion: reduce) { .c16-belt, .c16-gf, .c16-gi, .c16-go { animation: none; opacity: 1; } }
+</style>
+<svg viewBox="0 0 460 120" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif" font-size="11">
+  <text x="10" y="16" fill="currentColor">the cell state is a conveyor belt; gates tap into it</text>
+  <text x="10" y="52" fill="currentColor" font-size="10">cₜ₋₁</text>
+  <text x="425" y="52" fill="currentColor" font-size="10">cₜ</text>
+  <line class="c16-belt" x1="40" y1="48" x2="415" y2="48" stroke="#a855f7" stroke-width="4" fill="none"/>
+  <!-- forget gate (erase) -->
+  <g class="c16-gf">
+    <circle cx="140" cy="48" r="11" fill="#ec4899" opacity="0.85"/>
+    <text x="140" y="51" fill="currentColor" font-size="9" text-anchor="middle">fₜ</text>
+    <text x="140" y="82" fill="#ec4899" font-size="9" text-anchor="middle">erase</text>
+  </g>
+  <!-- input gate (write) -->
+  <g class="c16-gi">
+    <circle cx="250" cy="48" r="11" fill="#22c55e" opacity="0.85"/>
+    <text x="250" y="51" fill="currentColor" font-size="9" text-anchor="middle">iₜ</text>
+    <text x="250" y="82" fill="#22c55e" font-size="9" text-anchor="middle">write</text>
+  </g>
+  <!-- output gate (read) -->
+  <g class="c16-go">
+    <circle cx="360" cy="48" r="11" fill="#38bdf8" opacity="0.85"/>
+    <text x="360" y="51" fill="currentColor" font-size="9" text-anchor="middle">oₜ</text>
+    <text x="360" y="82" fill="#38bdf8" font-size="9" text-anchor="middle">read → hₜ</text>
+  </g>
+</svg>
 
 $$
 \begin{aligned}
@@ -380,6 +484,21 @@ $$
 **Also written:** the blend $h_t = (1-z_t)\odot h_{t-1} + z_t\odot\tilde h_t$ is an **exponential-moving-average** update with a learned, per-dimension rate $z_t$ — the same convex-combination form as $\text{new} = (1-\alpha)\,\text{old} + \alpha\,\text{fresh}$.
 
 The final line is a **convex blend**: when $z_t \approx 0$ the unit copies the previous state verbatim (perfect long-term memory, gradient passes through untouched); when $z_t \approx 1$ it overwrites with the fresh candidate. One gate, both behaviors.
+
+<style>
+@keyframes c16-slide { 0%,100% { cx: 120; } 50% { cx: 340; } }
+.c16-knob { animation: c16-slide 5s ease-in-out infinite; }
+@media (prefers-reduced-motion: reduce) { .c16-knob { animation: none; } }
+</style>
+<svg viewBox="0 0 460 90" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif" font-size="10">
+  <text x="10" y="16" fill="currentColor">the update gate zₜ is one knob sliding between keep and overwrite</text>
+  <line x1="120" y1="50" x2="340" y2="50" stroke="currentColor" stroke-width="2" opacity="0.5"/>
+  <text x="60" y="54" fill="#6366f1">keep</text>
+  <text x="350" y="54" fill="#ec4899">overwrite</text>
+  <text x="110" y="72" fill="#6366f1" font-size="9">zₜ≈0</text>
+  <text x="325" y="72" fill="#ec4899" font-size="9">zₜ≈1</text>
+  <circle class="c16-knob" cy="50" r="9" fill="#a855f7" opacity="0.9"/>
+</svg>
 
 ```{mermaid}
 flowchart LR
@@ -597,6 +716,28 @@ $$p_i = \frac{\exp(z_i / T)}{\sum_j \exp(z_j / T)}$$
 **In words:** divide every logit by the temperature before softmax; small $T$ makes the biggest logit dominate, large $T$ evens the field.
 **Also written:** at $T\to 0$ this collapses to $\arg\max_i z_i$ (greedy); at $T=1$ it is the model's raw distribution.
 
+The animation below shows the same three logits under a cooling and then warming temperature: low $T$ spikes the favorite, high $T$ levels the field.
+
+<style>
+@keyframes c16-temp-a { 0%,100% { height: 70px; y: 30px; } 50% { height: 40px; y: 60px; } }
+@keyframes c16-temp-b { 0%,100% { height: 22px; y: 78px; } 50% { height: 34px; y: 66px; } }
+@keyframes c16-temp-c { 0%,100% { height: 10px; y: 90px; } 50% { height: 28px; y: 72px; } }
+.c16-bar-a { animation: c16-temp-a 5s ease-in-out infinite; }
+.c16-bar-b { animation: c16-temp-b 5s ease-in-out infinite; }
+.c16-bar-c { animation: c16-temp-c 5s ease-in-out infinite; }
+@media (prefers-reduced-motion: reduce) { .c16-bar-a, .c16-bar-b, .c16-bar-c { animation: none; } }
+</style>
+<svg viewBox="0 0 320 120" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif" font-size="10">
+  <line x1="40" y1="100" x2="300" y2="100" stroke="currentColor" opacity="0.4"/>
+  <rect class="c16-bar-a" x="70"  width="40" rx="3" fill="#6366f1" opacity="0.85"/>
+  <rect class="c16-bar-b" x="140" width="40" rx="3" fill="#a855f7" opacity="0.85"/>
+  <rect class="c16-bar-c" x="210" width="40" rx="3" fill="#ec4899" opacity="0.85"/>
+  <g fill="currentColor" text-anchor="middle">
+    <text x="90" y="112">"cat"</text><text x="160" y="112">"dog"</text><text x="230" y="112">"car"</text>
+  </g>
+  <text x="40" y="16" fill="currentColor">low T (peaked) ⇄ high T (flat)</text>
+</svg>
+
 ```python
 import torch, torch.nn.functional as F
 def sample_next(logits, temperature=1.0, top_p=0.9):
@@ -618,7 +759,31 @@ def sample_next(logits, temperature=1.0, top_p=0.9):
 
 Recurrent nets overfit eagerly — they have many parameters reused over many steps, so a small training set is quickly memorized. The fixes are mostly the same tools as feedforward nets, but with one twist that trips people up: *where* and *how* you apply them on the time axis changes whether they help or hurt.
 
-**Dropout, applied correctly.** Plain dropout drops a different random set of units at every time step. On a recurrent connection that is destructive — it injects fresh noise into the memory at each step, so the signal you are trying to carry across 50 steps is corrupted 50 times. **Variational (or "locked") dropout** fixes this by sampling *one* dropout mask per sequence and reusing it at every time step, so the same units are dropped throughout — noise that the network can actually learn around. In practice, apply ordinary dropout freely *between stacked layers* (the vertical connections) and use the locked variant on the recurrent (horizontal) connection. PyTorch's `dropout=` argument on `nn.LSTM` applies between layers only — exactly the safe place — and applies nothing if there is just one layer.
+**Dropout, applied correctly.** Plain dropout drops a different random set of units at every time step. On a recurrent connection that is destructive — it injects fresh noise into the memory at each step, so the signal you are trying to carry across 50 steps is corrupted 50 times. **Variational (or "locked") dropout** fixes this by sampling *one* dropout mask per sequence and reusing it at every time step, so the same units are dropped throughout — noise that the network can actually learn around. The contrast is easy to see: standard dropout zaps a different scatter of units at each step (left), locked dropout fixes the pattern for the whole sequence (right).
+
+<svg viewBox="0 0 460 130" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif" font-size="10">
+  <text x="20" y="16" fill="#ec4899">standard dropout: fresh mask each step</text>
+  <text x="270" y="16" fill="#22c55e">locked dropout: one mask, reused</text>
+  <!-- standard: random dropped per column -->
+  <g>
+    <!-- step1 -->
+    <circle cx="40" cy="40" r="6" fill="#ec4899" opacity="0.85"/><circle cx="40" cy="62" r="6" fill="currentColor" opacity="0.15"/><circle cx="40" cy="84" r="6" fill="#ec4899" opacity="0.85"/><circle cx="40" cy="106" r="6" fill="#ec4899" opacity="0.85"/>
+    <circle cx="80" cy="40" r="6" fill="currentColor" opacity="0.15"/><circle cx="80" cy="62" r="6" fill="#ec4899" opacity="0.85"/><circle cx="80" cy="84" r="6" fill="#ec4899" opacity="0.85"/><circle cx="80" cy="106" r="6" fill="currentColor" opacity="0.15"/>
+    <circle cx="120" cy="40" r="6" fill="#ec4899" opacity="0.85"/><circle cx="120" cy="62" r="6" fill="#ec4899" opacity="0.85"/><circle cx="120" cy="84" r="6" fill="currentColor" opacity="0.15"/><circle cx="120" cy="106" r="6" fill="#ec4899" opacity="0.85"/>
+    <circle cx="160" cy="40" r="6" fill="currentColor" opacity="0.15"/><circle cx="160" cy="62" r="6" fill="#ec4899" opacity="0.85"/><circle cx="160" cy="84" r="6" fill="#ec4899" opacity="0.85"/><circle cx="160" cy="106" r="6" fill="#ec4899" opacity="0.85"/>
+  </g>
+  <!-- locked: same row dropped across all columns -->
+  <g>
+    <circle cx="290" cy="40" r="6" fill="#22c55e" opacity="0.85"/><circle cx="290" cy="62" r="6" fill="currentColor" opacity="0.15"/><circle cx="290" cy="84" r="6" fill="#22c55e" opacity="0.85"/><circle cx="290" cy="106" r="6" fill="#22c55e" opacity="0.85"/>
+    <circle cx="330" cy="40" r="6" fill="#22c55e" opacity="0.85"/><circle cx="330" cy="62" r="6" fill="currentColor" opacity="0.15"/><circle cx="330" cy="84" r="6" fill="#22c55e" opacity="0.85"/><circle cx="330" cy="106" r="6" fill="#22c55e" opacity="0.85"/>
+    <circle cx="370" cy="40" r="6" fill="#22c55e" opacity="0.85"/><circle cx="370" cy="62" r="6" fill="currentColor" opacity="0.15"/><circle cx="370" cy="84" r="6" fill="#22c55e" opacity="0.85"/><circle cx="370" cy="106" r="6" fill="#22c55e" opacity="0.85"/>
+    <circle cx="410" cy="40" r="6" fill="#22c55e" opacity="0.85"/><circle cx="410" cy="62" r="6" fill="currentColor" opacity="0.15"/><circle cx="410" cy="84" r="6" fill="#22c55e" opacity="0.85"/><circle cx="410" cy="106" r="6" fill="#22c55e" opacity="0.85"/>
+  </g>
+  <text x="20" y="126" fill="#888">→ time</text>
+  <text x="270" y="126" fill="#888">→ time (same row stays off)</text>
+</svg>
+
+In practice, apply ordinary dropout freely *between stacked layers* (the vertical connections) and use the locked variant on the recurrent (horizontal) connection. PyTorch's `dropout=` argument on `nn.LSTM` applies between layers only — exactly the safe place — and applies nothing if there is just one layer.
 
 ```python
 import torch.nn as nn
@@ -652,6 +817,8 @@ $$\text{receptive field} = 1 + (k - 1)\sum_{\ell} d_\ell$$
 
 **In words:** the span a stacked dilated conv can "see" grows with the filter size $k$ and the sum of the per-layer dilation factors $d_\ell$ — double the dilation each layer and the reach doubles too.
 **Also written:** with $L$ layers, filter size $k$, and dilations $d_\ell = 2^{\ell-1}$, the field is $1 + (k-1)(2^{L}-1)$ — exponential in depth.
+
+**Worked example — reach in numbers.** With filter size $k=2$ and three stacked layers at dilations $1, 2, 4$, the receptive field is $1 + (2-1)(1+2+4) = 1 + 7 = 8$ steps. Add one more layer at dilation $8$ and it jumps to $1 + (1)(1+2+4+8) = 16$. Each extra layer *doubles* the reach — so just 10 layers already see past $1000$ steps, something a vanilla RNN could never hold in memory.
 
 <svg viewBox="0 0 440 150" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif" font-size="10">
   <text x="10" y="14" fill="currentColor">dilated 1D conv: dilation 1 → 2 → 4 grows the receptive field</text>

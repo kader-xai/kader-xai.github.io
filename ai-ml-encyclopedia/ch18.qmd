@@ -226,6 +226,28 @@ A plain autoencoder learns *points*; a **variational autoencoder (VAE)** learns 
 
 The intuition for *why* this fills the holes: a plain autoencoder is allowed to drop each input onto a single razor-thin point, leaving gulfs of empty space between codes. The VAE instead forces every input to claim a small *fuzzy cloud* of codes, and pushes all those clouds toward one shared blob (a unit Gaussian). Overlapping fuzzy clouds tile the space with no gaps — so any random point you pick decodes to something sensible.
 
+<svg viewBox="0 0 520 180" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif" font-size="11">
+  <style>
+    @keyframes c18-breathe {0%,100%{r:18px;opacity:.45}50%{r:26px;opacity:.30}}
+    .c18-cloud{animation:c18-breathe 4s ease-in-out infinite}
+    @media (prefers-reduced-motion:reduce){.c18-cloud{animation:none}}
+  </style>
+  <text x="130" y="18" text-anchor="middle" font-weight="bold" fill="currentColor">plain AE: lonely points</text>
+  <text x="390" y="18" text-anchor="middle" font-weight="bold" fill="currentColor">VAE: overlapping clouds</text>
+  <!-- left: bare points with gaps -->
+  <rect x="30" y="35" width="200" height="120" fill="currentColor" opacity="0.05"/>
+  <circle cx="70"  cy="70"  r="4" fill="#ec4899"/><circle cx="190" cy="60" r="4" fill="#ec4899"/>
+  <circle cx="110" cy="130" r="4" fill="#ec4899"/><circle cx="160" cy="100" r="4" fill="#ec4899"/>
+  <text x="130" y="172" text-anchor="middle" fill="#f59e0b">? sample here → garbage</text>
+  <!-- right: fuzzy clouds that tile -->
+  <rect x="290" y="35" width="200" height="120" fill="currentColor" opacity="0.05"/>
+  <circle class="c18-cloud" cx="340" cy="80"  fill="#6366f1"/>
+  <circle class="c18-cloud" cx="400" cy="70"  fill="#22c55e" style="animation-delay:.8s"/>
+  <circle class="c18-cloud" cx="370" cy="120" fill="#a855f7" style="animation-delay:1.6s"/>
+  <circle class="c18-cloud" cx="430" cy="115" fill="#38bdf8" style="animation-delay:2.4s"/>
+  <text x="390" y="172" text-anchor="middle" fill="#22c55e">any point → something sensible</text>
+</svg>
+
 The training objective is the **ELBO** (evidence lower bound), which has two terms pulling in tension:
 
 $$\mathcal{L} = \underbrace{\mathbb{E}_{q(z|x)}[\log p(x|z)]}_{\text{reconstruction}} - \underbrace{D_{\mathrm{KL}}\big(q(z|x)\,\Vert\,p(z)\big)}_{\text{regularizer}}$$
@@ -283,6 +305,8 @@ z = mu + std * torch.randn_like(std)       # reparameterization trick
 
 The KL has a clean closed form for two Gaussians, shown above — no sampling needed for that term. A famous side effect of the smooth latent space is **interpolation**: pick the codes of two real inputs, walk a straight line between them, and decode each step — you get a smooth morph (one face slowly becoming another), evidence that the space is genuinely continuous and meaningful. The cost is that VAEs tend to produce slightly **blurry** samples, because the Gaussian likelihood and the averaging over $q(z|x)$ smear fine detail.
 
+**Where this is used.** The smooth, navigable latent space is the selling point. In drug and material discovery, a VAE trained on known molecules turns chemistry into a continuous space you can *optimize over* — nudge a code toward "more soluble" and decode to a new candidate molecule. The same interpolation trick powers voice and face morphing, and the VAE's encoder doubles as a feature extractor for downstream classifiers when labeled data is scarce.
+
 ::: {.callout-warning}
 If the KL term overwhelms reconstruction, the decoder learns to ignore $z$ entirely (it can reconstruct an "average" output without it) — a failure called **posterior collapse**. Warming up the KL weight from 0, or down-weighting it (the $\beta$-VAE with $\beta < 1$), is the usual cure.
 :::
@@ -309,6 +333,35 @@ flowchart LR
   D --> P["real or fake?"]
   P -. "gradient updates both nets" .-> G
 ```
+
+<svg viewBox="0 0 520 170" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif" font-size="11">
+  <style>
+    @keyframes c18-forge {0%,100%{opacity:.4}50%{opacity:1}}
+    @keyframes c18-spy   {0%,100%{opacity:1}50%{opacity:.4}}
+    @keyframes c18-flow  {0%{stroke-dashoffset:24}100%{stroke-dashoffset:0}}
+    .c18-forge{animation:c18-forge 3s ease-in-out infinite}
+    .c18-spy{animation:c18-spy 3s ease-in-out infinite}
+    .c18-flow{stroke-dasharray:6 6;animation:c18-flow 1s linear infinite}
+    @media (prefers-reduced-motion:reduce){.c18-forge,.c18-spy,.c18-flow{animation:none}}
+  </style>
+  <!-- generator -->
+  <circle cx="80" cy="85" r="34" fill="#6366f1" opacity="0.25"/>
+  <text x="80" y="82" text-anchor="middle" font-weight="bold" fill="currentColor">G</text>
+  <text x="80" y="98" text-anchor="middle" font-size="9" fill="currentColor">forger</text>
+  <!-- fake sample arrow -->
+  <line class="c18-flow" x1="118" y1="85" x2="210" y2="85" stroke="#f59e0b" stroke-width="3"/>
+  <text x="164" y="76" text-anchor="middle" font-size="9" fill="#f59e0b">fake</text>
+  <!-- discriminator -->
+  <circle cx="250" cy="85" r="34" fill="#ec4899" opacity="0.25"/>
+  <text x="250" y="82" text-anchor="middle" font-weight="bold" fill="currentColor">D</text>
+  <text x="250" y="98" text-anchor="middle" font-size="9" fill="currentColor">detective</text>
+  <!-- verdicts -->
+  <text class="c18-forge" x="370" y="70" text-anchor="middle" fill="#22c55e">"real!" ✓ (G wins)</text>
+  <text class="c18-spy"   x="370" y="105" text-anchor="middle" fill="#ec4899">"fake!" ✗ (D wins)</text>
+  <line x1="284" y1="78" x2="318" y2="66" stroke="currentColor" stroke-width="1" opacity="0.5"/>
+  <line x1="284" y1="92" x2="318" y2="104" stroke="currentColor" stroke-width="1" opacity="0.5"/>
+  <text x="260" y="155" text-anchor="middle" font-size="10" fill="currentColor">each improves by trying to beat the other — until fakes are indistinguishable</text>
+</svg>
 
 ```python
 import numpy as np
@@ -400,6 +453,10 @@ A fourth variant worth knowing rounds out the picture. The **conditional GAN (cG
 | cGAN | Class-controlled generation | Condition $G$ and $D$ on a label $y$ |
 | CycleGAN | Unpaired translation | Two generators + cycle-consistency loss |
 | StyleGAN | Controllable, high-fidelity faces | Style vector injected at every resolution |
+
+::: {.callout-tip}
+The pattern across all four variants is the same lever: **where you inject extra information**. cGAN injects a label at the input; StyleGAN injects a style at every resolution; CycleGAN injects a constraint (the round-trip) into the loss. When you want a GAN to do something new, the first question is usually "what do I condition on, and where does it enter?"
+:::
 
 ## 18.5 — Diffusion Models
 
@@ -783,7 +840,7 @@ $$ J(\theta) \;=\; \mathbb{E}_{x\sim p_{\text{data}}}\!\left[\, \tfrac{1}{2}\,\|
 **In words:** keep the model's arrows modest in length, but reward them for spreading inward toward the data — and the unknown true score has dropped out completely.
 **Also written:** $J(\theta) = \mathbb{E}\big[\tfrac12\|s_\theta(x)\|^2 + \sum_i \partial^2 \log p_\theta/\partial x_i^2\big] + \text{const}$ — the trace of the score's Jacobian is the sum of the log-density's second derivatives (its Laplacian).
 
-The second term is the trace of the Jacobian of the score — equivalently $\sum_i \partial^2 \log p_\theta / \partial x_i^2$, the sum of second derivatives. Intuitively the first term wants the score small everywhere (don't claim steep gradients without reason) while the trace term rewards the score for *converging* toward data (negative divergence at the modes). Together they pin the vector field to the data without ever touching $Z$.
+Read the two terms as a tug-of-war. The first, $\tfrac12\|s_\theta\|^2$, is a "don't exaggerate" penalty: it keeps the arrows short, so the model can't claim steep gradients for free. The second, the Jacobian trace (equivalently $\sum_i \partial^2 \log p_\theta / \partial x_i^2$, the sum of second derivatives), is a "point inward" reward: it pays the model for arrows that *converge*, all aiming toward a common center the way water flows to a drain. Big inward-pointing arrows are exactly what a density peak looks like — so the trade-off forces the arrows to converge precisely where the data piles up, and the unknown true score never appears. No $Z$ anywhere.
 
 **Worked example, one dimension.** Take a Gaussian model $p_\theta(x) \propto e^{-\theta x^2/2}$ again, so $\log p_\theta(x) = -\tfrac\theta2 x^2 + \text{const}$ and the model score is $s_\theta(x) = \partial_x \log p_\theta = -\theta x$. Plug into the integrated objective: $\tfrac12 s_\theta^2 = \tfrac12\theta^2 x^2$ and $\partial_x s_\theta = -\theta$, so
 
@@ -811,6 +868,32 @@ $$ x_{t+1} \;=\; x_t \;+\; \tfrac{\epsilon}{2}\,\nabla_x \log p(x_t) \;+\; \sqrt
 **Also written:** $x_{t+1} = x_t - \tfrac{\epsilon}{2}\,\nabla_x E(x_t) + \sqrt{\epsilon}\,z_t$, since the score equals the negative energy gradient — a noisy gradient *descent* on energy.
 
 The middle term is the score: a step *uphill in log-density*, i.e. downhill in energy. The last term is the random kick, scaled so that as the step size $\epsilon \to 0$ and the number of steps $\to \infty$, the distribution of $x_t$ converges to $p(x)$ exactly. Drop the noise term and you get ordinary gradient ascent that converges to the nearest mode and stops — a single image, not a sample from the distribution. The noise is what makes it a *sampler* rather than an *optimizer*.
+
+<svg viewBox="0 0 520 170" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif" font-size="11">
+  <style>
+    @keyframes c18-wander {
+      0%   {cx:60px;  cy:60px}
+      25%  {cx:150px; cy:95px}
+      50%  {cx:240px; cy:70px}
+      70%  {cx:300px; cy:110px}
+      100% {cx:330px; cy:95px}
+    }
+    .c18-pollen{animation:c18-wander 6s ease-in-out infinite alternate}
+    @media (prefers-reduced-motion:reduce){.c18-pollen{animation:none}}
+  </style>
+  <text x="260" y="18" text-anchor="middle" font-weight="bold" fill="currentColor">drift toward density + random kicks → a sample</text>
+  <!-- density blob (target) -->
+  <ellipse cx="330" cy="95" rx="80" ry="55" fill="#22c55e" opacity="0.15"/>
+  <ellipse cx="330" cy="95" rx="45" ry="32" fill="#22c55e" opacity="0.25"/>
+  <circle cx="330" cy="95" r="4" fill="#22c55e"/>
+  <text x="330" y="160" text-anchor="middle" font-size="10" fill="#22c55e">high-density region p(x)</text>
+  <!-- score arrows pointing toward blob -->
+  <line x1="80" y1="70" x2="120" y2="82" stroke="#6366f1" stroke-width="1.5" opacity="0.6"/>
+  <line x1="170" y1="55" x2="210" y2="72" stroke="#6366f1" stroke-width="1.5" opacity="0.6"/>
+  <!-- wandering particle -->
+  <circle class="c18-pollen" cx="60" cy="60" r="6" fill="#f59e0b"/>
+  <text x="60" y="40" text-anchor="middle" font-size="9" fill="#f59e0b">start (noise)</text>
+</svg>
 
 ```{mermaid}
 flowchart LR

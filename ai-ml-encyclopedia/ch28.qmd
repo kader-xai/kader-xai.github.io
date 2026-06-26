@@ -145,6 +145,27 @@ Post-2008 regulation (Basel) shifted capital rules toward ES precisely because t
 
 Here is the core difficulty made concrete. **Non-stationarity** means the statistical relationship between features and target changes over time. Suppose a credit model learns that a debt-to-income ratio above 0.4 signals high default risk, calibrated in a low-interest-rate era. Rates spike, and now 0.4 is normal and 0.55 is the new danger line. The model is silently wrong — its inputs still look familiar, but the rule it learned no longer holds.
 
+The visual below shows the trap: the model's learned threshold (dashed line) stays put while the real danger line drifts away from it.
+
+<style>
+@keyframes c28-drift { 0%,100% { transform: translateX(0); } 50% { transform: translateX(70px); } }
+@keyframes c28-pulse { 0%,100% { opacity: .35; } 50% { opacity: .9; } }
+@media (prefers-reduced-motion: reduce) { .c28-driftline { animation: none !important; } }
+</style>
+<svg viewBox="0 0 460 150" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif" font-size="11">
+  <line x1="40" y1="120" x2="440" y2="120" stroke="currentColor"/>
+  <text x="240" y="142" text-anchor="middle" fill="currentColor">debt-to-income ratio →</text>
+  <!-- fixed learned threshold -->
+  <line x1="150" y1="30" x2="150" y2="120" stroke="#6366f1" stroke-width="2" stroke-dasharray="5 4"/>
+  <text x="150" y="22" text-anchor="middle" fill="#6366f1">model's rule (0.4)</text>
+  <!-- drifting true danger line -->
+  <g class="c28-driftline" style="animation: c28-drift 6s ease-in-out infinite;">
+    <line x1="220" y1="34" x2="220" y2="120" stroke="#ec4899" stroke-width="2.5"/>
+    <text x="220" y="48" text-anchor="middle" fill="#ec4899">true danger</text>
+  </g>
+  <circle cx="220" cy="120" r="4" fill="#ec4899" style="animation: c28-pulse 6s ease-in-out infinite;"/>
+</svg>
+
 ```python
 import numpy as np
 # Why a naive random train/test split LIES in finance: it leaks the future.
@@ -373,6 +394,8 @@ pred = iso.predict(X)                  # -1 = anomaly, +1 = normal
 print("flagged anomalies:", int((pred == -1).sum()))   # ~5, the injected outliers
 ```
 
+**Where this shows up, concretely.** A streaming service ranks 50,000 candidate titles per user and surfaces the top 20 — that is the recommender's `argsort`-then-top-k from above, run a billion times a day. A card network scores every swipe in ~10 ms and routes the riskiest 0.1% to a reviewer — that is the fraud half, the same ranking with a threshold instead of a top-k. Both teams obsess over the *same* two numbers: how many real positives sit in the tiny slice they act on, and how much friction (skipped-but-good titles, frozen-but-honest cards) that slice costs. Different industries, identical scoreboard.
+
 ::: {.callout-tip}
 When scoping a new project in any industry, ask two diagnostic questions: "Is there a user being matched to items here?" (a recommender problem) and "Am I hunting rare bad events in a flood of normal ones?" (an anomaly/fraud problem). A surprising fraction of "novel" requests are one of these two in disguise.
 :::
@@ -401,14 +424,33 @@ Strip away the domain vocabulary and the same four lessons explain most of why r
 
 **Distribution shift is the rule, not the exception.** A model is trained on a snapshot of the world; the world then moves. Three flavors degrade a deployed model silently: **covariate shift** (the inputs change — a new customer demographic), **label shift** (the base rates change — fraud rises in a recession), and **concept drift** (the input-output relationship itself changes — what counts as risky is redefined). The fix is not a one-time event but **monitoring**: track input distributions and live performance, and retrain on a schedule or a trigger.
 
+Watch the live distribution (pink) slide away from the training distribution (indigo) it was fit on — that growing gap is exactly what a drift alarm like PSI measures:
+
+<style>
+@keyframes c28-shift { 0%,15% { transform: translateX(0); } 85%,100% { transform: translateX(120px); } }
+@keyframes c28-fade { 0%,20% { opacity: .15; } 90%,100% { opacity: .85; } }
+@media (prefers-reduced-motion: reduce) { .c28-live { animation: none !important; transform: translateX(80px); opacity: .7 !important; } }
+</style>
+<svg viewBox="0 0 460 160" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif" font-size="11">
+  <line x1="30" y1="130" x2="440" y2="130" stroke="currentColor"/>
+  <!-- training distribution (fixed bell) -->
+  <path d="M60,130 C110,130 110,40 150,40 C190,40 190,130 240,130 Z" fill="#6366f1" fill-opacity="0.35" stroke="#6366f1" stroke-width="2"/>
+  <text x="150" y="150" text-anchor="middle" fill="#6366f1">training</text>
+  <!-- live distribution (drifts right) -->
+  <g class="c28-live" style="animation: c28-shift 7s ease-in-out infinite, c28-fade 7s ease-in-out infinite;">
+    <path d="M60,130 C110,130 110,55 150,55 C190,55 190,130 240,130 Z" fill="#ec4899" fill-opacity="0.4" stroke="#ec4899" stroke-width="2"/>
+    <text x="150" y="48" text-anchor="middle" fill="#ec4899">live</text>
+  </g>
+</svg>
+
 The cheap, industry-standard drift alarm is the **Population Stability Index (PSI)**, which measures how far a live feature distribution has wandered from its training distribution:
 
 $$
 \text{PSI} = \sum_{i} (a_i - e_i)\,\ln\!\frac{a_i}{e_i}
 $$
 
-**In words:** bin the feature, then for each bin add up (live share − training share) times the log-ratio of those shares; the bigger the total, the more the two distributions disagree. Zero means identical.
-**Also written:** it is the *symmetric* sum of two KL-divergence terms, $\sum_i e_i\ln\frac{e_i}{a_i} + \sum_i a_i\ln\frac{a_i}{e_i}$ — i.e. $\text{KL}(e\Vert a) + \text{KL}(a\Vert e)$, the Jeffreys divergence between training ($e$) and live ($a$) histograms.
+**In words:** chop the feature into bins (say, deciles). In each bin, take how much the live share differs from the training share, and weight it by the log of their ratio so lopsided bins count more. Add up all the bins: 0 means the two distributions are identical, and a bigger number means they have drifted further apart.
+**Also written:** it equals $\text{KL}(e\Vert a) + \text{KL}(a\Vert e)$ — the two KL-divergences added in both directions (the Jeffreys divergence), which is just a symmetric way to score how different the training histogram $e$ and live histogram $a$ are.
 
 ```python
 import numpy as np
@@ -621,6 +663,26 @@ DNA's cousin problem lives one level up. A gene's protein-coding region specifie
 
 The key insight is not "a bigger network." It is **evolutionary coupling**. Across thousands of species, the same protein appears with mutations. If two amino-acid positions are physically touching in the folded structure, a mutation at one tends to be compensated by a mutation at the other — otherwise the protein breaks and that lineage dies out. So *correlated mutations across a multiple-sequence alignment (MSA) are a noisy signal of physical contact.*
 
+The doodle below shows the tell: two coupled columns in the alignment light up together, again and again, across species — that synchrony is the contact signal.
+
+<style>
+@keyframes c28-couple { 0%,100% { fill-opacity: .2; } 50% { fill-opacity: .85; } }
+@media (prefers-reduced-motion: reduce) { .c28-co { animation: none !important; fill-opacity: .6; } }
+</style>
+<svg viewBox="0 0 440 150" xmlns="http://www.w3.org/2000/svg" font-family="monospace" font-size="13">
+  <text x="10" y="20" font-family="sans-serif" font-size="11" fill="currentColor">aligned homologs (rows) · positions (cols)</text>
+  <g fill="currentColor">
+    <text x="20" y="50">M</text><text x="80" y="50">K</text><text x="140" y="50">V</text><text x="200" y="50">L</text><text x="260" y="50">A</text>
+    <text x="20" y="80">M</text><text x="80" y="80">R</text><text x="140" y="80">V</text><text x="200" y="80">L</text><text x="260" y="80">D</text>
+    <text x="20" y="110">M</text><text x="80" y="110">K</text><text x="140" y="110">V</text><text x="200" y="110">L</text><text x="260" y="110">A</text>
+  </g>
+  <!-- highlight the two coupled columns -->
+  <rect class="c28-co" x="72" y="34" width="24" height="84" rx="3" fill="#38bdf8" style="animation: c28-couple 4s ease-in-out infinite;"/>
+  <rect class="c28-co" x="252" y="34" width="24" height="84" rx="3" fill="#38bdf8" style="animation: c28-couple 4s ease-in-out infinite;"/>
+  <path d="M84,28 Q170,4 264,28" fill="none" stroke="#a855f7" stroke-width="2"/>
+  <text x="300" y="80" font-family="sans-serif" font-size="11" fill="#a855f7">co-vary → likely in contact</text>
+</svg>
+
 ```{mermaid}
 flowchart TB
   A["Query protein sequence"] --> B["Search databases<br/>build MSA<br/>(thousands of homologs)"]
@@ -752,6 +814,10 @@ What makes this hard is not the recipe but the **evaluation**. A model that scor
 | AUPRC | far more honest when positives (pathogenic) are rare |
 | Calibration | a "0.9 pathogenic" score must mean ~90% truly are |
 | Enrichment in known genes | do top-scored variants land in disease genes? |
+
+::: {.callout-tip}
+Rule of thumb: a zero-shot variant score (reference-minus-mutant under a sequence model) is a *prior*, not a verdict. It ranks candidates cheaply across the whole genome, but before any clinical use it must be recalibrated and checked against labelled pathogenic/benign sets — the language model knows what proteins look like, not what hurts a patient.
+:::
 
 ## 28.8 — Regulatory-Motif Discovery and Why Interpretability Is the Product
 

@@ -162,6 +162,30 @@ The pendulum swung to **connectionism** — learning from data with neural netwo
 
 The modern era ignited in **2012**, when a deep convolutional network (AlexNet) crushed the ImageNet image-recognition benchmark, proving deep learning plus GPUs plus big data worked. The **transformer** (2017) unlocked scale, leading to **foundation models** — single large models pre-trained on internet-scale data, then adapted to many tasks (GPT, BERT, and their descendants).
 
+The "pendulum" isn't just a metaphor — here it is swinging, hype peaks giving way to winters and back again:
+
+<style>
+@keyframes c5-pendulum { 0%,100% { transform: rotate(-26deg); } 50% { transform: rotate(26deg); } }
+@keyframes c5-glow { 0%,100% { opacity: 0.35; } 50% { opacity: 1; } }
+@media (prefers-reduced-motion: reduce) {
+  .c5-arm { animation: none !important; transform: rotate(0deg); }
+  .c5-pulse { animation: none !important; opacity: 0.8; }
+}
+</style>
+<svg viewBox="0 0 420 200" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif">
+  <line x1="40" y1="170" x2="380" y2="170" stroke="currentColor" stroke-opacity="0.4"/>
+  <text x="120" y="190" text-anchor="middle" font-size="10" fill="#6366f1" font-weight="bold">symbolic / rules</text>
+  <text x="300" y="190" text-anchor="middle" font-size="10" fill="#22c55e" font-weight="bold">connectionist / learning</text>
+  <circle cx="210" cy="30" r="5" fill="currentColor"/>
+  <g class="c5-arm" style="transform-origin:210px 30px; animation:c5-pendulum 6s ease-in-out infinite;">
+    <line x1="210" y1="30" x2="210" y2="135" stroke="currentColor" stroke-width="2"/>
+    <circle cx="210" cy="145" r="14" fill="#f59e0b" fill-opacity="0.85" stroke="currentColor"/>
+    <text x="210" y="149" text-anchor="middle" font-size="9" font-weight="bold" fill="#fff">AI</text>
+  </g>
+  <circle class="c5-pulse" cx="120" cy="120" r="6" fill="#6366f1" style="animation:c5-glow 6s ease-in-out infinite;"/>
+  <circle class="c5-pulse" cx="300" cy="120" r="6" fill="#22c55e" style="animation:c5-glow 6s ease-in-out 3s infinite;"/>
+</svg>
+
 ```{mermaid}
 timeline
     title AI's swinging pendulum
@@ -220,6 +244,10 @@ km = KMeans(n_clusters=3).fit(X_train)             # X only
 groups = km.predict(X_test)
 ```
 
+::: {.callout-tip}
+When you reach for a paradigm, follow the cost of labels. Labels plentiful → supervised. None and you only want structure → unsupervised. Labels scarce but raw data cheap → semi- or self-supervised (this is why LLMs are trained self-supervised: nobody could hand-label a trillion words).
+:::
+
 ## 5.4 — The End-to-End ML Workflow
 
 A model is maybe 10% of a real ML project. The rest is the pipeline around it. The stages run in order, but the arrows loop back constantly — you learn things downstream that send you back upstream.
@@ -237,6 +265,8 @@ flowchart LR
     F --> G[Monitor]
     G -->|drift detected| B
 ```
+
+**Worked example — a delivery-time predictor.** *Framing:* the business cares about late deliveries, so the metric is "% of estimates within 5 minutes," not raw error. *Data:* two years of trips, with messy GPS gaps to clean. *Features:* time of day, distance, courier load. *Train/Evaluate:* a gradient-boosting model scores well on last year's held-out trips. *Deploy:* it goes live in the app. *Monitor:* six months later a new warehouse opens, traffic patterns shift, accuracy drops — **drift** — and the arrow loops you straight back to fresh data. Notice the model itself was one line of the story.
 
 ::: {.callout-warning}
 The most expensive mistake is skipping problem framing and optimizing a metric that doesn't match the real goal. A churn model with 99% accuracy is useless if 99% of users don't churn — it can hit that score by predicting "nobody churns." Pick the metric before you touch the data.
@@ -370,8 +400,18 @@ A dartboard makes the two concrete: high bias is a tight cluster landing in the 
   <text x="270" y="178" text-anchor="middle" font-size="9" fill="currentColor">scattered, centered-ish</text>
 </svg>
 
-The catch: pushing complexity up lowers bias but raises variance, and vice versa. Total error is U-shaped — it falls, bottoms out at the sweet spot, then rises. Your job is to find the bottom.
+The catch: pushing complexity up lowers bias but raises variance, and vice versa. Total error is U-shaped — it falls, bottoms out at the sweet spot, then rises. Your job is to find the bottom. Watch the ball roll down the total-error curve and settle there:
 
+<style>
+@keyframes c5-roll {
+  0%   { offset-distance: 8%; }
+  100% { offset-distance: 52%; }
+}
+@keyframes c5-spot { 0%,100% { r: 5; opacity: 0.6; } 50% { r: 8; opacity: 1; } }
+@media (prefers-reduced-motion: reduce) {
+  .c5-ball { animation: none !important; offset-distance: 52%; }
+}
+</style>
 <svg viewBox="0 0 420 280" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif">
   <line x1="50" y1="240" x2="400" y2="240" stroke="#333"/><line x1="50" y1="240" x2="50" y2="20" stroke="#333"/>
   <text x="225" y="270" text-anchor="middle" font-size="12">model complexity →</text>
@@ -385,9 +425,12 @@ The catch: pushing complexity up lowers bias but raises variance, and vice versa
   <!-- total U -->
   <path d="M60 95 Q200 130 220 125 Q300 120 390 70" stroke="#2e7d32" stroke-width="3" fill="none"/>
   <text x="95" y="105" font-size="11" font-weight="bold" fill="#2e7d32">total error</text>
+  <!-- rolling ball easing toward the bottom of the U -->
+  <circle class="c5-ball" r="7" fill="#f59e0b" stroke="currentColor"
+          style="offset-path:path('M60 95 Q200 130 220 125 Q300 120 390 70'); animation:c5-roll 5s ease-in-out infinite alternate;"/>
   <!-- sweet spot -->
   <line x1="215" y1="125" x2="215" y2="240" stroke="#888" stroke-dasharray="4 3"/>
-  <circle cx="215" cy="125" r="5" fill="#2e7d32"/>
+  <circle cx="215" cy="125" r="5" fill="#2e7d32" style="animation:c5-spot 5s ease-in-out infinite;"/>
   <text x="215" y="255" text-anchor="middle" font-size="10" fill="#2e7d32">sweet spot</text>
   <text x="90" y="35" font-size="9" fill="#666">underfit zone</text>
   <text x="320" y="35" font-size="9" fill="#666">overfit zone</text>
@@ -412,6 +455,29 @@ $$\text{Loss}_{\text{reg}} = \text{Loss}_{\text{data}} + \lambda \sum_i w_i^2$$
 **Also written:** $\mathcal{L}_{\text{reg}}(\mathbf{w}) = \mathcal{L}_{\text{data}}(\mathbf{w}) + \lambda\,\lVert \mathbf{w} \rVert_2^2$ (the penalty is the squared $L_2$ norm of the weight vector).
 
 The penalty term ($L_2$, "ridge") punishes large weights, so the optimizer keeps them small unless the data strongly justifies otherwise. $L_1$ ("lasso") uses $\sum |w_i|$ instead and drives some weights exactly to zero — automatic feature selection. The knob $\lambda$ sets the strength: $\lambda = 0$ is no regularization; large $\lambda$ forces a very simple model (and can underfit).
+
+The one picture that separates the two penalties: $L_1$'s diamond has sharp corners *on the axes*, so the solution tends to snap to a corner where some weight is exactly zero; $L_2$'s smooth circle has no corners, so it shrinks weights toward zero but rarely all the way.
+
+<svg viewBox="0 0 420 200" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif">
+  <!-- L2 circle -->
+  <g>
+  <line x1="20" y1="170" x2="190" y2="170" stroke="currentColor" stroke-opacity="0.4"/>
+  <line x1="105" y1="30" x2="105" y2="170" stroke="currentColor" stroke-opacity="0.4"/>
+  <circle cx="105" cy="100" r="45" fill="rgba(56,189,248,0.3)" stroke="#38bdf8" stroke-width="2"/>
+  <circle cx="150" cy="55" r="3.5" fill="#ec4899"/>
+  <text x="105" y="190" text-anchor="middle" font-size="11" font-weight="bold">L2 (ridge): round</text>
+  <text x="105" y="20" text-anchor="middle" font-size="9" fill="#666">touches off-axis → both weights small</text>
+  </g>
+  <!-- L1 diamond -->
+  <g>
+  <line x1="230" y1="170" x2="400" y2="170" stroke="currentColor" stroke-opacity="0.4"/>
+  <line x1="315" y1="30" x2="315" y2="170" stroke="currentColor" stroke-opacity="0.4"/>
+  <polygon points="315,55 360,100 315,145 270,100" fill="rgba(168,85,247,0.3)" stroke="#a855f7" stroke-width="2"/>
+  <circle cx="315" cy="55" r="4" fill="#22c55e"/>
+  <text x="315" y="190" text-anchor="middle" font-size="11" font-weight="bold">L1 (lasso): cornered</text>
+  <text x="315" y="20" text-anchor="middle" font-size="9" fill="#666">touches a corner → one weight = 0</text>
+  </g>
+</svg>
 
 ```python
 import numpy as np
@@ -446,7 +512,7 @@ Tune $\lambda$ with cross-validation, never on the test set. Sweep it across ord
 
 The **curse of dimensionality** is the bundle of bizarre things that happen when data has many features (high dimensions). The headline: as dimensions grow, the volume of the space explodes exponentially, so your data becomes hopelessly **sparse** — every point sits alone in a vast empty space, and notions like "nearby" stop meaning much.
 
-A concrete way to feel it: to cover 10% of the range of each axis you need a hypercube whose side is $0.1$. In 1-D that captures 10% of the data. In 10-D the same cube captures $0.1^{10}$ = one ten-billionth of the volume. To capture 10% of points in 10-D, the cube's side must be $0.1^{1/10} \approx 0.8$ — it spans 80% of *every* axis. "Local" neighborhoods aren't local anymore.
+Here is the whole curse in one number. Say you want a little box that grabs **10% of your data**. In 1-D (a line), the box is just a segment covering 10% of the line — easy. In 2-D (a square), to still catch 10% of the area each side must span about 32% of its axis. In 10-D, each side must span about **80%** of *every* axis to capture the same 10%. A "neighborhood" that swallows 80% of every feature isn't a neighborhood at all — "local" has stopped meaning local. The reason: the box's volume is its side length multiplied by itself once per dimension, so as dimensions pile up you have to stretch each side closer and closer to the full range just to keep the same slice of points.
 
 The fraction-of-axis rule that drives this is worth stating as a formula. To capture a fraction $r$ of the points in $d$ dimensions, each side of the cube must span:
 
@@ -455,6 +521,13 @@ $$e_d(r) = r^{1/d}$$
 **In words:** the side length you need to grab a given slice of the data is the $d$-th root of that slice — and as the number of dimensions $d$ grows, that root races toward 1, meaning the "neighborhood" swallows almost the whole range of every feature.
 
 **Also written:** $e_d(r) = \exp\!\big(\tfrac{1}{d}\ln r\big)$, so $e_d(r) \to 1$ as $d \to \infty$ for any fixed $r < 1$.
+
+| Dimensions $d$ | Side length to capture 10% | What it means |
+|----------------|----------------------------|---------------|
+| 1 | 0.10 | a tiny local slice |
+| 2 | 0.32 | a third of each axis |
+| 10 | 0.80 | most of every axis |
+| 100 | 0.98 | essentially the whole space |
 
 <svg viewBox="0 0 480 180" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif">
   <text x="60" y="20" text-anchor="middle" font-size="11" font-weight="bold">1-D</text>

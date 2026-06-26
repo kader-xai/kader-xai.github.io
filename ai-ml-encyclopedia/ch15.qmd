@@ -129,6 +129,45 @@ $$
 
 **Also written:** $\;(\text{input} * \text{kernel})[i,j] = \sum_{m,n} \text{input}[i+m,\,j+n]\,\text{kernel}[m,n]$, where $*$ denotes the (cross-correlation) convolution operator used by deep-learning libraries.
 
+Here is that sliding window in motion — one amber kernel stepping across the input, dropping one green output cell at each stop:
+
+<style>
+@keyframes c15-slide {
+  0%, 18%   { transform: translate(0px, 0px); }
+  25%, 43%  { transform: translate(44px, 0px); }
+  50%, 68%  { transform: translate(0px, 44px); }
+  75%, 93%  { transform: translate(44px, 44px); }
+  100%      { transform: translate(0px, 0px); }
+}
+@keyframes c15-pop {
+  0%, 100% { opacity: 0.15; }
+  50%      { opacity: 0.9; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .c15-win { animation: none !important; }
+  .c15-cell { animation: none !important; opacity: 0.7 !important; }
+}
+</style>
+<svg viewBox="0 0 460 230" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif" font-size="12">
+  <text x="20" y="20" fill="currentColor">input — kernel slides over it</text>
+  <g stroke="currentColor" stroke-opacity="0.35" fill="none">
+    <rect x="20" y="32" width="132" height="132"/>
+    <line x1="20" y1="76" x2="152" y2="76"/><line x1="20" y1="120" x2="152" y2="120"/>
+    <line x1="64" y1="32" x2="64" y2="164"/><line x1="108" y1="32" x2="108" y2="164"/>
+  </g>
+  <rect class="c15-win" x="20" y="32" width="88" height="88" rx="4"
+        fill="#f59e0b" fill-opacity="0.25" stroke="#f59e0b" stroke-width="3"
+        style="animation: c15-slide 6s ease-in-out infinite;"/>
+  <text x="240" y="20" fill="currentColor">output feature map</text>
+  <g>
+    <rect class="c15-cell" x="240" y="40" width="40" height="40" rx="3" fill="#22c55e" stroke="#22c55e" style="animation: c15-pop 6s ease-in-out infinite;"/>
+    <rect class="c15-cell" x="284" y="40" width="40" height="40" rx="3" fill="#22c55e" stroke="#22c55e" style="animation: c15-pop 6s ease-in-out infinite 1.5s;"/>
+    <rect class="c15-cell" x="240" y="84" width="40" height="40" rx="3" fill="#22c55e" stroke="#22c55e" style="animation: c15-pop 6s ease-in-out infinite 3s;"/>
+    <rect class="c15-cell" x="284" y="84" width="40" height="40" rx="3" fill="#22c55e" stroke="#22c55e" style="animation: c15-pop 6s ease-in-out infinite 4.5s;"/>
+  </g>
+  <text x="240" y="150" fill="currentColor" font-size="11">each stop → one cell</text>
+</svg>
+
 The SVG below shows a 3×3 kernel sliding over a 5×5 input, producing one cell of the output.
 
 <svg viewBox="0 0 560 230" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif" font-size="13">
@@ -195,6 +234,8 @@ y = conv(x)
 print(y.shape)                            # torch.Size([1, 16, 32, 32])
 print(conv.weight.shape)                  # [16, 3, 3, 3]  = out×in×Kh×Kw
 ```
+
+**Where this shows up.** A blur is just a 3×3 kernel of all $1/9$ (averaging neighbours); a vertical-edge detector is the Sobel kernel $\begin{smallmatrix}-1&0&1\\-2&0&2\\-1&0&1\end{smallmatrix}$. For decades, image editors hand-designed these filters. A CNN's only new trick is to *learn* the numbers in the kernel from data instead of hand-picking them.
 
 ::: {.callout-tip}
 **Intuition:** a convolution layer is a stack of pattern-stamps. Each filter stamps across the whole image asking "is my pattern here?" — and parameter sharing means it learns that pattern *once* and detects it *everywhere*.
@@ -263,6 +304,22 @@ Two knobs control how a filter sweeps the input. **Stride** is the step size: st
 
 Why pad? Without it, every convolution shrinks the image — a 3×3 filter trims one pixel off each side — and corner pixels get visited by fewer windows than centre pixels, so edge information leaks away. **"Same" padding** adds just enough border to keep the output the same size as the input; **"valid" padding** means no padding (the output shrinks).
 
+<svg viewBox="0 0 520 150" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif" font-size="12">
+  <text x="20" y="16" fill="currentColor">"same" padding: a zero border lets the filter reach the corners</text>
+  <g stroke="#38bdf8" stroke-dasharray="3 3" fill="#38bdf8" fill-opacity="0.12">
+    <rect x="20" y="30" width="160" height="100"/>
+  </g>
+  <text x="24" y="46" fill="#38bdf8" font-size="10">0  0  0  0  0</text>
+  <g stroke="#6366f1" fill="#6366f1" fill-opacity="0.18">
+    <rect x="50" y="55" width="100" height="50"/>
+  </g>
+  <text x="64" y="84" fill="#6366f1">real pixels</text>
+  <rect x="20" y="30" width="60" height="60" fill="#f59e0b" fill-opacity="0.2" stroke="#f59e0b" stroke-width="2"/>
+  <text x="240" y="60" fill="currentColor">→ output stays the</text>
+  <text x="240" y="80" fill="currentColor">same H×W as the input</text>
+  <text x="240" y="108" fill="currentColor" font-size="11">drop the border = "valid" = output shrinks</text>
+</svg>
+
 The output size along one dimension is:
 
 $$
@@ -304,13 +361,19 @@ $$
 
 **Also written:** with all strides equal to 1, this collapses to the simple sum $R_L = 1 + \sum_{\ell=1}^{L}(K_\ell - 1)$ — e.g. three stacked 3×3 convs give $1 + 3\times2 = 7$, matching one 7×7 filter.
 
-<svg viewBox="0 0 520 180" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif" font-size="12">
-  <text x="20" y="16" fill="#555">Stacked 3×3 convs widen the receptive field</text>
-  <rect x="20" y="30" width="140" height="120" fill="#6366f122" stroke="#6366f1"/>
-  <text x="60" y="170" fill="#6366f1">input 7×7</text>
-  <rect x="40" y="50" width="100" height="80" fill="#22c55e22" stroke="#22c55e"/>
-  <rect x="60" y="70" width="60" height="40" fill="#f59e0b33" stroke="#f59e0b"/>
-  <rect x="80" y="86" width="20" height="8" fill="#ec4899" stroke="#ec4899"/>
+<style>
+@keyframes c15-grow {
+  0%, 100% { stroke-opacity: 0.25; }
+  50%      { stroke-opacity: 1; }
+}
+@media (prefers-reduced-motion: reduce) { .c15-rf { animation: none !important; stroke-opacity: 0.8 !important; } }
+</style>
+<svg viewBox="0 0 520 200" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif" font-size="12">
+  <text x="20" y="16" fill="currentColor">Stacked 3×3 convs widen the receptive field (rings light up in turn)</text>
+  <rect class="c15-rf" x="20" y="30" width="140" height="140" fill="#6366f1" fill-opacity="0.12" stroke="#6366f1" stroke-width="2" style="animation: c15-grow 5s ease-in-out infinite;"/>
+  <rect class="c15-rf" x="40" y="50" width="100" height="100" fill="#22c55e" fill-opacity="0.14" stroke="#22c55e" stroke-width="2" style="animation: c15-grow 5s ease-in-out infinite 0.7s;"/>
+  <rect class="c15-rf" x="60" y="70" width="60" height="60" fill="#f59e0b" fill-opacity="0.18" stroke="#f59e0b" stroke-width="2" style="animation: c15-grow 5s ease-in-out infinite 1.4s;"/>
+  <rect class="c15-rf" x="80" y="90" width="20" height="20" fill="#ec4899" fill-opacity="0.6" stroke="#ec4899" stroke-width="2" style="animation: c15-grow 5s ease-in-out infinite 2.1s;"/>
   <text x="300" y="60" fill="#ec4899">pink = 1 output value of conv-3</text>
   <text x="300" y="84" fill="#f59e0b">amber = its 3×3 reach in conv-2</text>
   <text x="300" y="108" fill="#22c55e">green = 5×5 reach in conv-1</text>
@@ -324,6 +387,10 @@ import torch.nn as nn
 # dilation=2 makes a 3×3 kernel reach across a 5×5 span, same 9 weights
 nn.Conv2d(64, 64, kernel_size=3, padding=2, dilation=2)
 ```
+
+::: {.callout-tip}
+**Rule of thumb:** if your model can't "see" a whole object — e.g. it misses large shapes but nails small textures — its receptive field is too small for the input. Add depth, increase stride/pooling, or use dilation, rather than blindly widening kernels.
+:::
 
 ## 15.5 — CNN architectures (LeNet, AlexNet, VGG, ResNet)
 
@@ -343,6 +410,23 @@ CNN design history is a story of going deeper while keeping training stable. Fou
 | AlexNet | 2012 | 8 | ReLU, dropout, GPUs |
 | VGG-16 | 2014 | 16 | uniform 3×3 stacks |
 | ResNet-50 | 2015 | 50 | residual connections |
+
+The depth jump over those 17 years is hard to feel from a table, so here it is to scale — each bar is one network's layer count:
+
+<svg viewBox="0 0 520 170" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif" font-size="12">
+  <line x1="60" y1="20" x2="60" y2="140" stroke="currentColor" stroke-opacity="0.3"/>
+  <line x1="60" y1="140" x2="500" y2="140" stroke="currentColor" stroke-opacity="0.3"/>
+  <!-- depth scaled: 2px per layer -->
+  <rect x="80"  y="126" width="60" height="14"  fill="#38bdf8" fill-opacity="0.6" stroke="#38bdf8"/>
+  <text x="92" y="156" fill="currentColor">LeNet-5</text><text x="92" y="120" fill="#38bdf8">7</text>
+  <rect x="180" y="124" width="60" height="16"  fill="#22c55e" fill-opacity="0.6" stroke="#22c55e"/>
+  <text x="186" y="156" fill="currentColor">AlexNet</text><text x="200" y="118" fill="#22c55e">8</text>
+  <rect x="280" y="108" width="60" height="32"  fill="#f59e0b" fill-opacity="0.6" stroke="#f59e0b"/>
+  <text x="290" y="156" fill="currentColor">VGG-16</text><text x="300" y="102" fill="#f59e0b">16</text>
+  <rect x="380" y="40"  width="60" height="100" fill="#ec4899" fill-opacity="0.6" stroke="#ec4899"/>
+  <text x="382" y="156" fill="currentColor">ResNet-50</text><text x="396" y="34" fill="#ec4899">50</text>
+  <text x="20" y="80" fill="currentColor" transform="rotate(-90 20 80)" font-size="11">depth →</text>
+</svg>
 
 **Residual connections.** Naively stacking more layers made networks *worse* — gradients vanished and very deep nets were hard to optimise. ResNet adds a **skip connection** that lets the input bypass a block and be added to its output:
 
@@ -366,6 +450,21 @@ flowchart LR
 ## 15.6 — Batch normalization
 
 **Intuition first.** Imagine a relay race where each runner is handed a baton whose weight keeps changing run to run — they can never settle into a rhythm. Deep layers face the same problem: as the weights below them update, the *distribution* of inputs each layer receives keeps shifting (often called **internal covariate shift**), so every layer is forever chasing a moving target. **Batch normalization** hands each layer a baton of standardised weight: it re-centres and re-scales each feature to roughly zero mean and unit variance, using the statistics of the current mini-batch.
+
+The picture: BatchNorm takes a lopsided spread of activations and slides + squeezes it back to a tidy bell around zero, every batch.
+
+<svg viewBox="0 0 520 150" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif" font-size="12">
+  <line x1="20" y1="110" x2="240" y2="110" stroke="currentColor" stroke-opacity="0.3"/>
+  <text x="20" y="20" fill="currentColor">before: off-centre, wide</text>
+  <path d="M40,110 Q150,30 180,110 Q195,75 210,110" fill="#f59e0b" fill-opacity="0.25" stroke="#f59e0b" stroke-width="2"/>
+  <line x1="150" y1="110" x2="150" y2="50" stroke="#f59e0b" stroke-dasharray="3 3"/>
+  <text x="270" y="78" fill="currentColor" font-size="20">→</text>
+  <line x1="300" y1="110" x2="500" y2="110" stroke="currentColor" stroke-opacity="0.3"/>
+  <text x="300" y="20" fill="currentColor">after: centred, unit width</text>
+  <path d="M340,110 Q400,40 460,110" fill="#22c55e" fill-opacity="0.3" stroke="#22c55e" stroke-width="2"/>
+  <line x1="400" y1="110" x2="400" y2="46" stroke="#22c55e" stroke-dasharray="3 3"/>
+  <text x="392" y="128" fill="#22c55e" font-size="11">0</text>
+</svg>
 
 For a feature $x$ over a mini-batch $\mathcal{B}$:
 
@@ -397,7 +496,9 @@ block = nn.Sequential(
 
 Step back and look at the whole pipeline. A CNN processes an image in two phases: a **feature extractor** of stacked conv + activation + pooling blocks that turns raw pixels into increasingly abstract feature maps, followed by a **classifier head** (a global pool plus one or two dense layers) that maps those features to class scores.
 
-The crucial bookkeeping is **channels**. A colour image starts with 3 channels (R, G, B). A convolution filter is not really 2D — it spans *all* input channels, so a 3×3 filter over a 3-channel input is actually a 3×3×3 block of weights producing one output number per position. A conv **layer** holds many such filters; if it has 64 filters, it outputs a feature map with **64 channels**. Spatial size tends to shrink as you go deep, while channel count grows — the network trades "where" for "what".
+The key bookkeeping is **channels**, and the one idea that trips people up is this: *a convolution filter is not flat.* A colour image has 3 stacked sheets — red, green, blue. A "3×3 filter" on it is really a little 3×3×3 cube of weights: it covers a 3×3 patch on *all three* sheets at once, multiplies, and adds everything into **one** number. So each filter, wherever it lands, outputs a single value — collapsing every input channel into one.
+
+A conv **layer** is just many such cubes side by side. Put 64 filters in the layer and you get 64 output sheets — a feature map with **64 channels**. Stack layers and a pattern emerges: spatial size shrinks (pooling and stride), while channel count grows. The network is steadily trading *"where"* (precise location) for *"what"* (rich pattern identity).
 
 ```{mermaid}
 flowchart LR
@@ -434,6 +535,24 @@ Training a deep CNN from scratch needs millions of labelled images and a lot of 
 **The everyday analogy.** Hiring someone who already speaks the language and just needs to learn your company's jargon beats training a newborn from scratch. A pretrained backbone already "speaks vision"; you only teach it your handful of labels.
 
 The recipe: take a network already trained on a huge dataset (ImageNet, 1.2M images), call its feature extractor the **backbone**, discard its original classifier head, and attach a fresh small head for your task. Then either **freeze** the backbone and train only the head (fast, needs little data), or **fine-tune** — unfreeze some top layers and train them too at a small learning rate, for a bit more accuracy when you have more data.
+
+<svg viewBox="0 0 520 140" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif" font-size="11">
+  <text x="20" y="18" fill="currentColor">reuse the frozen backbone, swap only the head</text>
+  <g stroke="#6366f1" fill="#6366f1" fill-opacity="0.18">
+    <rect x="20" y="40" width="70" height="50" rx="4"/>
+    <rect x="100" y="40" width="70" height="50" rx="4"/>
+    <rect x="180" y="40" width="70" height="50" rx="4"/>
+  </g>
+  <text x="40" y="68" fill="#6366f1">edges</text>
+  <text x="116" y="68" fill="#6366f1">textures</text>
+  <text x="198" y="68" fill="#6366f1">shapes</text>
+  <text x="20" y="108" fill="#6366f1" font-size="10">🔒 frozen — pretrained on ImageNet</text>
+  <text x="262" y="68" fill="currentColor" font-size="16">→</text>
+  <rect x="290" y="40" width="90" height="50" rx="4" fill="#22c55e" fill-opacity="0.25" stroke="#22c55e" stroke-dasharray="4 3"/>
+  <text x="300" y="62" fill="#22c55e">new head</text>
+  <text x="300" y="80" fill="#22c55e" font-size="10">your 5 labels</text>
+  <text x="290" y="108" fill="#22c55e" font-size="10">✏️ trains — a few hundred images</text>
+</svg>
 
 ```python
 # real PyTorch / torchvision: reuse a pretrained ResNet for a 5-class problem

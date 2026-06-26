@@ -170,7 +170,28 @@ The cat photo is far closer to "a cat" than to "a car" — exactly the alignment
 **Intuition:** a shared space turns "is this image about cats?" into "is this image's vector near the word *cat*'s vector?" — a plain dot product. Once everything is a vector in one space, cross-modal problems collapse into nearest-neighbor lookups.
 :::
 
-**The alignment gap.** One subtlety worth naming early: even in a well-trained shared space, image vectors and text vectors do not perfectly overlap. They tend to occupy two slightly separated *cones* — image embeddings cluster among themselves, text embeddings among themselves, with a narrow gap between the clusters. This **modality gap** is partly a consequence of random initialization and the temperature in contrastive training, and it is usually harmless (cosine ranking still works fine within a modality-to-modality comparison), but it explains why naive tricks like averaging an image vector with a text vector can land you in an empty no-man's-land between the cones.
+**The alignment gap.** Even in a well-trained shared space, image vectors and text vectors don't sit perfectly on top of each other. Picture two clouds of points that *point the same way* but live in two slightly separate clumps — all the image vectors in one clump, all the text vectors in another, with a thin no-man's-land between them. This **modality gap** is mostly a leftover from how training starts (random weights) and the temperature knob in contrastive learning. It's usually harmless: ranking a text query against images still works, because you're always comparing across the gap the same way. The one thing to avoid is *averaging* an image vector with a text vector — the midpoint lands in the empty gap, matching nothing.
+
+<svg viewBox="0 0 360 170" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Two separated clouds of vectors with a gap between them">
+  <style>
+    @keyframes c24-gapdrift { 0%,100% { transform: translateX(0); } 50% { transform: translateX(5px); } }
+    @media (prefers-reduced-motion: reduce) { .c24-cloud { animation: none !important; } }
+    .c24-cloud-img { animation: c24-gapdrift 6s ease-in-out infinite; }
+    .c24-cloud-txt { animation: c24-gapdrift 6s ease-in-out infinite reverse; }
+  </style>
+  <g class="c24-cloud c24-cloud-img" fill="#f59e0b" fill-opacity="0.85">
+    <circle cx="90" cy="55" r="5"/><circle cx="110" cy="75" r="5"/><circle cx="75" cy="85" r="5"/>
+    <circle cx="105" cy="50" r="5"/><circle cx="88" cy="100" r="5"/><circle cx="120" cy="92" r="5"/>
+  </g>
+  <text x="70" y="35" font-size="11" fill="currentColor">🖼️ image cone</text>
+  <g class="c24-cloud c24-cloud-txt" fill="#38bdf8" fill-opacity="0.85">
+    <circle cx="250" cy="60" r="5"/><circle cx="270" cy="80" r="5"/><circle cx="240" cy="92" r="5"/>
+    <circle cx="265" cy="55" r="5"/><circle cx="285" cy="95" r="5"/><circle cx="255" cy="108" r="5"/>
+  </g>
+  <text x="232" y="35" font-size="11" fill="currentColor">📝 text cone</text>
+  <line x1="175" y1="40" x2="175" y2="120" stroke="#888" stroke-width="1" stroke-dasharray="3 3"/>
+  <text x="143" y="150" font-size="9" fill="#888">the modality gap — averaging across it lands here, in nothing</text>
+</svg>
 
 ## 24.2 — CLIP: Contrastive Image–Text Pretraining
 
@@ -386,6 +407,41 @@ Training is typically two-stage. First **alignment pretraining**: freeze the vis
 
 Run the shared space in reverse and you get **generation**: instead of mapping an image *to* text, you synthesize an image *from* text. Modern **text-to-image** systems are overwhelmingly **diffusion models** (the full mechanism — forward noising, the denoising network, samplers, and latent diffusion — is the subject of Chapter 18). Here we cover only the multimodal hinge: **how the words steer the pixels.**
 
+The animation below shows the loop: random noise on the left, gradually denoised into a picture on the right, with the text prompt pulling each step toward the target.
+
+<svg viewBox="0 0 380 130" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Noise denoising into an image over steps, guided by text">
+  <style>
+    @keyframes c24-denoise { 0% { opacity: .15; } 100% { opacity: 1; } }
+    @keyframes c24-noisefade { 0% { opacity: 1; } 100% { opacity: .1; } }
+    @keyframes c24-arrow { 0%,100% { transform: translateX(0); } 50% { transform: translateX(6px); } }
+    @media (prefers-reduced-motion: reduce) { .c24-d, .c24-n, .c24-ar { animation: none !important; } }
+    .c24-d  { animation: c24-denoise 4s ease-in-out infinite alternate; }
+    .c24-n  { animation: c24-noisefade 4s ease-in-out infinite alternate; }
+    .c24-ar { animation: c24-arrow 4s ease-in-out infinite; }
+  </style>
+  <g class="c24-n" fill="#a855f7" fill-opacity="0.7">
+    <rect x="20" y="30" width="9" height="9"/><rect x="34" y="44" width="9" height="9"/>
+    <rect x="22" y="58" width="9" height="9"/><rect x="40" y="30" width="9" height="9"/>
+    <rect x="28" y="74" width="9" height="9"/><rect x="44" y="62" width="9" height="9"/>
+  </g>
+  <text x="18" y="105" font-size="10" fill="currentColor">noise</text>
+  <line class="c24-ar" x1="70" y1="58" x2="120" y2="58" stroke="currentColor" stroke-width="1.5" marker-end="url(#c24ah)"/>
+  <text x="150" y="20" font-size="10" fill="#22c55e">📝 prompt guides every step ↓</text>
+  <g class="c24-d">
+    <circle cx="200" cy="60" r="22" fill="#f59e0b" fill-opacity="0.85"/>
+    <circle cx="193" cy="55" r="3" fill="#6366f1"/><circle cx="207" cy="55" r="3" fill="#6366f1"/>
+    <path d="M190 68 Q200 76 210 68" stroke="#6366f1" stroke-width="2" fill="none"/>
+  </g>
+  <line class="c24-ar" x1="240" y1="58" x2="290" y2="58" stroke="currentColor" stroke-width="1.5" marker-end="url(#c24ah)"/>
+  <g class="c24-d">
+    <rect x="305" y="38" width="50" height="44" rx="4" fill="#38bdf8" fill-opacity="0.8"/>
+    <circle cx="320" cy="52" r="5" fill="#f59e0b"/>
+    <path d="M305 78 L325 62 L340 72 L355 58 L355 82 Z" fill="#22c55e" fill-opacity="0.9"/>
+  </g>
+  <text x="305" y="105" font-size="10" fill="currentColor">image</text>
+  <defs><marker id="c24ah" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6 Z" fill="currentColor"/></marker></defs>
+</svg>
+
 The link is **conditioning**. The denoiser is not asked to remove noise blindly; it removes noise *given a text embedding*. A text encoder (often the CLIP text encoder of §24.2, or a T5 language model) turns the prompt into a sequence of vectors, and the denoising U-Net or transformer attends to them via **cross-attention** (§24.7) at every step. The text acts as a steering wheel nudging each denoising step toward images consistent with the prompt.
 
 ```{mermaid}
@@ -461,6 +517,35 @@ Push the guidance scale too high and images "burn" — garish colors, fried cont
 
 Sound fits the shared-space recipe just as cleanly as images. The trick is to make audio *look like* something a transformer already eats. Most systems first convert a waveform into a **spectrogram** — a 2-D image of frequency (vertical) versus time (horizontal) — and then treat it almost exactly like a picture (the audio front-end, spectrograms, and speech specifics live in Chapter 21).
 
+A **spectrogram** is the bridge: it redraws sound as a picture, so the same vision machinery applies. The doodle below shows a sound's energy shimmering across frequency (up) and time (right) — a 2-D image a transformer can read patch by patch, just like a photo.
+
+<svg viewBox="0 0 320 130" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="A spectrogram: frequency vertical, time horizontal, energy shimmering">
+  <style>
+    @keyframes c24-spec { 0%,100% { opacity: .35; } 50% { opacity: 1; } }
+    @media (prefers-reduced-motion: reduce) { .c24-bar { animation: none !important; } }
+    .c24-bar { animation: c24-spec 3.5s ease-in-out infinite; }
+  </style>
+  <line x1="34" y1="14" x2="34" y2="100" stroke="#888" stroke-width="1"/>
+  <line x1="34" y1="100" x2="300" y2="100" stroke="#888" stroke-width="1"/>
+  <text x="6" y="58" font-size="9" fill="#888" transform="rotate(-90 12 58)">freq</text>
+  <text x="150" y="120" font-size="9" fill="#888">time →</text>
+  <g>
+    <rect class="c24-bar" x="44"  y="60" width="14" height="40" fill="#ec4899" fill-opacity="0.8" style="animation-delay:0s"/>
+    <rect class="c24-bar" x="64"  y="38" width="14" height="62" fill="#a855f7" fill-opacity="0.8" style="animation-delay:.3s"/>
+    <rect class="c24-bar" x="84"  y="50" width="14" height="50" fill="#38bdf8" fill-opacity="0.8" style="animation-delay:.6s"/>
+    <rect class="c24-bar" x="104" y="24" width="14" height="76" fill="#6366f1" fill-opacity="0.8" style="animation-delay:.9s"/>
+    <rect class="c24-bar" x="124" y="46" width="14" height="54" fill="#22c55e" fill-opacity="0.8" style="animation-delay:1.2s"/>
+    <rect class="c24-bar" x="144" y="32" width="14" height="68" fill="#f59e0b" fill-opacity="0.8" style="animation-delay:1.5s"/>
+    <rect class="c24-bar" x="164" y="56" width="14" height="44" fill="#ec4899" fill-opacity="0.8" style="animation-delay:1.8s"/>
+    <rect class="c24-bar" x="184" y="40" width="14" height="60" fill="#a855f7" fill-opacity="0.8" style="animation-delay:2.1s"/>
+    <rect class="c24-bar" x="204" y="52" width="14" height="48" fill="#38bdf8" fill-opacity="0.8" style="animation-delay:2.4s"/>
+    <rect class="c24-bar" x="224" y="30" width="14" height="70" fill="#6366f1" fill-opacity="0.8" style="animation-delay:2.7s"/>
+    <rect class="c24-bar" x="244" y="48" width="14" height="52" fill="#22c55e" fill-opacity="0.8" style="animation-delay:3.0s"/>
+    <rect class="c24-bar" x="264" y="36" width="14" height="64" fill="#f59e0b" fill-opacity="0.8" style="animation-delay:3.3s"/>
+  </g>
+  <text x="90" y="10" font-size="9" fill="#888">🔊 waveform → spectrogram → treat like an image</text>
+</svg>
+
 **Audio-language models** pair an audio encoder with a text encoder in one space, mirroring CLIP. **CLAP** (Contrastive Language–Audio Pretraining) trains on (sound, description) pairs so that the clip of a barking dog lands near the text "a dog barking," giving zero-shot **audio classification** and text-to-sound retrieval. On the generation side, **Whisper** maps speech-spectrograms to text (transcription/translation), while text-to-audio diffusion models like AudioLDM run §24.5 in the sound domain to synthesize effects and music from prompts.
 
 **With a real framework.** Whisper transcription is one pipeline call:
@@ -486,6 +571,8 @@ flowchart LR
 ```
 
 This unification is what lets a model take a spoken question about a photo and reply with both spoken words and a generated illustration — the inputs and outputs are all just tokens in the same stream. Models such as GPT-4o, Gemini, and Chameleon move in this direction, processing voice, vision, and text natively rather than gluing separate systems together.
+
+**Where this shows up:** the voice mode in modern assistants is exactly this — you speak (audio tokens in), the model "sees" your camera feed (image tokens in), and it speaks back (audio tokens out) with no separate speech-to-text-to-speech pipeline bolted on. Because it's one stream, the model can be interrupted mid-sentence and can react to a tone of voice, which a chain of separate systems handles clumsily.
 
 ::: {.callout-tip}
 **Intuition:** "tokens are a universal currency." Once an image, a sound, and a sentence are all sequences of integers from one vocabulary, the difference between captioning, transcription, and text-to-image is just *which* tokens you feed in and *which* you ask the model to produce.
