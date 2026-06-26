@@ -117,6 +117,47 @@ The intuition is a loop, not a pipeline. A robot does not perceive once and then
 
 **Perceive** turns raw sensor bytes (camera pixels, LiDAR returns, wheel encoder ticks, IMU accelerations) into features — edges, obstacles, landmarks. **Estimate** fuses those noisy features over time into a belief about the world state: *where am I, where is everything else, how fast am I going.* **Plan** chooses a sequence of actions to reach a goal given that belief. **Act** sends torques and velocities to actuators — and immediately feeds the resulting motion back into perception.
 
+The loop below runs forever; watch the active stage travel around it — that traveling pulse *is* the robot's heartbeat, and a real system runs several of these nested at different speeds.
+
+<svg viewBox="0 0 460 150" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif" font-size="11" role="img" aria-label="Animated perceive, estimate, plan, act loop">
+  <style>
+    @keyframes c41-loop-pulse {
+      0%,100% { opacity: 0.35; }
+      25%     { opacity: 1; }
+    }
+    .c41-stage { animation: c41-loop-pulse 6s ease-in-out infinite; }
+    .c41-s2 { animation-delay: -1.5s; }
+    .c41-s3 { animation-delay: -3s; }
+    .c41-s4 { animation-delay: -4.5s; }
+    @media (prefers-reduced-motion: reduce) { .c41-stage { animation: none; opacity: 0.8; } }
+  </style>
+  <g stroke="currentColor" stroke-width="1.5" fill="none" opacity="0.4" marker-end="url(#c41a)">
+    <line x1="118" y1="55" x2="160" y2="55"/>
+    <line x1="262" y1="55" x2="304" y2="55"/>
+    <line x1="375" y1="75" x2="375" y2="100"/>
+    <line x1="305" y1="120" x2="118" y2="120"/>
+    <line x1="55" y1="100" x2="55" y2="75"/>
+  </g>
+  <g class="c41-stage">
+    <rect x="20" y="40" width="98" height="32" rx="6" fill="#38bdf8" opacity="0.45" stroke="#38bdf8"/>
+    <text x="69" y="60" fill="currentColor" text-anchor="middle">Perceive</text>
+  </g>
+  <g class="c41-stage c41-s2">
+    <rect x="164" y="40" width="98" height="32" rx="6" fill="#6366f1" opacity="0.45" stroke="#6366f1"/>
+    <text x="213" y="60" fill="currentColor" text-anchor="middle">Estimate</text>
+  </g>
+  <g class="c41-stage c41-s3">
+    <rect x="308" y="40" width="98" height="32" rx="6" fill="#a855f7" opacity="0.45" stroke="#a855f7"/>
+    <text x="357" y="60" fill="currentColor" text-anchor="middle">Plan</text>
+  </g>
+  <g class="c41-stage c41-s4">
+    <rect x="308" y="104" width="98" height="32" rx="6" fill="#22c55e" opacity="0.45" stroke="#22c55e"/>
+    <text x="357" y="124" fill="currentColor" text-anchor="middle">Act</text>
+  </g>
+  <text x="160" y="116" fill="currentColor" opacity="0.6" font-size="10">motion feeds back into the world</text>
+  <defs><marker id="c41a" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6 Z" fill="currentColor"/></marker></defs>
+</svg>
+
 ```{mermaid}
 flowchart LR
     W((Physical<br/>world)) -->|sensors| P[Perceive<br/>pixels → features]
@@ -156,7 +197,7 @@ $$p^{\text{world}} = R^{\text{world}}_{\text{cam}}\, p^{\text{cam}} + t^{\text{w
 **In words:** to move a point from the camera's viewpoint into world coordinates, rotate it to align the axes, then shift it by where the camera sits.
 **Also written:** in homogeneous form one $4\times4$ matrix does both, $\tilde p^{\text{world}} = T^{\text{world}}_{\text{cam}}\, \tilde p^{\text{cam}}$ where $T = \begin{bmatrix} R & t \\ 0 & 1 \end{bmatrix}$ and $\tilde p = (x,y,z,1)$.
 
-That homogeneous form is why robotics code lives in $4\times4$ matrices: chaining frames (world ← base ← arm ← camera) becomes plain matrix multiplication, $T^{\text{world}}_{\text{cam}} = T^{\text{world}}_{\text{base}} T^{\text{base}}_{\text{arm}} T^{\text{arm}}_{\text{cam}}$, and inverting a transform flips the direction. ROS systems track this whole tree of frames continuously (the `tf` system); getting one transform wrong is the single most common robotics bug (§41.10).
+Why bother stuffing rotation and translation into one $4\times4$ matrix? Because then *chaining frames is just multiplication.* Picture the frames as a family tree: world → base → arm → camera. To turn a point the camera sees into world coordinates, you walk up that tree, and each hop is one matrix. Multiply them in order and you get a single transform $T^{\text{world}}_{\text{cam}} = T^{\text{world}}_{\text{base}}\, T^{\text{base}}_{\text{arm}}\, T^{\text{arm}}_{\text{cam}}$ that does the whole trip at once. Want the reverse trip (world → camera)? Just invert the matrix. That is the entire reason robotics code is full of $4\times4$ matrices. ROS keeps this whole tree of frames updated live (the `tf` system), and getting one hop wrong — a flipped sign, a swapped pair — is the single most common robotics bug (§41.10).
 
 ## 41.2 Configuration space and kinematics
 
@@ -347,6 +388,28 @@ $$\min_{u_0,\dots,u_{N-1}} \;\sum_{k=0}^{N-1}\Big[ (x_k - x_k^{\text{ref}})^\top
 **In words:** over the next $N$ steps, pick the commands that keep the predicted state close to the reference while spending little control effort, respecting the physics and the actuator limits — then commit only to the first command and repeat.
 **Also written:** the per-step penalty $\|x_k-x_k^{\text{ref}}\|_Q^2 + \|u_k\|_R^2$ uses the weighted-norm shorthand $\|z\|_M^2 = z^\top M z$.
 
+The animation makes the *receding horizon* idea concrete: at each tick the planner imagines a short path ahead (the faint horizon), commits only the first step, then slides the whole window forward and re-imagines.
+
+<svg viewBox="0 0 460 120" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif" font-size="11" role="img" aria-label="Animated receding-horizon window sliding forward">
+  <style>
+    @keyframes c41-mpc-slide {
+      0%   { transform: translateX(0); }
+      100% { transform: translateX(96px); }
+    }
+    .c41-mpc-win { animation: c41-mpc-slide 4s ease-in-out infinite alternate; }
+    @media (prefers-reduced-motion: reduce) { .c41-mpc-win { animation: none; } }
+  </style>
+  <line x1="20" y1="80" x2="440" y2="80" stroke="currentColor" opacity="0.3"/>
+  <path d="M20 80 Q 120 40 230 55 T 440 50" fill="none" stroke="#22c55e" stroke-dasharray="4 4" opacity="0.5"/>
+  <text x="20" y="105" fill="#22c55e" opacity="0.8">reference path</text>
+  <g class="c41-mpc-win">
+    <rect x="40" y="30" width="110" height="60" rx="6" fill="#6366f1" opacity="0.18" stroke="#6366f1"/>
+    <text x="95" y="24" fill="#6366f1" text-anchor="middle" font-size="10">horizon (imagined)</text>
+    <circle cx="52" cy="74" r="5" fill="#f59e0b"/>
+    <text x="52" y="105" fill="#f59e0b" text-anchor="middle" font-size="10">apply 1st</text>
+  </g>
+</svg>
+
 MPC's selling point is that it handles **constraints** natively — speed caps, lane boundaries, joint limits, obstacle clearance go straight into the optimization, which PID cannot do. Its cost is computational: an optimization problem solved every cycle. It is the workhorse of modern self-driving steering, legged-robot balance, and process control. It is also the fast **replanning** loop referenced in §41.7.
 
 ## 41.4 State estimation and the recursive Bayes filter
@@ -369,6 +432,25 @@ $$bel(x_t) = \eta\, p(z_t \mid x_t)\, \overline{bel}(x_t)$$
 **In words:** reweight each candidate state by how well it explains the measurement you just got, then rescale so the weights sum to one.
 **Also written:** $bel(x_t) \propto p(z_t \mid x_t)\,\overline{bel}(x_t)$, with $\eta = 1/\!\int p(z_t\mid x_t)\,\overline{bel}(x_t)\,dx_t$.
 
+The whole filter is one breathing rhythm: *acting widens the belief, sensing narrows it.* Watch the bell curve below pulse wide (predict) then snap sharp (update), forever.
+
+<svg viewBox="0 0 460 130" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif" font-size="11" role="img" aria-label="Animated belief widening on predict and narrowing on update">
+  <style>
+    @keyframes c41-belief-breathe {
+      0%,100% { transform: scaleX(1); opacity: 0.85; }
+      50%     { transform: scaleX(2.1); opacity: 0.45; }
+    }
+    .c41-belief { transform-origin: 230px 100px; animation: c41-belief-breathe 5s ease-in-out infinite; }
+    @media (prefers-reduced-motion: reduce) { .c41-belief { animation: none; } }
+  </style>
+  <line x1="30" y1="100" x2="430" y2="100" stroke="currentColor" opacity="0.35"/>
+  <line x1="230" y1="30" x2="230" y2="100" stroke="#22c55e" stroke-dasharray="4 4" opacity="0.6"/>
+  <text x="236" y="40" fill="#22c55e" font-size="10">true state</text>
+  <path class="c41-belief" d="M150 100 C 190 100 200 35 230 35 C 260 35 270 100 310 100 Z" fill="#6366f1" opacity="0.5" stroke="#6366f1"/>
+  <text x="30" y="122" fill="#6366f1" opacity="0.8" font-size="10">predict widens →</text>
+  <text x="330" y="122" fill="#6366f1" opacity="0.8" font-size="10">← update narrows</text>
+</svg>
+
 ```{mermaid}
 flowchart LR
     B["bel(x_{t-1})"] -->|"predict: apply motion u_t"| BP["bel-bar(x_t)<br/>wider, less certain"]
@@ -390,6 +472,18 @@ $$K = \frac{P}{P+R}, \qquad \hat{x} \leftarrow \hat{x} + K(z - \hat{x}), \qquad 
 
 **In words:** the gain is the prediction's share of the total uncertainty; nudge the estimate toward the measurement by that fraction of the surprise, and shrink the uncertainty accordingly.
 **Also written:** in full matrix form $K = P H^\top (H P H^\top + R)^{-1}$, with $\hat{x} \leftarrow \hat{x} + K(z - H\hat{x})$ and $P \leftarrow (I - KH)P$; the scalar case above is $H=1$.
+
+The picture below is the whole filter in one frame: a fuzzy prediction (blue) and a fuzzy measurement (amber) blend into a *sharper* fused belief (green) sitting between them — narrower than either input.
+
+<svg viewBox="0 0 460 140" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif" font-size="11" role="img" aria-label="Prediction and measurement Gaussians fusing into a narrower belief">
+  <line x1="20" y1="110" x2="440" y2="110" stroke="currentColor" opacity="0.35"/>
+  <path d="M40 110 C 100 110 110 50 160 50 C 210 50 220 110 280 110 Z" fill="#6366f1" opacity="0.4" stroke="#6366f1"/>
+  <text x="120" y="44" fill="#6366f1" font-size="10">prediction</text>
+  <path d="M200 110 C 250 110 258 55 300 55 C 342 55 350 110 400 110 Z" fill="#f59e0b" opacity="0.4" stroke="#f59e0b"/>
+  <text x="320" y="49" fill="#f59e0b" font-size="10">measurement</text>
+  <path d="M180 110 C 215 110 222 28 248 28 C 274 28 281 110 316 110 Z" fill="#22c55e" opacity="0.55" stroke="#22c55e"/>
+  <text x="206" y="22" fill="#22c55e" font-size="10">fused: sharper than both</text>
+</svg>
 
 **Worked 1-D example.** Estimate a robot's position. We believe $\hat{x}=0$ m with variance $P=4$ (std 2 m). The robot does not move ($\hat{x}$ prediction stays 0), but motion adds process noise $Q=1$, so after predict $P = 4+1 = 5$. A GPS reads $z=3$ m with measurement variance $R=2$.
 
@@ -486,6 +580,10 @@ print(round(px.mean(), 2))                 # converges near true position ~6
 | UKF | single Gaussian | yes (sigma points) | moderate | stronger nonlinearity, no derivatives |
 | Particle | arbitrary samples | yes | expensive | multi-modal, global localization |
 
+::: {.callout-tip}
+Rule of thumb for picking a filter: reach for the plain Kalman filter first; only climb to EKF/UKF when a model is genuinely nonlinear, and only to a particle filter when the belief is genuinely multi-modal (you cannot summarize it with one mean and covariance). Particle filters are powerful but pay an exponential price in dimension — a global-localization tool, not a default.
+:::
+
 ## 41.6 SLAM: simultaneous localization and mapping
 
 There is a chicken-and-egg trap in §41.5: to know where you are you need a map, but to build a map you need to know where you are. **SLAM** solves both at once — estimate the robot's trajectory *and* the map from the same stream of sensor data.
@@ -531,6 +629,19 @@ $$f(n) = g(n) + h(n).$$
 
 A* returns the optimal path whenever $h$ is **admissible** (never overestimates true remaining cost). The straight-line (Euclidean) distance is the canonical admissible heuristic for spatial grids: a real path can only be longer than the crow-flies line. A better (larger but still admissible) heuristic explores fewer nodes.
 
+The contrast below is the whole reason A\* exists: Dijkstra (left) fans out in a fat blind disk; A\*'s heuristic (right) pulls the explored set into a narrow corridor aimed at the goal — same optimal path, a fraction of the work.
+
+<svg viewBox="0 0 440 180" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif" font-size="11" role="img" aria-label="Dijkstra explores a wide disk, A-star a narrow corridor toward the goal">
+  <text x="20" y="18" fill="currentColor">Dijkstra: blind, all directions</text>
+  <circle cx="55" cy="100" r="48" fill="#f59e0b" opacity="0.22" stroke="#f59e0b" stroke-dasharray="3 3"/>
+  <circle cx="55" cy="100" r="5" fill="#22c55e"/><text x="40" y="160" fill="#22c55e">start</text>
+  <circle cx="150" cy="100" r="5" fill="#ec4899"/><text x="138" y="160" fill="#ec4899">goal</text>
+  <text x="250" y="18" fill="currentColor">A*: steered toward goal</text>
+  <path d="M285 100 Q 350 70 420 100 Q 350 130 285 100 Z" fill="#6366f1" opacity="0.25" stroke="#6366f1" stroke-dasharray="3 3"/>
+  <circle cx="285" cy="100" r="5" fill="#22c55e"/><text x="270" y="160" fill="#22c55e">start</text>
+  <circle cx="420" cy="100" r="5" fill="#ec4899"/><text x="405" y="160" fill="#ec4899">goal</text>
+</svg>
+
 **Tiny worked example.** Grid from S to G, $h$ = Manhattan distance, unit step cost:
 
 ```
@@ -540,6 +651,8 @@ S . . #          g(S)=0
 ```
 
 A* pops the lowest-$f$ node each step. The node with $f=5$ is explored before the $f=9$ detour, so A* drives toward G instead of fanning out like Dijkstra — same optimal path, far fewer expansions.
+
+**Worked example — heuristic saves work.** On an open $100 \times 100$ grid, a goal $60$ cells straight ahead, no obstacles. Dijkstra has no sense of direction, so it expands cells in a growing disk around the start: reaching distance $60$ touches on the order of $\pi \cdot 60^2 \approx 11{,}000$ cells. A\* with the (admissible) straight-line heuristic only expands cells along the corridor toward the goal — on an obstacle-free grid that is essentially the $\sim\!60$ cells of the path itself plus a thin fringe, a few hundred at most. Same optimal length, roughly **20–50× fewer expansions.** Add obstacles and the gap shrinks (the heuristic gets fooled by walls), but the lesson holds: a good heuristic is what makes search tractable at scale.
 
 ### Sampling-based planning: PRM, RRT, RRT*
 
@@ -707,6 +820,24 @@ A robot exerts force in a world containing people. Three practical realities sep
 
 **Safety** is layered, not a single check. A common pattern: a fast, simple, certifiable **safety layer** runs underneath the smart-but-fallible autonomy stack — emergency-stop on collision-imminent, speed and force limits, a watchdog that halts if the control loop misses its deadline. The principle is that the *simple* layer is the one you can verify and trust; the learned planner proposes, the safety monitor disposes. Formal tools like control-barrier functions and reachability analysis make "the robot cannot enter this unsafe set" a provable property rather than a hope.
 
+The mental model is a referee sitting under the planner: the clever stack suggests a move, and the simple verified monitor either passes it through or vetoes it down to a safe fallback.
+
+<svg viewBox="0 0 440 150" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif" font-size="11" role="img" aria-label="Smart planner proposes, simple safety monitor approves or vetoes">
+  <rect x="20" y="20" width="160" height="44" rx="6" fill="#a855f7" opacity="0.4" stroke="#a855f7"/>
+  <text x="100" y="39" fill="currentColor" text-anchor="middle">smart autonomy stack</text>
+  <text x="100" y="55" fill="currentColor" text-anchor="middle" font-size="9" opacity="0.7">(learned, fallible)</text>
+  <line x1="180" y1="42" x2="250" y2="42" stroke="currentColor" opacity="0.5" marker-end="url(#c41sf)"/>
+  <text x="186" y="34" fill="currentColor" font-size="9" opacity="0.7">proposes</text>
+  <rect x="252" y="20" width="160" height="44" rx="6" fill="#22c55e" opacity="0.4" stroke="#22c55e"/>
+  <text x="332" y="39" fill="currentColor" text-anchor="middle">safety monitor</text>
+  <text x="332" y="55" fill="currentColor" text-anchor="middle" font-size="9" opacity="0.7">(simple, verified)</text>
+  <line x1="332" y1="64" x2="332" y2="110" stroke="#22c55e" opacity="0.6" marker-end="url(#c41sf)"/>
+  <text x="340" y="92" fill="#22c55e" font-size="10">pass ✓ or veto → safe fallback</text>
+  <rect x="252" y="112" width="160" height="30" rx="6" fill="#38bdf8" opacity="0.35" stroke="#38bdf8"/>
+  <text x="332" y="131" fill="currentColor" text-anchor="middle">actuators</text>
+  <defs><marker id="c41sf" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6 Z" fill="currentColor"/></marker></defs>
+</svg>
+
 **Human-robot interaction (HRI)** adds that humans are part of the environment and they are *reactive and hard to predict*. A robot sharing a space must estimate human intent, signal its own (a self-driving car nudging forward to indicate it will go), and stay *legible* — moving so a person can read what it will do next. Predictability often beats raw efficiency: a slightly slower motion a human can anticipate is safer than a fast optimal one that surprises them.
 
 **Calibration** is the unglamorous foundation everything rests on. Models assume the camera is exactly where the CAD says, the wheels are exactly $r$, the IMU reads zero at rest — and reality disagrees. Sensors need *intrinsic* calibration (a camera's lens distortion and focal length) and *extrinsic* calibration (the rigid transform between the camera and the arm base — the "hand-eye" calibration). Wheels wear, gears have backlash, an IMU has a bias that drifts with temperature, and a PWM servo driver often runs a few percent off its nominal frequency. The best estimator and planner in the world produce garbage if fed an uncalibrated transform.
@@ -760,6 +891,10 @@ rclpy.init(); rclpy.spin(Driver())
 ```
 
 The takeaway: the algorithms in this chapter rarely ship as standalone scripts — they ship as nodes wired into a graph, and "which node publishes what, at what rate, in which frame" is the architecture you actually debug.
+
+::: {.callout-tip}
+When a ROS system "freezes" or behaves erratically, suspect the *plumbing* before the algorithm: a topic nobody publishes (a subscriber waiting forever), a queue depth so small that messages are dropped under load, a node publishing in the wrong frame, or two nodes fighting over `/cmd_vel`. Tools like `ros2 topic hz`, `ros2 topic echo`, and `rqt_graph` tell you what is *actually* flowing — check that the graph matches the one in your head before touching any math.
+:::
 
 ## 41.1 — Key takeaways
 

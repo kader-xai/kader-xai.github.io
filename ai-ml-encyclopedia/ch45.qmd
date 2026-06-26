@@ -288,7 +288,7 @@ trainer.train()
 
 ## 45.5 — Parameter-Efficient Fine-Tuning (PEFT)
 
-Full fine-tuning has a brutal memory bill, and it is not the weights that hurt — it is the optimizer. Train with Adam in mixed precision and for every parameter you must store, beyond the working fp16 weights: a gradient, an fp32 master copy of the weights, and *two* fp32 optimizer moments (Adam's first moment $m$ and second moment $v$). Do the arithmetic.
+Full fine-tuning has a brutal memory bill, and here is the surprise: the model's weights are the *small* part. The optimizer is the hog. Picture every single parameter dragging an entourage: for each one weight you actually use, Adam in mixed precision also keeps around its gradient, a high-precision (fp32) backup copy of the weight, and *two* more fp32 bookkeeping numbers (Adam's running averages $m$ and $v$). So one number to use balloons into roughly five-to-nine numbers to store. Do the arithmetic.
 
 > **Worked memory math (7B params, Adam, mixed precision).** Per the standard mixed-precision accounting (2 bytes for fp16 tensors, 4 bytes for fp32):
 > | Tensor | Precision | Bytes/param | Size (7B) |
@@ -351,6 +351,31 @@ Here $r$ is the **rank** (typically 8–64), $\alpha$ is a scaling constant, and
   <line x1="500" y1="50" x2="500" y2="150" stroke="currentColor" stroke-dasharray="3"/>
   <text x="515" y="95" font-size="11">skinny</text>
   <text x="515" y="110" font-size="11">→ tiny</text>
+</svg>
+
+And here is the same idea in motion — the input is squeezed through the narrow rank-$r$ waist, then expanded back, so the whole update flows through a tiny bottleneck:
+
+<style>
+@keyframes c45-lora-flow { 0% { offset-distance: 0%; opacity: 0; } 8% { opacity: 1; } 92% { opacity: 1; } 100% { offset-distance: 100%; opacity: 0; } }
+@media (prefers-reduced-motion: reduce) { .c45-dot { animation: none !important; } }
+.c45-dot { offset-path: path('M 70 75 L 300 75 L 300 75 L 530 75'); animation: c45-lora-flow 3.6s linear infinite; }
+.c45-dot2 { animation-delay: 1.2s; }
+.c45-dot3 { animation-delay: 2.4s; }
+</style>
+<svg viewBox="0 0 600 150" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif" font-size="12" fill="currentColor">
+  <rect x="20" y="45" width="50" height="60" rx="5" fill="#6366f1" fill-opacity="0.3" stroke="#6366f1"/>
+  <text x="45" y="125" text-anchor="middle" font-size="11">x (d-dim)</text>
+  <path d="M 70 50 L 290 70 L 290 80 L 70 100 Z" fill="#f59e0b" fill-opacity="0.18" stroke="#f59e0b"/>
+  <text x="170" y="38" text-anchor="middle" font-size="11">A: squeeze d → r</text>
+  <rect x="285" y="68" width="14" height="14" rx="3" fill="#a855f7" fill-opacity="0.5" stroke="#a855f7"/>
+  <text x="292" y="108" text-anchor="middle" font-size="11">rank r</text>
+  <path d="M 300 73 L 520 50 L 520 100 L 300 77 Z" fill="#22c55e" fill-opacity="0.18" stroke="#22c55e"/>
+  <text x="430" y="38" text-anchor="middle" font-size="11">B: expand r → d</text>
+  <rect x="530" y="45" width="50" height="60" rx="5" fill="#6366f1" fill-opacity="0.3" stroke="#6366f1"/>
+  <text x="555" y="125" text-anchor="middle" font-size="11">+ correction</text>
+  <circle class="c45-dot" r="4" fill="#ec4899"/>
+  <circle class="c45-dot c45-dot2" r="4" fill="#ec4899"/>
+  <circle class="c45-dot c45-dot3" r="4" fill="#ec4899"/>
 </svg>
 
 ```python
@@ -479,7 +504,31 @@ $$\mathcal{L} = (1-\lambda)\,\mathcal{L}_{\text{CE}}(y,\,p_s) + \lambda\,T^2\,\m
 
 The $T^2$ factor rescales the soft-loss gradients back to the same magnitude as the hard-loss gradients.
 
-**Tiny worked example.** Teacher logits for {dog, wolf, cat} are $z=(4,2,0)$. At $T=1$ the softmax is roughly $(0.84, 0.11, 0.02)$ — already telling you wolf ≫ cat. Crank to $T=2$ and you divide logits first: $(2,1,0)\to(0.67,0.24,0.09)$; at $T=4$, $(1,0.5,0)\to(0.51,0.31,0.19)$. As $T$ rises the gaps shrink, so the student is forced to *also* learn the faint "cat is a little dog-like" signal it would have ignored under the near-one-hot $T=1$ distribution. That faint structure is the "dark knowledge."
+**Tiny worked example.** Teacher logits for {dog, wolf, cat} are $z=(4,2,0)$. At $T=1$ the softmax is roughly $(0.84, 0.11, 0.02)$ — already telling you wolf ≫ cat. Crank to $T=2$ and you divide logits first: $(2,1,0)\to(0.67,0.24,0.09)$; at $T=4$, $(1,0.5,0)\to(0.51,0.31,0.19)$. As $T$ rises the gaps shrink, so the student is forced to *also* learn the faint "cat is a little dog-like" signal it would have ignored under the near-one-hot $T=1$ distribution. That faint structure is the "dark knowledge." Watch the three bars breathe as temperature rises and falls — the tall "dog" bar shrinks while the buried "cat" bar lifts into view:
+
+<style>
+@keyframes c45-temp-dog { 0%,100% { height: 70px; y: 30px; } 50% { height: 42px; y: 58px; } }
+@keyframes c45-temp-wolf { 0%,100% { height: 10px; y: 90px; } 50% { height: 26px; y: 74px; } }
+@keyframes c45-temp-cat { 0%,100% { height: 3px; y: 97px; } 50% { height: 16px; y: 84px; } }
+@media (prefers-reduced-motion: reduce) { .c45-tb { animation: none !important; } }
+.c45-tb { animation: 5s ease-in-out infinite; }
+.c45-tb-dog { animation-name: c45-temp-dog; }
+.c45-tb-wolf { animation-name: c45-temp-wolf; }
+.c45-tb-cat { animation-name: c45-temp-cat; }
+</style>
+<svg viewBox="0 0 360 130" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif" font-size="12" fill="currentColor">
+  <line x1="30" y1="100" x2="250" y2="100" stroke="currentColor" stroke-opacity="0.4"/>
+  <rect class="c45-tb c45-tb-dog"  x="50"  width="40" height="70" rx="3" y="30" fill="#6366f1" fill-opacity="0.55" stroke="#6366f1"/>
+  <rect class="c45-tb c45-tb-wolf" x="110" width="40" height="10" rx="3" y="90" fill="#f59e0b" fill-opacity="0.55" stroke="#f59e0b"/>
+  <rect class="c45-tb c45-tb-cat"  x="170" width="40" height="3"  rx="3" y="97" fill="#ec4899" fill-opacity="0.55" stroke="#ec4899"/>
+  <text x="70"  y="115" text-anchor="middle" font-size="11">dog</text>
+  <text x="130" y="115" text-anchor="middle" font-size="11">wolf</text>
+  <text x="190" y="115" text-anchor="middle" font-size="11">cat</text>
+  <text x="300" y="55" text-anchor="middle" font-size="11">low T:</text>
+  <text x="300" y="70" text-anchor="middle" font-size="11">peaked</text>
+  <text x="300" y="92" text-anchor="middle" font-size="11">high T:</text>
+  <text x="300" y="107" text-anchor="middle" font-size="11">flat</text>
+</svg>
 
 <svg viewBox="0 0 640 200" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif" font-size="13" fill="currentColor">
   <rect x="20" y="60" width="150" height="80" rx="8" fill="#6366f1" fill-opacity="0.3" stroke="#6366f1"/>
@@ -509,6 +558,10 @@ def distill_loss(student_logits, teacher_logits, labels, T=2.0, lam=0.5):
     hard = F.cross_entropy(student_logits, labels)
     return (1 - lam) * hard + lam * soft
 ```
+
+::: {.callout-tip}
+The temperature $T$ is the knob that controls how much "dark knowledge" you expose. $T=1$ is nearly one-hot — the student barely sees the inter-class hints. Push $T$ to 2–4 to flatten the distribution and let the faint signals through, but don't forget the $T^2$ multiplier on the soft loss: without it, raising $T$ silently shrinks the gradients and the soft term quietly stops mattering. A common starting point is $T=2$, $\lambda=0.5$.
+:::
 
 For LLMs, the modern variants matter. **Sequence-level distillation** trains the student on text *generated by* the teacher (the teacher writes the answers, the student imitates them). **On-policy distillation** goes further: the student generates, and the teacher scores or corrects the student's *own* outputs — closing the train/inference mismatch that hurts naive imitation. Distillation is how a frontier-quality teacher becomes a deployable 8B student.
 
@@ -569,6 +622,8 @@ The simplest version, **model soups / weight averaging**, just takes the element
 **In words:** a task vector is "everything that fine-tuning changed, as a single arrow"; adding two arrows to the base point lands you at a model that does both jobs, and subtracting an arrow walks the model *away* from a behavior.
 
 **Also written:** the merged model is $\theta_{\text{merged}} = \theta_{\text{base}} + \sum_i \lambda_i\,\tau_i$ with $\tau_i = \theta_i - \theta_{\text{base}}$; a uniform average ("soup") of $n$ models is the special case $\theta_{\text{merged}} = \frac{1}{n}\sum_i \theta_i = \theta_{\text{base}} + \frac{1}{n}\sum_i \tau_i$.
+
+**Tiny worked example (one weight).** Take a single parameter to see the arithmetic. Base value $\theta_{\text{base}} = 0.50$. The code fine-tune moved it to $0.80$, so $\tau_{\text{code}} = 0.80 - 0.50 = +0.30$. The math fine-tune moved it to $0.40$, so $\tau_{\text{math}} = 0.40 - 0.50 = -0.10$. Adding both arrows at $\lambda=1$: $\theta_{\text{merged}} = 0.50 + 0.30 + (-0.10) = 0.70$ — pulled toward "code" because code wanted a bigger move and they disagreed in sign. That sign disagreement is exactly the interference TIES tackles: it would notice code (+) outvotes math (−) on this weight and keep only the positive contribution.
 
 <svg viewBox="0 0 640 200" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif" font-size="13" fill="currentColor">
   <line x1="80" y1="170" x2="560" y2="170" stroke="currentColor" stroke-opacity="0.3"/>

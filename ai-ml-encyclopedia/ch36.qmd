@@ -146,6 +146,26 @@ There are two roads to an explanation. Either build a model that is *transparent
 
 **Post-hoc explanation** means you train whatever is most accurate (a gradient-boosted forest, a deep net) and then fit a *second* procedure that approximates its behaviour in human terms — LIME, SHAP, saliency maps, all covered below. The danger is baked in: the explanation is an approximation of the model, and an approximation can be wrong.
 
+The two roads, side by side — one path keeps the glass clear all the way through; the other bolts a viewing window onto a sealed box:
+
+<svg viewBox="0 0 460 180" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif" font-size="11">
+  <text x="115" y="18" text-anchor="middle" fill="currentColor" font-weight="bold">INTRINSIC</text>
+  <rect x="40" y="35" width="150" height="70" rx="8" fill="rgba(34,197,94,0.18)" stroke="#22c55e" stroke-width="2"/>
+  <text x="115" y="68" text-anchor="middle" fill="currentColor">model you can</text>
+  <text x="115" y="84" text-anchor="middle" fill="currentColor">read directly</text>
+  <text x="115" y="128" text-anchor="middle" fill="#22c55e">explanation = model</text>
+  <text x="115" y="144" text-anchor="middle" fill="#22c55e">always faithful</text>
+  <text x="345" y="18" text-anchor="middle" fill="currentColor" font-weight="bold">POST-HOC</text>
+  <rect x="270" y="35" width="70" height="70" rx="8" fill="rgba(99,102,241,0.22)" stroke="#6366f1" stroke-width="2"/>
+  <text x="305" y="74" text-anchor="middle" fill="currentColor">black</text>
+  <text x="305" y="88" text-anchor="middle" fill="currentColor">box</text>
+  <rect x="360" y="50" width="70" height="40" rx="6" fill="rgba(245,158,11,0.18)" stroke="#f59e0b" stroke-width="2"/>
+  <text x="395" y="74" text-anchor="middle" fill="currentColor">approx.</text>
+  <line x1="340" y1="70" x2="360" y2="70" stroke="#f59e0b" stroke-width="2" stroke-dasharray="3 2"/>
+  <text x="345" y="128" text-anchor="middle" fill="#f59e0b">explanation ≈ model</text>
+  <text x="345" y="144" text-anchor="middle" fill="#f59e0b">can be wrong</text>
+</svg>
+
 A worked contrast. Suppose a bank predicts default. An intrinsic logistic-regression model gives coefficients: `income: −0.8`, `prior_defaults: +1.5`, `credit_age: −0.3`. The reason for any denial is read straight off these weights times the applicant's values. A post-hoc model — say XGBoost plus SHAP — might be 3 points more accurate, but each denial's reason is now an *estimate* of the boosted forest's local behaviour.
 
 | Property | Intrinsic | Post-hoc |
@@ -377,6 +397,40 @@ $$f(x) = \mathbb{E}[f] + \sum_{j} \phi_j$$
 
 **In words:** start from the model's average output, then add up every feature's SHAP contribution, and you land exactly on this instance's prediction — nothing is left over. **Also written:** $\hat{y}(x) = \phi_0 + \sum_{j=1}^{M}\phi_j$, where $\phi_0 = \mathbb{E}[f]$ is the base value.
 
+That additivity is exactly what a SHAP **waterfall** plot draws: it starts at the base value and stacks each feature's push (up or down) until it lands on the final prediction. Watch the bars build, each one nudging the running total toward the answer:
+
+<style>
+@keyframes c36-wf-grow { from { width: 0; opacity: 0.2; } to { opacity: 0.9; } }
+.c36-wf-bar { transform-box: fill-box; animation: c36-wf-grow 1.6s ease-out infinite alternate; }
+.c36-wf-bar:nth-of-type(2) { animation-delay: .25s; }
+.c36-wf-bar:nth-of-type(3) { animation-delay: .5s; }
+.c36-wf-bar:nth-of-type(4) { animation-delay: .75s; }
+@media (prefers-reduced-motion: reduce) { .c36-wf-bar { animation: none; opacity: 0.9; } }
+</style>
+<svg viewBox="0 0 400 200" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif" font-size="11">
+  <line x1="150" y1="20" x2="150" y2="180" stroke="currentColor" stroke-dasharray="3 3" opacity="0.4"/>
+  <text x="150" y="16" text-anchor="middle" fill="currentColor">running prediction →</text>
+  <!-- base -->
+  <text x="10" y="44" fill="currentColor">E[f] = 0.10</text>
+  <rect x="150" y="34" width="3" height="14" fill="currentColor"/>
+  <!-- +defaults -->
+  <rect class="c36-wf-bar" x="150" y="62" width="120" height="16" rx="2" fill="#ec4899" opacity="0.85"/>
+  <text x="10" y="74" fill="currentColor">+ defaults</text>
+  <text x="276" y="74" fill="#ec4899">+0.24</text>
+  <!-- -income -->
+  <rect class="c36-wf-bar" x="120" y="90" width="30" height="16" rx="2" fill="#38bdf8" opacity="0.85"/>
+  <text x="10" y="102" fill="currentColor">− income</text>
+  <text x="114" y="102" text-anchor="end" fill="#38bdf8">−0.06</text>
+  <!-- +loans -->
+  <rect class="c36-wf-bar" x="150" y="118" width="40" height="16" rx="2" fill="#ec4899" opacity="0.85"/>
+  <text x="10" y="130" fill="currentColor">+ open_loans</text>
+  <text x="196" y="130" fill="#ec4899">+0.08</text>
+  <!-- final -->
+  <rect class="c36-wf-bar" x="150" y="146" width="180" height="16" rx="2" fill="#a855f7" opacity="0.9"/>
+  <text x="10" y="158" fill="currentColor">f(x) = 0.36</text>
+  <text x="336" y="158" fill="#a855f7">prediction</text>
+</svg>
+
 A fully worked two-feature example by hand. Features are `defaults` ($D$) and `income` ($I$); the baseline (predict-nothing) value is $f(\varnothing) = 0.10$. The model's value for each feature subset:
 
 | Subset $S$ | $f(S)$ |
@@ -475,6 +529,33 @@ For images, the natural question is *where in the picture did the model look?* *
 4. Combine and keep positives: $L^c = \text{ReLU}\!\big(\sum_k \alpha_k^c A^k\big)$, then upsample to image size.
 
 For step 4: **In words:** weight each feature map by how much it helps class $c$, add them up, and throw away the negative parts so only regions that *support* the class light up. **Also written:** $L^c_{\text{Grad-CAM}} = \max\!\big(0,\ \sum_k \alpha_k^c A^k\big)$.
+
+A Grad-CAM heatmap is a "hot spot" laid over the photo — here a soft glow gently pulses over the dog's face, the region the model leaned on. (A *healthy* result: the heat sits on the animal, not the background.)
+
+<style>
+@keyframes c36-cam-pulse { 0%,100% { opacity: 0.35; r: 30px; } 50% { opacity: 0.75; r: 40px; } }
+.c36-cam-hot { animation: c36-cam-pulse 3.5s ease-in-out infinite; }
+@media (prefers-reduced-motion: reduce) { .c36-cam-hot { animation: none; opacity: 0.6; } }
+</style>
+<svg viewBox="0 0 320 180" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif" font-size="11">
+  <defs>
+    <radialGradient id="c36camgrad" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#ec4899" stop-opacity="0.9"/>
+      <stop offset="55%" stop-color="#f59e0b" stop-opacity="0.6"/>
+      <stop offset="100%" stop-color="#f59e0b" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+  <rect x="20" y="20" width="180" height="140" rx="8" fill="rgba(99,102,241,0.10)" stroke="#6366f1"/>
+  <!-- crude dog doodle -->
+  <ellipse cx="110" cy="95" rx="42" ry="34" fill="rgba(168,85,247,0.18)" stroke="#a855f7"/>
+  <circle cx="95" cy="88" r="4" fill="currentColor"/><circle cx="125" cy="88" r="4" fill="currentColor"/>
+  <path d="M100 108 Q110 116 120 108" fill="none" stroke="currentColor" stroke-width="2"/>
+  <path d="M72 62 L86 80 M148 62 L134 80" stroke="#a855f7" stroke-width="3"/>
+  <circle class="c36-cam-hot" cx="110" cy="95" r="34" fill="url(#c36camgrad)"/>
+  <text x="110" y="176" text-anchor="middle" fill="currentColor">input + Grad-CAM heat</text>
+  <text x="250" y="80" text-anchor="middle" fill="#ec4899">hot = "the model</text>
+  <text x="250" y="96" text-anchor="middle" fill="#ec4899">looked here"</text>
+</svg>
 
 ```{mermaid}
 flowchart LR
@@ -643,7 +724,7 @@ The same cautions apply as for probing (§36.13): a concept needs enough clean e
 
 All the methods so far treat the network as a black box and study its inputs and outputs. **Mechanistic interpretability** takes the opposite, more ambitious stance: open the box and *reverse-engineer the internal algorithm* — the specific neurons, attention heads, and weight pathways (**circuits**) that implement a behaviour. The aspiration is to understand a network the way you understand a decompiled program.
 
-A milder, widely-used cousin is **probing**. The idea: if some concept (part-of-speech, sentiment, whether a chess position is winning) is *linearly readable* from a layer's activations, the model has likely encoded it there. You train a small **probe classifier** on frozen activations to predict the concept; high probe accuracy is evidence the information is present and accessible.
+A milder, widely-used cousin is **probing**. The idea in one line: *if you can read a fact off a layer with a simple ruler, the layer must already be storing it.* So you freeze the model, grab its hidden activations for a batch of inputs, and train a tiny classifier (the **probe**) to predict some concept — part of speech, sentiment, whether a chess position is winning — from those activations alone. If the probe scores high, the information was sitting there, ready to be read; if it scores at chance, the layer isn't holding that concept (at least not in a simple, linear form).
 
 ```python
 # Probing: can a linear classifier read 'concept' from layer activations?
@@ -657,6 +738,16 @@ print("probe accuracy:", probe.score(acts_test, y_test))
 The field has produced striking concrete results: **induction heads** in transformers that implement in-context copying ("...A B ... A → predict B"), and a real risk — **polysemanticity**, where a single neuron fires for several unrelated concepts because the network packs more features than it has neurons (**superposition**). **Sparse autoencoders** are the current tool for disentangling these into mono-semantic features. Probing has its own trap: a powerful probe might *learn* the concept itself rather than *find* it already there — control with a randomized-label baseline to confirm the model, not the probe, holds the information.
 
 A complementary, more *causal* tool is **activation patching** (a.k.a. causal tracing): run the model on a clean input, run it again on a corrupted one, then copy a specific activation from the clean run into the corrupted run and see if the correct answer is restored. If patching one head's output flips the prediction back, that head *causally* carries the relevant information — much stronger evidence than a correlational probe.
+
+```{mermaid}
+flowchart LR
+  Clean["clean run: 'Paris is in ___' → France"] --> Cache[cache activations]
+  Corrupt["corrupted run: 'Rome is in ___' → Italy"] --> Patch[patch in one cached head]
+  Cache --> Patch
+  Patch --> Test{answer flips back to France?}
+  Test -->|yes| Causal[that head carries the fact]
+  Test -->|no| Skip[head not responsible]
+```
 
 ::: {.callout-tip}
 **Where this shows up in practice.** Anthropic's interpretability team used sparse autoencoders on a production LLM to pull out millions of human-nameable features — a "Golden Gate Bridge" feature, a "code with a security bug" feature — and showed that *clamping* a feature up or down steers the model's behaviour. That is mechanistic interpretability leaving the lab: not just reading a circuit, but using it as a dial.

@@ -281,6 +281,27 @@ graph TD
 
 That $\sqrt{\ln\lvert\mathcal{H}\rvert/n}$ is the generalization gap. Rearranging to get the gap below $\varepsilon$ recovers the agnostic sample complexity $m \sim \frac{1}{\varepsilon^2}(\ln\lvert\mathcal{H}\rvert + \ln\frac1\delta)$ from Section 42.2. The $\ln\lvert\mathcal{H}\rvert$ is the price of searching the class; the union bound is how we pay it.
 
+The animation below is the lottery analogy in motion: each hypothesis is a "ticket" whose empirical error wobbles around its true error. Search enough of them and one will *look* great by chance — the union bound widens everyone's safety cushion so the luckiest-looking ticket you keep is still trustworthy.
+
+<svg viewBox="0 0 520 200" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif" font-size="13" fill="currentColor">
+  <style>
+    @keyframes c42-union-ticket{0%,100%{transform:translateX(0)}50%{transform:translateX(14px)}}
+    @keyframes c42-union-lucky{0%,100%{transform:translateX(0);opacity:.85}50%{transform:translateX(40px);opacity:1}}
+    @media (prefers-reduced-motion: reduce){.c42-uw{animation:none!important}}
+  </style>
+  <text x="10" y="18" font-weight="bold">Many hypotheses, each error wandering — one looks lucky</text>
+  <line x1="120" y1="40" x2="120" y2="180" stroke="currentColor" stroke-dasharray="3 3"/>
+  <text x="78" y="36" fill="currentColor">true R</text>
+  <line x1="240" y1="40" x2="240" y2="180" stroke="#f59e0b" stroke-dasharray="3 3"/>
+  <text x="190" y="36" fill="#f59e0b">cushion edge</text>
+  <g class="c42-uw" style="animation:c42-union-ticket 4s ease-in-out infinite"><circle cx="120" cy="60" r="7" fill="#6366f1" opacity="0.8"/></g>
+  <g class="c42-uw" style="animation:c42-union-ticket 4.6s ease-in-out infinite"><circle cx="120" cy="90" r="7" fill="#38bdf8" opacity="0.8"/></g>
+  <g class="c42-uw" style="animation:c42-union-ticket 5.2s ease-in-out infinite"><circle cx="120" cy="120" r="7" fill="#a855f7" opacity="0.8"/></g>
+  <g class="c42-uw" style="animation:c42-union-lucky 4.2s ease-in-out infinite"><circle cx="120" cy="150" r="8" fill="#22c55e"/></g>
+  <text x="300" y="155" fill="#22c55e">luckiest ĥ — still inside cushion ✓</text>
+  <text x="300" y="90" fill="#6366f1">each ● = one hypothesis's R̂</text>
+</svg>
+
 The obvious problem: most interesting classes are **infinite** — a linear classifier has continuous weights, so $\lvert\mathcal{H}\rvert=\infty$ and the bound is vacuous. We need a complexity measure that captures the *effective* size of an infinite class. That is VC dimension.
 
 ## 42.5 VC dimension and shattering
@@ -328,6 +349,8 @@ $$
 **Also written:** the gap obeys $R(h)-\hat R(h) = O\!\big(\sqrt{d_{VC}/n}\big)$ up to log factors — i.e. it scales as $\sqrt{\text{capacity} / \text{data}}$.
 
 Here $d_{VC}$ plays the role $\ln\lvert\mathcal{H}\rvert$ played for finite classes — it is the *effective* log-cardinality. The Sauer–Shelah lemma is the engine: a class of VC dimension $d$ can produce at most $O(n^d)$ distinct labelings of $n$ points, *polynomially* many rather than $2^n$, so the union bound becomes tractable even over infinitely many hypotheses.
+
+**Where this shows up.** The "$d_{VC}=d+1$ for linear classifiers in $\mathbb{R}^d$" rule is the back-of-envelope every practitioner uses without naming it: a logistic-regression model with 50 features has $d_{VC}\approx 51$, so the $\sqrt{d_{VC}/n}$ heuristic says you want $n$ comfortably in the thousands before the training accuracy is believable. Add a polynomial feature expansion and $d_{VC}$ balloons — which is exactly why expanded-feature models overfit on small datasets. VC dimension is the formalization of the folk rule "you need several times more rows than columns."
 
 ::: {.callout-warning}
 **Pitfall.** VC bounds are distribution-free and worst-case, so they are notoriously *loose* — often predicting you need millions of samples where thousands suffice. They are a tool for understanding *what makes learning possible* and the *shape* of dependencies (gap $\sim\sqrt{d_{VC}/n}$), not for tight numerical predictions. And for modern nets, $d_{VC}$ can exceed $n$, making the bound vacuous (Section 42.9).
@@ -434,6 +457,27 @@ $$
 
 The payoff: a $\beta$-stable algorithm has expected generalization gap bounded by $\beta$ (typically $O(1/n)$ for regularized methods). This is exactly *why regularization generalizes* — adding a $\frac{\lambda}{2}\|w\|^2$ penalty makes the minimizer move less when data changes (larger $\lambda$ → more stable → smaller gap, at the cost of higher bias). Ridge regression, SVMs, and weight decay all earn their generalization guarantees through stability, not VC counting. Stochastic gradient descent run for few enough steps is stable too, which is one modern explanation for why early stopping helps.
 
+The picture below contrasts the two regimes: swap one data point in and out, and watch how much the fitted line jumps. The lightly-regularized model lurches (unstable, big gap); the heavily-regularized one barely flinches (stable, small gap).
+
+<svg viewBox="0 0 520 210" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif" font-size="13" fill="currentColor">
+  <style>
+    @keyframes c42-stab-wobble{0%,100%{transform:rotate(-9deg)}50%{transform:rotate(9deg)}}
+    @keyframes c42-stab-firm{0%,100%{transform:rotate(-1.5deg)}50%{transform:rotate(1.5deg)}}
+    @media (prefers-reduced-motion: reduce){.c42-sw{animation:none!important}}
+  </style>
+  <text x="10" y="18" font-weight="bold">Swap one point: weak penalty lurches, strong penalty holds</text>
+  <text x="60" y="42" fill="#ec4899">low λ — unstable</text>
+  <rect x="40" y="55" width="170" height="120" fill="rgba(236,72,153,0.08)" stroke="#ec4899" rx="6"/>
+  <line class="c42-sw" x1="125" y1="160" x2="125" y2="70" stroke="#ec4899" stroke-width="3" stroke-linecap="round" style="transform-origin:125px 160px;animation:c42-stab-wobble 3.5s ease-in-out infinite"/>
+  <circle cx="80" cy="140" r="5" fill="#6366f1"/><circle cx="120" cy="110" r="5" fill="#6366f1"/><circle cx="165" cy="95" r="5" fill="#6366f1"/>
+  <text x="320" y="42" fill="#22c55e">high λ — stable</text>
+  <rect x="300" y="55" width="170" height="120" fill="rgba(34,197,94,0.08)" stroke="#22c55e" rx="6"/>
+  <line class="c42-sw" x1="385" y1="160" x2="385" y2="70" stroke="#22c55e" stroke-width="3" stroke-linecap="round" style="transform-origin:385px 160px;animation:c42-stab-firm 3.5s ease-in-out infinite"/>
+  <circle cx="340" cy="140" r="5" fill="#6366f1"/><circle cx="380" cy="110" r="5" fill="#6366f1"/><circle cx="425" cy="95" r="5" fill="#6366f1"/>
+  <text x="40" y="200" fill="currentColor">big swing ⇒ large generalization gap</text>
+  <text x="300" y="200" fill="currentColor">tiny swing ⇒ small gap</text>
+</svg>
+
 ```python
 # scikit-learn: stability in action — stronger ridge penalty = smaller change
 # when one training row is swapped out, and a smaller train/test gap.
@@ -492,7 +536,11 @@ $$
 **In words:** at every round, pick the decision that would have been best on *everything seen so far*, but nudged by a regularizer that stops you from over-reacting to the latest data.
 **Also written:** equivalently $w_{t+1}=\arg\min_w \big\langle \sum_{s\le t}\nabla\ell_s(w_s),\,w\big\rangle + \tfrac1\eta r(w)$ in its linearized form; with $r(w)=\tfrac12\|w\|^2$ this unrolls to the gradient step $w_{t+1}=w_t-\eta\nabla\ell_t(w_t)$.
 
-The regularizer $r$ prevents the wild swings that "follow the leader" alone would suffer. With a strongly convex $r$, FTRL achieves $O(\sqrt T)$ regret; online gradient descent is the special case $r(w)=\tfrac12\|w\|^2$. FTRL is not a toy — it is the workhorse behind large-scale ad click-through prediction systems.
+The regularizer $r$ prevents the wild swings that "follow the leader" alone would suffer. Plainly: if you always jump to whatever was best so far, a single noisy day flips your whole strategy and you thrash. The regularizer is a bit of inertia — it keeps you near your previous choice so you only drift when the *accumulated* evidence is strong. With a strongly convex $r$, FTRL achieves $O(\sqrt T)$ regret; online gradient descent is the special case $r(w)=\tfrac12\|w\|^2$. FTRL is not a toy — it is the workhorse behind large-scale ad click-through prediction systems.
+
+::: {.callout-tip}
+**Rule of thumb.** "Follow the *regularized* leader, never the bare leader." Any online rule that reacts to the single most recent loss with no inertia (plain follow-the-leader, an unclipped learning rate) will oscillate and rack up linear regret on adversarial sequences. The cure is always the same shape: add a strongly-convex regularizer (or equivalently, a small-enough step size) so each update is a *nudge*, not a *leap*.
+:::
 
 ```{mermaid}
 graph LR
@@ -550,6 +598,8 @@ $$
 **Also written:** the gap obeys $\mathbb{E}_Q[R] - \mathbb{E}_Q[\hat R] \le \sqrt{\big(\mathrm{KL}(Q\|P)+\ln(n/\delta)\big)/(2(n-1))}$, with $\mathrm{KL}(Q\|P)=\mathbb{E}_{h\sim Q}[\ln \frac{Q(h)}{P(h)}]$ playing the complexity role that $\ln|\mathcal H|$ and $d_{VC}$ played before.
 
 The lesson: the right "complexity" of a learned net is not its parameter count but **how much information training had to write into the weights** beyond the prior. A network that fits the data while staying close to a generic initialization is, in a precise sense, simple — and PAC-Bayes certifies it.
+
+**Where this shows up.** PAC-Bayes is not only a proof technique — it is also *optimized directly*. Dziugaite and Roy (2017) trained a network on MNIST by minimizing the PAC-Bayes bound itself, producing a certificate guaranteeing under ~20% test error before ever touching the test set — the first non-vacuous guarantee for a real net. The same flat-minima intuition powers practical tools like **Sharpness-Aware Minimization (SAM)**, which explicitly seeks weight regions where the loss stays low under perturbation — engineering for exactly the flatness PAC-Bayes rewards.
 
 ## 42.12 Nonconvex landscapes: when local minima are global
 

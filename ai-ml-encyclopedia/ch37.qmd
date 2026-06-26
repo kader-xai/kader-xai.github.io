@@ -162,6 +162,37 @@ flowchart LR
 
 To make the danger concrete, imagine two worlds. In the **observed world**, ice cream and drownings rise and fall together because heat moves both. In the **intervention world**, you personally fix ice-cream sales at zero (you ban it) while letting heat do whatever it likes. The drownings barely move, because you snapped the link to ice cream but not the link from heat. A predictor trained on the first world confidently — and wrongly — promises a payoff in the second.
 
+```{=html}
+<style>
+@keyframes c37-seesee { 0%,45%{opacity:1} 55%,100%{opacity:.12} }
+@keyframes c37-dosee  { 0%,45%{opacity:.12} 55%,100%{opacity:1} }
+@keyframes c37-scissor{ 0%,40%{opacity:0;transform:translateX(-8px)} 55%,100%{opacity:1;transform:translateX(0)} }
+@media (prefers-reduced-motion: reduce){ .c37-w1,.c37-w2,.c37-cut{animation:none!important} }
+</style>
+<svg viewBox="0 0 460 170" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif" font-size="11" role="img" aria-label="Observing keeps the heat to ice-cream arrow; doing cuts it">
+  <text x="230" y="16" text-anchor="middle" fill="currentColor" font-weight="bold">same graph, two questions</text>
+  <!-- heat node -->
+  <circle cx="230" cy="55" r="20" fill="#f59e0b" opacity="0.7"/>
+  <text x="230" y="59" text-anchor="middle" fill="currentColor">heat</text>
+  <!-- ice cream + drowning -->
+  <rect x="80"  y="110" width="90" height="30" rx="6" fill="#38bdf8" opacity="0.3"/>
+  <rect x="290" y="110" width="90" height="30" rx="6" fill="#22c55e" opacity="0.3"/>
+  <text x="125" y="129" text-anchor="middle" fill="currentColor">ice cream</text>
+  <text x="335" y="129" text-anchor="middle" fill="currentColor">drownings</text>
+  <!-- heat -> drownings (always there) -->
+  <line x1="245" y1="70" x2="320" y2="108" stroke="#22c55e" stroke-width="2.5"/>
+  <!-- heat -> ice cream: present when OBSERVING, cut when DOING -->
+  <line class="c37-w1" x1="215" y1="70" x2="140" y2="108" stroke="#f59e0b" stroke-width="2.5" style="animation:c37-seesee 6s ease-in-out infinite"/>
+  <g class="c37-cut" style="animation:c37-scissor 6s ease-in-out infinite">
+    <line x1="215" y1="70" x2="140" y2="108" stroke="#ec4899" stroke-width="2.5" stroke-dasharray="3 4"/>
+    <text x="172" y="84" fill="#ec4899" font-size="14">✂</text>
+  </g>
+  <!-- caption switches -->
+  <text class="c37-w1" x="230" y="162" text-anchor="middle" fill="#38bdf8" style="animation:c37-seesee 6s ease-in-out infinite">SEE: P(Y|X) — heat still feeds ice cream</text>
+  <text class="c37-w2" x="230" y="162" text-anchor="middle" fill="#ec4899" style="animation:c37-dosee 6s ease-in-out infinite">DO: P(Y|do X) — you cut heat→ice cream</text>
+</svg>
+```
+
 ::: {.callout-warning}
 "The model is 95% accurate" tells you nothing about whether acting on its inputs is safe. Accuracy measures fit to the observed world; interventions create a *new* world the training data never saw.
 :::
@@ -224,20 +255,20 @@ Rule of thumb: a variable is a confounder candidate if you can draw arrows *from
 A wins on small stones *and* on large stones, yet B wins overall. Why? Doctors gave A to the hard (large-stone) cases — 263 of A's 350 patients had large stones — and gave B mostly to the easy small-stone cases. So B's combined number is inflated by a flood of easy patients, while A's is dragged down by hard ones. Stone size is the confounder; the *subgroup* numbers are the causally honest ones, because they hold the confounder fixed.
 
 <svg viewBox="0 0 460 200" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif" font-size="12">
-  <line x1="40" y1="170" x2="440" y2="170" stroke="#888"/>
-  <line x1="40" y1="20" x2="40" y2="170" stroke="#888"/>
-  <text x="14" y="100" transform="rotate(-90 14,100)">success rate</text>
-  <circle cx="120" cy="35" r="5" fill="#2a7"/>
-  <circle cx="360" cy="60" r="5" fill="#2a7"/>
-  <line x1="120" y1="35" x2="360" y2="60" stroke="#2a7" stroke-width="2"/>
-  <text x="370" y="60" fill="#2a7">A</text>
-  <circle cx="120" cy="48" r="5" fill="#c63"/>
-  <circle cx="360" cy="70" r="5" fill="#c63"/>
-  <line x1="120" y1="48" x2="360" y2="70" stroke="#c63" stroke-width="2"/>
-  <text x="370" y="74" fill="#c63">B</text>
-  <text x="95" y="190">small stones</text>
-  <text x="325" y="190">large stones</text>
-  <text x="120" y="150" fill="#555">A is above B in BOTH groups — yet B's easy-case mix wins overall</text>
+  <line x1="40" y1="170" x2="440" y2="170" stroke="currentColor" opacity="0.4"/>
+  <line x1="40" y1="20" x2="40" y2="170" stroke="currentColor" opacity="0.4"/>
+  <text x="14" y="100" transform="rotate(-90 14,100)" fill="currentColor">success rate</text>
+  <circle cx="120" cy="35" r="5" fill="#22c55e"/>
+  <circle cx="360" cy="60" r="5" fill="#22c55e"/>
+  <line x1="120" y1="35" x2="360" y2="60" stroke="#22c55e" stroke-width="2"/>
+  <text x="370" y="60" fill="#22c55e">A</text>
+  <circle cx="120" cy="48" r="5" fill="#f59e0b"/>
+  <circle cx="360" cy="70" r="5" fill="#f59e0b"/>
+  <line x1="120" y1="48" x2="360" y2="70" stroke="#f59e0b" stroke-width="2"/>
+  <text x="370" y="74" fill="#f59e0b">B</text>
+  <text x="95" y="190" fill="currentColor">small stones</text>
+  <text x="325" y="190" fill="currentColor">large stones</text>
+  <text x="120" y="150" fill="currentColor" opacity="0.75">A is above B in BOTH groups — yet B's easy-case mix wins overall</text>
 </svg>
 
 ::: {.callout-warning}
@@ -254,6 +285,28 @@ The **potential outcomes** framework (Neyman–Rubin) gives causation a crisp de
 The **individual causal effect** is $\tau_i = Y_i(1) - Y_i(0)$. The trouble — the **fundamental problem of causal inference** — is that you only ever observe *one* of the two. The other is the **counterfactual**: what *would have* happened under the road not taken. You can never see both for the same person, so individual effects are unobservable; we estimate *averages* instead.
 
 Intuition: it's like wanting to know whether a particular umbrella kept *you* dry today. You either carried it (and stayed dry) or didn't (and got wet) — you can't replay this exact afternoon both ways. The single thing you most want to measure is the one thing physics forbids you to observe. Causal inference's whole trick is borrowing the missing half from *other, comparable people*.
+
+```{=html}
+<style>
+@keyframes c37-take  { 0%,100%{opacity:1} } /* taken road: solid */
+@keyframes c37-ghost { 0%,100%{opacity:.25} 50%{opacity:.55} }
+@media (prefers-reduced-motion: reduce){ .c37-ghost{animation:none!important} }
+</style>
+<svg viewBox="0 0 440 170" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif" font-size="11" role="img" aria-label="A unit takes one road; the other road is the unobserved counterfactual">
+  <!-- the unit -->
+  <circle cx="60" cy="85" r="12" fill="#a855f7"/>
+  <text x="60" y="118" text-anchor="middle" fill="currentColor">patient i</text>
+  <!-- road taken: treated -->
+  <line x1="72" y1="80" x2="300" y2="40" stroke="#22c55e" stroke-width="3"/>
+  <circle cx="312" cy="38" r="11" fill="#22c55e" opacity="0.85"/>
+  <text x="360" y="42" fill="currentColor">Y(1) observed ✓</text>
+  <!-- road not taken: ghosted counterfactual -->
+  <line class="c37-ghost" x1="72" y1="92" x2="300" y2="132" stroke="#ec4899" stroke-width="3" stroke-dasharray="5 6" style="animation:c37-ghost 4s ease-in-out infinite"/>
+  <circle class="c37-ghost" cx="312" cy="134" r="11" fill="none" stroke="#ec4899" stroke-width="2" stroke-dasharray="3 3" style="animation:c37-ghost 4s ease-in-out infinite"/>
+  <text class="c37-ghost" x="360" y="138" fill="#ec4899" style="animation:c37-ghost 4s ease-in-out infinite">Y(0) counterfactual ✕</text>
+  <text x="170" y="160" text-anchor="middle" fill="currentColor">effect τ = Y(1) − Y(0): one half always missing</text>
+</svg>
+```
 
 **Worked example.** Picture five patients, with both potential outcomes filled in by an oracle (in reality you see only the column matching what they actually got):
 
@@ -551,30 +604,30 @@ $$\widehat{\text{ATT}} = \big(\bar Y^{\text{treat}}_{\text{after}}-\bar Y^{\text
 Concretely, if a state raises its minimum wage and employment there moves from 20 to 19 (down 1) while a neighboring control state moves from 18 to 16 (down 2), DiD estimates the policy *raised* employment by $(-1) - (-2) = +1$ relative to the trend both states shared.
 
 <svg viewBox="0 0 440 220" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif" font-size="12">
-  <line x1="50" y1="190" x2="420" y2="190" stroke="#888"/>
-  <line x1="50" y1="20" x2="50" y2="190" stroke="#888"/>
-  <line x1="235" y1="20" x2="235" y2="190" stroke="#bbb" stroke-dasharray="4"/>
-  <text x="195" y="15" fill="#777">treatment time</text>
-  <line x1="70" y1="150" x2="235" y2="120" stroke="#36c" stroke-width="2"/>
-  <line x1="235" y1="120" x2="400" y2="90" stroke="#36c" stroke-width="2"/>
-  <text x="405" y="92" fill="#36c">control</text>
-  <line x1="70" y1="120" x2="235" y2="90" stroke="#c33" stroke-width="2"/>
-  <line x1="235" y1="90" x2="400" y2="40" stroke="#c33" stroke-width="2"/>
-  <text x="405" y="42" fill="#c33">treated</text>
-  <line x1="235" y1="90" x2="400" y2="60" stroke="#c33" stroke-width="2" stroke-dasharray="5"/>
-  <text x="290" y="80" fill="#c33">counterfactual</text>
-  <line x1="400" y1="40" x2="400" y2="60" stroke="#000"/>
-  <text x="338" y="54" fill="#000">DiD = effect</text>
+  <line x1="50" y1="190" x2="420" y2="190" stroke="currentColor" opacity="0.4"/>
+  <line x1="50" y1="20" x2="50" y2="190" stroke="currentColor" opacity="0.4"/>
+  <line x1="235" y1="20" x2="235" y2="190" stroke="currentColor" opacity="0.3" stroke-dasharray="4"/>
+  <text x="195" y="15" fill="currentColor" opacity="0.7">treatment time</text>
+  <line x1="70" y1="150" x2="235" y2="120" stroke="#38bdf8" stroke-width="2"/>
+  <line x1="235" y1="120" x2="400" y2="90" stroke="#38bdf8" stroke-width="2"/>
+  <text x="405" y="92" fill="#38bdf8">control</text>
+  <line x1="70" y1="120" x2="235" y2="90" stroke="#ec4899" stroke-width="2"/>
+  <line x1="235" y1="90" x2="400" y2="40" stroke="#ec4899" stroke-width="2"/>
+  <text x="405" y="42" fill="#ec4899">treated</text>
+  <line x1="235" y1="90" x2="400" y2="60" stroke="#ec4899" stroke-width="2" stroke-dasharray="5"/>
+  <text x="280" y="80" fill="#ec4899" opacity="0.85">counterfactual</text>
+  <line x1="400" y1="40" x2="400" y2="60" stroke="#f59e0b" stroke-width="3"/>
+  <text x="332" y="54" fill="#f59e0b">DiD = effect</text>
 </svg>
 
 **Regression discontinuity (RD).** When treatment is assigned by a sharp cutoff on a running variable — a test score above 60 gets the scholarship, below 60 doesn't — units *just* above and *just* below the threshold are essentially identical except for treatment. Comparing outcomes in a narrow window around the cutoff gives a local randomized experiment for free. A student scoring 59 and one scoring 61 are indistinguishable in talent, so any later gap in their graduation rates is attributable to the scholarship, not the score.
 
 <svg viewBox="0 0 440 200" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif" font-size="12">
-  <line x1="50" y1="170" x2="420" y2="170" stroke="#888"/>
-  <line x1="50" y1="20" x2="50" y2="170" stroke="#888"/>
-  <line x1="235" y1="20" x2="235" y2="180" stroke="#bbb" stroke-dasharray="4"/>
-  <text x="200" y="195" fill="#777">cutoff</text>
-  <text x="120" y="195" fill="#777">running variable (e.g. test score)</text>
+  <line x1="50" y1="170" x2="420" y2="170" stroke="currentColor" opacity="0.4"/>
+  <line x1="50" y1="20" x2="50" y2="170" stroke="currentColor" opacity="0.4"/>
+  <line x1="235" y1="20" x2="235" y2="180" stroke="currentColor" opacity="0.3" stroke-dasharray="4"/>
+  <text x="200" y="195" fill="currentColor" opacity="0.7">cutoff</text>
+  <text x="120" y="195" fill="currentColor" opacity="0.7">running variable (e.g. test score)</text>
   <!-- below-cutoff trend (untreated) -->
   <line x1="60" y1="150" x2="235" y2="110" stroke="#38bdf8" stroke-width="2.5"/>
   <!-- above-cutoff trend (treated), jumped up -->
@@ -680,6 +733,35 @@ In marketing this sorts customers into four types:
 - **Sleeping dogs** — buy unless contacted; the message *annoys* them (negative uplift; actively avoid).
 
 A predictive (propensity-to-buy) model would happily target sure things, who convert anyway, and sleeping dogs, who you then drive away. Only an uplift model finds the persuadables. The simplest estimator is the **T-learner**: fit one model $\hat\mu_1(x)$ on the treated, another $\hat\mu_0(x)$ on the control, and predict $\widehat{\text{CATE}}(x)=\hat\mu_1(x)-\hat\mu_0(x)$.
+
+```{=html}
+<style>
+@keyframes c37-pulse { 0%,100%{transform:scale(1)} 50%{transform:scale(1.18)} }
+@media (prefers-reduced-motion: reduce){ .c37-pers{animation:none!important} }
+</style>
+<svg viewBox="0 0 460 130" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif" font-size="11" role="img" aria-label="Four customer types ranked by uplift; only persuadables have positive uplift worth targeting">
+  <text x="230" y="16" text-anchor="middle" fill="currentColor" font-weight="bold">uplift = P(buy | emailed) − P(buy | left alone)</text>
+  <!-- persuadable: positive, glowing -->
+  <g class="c37-pers" style="animation:c37-pulse 2.6s ease-in-out infinite;transform-origin:70px 70px">
+    <rect x="35" y="45" width="70" height="50" rx="8" fill="#22c55e" opacity="0.35"/>
+  </g>
+  <text x="70" y="68" text-anchor="middle" fill="currentColor">persuadable</text>
+  <text x="70" y="85" text-anchor="middle" fill="#22c55e" font-weight="bold">+ target</text>
+  <!-- sure thing -->
+  <rect x="125" y="45" width="70" height="50" rx="8" fill="#38bdf8" opacity="0.2"/>
+  <text x="160" y="68" text-anchor="middle" fill="currentColor">sure thing</text>
+  <text x="160" y="85" text-anchor="middle" fill="#38bdf8">0 skip</text>
+  <!-- lost cause -->
+  <rect x="215" y="45" width="70" height="50" rx="8" fill="#38bdf8" opacity="0.2"/>
+  <text x="250" y="68" text-anchor="middle" fill="currentColor">lost cause</text>
+  <text x="250" y="85" text-anchor="middle" fill="#38bdf8">0 skip</text>
+  <!-- sleeping dog: negative -->
+  <rect x="305" y="45" width="80" height="50" rx="8" fill="#ec4899" opacity="0.3"/>
+  <text x="345" y="68" text-anchor="middle" fill="currentColor">sleeping dog</text>
+  <text x="345" y="85" text-anchor="middle" fill="#ec4899" font-weight="bold">− avoid</text>
+  <text x="425" y="74" fill="currentColor">uplift →</text>
+</svg>
+```
 
 **Worked example.** Suppose for a given customer the treated-outcome model predicts a 0.30 purchase probability if emailed and the control model predicts 0.45 if left alone. The uplift is $0.30 - 0.45 = -0.15$ — *negative*. This customer is a sleeping dog: emailing them *lowers* their purchase chance by 15 points. A plain propensity model sees only the 0.30 and might still target them; the uplift model correctly says leave them alone.
 

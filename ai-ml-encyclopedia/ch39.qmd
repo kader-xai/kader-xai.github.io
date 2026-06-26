@@ -119,16 +119,16 @@ The hidden-prediction task is called a **pretext task**. Mask a word in a senten
 
 **Contrastive learning** is one especially powerful flavor of SSL. The intuition: pull together things that are "the same" and push apart things that are "different," without ever naming what they are. Take an image, make two random augmentations of it (a crop, a color shift) — these form a **positive pair**, two views of the same underlying thing. Every other image in the batch is a **negative**. Train the encoder so the two positive views land close in embedding space and negatives land far.
 
-The standard objective is the **InfoNCE** loss. For an anchor embedding $z_i$ with positive $z_j$ and a similarity $\text{sim}(\cdot)$ (cosine similarity scaled by temperature $\tau$), the denominator runs over the positive partner *plus* all negatives — every candidate except the anchor itself:
+The standard objective is the **InfoNCE** loss. Think of it as a multiple-choice quiz: the anchor $z_i$ must pick its true twin $z_j$ out of a lineup that contains the twin plus every negative. The "score" for each candidate is its similarity to the anchor (cosine, divided by temperature $\tau$); a softmax turns those scores into pick-probabilities, and the loss is just $-\log(\text{probability assigned to the true twin})$ — high when the twin is the clear winner:
 
 $$
 \mathcal{L}_{i} = -\log \frac{\exp(\text{sim}(z_i, z_j)/\tau)}{\displaystyle\sum_{k \neq i} \exp(\text{sim}(z_i, z_k)/\tau)}
 $$
 
-**In words:** "Out of every candidate in the batch, how confidently does the model pick my true twin as the closest match?" — it's the softmax probability of the positive partner, negated and logged so that *more confident = lower loss*.
-**Also written:** as a cross-entropy with a one-hot target on the positive, $\mathcal{L}_i = \text{CE}\big(\text{softmax}_k(\text{sim}(z_i,z_k)/\tau),\, \mathbb{1}[k=j]\big)$, or equivalently $\mathcal{L}_i = -\,\text{sim}(z_i,z_j)/\tau + \log\sum_{k\neq i}\exp(\text{sim}(z_i,z_k)/\tau)$ (numerator term minus a log-sum-exp).
+The denominator sums over *every* candidate but the anchor itself ($k \neq i$) — so it counts the true twin and all the negatives. That makes this exactly an ordinary softmax cross-entropy whose "correct class" is the positive partner.
 
-Here the sum over $k \neq i$ includes $k = j$ (the positive) along with every negative; only the self-term $k = i$ is excluded. This is just a softmax cross-entropy where the "correct class" is the positive partner among all candidates in the batch.
+**In words:** "Out of everyone in the lineup, how confidently does the model pick my true twin? — the more confident, the lower the loss."
+**Also written:** numerator term minus a log-sum-exp, $\mathcal{L}_i = -\,\text{sim}(z_i,z_j)/\tau + \log\sum_{k\neq i}\exp(\text{sim}(z_i,z_k)/\tau)$.
 
 ```python
 import numpy as np
@@ -434,6 +434,25 @@ for eps in [8.0, 1.0, 0.25]:               # weaker -> stronger privacy
 
 At $\varepsilon = 8$ the noise barely perturbs the update; at $\varepsilon = 0.25$ it swamps it. There is no free lunch — every bit of guaranteed privacy is paid for in added noise, which is why DP deployments tune $\varepsilon$ to the weakest privacy the use case can ethically accept.
 
+The animation makes the tradeoff visible: a clean signal (the true update) versus the jitter that differential privacy sprinkles on top — turn privacy up and the wobble grows.
+
+<svg viewBox="0 0 420 120" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif" font-size="10">
+  <style>
+    @keyframes c39-dpjit { 0%,100% { transform: translateY(0) } 25% { transform: translateY(-7px) } 50% { transform: translateY(4px) } 75% { transform: translateY(-3px) } }
+    .c39-noisy { animation: c39-dpjit 2.2s ease-in-out infinite; }
+    @media (prefers-reduced-motion: reduce) { .c39-noisy { animation: none; } }
+  </style>
+  <line x1="30" y1="60" x2="400" y2="60" stroke="currentColor" stroke-width="1.5" opacity="0.55"/>
+  <text x="30" y="22" fill="#22c55e">true update (private signal)</text>
+  <circle cx="120" cy="60" r="5" fill="#22c55e"/>
+  <circle cx="200" cy="60" r="5" fill="#22c55e"/>
+  <circle cx="280" cy="60" r="5" fill="#22c55e"/>
+  <text x="245" y="108" fill="#ec4899">+ DP noise (jitters more as ε shrinks)</text>
+  <circle class="c39-noisy" cx="120" cy="60" r="5" fill="rgba(236,72,153,0.7)"/>
+  <circle class="c39-noisy" cx="200" cy="60" r="5" fill="rgba(236,72,153,0.7)" style="animation-delay:.5s"/>
+  <circle class="c39-noisy" cx="280" cy="60" r="5" fill="rgba(236,72,153,0.7)" style="animation-delay:1s"/>
+</svg>
+
 ::: {.callout-warning}
 FL is not automatically private. Sending gradients instead of data feels safe but is not — gradient-inversion attacks can recover images from updates. Privacy guarantees come from DP and secure aggregation layered *on top* of FL, not from FL alone.
 :::
@@ -708,6 +727,36 @@ vote = Counter(answers).most_common(1)[0][0]
 print(vote)   # -> 12: majority agrees, outvoting the two stray chains
 ```
 
+Five chains set off from the same question and arrive at their own answers; the three that agree on **12** form the winning bloc, and that bloc gently pulses to mark the vote.
+
+<svg viewBox="0 0 420 150" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif" font-size="11">
+  <style>
+    @keyframes c39-vote { 0%,100% { opacity:.55; r:15 } 50% { opacity:1; r:17 } }
+    .c39-win { animation: c39-vote 2.6s ease-in-out infinite; }
+    @media (prefers-reduced-motion: reduce) { .c39-win { animation: none; opacity:1; } }
+  </style>
+  <circle cx="30" cy="75" r="9" fill="rgba(99,102,241,0.5)" stroke="#6366f1"/>
+  <text x="30" y="105" text-anchor="middle" fill="currentColor">question</text>
+  <!-- chains -->
+  <line x1="40" y1="75" x2="150" y2="30" stroke="currentColor" opacity="0.4"/>
+  <line x1="40" y1="75" x2="150" y2="55" stroke="currentColor" opacity="0.4"/>
+  <line x1="40" y1="75" x2="150" y2="80" stroke="currentColor" opacity="0.4"/>
+  <line x1="40" y1="75" x2="150" y2="105" stroke="currentColor" opacity="0.4"/>
+  <line x1="40" y1="75" x2="150" y2="130" stroke="currentColor" opacity="0.4"/>
+  <circle class="c39-win" cx="180" cy="30" r="15" fill="rgba(34,197,94,0.45)" stroke="#22c55e"/><text x="180" y="34" text-anchor="middle" fill="currentColor">12</text>
+  <circle cx="180" cy="55" r="13" fill="rgba(148,163,184,0.3)" stroke="currentColor" opacity="0.6"/><text x="180" y="59" text-anchor="middle" fill="currentColor">11</text>
+  <circle class="c39-win" cx="180" cy="80" r="15" fill="rgba(34,197,94,0.45)" stroke="#22c55e" style="animation-delay:.4s"/><text x="180" y="84" text-anchor="middle" fill="currentColor">12</text>
+  <circle cx="180" cy="105" r="13" fill="rgba(148,163,184,0.3)" stroke="currentColor" opacity="0.6"/><text x="180" y="109" text-anchor="middle" fill="currentColor">9</text>
+  <circle class="c39-win" cx="180" cy="130" r="15" fill="rgba(34,197,94,0.45)" stroke="#22c55e" style="animation-delay:.8s"/><text x="180" y="134" text-anchor="middle" fill="currentColor">12</text>
+  <!-- tally -->
+  <path d="M205 30 Q300 30 320 75" fill="none" stroke="#22c55e" stroke-width="1.5" opacity="0.7"/>
+  <path d="M205 80 Q300 80 320 75" fill="none" stroke="#22c55e" stroke-width="1.5" opacity="0.7"/>
+  <path d="M205 130 Q300 130 320 75" fill="none" stroke="#22c55e" stroke-width="1.5" opacity="0.7"/>
+  <circle cx="360" cy="75" r="22" fill="rgba(34,197,94,0.3)" stroke="#22c55e" stroke-width="2"/>
+  <text x="360" y="72" text-anchor="middle" fill="currentColor" font-weight="bold">12</text>
+  <text x="360" y="86" text-anchor="middle" fill="#22c55e" font-size="8">3 of 5 win</text>
+</svg>
+
 Why does voting help so reliably? If each chain is independently correct with probability $p > 0.5$, the chance the *majority* of $n$ chains is correct climbs toward 1 as $n$ grows — the same statistics that make a panel of mediocre judges beat one expert. The probability the majority is right is $\sum_{k > n/2} \binom{n}{k} p^k (1-p)^{n-k}$.
 
 **In words:** "Add up the chance that more than half the chains happen to be correct — and if each chain is even slightly better than a coin flip, that sum rushes toward certainty as you sample more chains."
@@ -933,6 +982,24 @@ $$g_i \leftarrow g_i - \frac{g_i \cdot g_j}{\|g_j\|^2}\, g_j$$
 **In words:** "If task $i$'s gradient pushes partly *against* task $j$'s, subtract off just that opposing part — keep what helps $i$, drop what fights $j$."
 **Also written:** as a projection, $g_i \leftarrow (I - \hat g_j \hat g_j^\top)\, g_i$ with $\hat g_j = g_j/\|g_j\|$ — orthogonal projection of $g_i$ out of $g_j$'s direction.
 
+Geometrically the surgery snips off only the component of $g_i$ that points back along $g_j$, leaving the part that runs perpendicular — the help survives, the conflict is removed.
+
+<svg viewBox="0 0 360 170" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif" font-size="10">
+  <line x1="40" y1="130" x2="330" y2="130" stroke="currentColor" opacity="0.3"/>
+  <line x1="60" y1="150" x2="60" y2="20" stroke="currentColor" opacity="0.3"/>
+  <!-- g_j pointing down-right -->
+  <line x1="60" y1="40" x2="200" y2="120" stroke="#38bdf8" stroke-width="2.5" marker-end="url(#c39a)"/>
+  <text x="205" y="120" fill="#38bdf8">g_j</text>
+  <!-- original g_i (conflicting) -->
+  <line x1="60" y1="40" x2="40" y2="118" stroke="#ec4899" stroke-width="2.5" marker-end="url(#c39a)" opacity="0.55"/>
+  <text x="14" y="118" fill="#ec4899" opacity="0.7">g_i</text>
+  <!-- de-conflicted g_i (perpendicular component) -->
+  <line x1="60" y1="40" x2="115" y2="6" stroke="#22c55e" stroke-width="2.5" marker-end="url(#c39a)"/>
+  <text x="120" y="14" fill="#22c55e">g_i after surgery</text>
+  <text x="150" y="160" text-anchor="middle" fill="currentColor" opacity="0.7">keep ⟂ part, drop the part fighting g_j</text>
+  <defs><marker id="c39a" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6 Z" fill="currentColor"/></marker></defs>
+</svg>
+
 ```python
 import numpy as np
 
@@ -953,6 +1020,10 @@ print(pcgrad([gA, gB]))                    # net update no longer fully cancels
 ```
 
 **GradNorm** attacks the *magnitude* side instead: it dynamically rescales each task's loss weight so that all tasks train at a similar *rate*, preventing the fast learner from hogging the shared backbone. PCGrad fixes direction; GradNorm balances speed. In practice they target the two ways multi-task training goes wrong — conflicting gradients and imbalanced ones — and are often worth more than yet another architecture tweak.
+
+::: {.callout-tip}
+Before reaching for gradient surgery, try the cheapest fix first: just **tune the per-task loss weights** (even a fixed hand-set ratio). A lot of "gradient conflict" is really one task's loss being numerically larger; rebalancing the weights often recovers most of the benefit with none of the machinery.
+:::
 
 ## 39.14 — Self-Supervised and Contrastive Learning in Depth
 
@@ -1054,6 +1125,8 @@ flowchart LR
 ```
 
 JEPA sits at an interesting crossroads of everything above: it predicts like masked modeling, but in latent space like the non-contrastive methods, using a stop-gradient/EMA target to avoid collapse like BYOL. The unifying view across this whole section is that SSL is the search for a *prediction task hard enough to demand understanding but not so literal that it wastes effort on noise* — and the frontier has been steadily moving that prediction from raw pixels toward abstract representations.
+
+**Where this shows up.** These are not just lab curiosities. DINO-style features power off-the-shelf image search and zero-shot segmentation; MAE pretraining is a standard warm-start for medical-imaging and satellite models where labels are scarce; and the "predict in representation space" idea behind JEPA underlies video and world-model pretraining where reconstructing every pixel would be hopeless. When a team says they "pretrained a backbone on unlabeled data and fine-tuned on our small set," they are almost always running one of the six rows in the table below.
 
 | Method | Family | Needs negatives? | Predicts in | Anti-collapse trick |
 |---|---|---|---|---|
