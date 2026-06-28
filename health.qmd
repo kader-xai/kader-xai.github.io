@@ -36,14 +36,8 @@ anchor-sections: false
     </div>
   </div>
 
-  <details class="panel wb-lib" id="wbLib">
-    <summary>📚 Curated picks (these power the day builder)</summary>
-    <div class="wb-filters" id="wbFilters"></div>
-    <div id="wbLibBody"></div>
-  </details>
-
   <details class="panel wb-lib" id="wbDS">
-    <summary>🗂️ Full exercise library — 1,300+ with step-by-step instructions</summary>
+    <summary>📚 Exercise library — 1,400+ exercises, grouped by muscle (gifs + instructions)</summary>
     <div class="wb-filters" id="wbDSFilters"></div>
     <div id="wbDSBody"></div>
   </details>
@@ -315,20 +309,6 @@ const wbSEC={
    wx("kb_row","Kettlebell Bent-Over Row","kettlebell")]}
 };
 const wbFLAT={};for(const k in wbSEC)wbSEC[k].list.forEach(e=>{if(!wbFLAT[e.id])wbFLAT[e.id]={...e,sec:k}});
-/* anatomical sub-regions for the library, per muscle group */
-const wbReg={
- chest:{order:['Upper Chest','Mid Chest','Lower Chest'],reg:{incline_db_press:'Upper Chest',incline_db_fly:'Upper Chest',cable_fly_low:'Upper Chest',machine_incline_press:'Upper Chest',barbell_incline_press:'Upper Chest',flat_db_press:'Mid Chest',machine_chest_press:'Mid Chest',pec_deck:'Mid Chest',db_pullover:'Mid Chest',decline_db_press:'Lower Chest',cable_fly_high:'Lower Chest',chest_dip:'Lower Chest'}},
- triceps:{order:['Pushdowns','Overhead (Long Head)','Extensions & Dips'],reg:{rope_pushdown:'Pushdowns',v_bar_pushdown:'Pushdowns',straight_bar_pushdown:'Pushdowns',single_arm_pushdown:'Pushdowns',overhead_rope_ext:'Overhead (Long Head)',db_overhead_ext:'Overhead (Long Head)',skull_crusher:'Extensions & Dips',db_kickback:'Extensions & Dips',close_grip_bench:'Extensions & Dips',machine_triceps_ext:'Extensions & Dips',bench_dip:'Extensions & Dips'}},
- biceps:{order:['Standard Curls','Hammer / Reverse','Peak / Stretch'],reg:{db_curl:'Standard Curls',cable_curl:'Standard Curls',barbell_curl:'Standard Curls',ez_bar_curl:'Standard Curls',hammer_curl:'Hammer / Reverse',rope_hammer_curl:'Hammer / Reverse',reverse_curl:'Hammer / Reverse',incline_db_curl:'Peak / Stretch',concentration_curl:'Peak / Stretch',preacher_curl:'Peak / Stretch'}},
- lats:{order:['Wide / Vertical','Close / Neutral','Straight-Arm','Pull-Ups'],reg:{lat_pulldown:'Wide / Vertical',wide_pulldown:'Wide / Vertical',close_grip_pulldown:'Close / Neutral',neutral_pulldown:'Close / Neutral',single_arm_pulldown:'Close / Neutral',straight_arm_pulldown:'Straight-Arm',assisted_pullup:'Pull-Ups',pull_up:'Pull-Ups',chin_up:'Pull-Ups'}},
- rows:{order:['Upper Back','Mid Back'],reg:{rope_cable_row:'Upper Back',one_arm_db_row:'Mid Back',db_bent_row:'Mid Back',chest_supported_row:'Mid Back',seated_cable_row:'Mid Back',single_arm_cable_row:'Mid Back',machine_row:'Mid Back',barbell_row:'Mid Back',t_bar_row:'Mid Back',inverted_row:'Mid Back'}},
- traps:{order:['Traps','Upper Traps / Rear'],reg:{db_shrug:'Traps',db_upright_row:'Traps',rope_upright_row:'Traps',cable_shrug:'Traps',barbell_shrug:'Traps',cable_high_row:'Upper Traps / Rear',face_pull:'Upper Traps / Rear'}},
- quads:{order:['Squat Pattern','Lunge & Split','Machine & Isolation'],reg:{goblet_squat:'Squat Pattern',db_squat:'Squat Pattern',barbell_squat:'Squat Pattern',front_squat:'Squat Pattern',hack_squat:'Squat Pattern',smith_squat:'Squat Pattern',bulgarian_split_squat:'Lunge & Split',db_lunge:'Lunge & Split',reverse_lunge:'Lunge & Split',db_step_up:'Lunge & Split',leg_press:'Machine & Isolation',leg_extension:'Machine & Isolation'}},
- hams:{order:['Hip Hinge','Leg Curl'],reg:{db_rdl:'Hip Hinge',single_leg_rdl:'Hip Hinge',barbell_rdl:'Hip Hinge',stiff_leg_deadlift:'Hip Hinge',good_morning:'Hip Hinge',deadlift:'Hip Hinge',seated_leg_curl:'Leg Curl',lying_leg_curl:'Leg Curl',nordic_curl:'Leg Curl'}},
- core:{order:['Abs (Flexion)','Obliques & Anti-Rotation','Stability'],reg:{rope_crunch:'Abs (Flexion)',hanging_leg_raise:'Abs (Flexion)',lying_leg_raise:'Abs (Flexion)',bicycle_crunch:'Abs (Flexion)',ab_wheel:'Abs (Flexion)',woodchopper:'Obliques & Anti-Rotation',pallof_press:'Obliques & Anti-Rotation',db_side_bend:'Obliques & Anti-Rotation',russian_twist:'Obliques & Anti-Rotation',plank:'Stability',dead_bug:'Stability',bird_dog:'Stability'}},
- cardio:{order:['Steady','Plyometric','Loaded'],reg:{jumping_jack:'Steady',high_knees:'Steady',butt_kick:'Steady',mountain_climber:'Steady',bear_crawl:'Steady',burpee:'Plyometric',jump_squat:'Plyometric',skater_jump:'Plyometric',box_jump:'Plyometric',jump_rope:'Plyometric',kettlebell_swing:'Loaded',battle_rope:'Loaded'}},
- kettlebell:{order:['Ballistic','Squat & Hinge','Press & Grind','Pull'],reg:{kettlebell_swing:'Ballistic',kb_clean:'Ballistic',kb_snatch:'Ballistic',kb_clean_press:'Ballistic',kb_thruster:'Ballistic',kb_figure8:'Ballistic',kb_goblet_squat:'Squat & Hinge',kb_front_squat:'Squat & Hinge',kb_deadlift:'Squat & Hinge',kb_press:'Press & Grind',kb_turkish_getup:'Press & Grind',kb_windmill:'Press & Grind',kb_row:'Pull'}}
-};
 const ws=(t,sec,def)=>({t,sec,def});
 const wbDAYS={
  push:{name:"Push",sub:"Chest · Delts · Triceps",c:"#ff6b6b",slots:[
@@ -445,64 +425,52 @@ function wbLazy(scope,recycle){if(!scope)return null;
     if(en.isIntersecting){if(im.dataset.loaded!=='1')wbLoadImg(im);}
     else if(recycle&&im.dataset.loaded==='1'){im.removeAttribute('src');im.dataset.loaded='0';}});},{rootMargin:'600px 0px'});
   scope.querySelectorAll('img[data-src]').forEach(function(im){io.observe(im);});return io;}
-function wbLibObserve(){if(wbIOlib)wbIOlib.disconnect();wbIOlib=wbLazy(document.getElementById('wbLibBody'),true);}
 
-let wbFilter="all";
-function wbCard(e){return `<div class="wb-libitem wb-click" onclick="wbOpenDetail('${e.id}')"><img data-src="${wbG}${e.id}.gif" data-recycle="1" alt="${e.name}" decoding="async"><div class="ln">${e.name}</div><span class="le" style="background:${wbEQ[e.eq].c}">${wbEQ[e.eq].l}</span></div>`;}
-function wbRenderLib(){document.getElementById('wbLibBody').innerHTML=Object.entries(wbSEC).map(function(en){
-  var k=en[0],sc=en[1];
-  var items=sc.list.filter(function(e){return wbFilter==="all"||e.eq===wbFilter;});if(!items.length)return"";
-  var rmap=wbReg[k],inner;
-  if(rmap){inner=rmap.order.map(function(rg){
-    var ri=items.filter(function(e){return (rmap.reg[e.id]||rmap.order[0])===rg;});
-    if(!ri.length)return"";
-    return '<div class="wb-libreg">'+rg+' <span>'+ri.length+'</span></div><div class="wb-libgrid">'+ri.map(wbCard).join('')+'</div>';}).join('');}
-  else{inner='<div class="wb-libgrid">'+items.map(wbCard).join('')+'</div>';}
-  return '<div class="wb-libsec"><h4>'+sc.name+' <span>'+items.length+'</span></h4>'+inner+'</div>';}).join('');}
-const wbeqs=["all",...wbORDER];
-document.getElementById('wbFilters').innerHTML=wbeqs.map(f=>{const lbl=f==="all"?"All":wbEQ[f].l;
-  return `<span class="wb-fchip ${f==='all'?'wb-on':''}" style="${f==='all'?'background:var(--gold);color:#fff':''}" onclick="wbSetFilter('${f}',this)">${lbl}</span>`;}).join('');
-function wbSetFilter(f,el){wbFilter=f;document.querySelectorAll('.wb-fchip').forEach(c=>{c.classList.remove('wb-on');c.style.background='';c.style.color='';});el.classList.add('wb-on');el.style.background=f==='all'?'var(--gold)':wbEQ[f].c;if(f==='all')el.style.color='#fff';renderReady();}
-function renderReady(){wbRenderLib();wbLibObserve();}
-document.getElementById('wbLib').addEventListener('toggle',function(){if(this.open&&!document.getElementById('wbLibBody').innerHTML){wbRenderLib();wbLibObserve();}});
-
-/* full external dataset (1,300+) — lazy fetched, gifs served from jsDelivr CDN */
-var wbDSdata=null,wbDSfilter='all',wbIOds;
-var wbCDN='https://cdn.jsdelivr.net/gh/hasaneyldrm/exercises-dataset@main/';
+/* one unified library: curated (local gifs) + dataset (CDN gifs), grouped by muscle context */
+let wbFilter="all",wbAll=null,wbIOu;
+const wbCDN='https://cdn.jsdelivr.net/gh/hasaneyldrm/exercises-dataset@main/';
+const wbGORD=['Chest','Back — Lats','Back — Upper/Mid','Traps','Lower Back','Shoulders','Biceps','Triceps','Forearms','Core / Abs','Quads','Hamstrings','Glutes','Calves','Inner Thigh','Outer Thigh','Neck & Traps','Kettlebell','Cardio'];
+const wbSECG={chest:'Chest',press:'Shoulders',side:'Shoulders',rear:'Shoulders',triceps:'Triceps',biceps:'Biceps',lats:'Back — Lats',rows:'Back — Upper/Mid',traps:'Traps',quads:'Quads',hams:'Hamstrings',glutes:'Glutes',calves:'Calves',core:'Core / Abs',cardio:'Cardio',lowerback:'Lower Back',kettlebell:'Kettlebell'};
 function wbEsc(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/"/g,'&quot;');}
-function wbDSload(){
-  if(wbDSdata){return;}
-  document.getElementById('wbDSBody').innerHTML='<p class="wb-dsmsg">Loading 1,300+ exercises…</p>';
-  fetch('strength-x9f3a7c2e/exercises.json').then(function(r){return r.json();}).then(function(j){
-    wbDSdata=j;
-    var eqs=['all'];wbORDER.forEach(function(q){if(j.some(function(o){return o.e===q;}))eqs.push(q);});
-    document.getElementById('wbDSFilters').innerHTML=eqs.map(function(f){var lbl=f==='all'?'All':(wbEQ[f]?wbEQ[f].l:f);
-      return '<span class="wb-fchip '+(f==='all'?'wb-on':'')+'" style="'+(f==='all'?'background:var(--gold);color:#fff':'')+'" onclick="wbDSsetFilter(\''+f+'\',this)">'+lbl+'</span>';}).join('');
-    wbDSrender();
-  }).catch(function(){document.getElementById('wbDSBody').innerHTML='<p class="wb-dsmsg">Could not load the library — check your connection and reopen this panel.</p>';});
-}
-function wbDScard(o,i){return '<div class="wb-libitem wb-click" onclick="wbOpenDataset('+i+')"><img data-src="'+wbCDN+o.v+'" data-recycle="1" alt="'+wbEsc(o.n)+'" decoding="async"><div class="ln">'+wbEsc(o.n)+'</div><span class="le" style="background:'+(wbEQ[o.e]?wbEQ[o.e].c:'#868e96')+'">'+(wbEQ[o.e]?wbEQ[o.e].l:o.e)+'</span></div>';}
-function wbDSrender(){
-  var html='',cur=null,n=0;
-  wbDSdata.forEach(function(o,i){
-    if(wbDSfilter!=='all'&&o.e!==wbDSfilter)return;
-    if(o.g!==cur){if(cur!==null)html+='</div>';cur=o.g;html+='<div class="wb-libreg">'+wbEsc(cur)+'</div><div class="wb-libgrid">';}
-    html+=wbDScard(o,i);n++;});
+function wbGroup(o){return o.e==='kettlebell'?'Kettlebell':o.g;}  /* all kettlebell work groups together, per request */
+function wbCuratedRecords(){var seen={},out=[];
+  Object.keys(wbSEC).forEach(function(k){var sc=wbSEC[k];sc.list.forEach(function(e){
+    if(seen[e.id])return;seen[e.id]=1;
+    var g=wbSECG[k]||sc.name;
+    if(e.id==='hip_adduction')g='Inner Thigh';else if(e.id==='hip_abduction')g='Outer Thigh';
+    out.push({n:e.name,g:g,e:e.eq,v:'/strength-x9f3a7c2e/gifs/'+e.id+'.gif',s:[sc.tip],m:sc.reps});});});
+  return out;}
+function wbUcard(o,i){return '<div class="wb-libitem wb-click" onclick="wbOpenU('+i+')"><img data-src="'+o.v+'" data-recycle="1" alt="'+wbEsc(o.n)+'" decoding="async"><div class="ln">'+wbEsc(o.n)+'</div><span class="le" style="background:'+(wbEQ[o.e]?wbEQ[o.e].c:'#868e96')+'">'+(wbEQ[o.e]?wbEQ[o.e].l:o.e)+'</span></div>';}
+function wbURender(){var html='',cur=null,n=0;
+  wbAll.forEach(function(o,i){if(wbFilter!=='all'&&o.e!==wbFilter)return;
+    var g=wbGroup(o);
+    if(g!==cur){if(cur!==null)html+='</div>';cur=g;html+='<div class="wb-libreg">'+wbEsc(g)+'</div><div class="wb-libgrid">';}
+    html+=wbUcard(o,i);n++;});
   if(cur!==null)html+='</div>';
   document.getElementById('wbDSBody').innerHTML=n?html:'<p class="wb-dsmsg">No exercises for this filter.</p>';
-  if(wbIOds)wbIOds.disconnect();wbIOds=wbLazy(document.getElementById('wbDSBody'),true);
-}
-function wbDSsetFilter(f,el){wbDSfilter=f;document.querySelectorAll('#wbDSFilters .wb-fchip').forEach(function(c){c.classList.remove('wb-on');c.style.background='';c.style.color='';});el.classList.add('wb-on');el.style.background=f==='all'?'var(--gold)':wbEQ[f].c;if(f==='all')el.style.color='#fff';wbDSrender();}
-function wbOpenDataset(i){var o=wbDSdata[i];if(!o)return;
-  var img=document.getElementById('wbMGif');img.removeAttribute('src');img.setAttribute('data-src',wbCDN+o.v);img.dataset.loaded='0';wbLoadImg(img);
+  if(wbIOu)wbIOu.disconnect();wbIOu=wbLazy(document.getElementById('wbDSBody'),true);}
+function wbUsetFilter(f,el){wbFilter=f;document.querySelectorAll('#wbDSFilters .wb-fchip').forEach(function(c){c.classList.remove('wb-on');c.style.background='';c.style.color='';});el.classList.add('wb-on');el.style.background=f==='all'?'var(--gold)':wbEQ[f].c;if(f==='all')el.style.color='#fff';wbURender();}
+function wbOpenU(i){var o=wbAll[i];if(!o)return;
+  var img=document.getElementById('wbMGif');img.removeAttribute('src');img.setAttribute('data-src',o.v);img.dataset.loaded='0';wbLoadImg(img);
   document.getElementById('wbMName').textContent=o.n;
-  document.getElementById('wbMTags').innerHTML='<span class="wb-tag" style="background:'+(wbEQ[o.e]?wbEQ[o.e].c:'#868e96')+'">'+(wbEQ[o.e]?wbEQ[o.e].l:o.e)+'</span><span class="wb-tag reps">'+wbEsc(o.g)+'</span>';
-  document.getElementById('wbMTip').innerHTML=(o.s&&o.s.length)?'<ol class="wb-steps"><li>'+o.s.map(wbEsc).join('</li><li>')+'</li></ol>':'';
+  document.getElementById('wbMTags').innerHTML='<span class="wb-tag" style="background:'+(wbEQ[o.e]?wbEQ[o.e].c:'#868e96')+'">'+(wbEQ[o.e]?wbEQ[o.e].l:o.e)+'</span><span class="wb-tag reps">'+wbEsc(o.m||wbGroup(o))+'</span>';
+  document.getElementById('wbMTip').innerHTML=(o.s&&o.s.length>1)?'<ol class="wb-steps"><li>'+o.s.map(wbEsc).join('</li><li>')+'</li></ol>':(o.s&&o.s[0]?wbEsc(o.s[0]):'');
   var slug=wbSlug(o.n);
   document.getElementById('wbMW').href='https://musclewiki.com/exercise/'+slug;
   document.getElementById('wbMSearch').href='https://www.google.com/search?q='+encodeURIComponent(o.n+' site:musclewiki.com');
   document.getElementById('wbYT').href='https://www.youtube.com/results?search_query='+encodeURIComponent(o.n+' exercise proper form technique');
   document.getElementById('wbModal').classList.add('wb-open');document.body.style.overflow='hidden';}
+function wbDSload(){if(wbAll){return;}
+  document.getElementById('wbDSBody').innerHTML='<p class="wb-dsmsg">Loading the full library…</p>';
+  fetch('strength-x9f3a7c2e/exercises.json').then(function(r){return r.json();}).then(function(j){
+    j.forEach(function(o){o.v=wbCDN+o.v;});
+    wbAll=wbCuratedRecords().concat(j);
+    wbAll.sort(function(a,b){var ga=wbGORD.indexOf(wbGroup(a)),gb=wbGORD.indexOf(wbGroup(b));if(ga<0)ga=99;if(gb<0)gb=99;return ga-gb||a.n.localeCompare(b.n);});
+    var eqs=['all'];wbORDER.forEach(function(q){if(wbAll.some(function(o){return o.e===q;}))eqs.push(q);});
+    document.getElementById('wbDSFilters').innerHTML=eqs.map(function(f){var lbl=f==='all'?'All':(wbEQ[f]?wbEQ[f].l:f);
+      return '<span class="wb-fchip '+(f==='all'?'wb-on':'')+'" style="'+(f==='all'?'background:var(--gold);color:#fff':'')+'" onclick="wbUsetFilter(\''+f+'\',this)">'+lbl+'</span>';}).join('');
+    wbURender();
+  }).catch(function(){document.getElementById('wbDSBody').innerHTML='<p class="wb-dsmsg">Could not load the library — check your connection and reopen this panel.</p>';});}
 document.getElementById('wbDS').addEventListener('toggle',function(){if(this.open)wbDSload();});
 </script>
 ```
