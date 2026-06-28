@@ -37,9 +37,15 @@ anchor-sections: false
   </div>
 
   <details class="panel wb-lib" id="wbLib">
-    <summary>📚 Browse the full exercise library</summary>
+    <summary>📚 Curated picks (these power the day builder)</summary>
     <div class="wb-filters" id="wbFilters"></div>
     <div id="wbLibBody"></div>
+  </details>
+
+  <details class="panel wb-lib" id="wbDS">
+    <summary>🗂️ Full exercise library — 1,300+ with step-by-step instructions</summary>
+    <div class="wb-filters" id="wbDSFilters"></div>
+    <div id="wbDSBody"></div>
   </details>
 </div>
 
@@ -190,6 +196,9 @@ anchor-sections: false
 .wb-yt{border-color:rgba(255,80,80,.5) !important;color:#ff5252 !important}
 .wb-yt:hover{color:#fff !important;background:#ff3b3b !important;border-color:transparent !important}
 .wb-mnote{font-size:11px;color:var(--ink-faint);margin-top:6px;text-align:center}
+.wb-steps{margin:0 0 14px 18px;padding:0;color:var(--ink-soft);font-size:13.5px;line-height:1.5}
+.wb-steps li{margin-bottom:5px}
+.wb-dsmsg{padding:14px 4px;color:var(--ink-faint);font-size:13px}
 
 @media print{
   .navbar,#theme-switch,.deco-layer,#quarto-footer,.nav-footer,#wbDays,#wbBuilder,.wb-lib,.wb-hero,.wb-stp,.wb-print,.wb-toast{display:none !important}
@@ -201,9 +210,10 @@ anchor-sections: false
 <script>
 const wbG="/strength-x9f3a7c2e/gifs/";
 const wbEQ={dumbbell:{l:"DB",c:"#4dabf7"},kettlebell:{l:"KB",c:"#f2b705"},rope:{l:"Rope",c:"#f08c00"},
-  cable:{l:"Cable",c:"#b14fd8"},machine:{l:"Machine",c:"#2f9e6e"},barbell:{l:"Barbell",c:"#7a869a"},bodyweight:{l:"Body",c:"#13b88a"}};
-const wbORDER=["dumbbell","kettlebell","barbell","rope","cable","machine","bodyweight"];
-const wbLABEL={dumbbell:"Dumbbell",kettlebell:"Kettlebell",barbell:"Barbell",rope:"Cable / Rope",cable:"Cable",machine:"Machine",bodyweight:"Bodyweight"};
+  cable:{l:"Cable",c:"#b14fd8"},machine:{l:"Machine",c:"#2f9e6e"},barbell:{l:"Barbell",c:"#7a869a"},
+  bodyweight:{l:"Body",c:"#13b88a"},band:{l:"Band",c:"#e64980"},other:{l:"Other",c:"#868e96"}};
+const wbORDER=["dumbbell","kettlebell","barbell","rope","cable","machine","band","bodyweight","other"];
+const wbLABEL={dumbbell:"Dumbbell",kettlebell:"Kettlebell",barbell:"Barbell",rope:"Cable / Rope",cable:"Cable",machine:"Machine",bodyweight:"Bodyweight",band:"Band",other:"Other"};
 function wx(id,name,eq){return {id,name,eq}}
 
 const wbSEC={
@@ -455,5 +465,44 @@ document.getElementById('wbFilters').innerHTML=wbeqs.map(f=>{const lbl=f==="all"
 function wbSetFilter(f,el){wbFilter=f;document.querySelectorAll('.wb-fchip').forEach(c=>{c.classList.remove('wb-on');c.style.background='';c.style.color='';});el.classList.add('wb-on');el.style.background=f==='all'?'var(--gold)':wbEQ[f].c;if(f==='all')el.style.color='#fff';renderReady();}
 function renderReady(){wbRenderLib();wbLibObserve();}
 document.getElementById('wbLib').addEventListener('toggle',function(){if(this.open&&!document.getElementById('wbLibBody').innerHTML){wbRenderLib();wbLibObserve();}});
+
+/* full external dataset (1,300+) — lazy fetched, gifs served from jsDelivr CDN */
+var wbDSdata=null,wbDSfilter='all',wbIOds;
+var wbCDN='https://cdn.jsdelivr.net/gh/hasaneyldrm/exercises-dataset@main/';
+function wbEsc(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/"/g,'&quot;');}
+function wbDSload(){
+  if(wbDSdata){return;}
+  document.getElementById('wbDSBody').innerHTML='<p class="wb-dsmsg">Loading 1,300+ exercises…</p>';
+  fetch('strength-x9f3a7c2e/exercises.json').then(function(r){return r.json();}).then(function(j){
+    wbDSdata=j;
+    var eqs=['all'];wbORDER.forEach(function(q){if(j.some(function(o){return o.e===q;}))eqs.push(q);});
+    document.getElementById('wbDSFilters').innerHTML=eqs.map(function(f){var lbl=f==='all'?'All':(wbEQ[f]?wbEQ[f].l:f);
+      return '<span class="wb-fchip '+(f==='all'?'wb-on':'')+'" style="'+(f==='all'?'background:var(--gold);color:#fff':'')+'" onclick="wbDSsetFilter(\''+f+'\',this)">'+lbl+'</span>';}).join('');
+    wbDSrender();
+  }).catch(function(){document.getElementById('wbDSBody').innerHTML='<p class="wb-dsmsg">Could not load the library — check your connection and reopen this panel.</p>';});
+}
+function wbDScard(o,i){return '<div class="wb-libitem wb-click" onclick="wbOpenDataset('+i+')"><img data-src="'+wbCDN+o.v+'" data-recycle="1" alt="'+wbEsc(o.n)+'" decoding="async"><div class="ln">'+wbEsc(o.n)+'</div><span class="le" style="background:'+(wbEQ[o.e]?wbEQ[o.e].c:'#868e96')+'">'+(wbEQ[o.e]?wbEQ[o.e].l:o.e)+'</span></div>';}
+function wbDSrender(){
+  var html='',cur=null,n=0;
+  wbDSdata.forEach(function(o,i){
+    if(wbDSfilter!=='all'&&o.e!==wbDSfilter)return;
+    if(o.g!==cur){if(cur!==null)html+='</div>';cur=o.g;html+='<div class="wb-libreg">'+wbEsc(cur)+'</div><div class="wb-libgrid">';}
+    html+=wbDScard(o,i);n++;});
+  if(cur!==null)html+='</div>';
+  document.getElementById('wbDSBody').innerHTML=n?html:'<p class="wb-dsmsg">No exercises for this filter.</p>';
+  if(wbIOds)wbIOds.disconnect();wbIOds=wbLazy(document.getElementById('wbDSBody'),true);
+}
+function wbDSsetFilter(f,el){wbDSfilter=f;document.querySelectorAll('#wbDSFilters .wb-fchip').forEach(function(c){c.classList.remove('wb-on');c.style.background='';c.style.color='';});el.classList.add('wb-on');el.style.background=f==='all'?'var(--gold)':wbEQ[f].c;if(f==='all')el.style.color='#fff';wbDSrender();}
+function wbOpenDataset(i){var o=wbDSdata[i];if(!o)return;
+  var img=document.getElementById('wbMGif');img.removeAttribute('src');img.setAttribute('data-src',wbCDN+o.v);img.dataset.loaded='0';wbLoadImg(img);
+  document.getElementById('wbMName').textContent=o.n;
+  document.getElementById('wbMTags').innerHTML='<span class="wb-tag" style="background:'+(wbEQ[o.e]?wbEQ[o.e].c:'#868e96')+'">'+(wbEQ[o.e]?wbEQ[o.e].l:o.e)+'</span><span class="wb-tag reps">'+wbEsc(o.g)+'</span>';
+  document.getElementById('wbMTip').innerHTML=(o.s&&o.s.length)?'<ol class="wb-steps"><li>'+o.s.map(wbEsc).join('</li><li>')+'</li></ol>':'';
+  var slug=wbSlug(o.n);
+  document.getElementById('wbMW').href='https://musclewiki.com/exercise/'+slug;
+  document.getElementById('wbMSearch').href='https://www.google.com/search?q='+encodeURIComponent(o.n+' site:musclewiki.com');
+  document.getElementById('wbYT').href='https://www.youtube.com/results?search_query='+encodeURIComponent(o.n+' exercise proper form technique');
+  document.getElementById('wbModal').classList.add('wb-open');document.body.style.overflow='hidden';}
+document.getElementById('wbDS').addEventListener('toggle',function(){if(this.open)wbDSload();});
 </script>
 ```
