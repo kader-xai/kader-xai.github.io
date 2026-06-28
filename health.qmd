@@ -146,6 +146,8 @@ anchor-sections: false
 .wb-libreg{font-size:11px;font-weight:800;letter-spacing:.6px;text-transform:uppercase;color:var(--ink-soft);
   margin:12px 0 7px;padding-left:2px;display:flex;gap:7px;align-items:center;border-left:3px solid var(--gold);padding-left:9px}
 .wb-libreg span{font-size:10px;color:var(--ink-faint);font-weight:600}
+.wb-libsub{font-size:10.5px;font-weight:700;letter-spacing:.4px;text-transform:uppercase;color:var(--ink-faint);margin:9px 0 6px 9px;display:flex;gap:6px;align-items:center}
+.wb-libsub span{font-size:9px;opacity:.7}
 .wb-libgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(120px,1fr));gap:9px}
 .wb-libitem{background:var(--glass-chip);border:1px solid var(--glass-border-soft);border-radius:14px;padding:7px;text-align:center}
 .wb-libitem img{width:100%;aspect-ratio:1;border-radius:9px;background:#fff;object-fit:cover}
@@ -441,12 +443,33 @@ function wbCuratedRecords(){var seen={},out=[];
     out.push({n:e.name,g:g,e:e.eq,v:'/strength-x9f3a7c2e/gifs/'+e.id+'.gif',s:[sc.tip],m:sc.reps});});});
   return out;}
 function wbUcard(o,i){return '<div class="wb-libitem wb-click" onclick="wbOpenU('+i+')"><img data-src="'+o.v+'" data-recycle="1" alt="'+wbEsc(o.n)+'" decoding="async"><div class="ln">'+wbEsc(o.n)+'</div><span class="le" style="background:'+(wbEQ[o.e]?wbEQ[o.e].c:'#868e96')+'">'+(wbEQ[o.e]?wbEQ[o.e].l:o.e)+'</span></div>';}
-function wbURender(){var html='',cur=null,n=0;
-  wbAll.forEach(function(o,i){if(wbFilter!=='all'&&o.e!==wbFilter)return;
-    var g=wbGroup(o);
-    if(g!==cur){if(cur!==null)html+='</div>';cur=g;html+='<div class="wb-libreg">'+wbEsc(g)+'</div><div class="wb-libgrid">';}
-    html+=wbUcard(o,i);n++;});
-  if(cur!==null)html+='</div>';
+// ponytail: sub-region from the exercise name; ambiguous names fall to 'General'. Add manual overrides only if a specific exercise lands wrong.
+function wbSub(g,name){var s=name.toLowerCase();switch(g){
+  case 'Chest': return /incline/.test(s)?'Upper Chest':(/decline|dip/.test(s)?'Lower Chest':'Mid Chest');
+  case 'Shoulders': return /rear|reverse|face ?pull|bent.?over/.test(s)?'Rear Delts':(/lateral|side rais|lat rais/.test(s)?'Side Delts':(/front rais/.test(s)?'Front Delts':'Press / Overhead'));
+  case 'Triceps': return /overhead|skull|french|lying.*extension/.test(s)?'Long Head (Overhead)':(/pushdown|push down|press ?down|kickback|dip/.test(s)?'Pushdown / Lateral':'General');
+  case 'Biceps': return /incline/.test(s)?'Long Head':(/preacher|concentration|spider/.test(s)?'Short Head / Peak':(/hammer|reverse/.test(s)?'Brachialis':'General'));
+  case 'Quads': return /lunge|split|step|bulgarian/.test(s)?'Lunge & Split':(/extension/.test(s)?'Isolation':(/squat|press|hack|sissy/.test(s)?'Squat & Press':'General'));
+  case 'Hamstrings': return /curl/.test(s)?'Leg Curl':(/deadlift|rdl|romanian|good ?morning|hinge|stiff/.test(s)?'Hip Hinge':'General');
+  case 'Glutes': return /thrust|bridge/.test(s)?'Thrust & Bridge':(/abduction|kickback|clamshell|pull.?through/.test(s)?'Abduction & Kickback':(/lunge|split|step/.test(s)?'Lunge & Split':'General'));
+  case 'Core / Abs': return /oblique|twist|wood ?chop|chop|pallof|side bend/.test(s)?'Obliques':(/leg raise|knee raise|reverse crunch|hanging|leg lift/.test(s)?'Lower Abs':(/crunch|sit.?up|plank|hollow|v.?up/.test(s)?'Upper Abs / Stability':'General'));
+  case 'Calves': return /seated/.test(s)?'Seated (Soleus)':'Standing (Gastroc)';
+  case 'Forearms': return /reverse|extensor/.test(s)?'Extensors':(/wrist|curl|flexor/.test(s)?'Flexors':'Grip / General');
+  case 'Back — Lats': return /straight.?arm|pullover/.test(s)?'Straight-Arm':(/pulldown|pull.?up|chin/.test(s)?'Vertical Pull':(/row/.test(s)?'Rows':'General'));
+  case 'Back — Upper/Mid': return /row/.test(s)?'Rows':(/pull/.test(s)?'Pull':(/shrug|trap/.test(s)?'Traps':'General'));}
+  return '';}
+var wbSUBORD={Chest:['Upper Chest','Mid Chest','Lower Chest'],Shoulders:['Press / Overhead','Side Delts','Front Delts','Rear Delts'],Triceps:['Pushdown / Lateral','Long Head (Overhead)','General'],Biceps:['Long Head','Short Head / Peak','Brachialis','General'],Quads:['Squat & Press','Lunge & Split','Isolation','General'],Hamstrings:['Hip Hinge','Leg Curl','General'],Glutes:['Thrust & Bridge','Lunge & Split','Abduction & Kickback','General'],'Core / Abs':['Upper Abs / Stability','Lower Abs','Obliques','General'],Calves:['Standing (Gastroc)','Seated (Soleus)'],Forearms:['Flexors','Extensors','Grip / General'],'Back — Lats':['Vertical Pull','Straight-Arm','Rows','General'],'Back — Upper/Mid':['Rows','Pull','Traps','General']};
+function wbURender(){
+  var groups={};wbAll.forEach(function(o,i){if(wbFilter!=='all'&&o.e!==wbFilter)return;var g=wbGroup(o);(groups[g]=groups[g]||[]).push([o,i]);});
+  var html='',n=0;
+  function block(g,arr){html+='<div class="wb-libreg">'+wbEsc(g)+' <span>'+arr.length+'</span></div>';n+=arr.length;
+    var ord=wbSUBORD[g];
+    if(!ord){html+='<div class="wb-libgrid">'+arr.map(function(p){return wbUcard(p[0],p[1]);}).join('')+'</div>';return;}
+    var subs={};arr.forEach(function(p){var s=wbSub(g,p[0].n)||'General';(subs[s]=subs[s]||[]).push(p);});
+    var keys=ord.slice();Object.keys(subs).forEach(function(s){if(keys.indexOf(s)<0)keys.push(s);});
+    keys.forEach(function(s){var ss=subs[s];if(!ss)return;html+='<div class="wb-libsub">'+wbEsc(s)+' <span>'+ss.length+'</span></div><div class="wb-libgrid">'+ss.map(function(p){return wbUcard(p[0],p[1]);}).join('')+'</div>';});}
+  wbGORD.forEach(function(g){if(groups[g])block(g,groups[g]);});
+  Object.keys(groups).forEach(function(g){if(wbGORD.indexOf(g)<0)block(g,groups[g]);});
   document.getElementById('wbDSBody').innerHTML=n?html:'<p class="wb-dsmsg">No exercises for this filter.</p>';
   if(wbIOu)wbIOu.disconnect();wbIOu=wbLazy(document.getElementById('wbDSBody'),true);}
 function wbUsetFilter(f,el){wbFilter=f;document.querySelectorAll('#wbDSFilters .wb-fchip').forEach(function(c){c.classList.remove('wb-on');c.style.background='';c.style.color='';});el.classList.add('wb-on');el.style.background=f==='all'?'var(--gold)':wbEQ[f].c;if(f==='all')el.style.color='#fff';wbURender();}
