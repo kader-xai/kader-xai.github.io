@@ -1,0 +1,553 @@
+---
+aliases: ["/mini-courses/mlops/day10.html"]
+title: "🚢 ML in Production — MLOps · Lesson 10 — Continuous Training: Closing the Loop"
+page-layout: full
+toc: true
+toc-location: left
+toc-title: "In this lesson"
+toc-depth: 2
+---
+
+[🏠 🚢 Course home](index.html)  &nbsp;|&nbsp;  [← Lesson 09](lesson09.html)  &nbsp;|&nbsp;  [📚 All mini-courses](../../mini-courses.html)
+
+------------------------------------------------------------------------
+
+# Lesson 10 — Continuous Training: Closing the Loop
+
+In the previous lesson you wired up monitoring: the service now logs every prediction, and an Evidently job compares live feature distributions against the training reference, emitting a drift summary. That gives you a smoke detector. In this lesson you install the sprinkler system. When the detector fires — or a schedule elapses, or measured performance sags — a pipeline retrains the churn model, pits the new candidate ("challenger") against the current production model ("champion") on a frozen holdout, and either promotes it automatically or flags it for a human. You will also write the rollback playbook for the day a promotion goes wrong, then run the entire ten-lesson system end-to-end: drift comes in one side, a new `@champion` alias and a redeployed container come out the other. This is the loop that turns "we deployed a model once" into "we operate a model."
+
+::: {.callout-note appearance="simple"}
+🎯 **In this lesson you will:** codify retraining triggers (schedule, drift, performance) as testable functions, build a retrain → evaluate-vs-champion → promote-or-flag pipeline as one script, schedule it with GitHub Actions and know when to graduate to Airflow/Prefect, write and rehearse a rollback playbook, and run the full 10-Lesson loop end-to-end.
+:::
+
+## Why retrain at all — and when
+
+A model is a snapshot of a data distribution. The distribution moves; the snapshot doesn't. For churn specifically: pricing changes, a competitor launches, a pandemic happens — the relationship between `tenure_months` and churn that held in January is stale by June. There are exactly three honest reasons to retrain, and they map to three trigger types:
+
+| Trigger | Signal | Fires when | Failure mode if it's your *only* trigger |
+|---|---|---|---|
+| **Schedule** | Wall clock | Model older than N days | Retrains on unchanged data (waste) or too slowly on fast drift |
+| **Drift** | Input distributions (Lesson 9's Evidently report) | Share of drifted features crosses a threshold | Drift without label shift can be harmless → pointless retrains; label shift without feature drift goes unseen |
+| **Performance** | Ground-truth labels joined to logged predictions | Rolling AUC drops below a floor | Labels arrive late (a churn label takes 30–90 days to materialize) — by the time this fires you've been wrong for weeks |
+
+The mature setup uses **all three, OR-ed together**: schedule as the backstop, drift as the early warning, performance as the ground truth. And crucially — a trigger firing means *retrain*, never *auto-deploy*. Promotion is a separate, gated decision. That separation is the whole design:
+
+```{mermaid}
+flowchart LR
+    A[Production traffic] --> B[Prediction + feature logs]
+    B --> C{Triggers<br/>schedule OR drift OR perf}
+    C -- "none fired" --> A
+    C -- "any fired" --> D[Train challenger<br/>on fresh window]
+    D --> E{Gate: challenger vs champion<br/>on frozen holdout}
+    E -- "wins by ≥ ε" --> F["Flip @champion alias<br/>(keep @previous)"]
+    E -- "loses / ties" --> G[Flag for human review<br/>keep champion serving]
+    F --> H[Redeploy service]
+    H --> A
+    G -.-> A
+```
+
+Nothing in that diagram is exotic. Every box is a Python function you already half-built on Lessons 2–9; in this lesson we connect them.
+
+## Trigger logic as code
+
+Triggers should be boring, pure functions over artifacts you already produce: the registry (Lesson 4) tells you model age, the Evidently summary (Lesson 9) tells you drift, the joined labels tell you performance. Put them in `src/triggers.py`:
+
+```python
+# src/triggers.py
+from __future__ import annotations
+
+import datetime as dt
+import json
+from dataclasses import dataclass, field
+from pathlib import Path
+
+from mlflow import MlflowClient
+
+MODEL_NAME = "churn-classifier"
+
+
+@dataclass
+class TriggerDecision:
+    retrain: bool
+    reasons: list[str] = field(default_factory=list)
+```
+
+A dataclass instead of a bare bool because "*why* did we retrain" is the first question anyone asks when reviewing the pipeline's history. The reasons list goes straight into the MLflow run tags later, so every retrain is self-documenting.
+
+```python
+def check_schedule(max_age_days: int = 30) -> str | None:
+    """Fire if the current champion is older than max_age_days."""
+    client = MlflowClient()
+    champion = client.get_model_version_by_alias(MODEL_NAME, "champion")
+    trained_at = dt.datetime.fromtimestamp(
+        champion.creation_timestamp / 1000, tz=dt.timezone.utc
+    )
+    age = dt.datetime.now(dt.timezone.utc) - trained_at
+    if age.days >= max_age_days:
+        return f"schedule: champion v{champion.version} is {age.days}d old (max {max_age_days})"
+    return None
+```
+
+Two details worth pausing on. First, we ask the **registry** for the model's age, not a file on disk — the registry is the single source of truth we established on Lesson 4, and `get_model_version_by_alias` resolves whatever version currently wears the `@champion` alias. Second, MLflow timestamps are epoch **milliseconds**; forget the `/ 1000` and every model looks like it was trained in the year 56,000, so the schedule trigger never fires. That is exactly the kind of silent bug that makes "automated" pipelines quietly dead.
+
+```python
+def check_drift(
+    summary_path: str = "monitoring/drift_summary.json",
+    max_drift_share: float = 0.3,
+) -> str | None:
+    """Fire if Lesson 9's Evidently job saw too many drifted features."""
+    p = Path(summary_path)
+    if not p.exists():
+        return None  # no monitoring data yet -> no opinion, not an error
+    s = json.loads(p.read_text())
+    if s["share_drifted_features"] > max_drift_share:
+        return (
+            f"drift: {s['share_drifted_features']:.0%} of features drifted "
+            f"(threshold {max_drift_share:.0%})"
+        )
+    return None
+
+
+def check_performance(
+    labeled_path: str = "monitoring/labeled_predictions.csv",
+    auc_floor: float = 0.80,
+    min_rows: int = 500,
+) -> str | None:
+    """Fire if rolling AUC on matured labels fell below the floor."""
+    import pandas as pd
+    from sklearn.metrics import roc_auc_score
+
+    p = Path(labeled_path)
+    if not p.exists():
+        return None
+    df = pd.read_csv(p)
+    if len(df) < min_rows:
+        return None  # AUC on 40 rows is noise, not signal
+    auc = roc_auc_score(df["label"], df["predicted_proba"])
+    if auc < auc_floor:
+        return f"performance: rolling AUC {auc:.3f} < floor {auc_floor}"
+    return None
+```
+
+Note the deliberate asymmetry in error handling: a *missing* monitoring file returns `None` (no opinion) rather than raising, because on the pipeline's very first run those files don't exist yet and the schedule trigger should still be able to carry the decision. But the `min_rows` guard is non-negotiable — AUC computed on a handful of matured labels swings wildly, and a trigger that fires on noise trains models on noise.
+
+```python
+def should_retrain() -> TriggerDecision:
+    reasons = [
+        r
+        for r in (check_schedule(), check_drift(), check_performance())
+        if r is not None
+    ]
+    return TriggerDecision(retrain=bool(reasons), reasons=reasons)
+
+
+if __name__ == "__main__":
+    d = should_retrain()
+    print(json.dumps({"retrain": d.retrain, "reasons": d.reasons}, indent=2))
+```
+
+Run it against the drifted traffic you simulated on Lesson 9:
+
+```text
+$ python -m src.triggers
+{
+  "retrain": true,
+  "reasons": [
+    "drift: 42% of features drifted (threshold 30%)"
+  ]
+}
+```
+
+Machine-readable stdout is intentional — the orchestrator (next-but-one section) parses exactly this JSON to decide whether the expensive training step runs at all.
+
+## The retrain → gate → promote pipeline
+
+This is the lesson's centerpiece: `src/continuous_training.py`. One script, four stages — train a challenger, evaluate both models on the *same frozen holdout*, apply the promotion gate, then either flip the alias or flag for review. We reuse Lesson 2's `build_pipeline()` and data loading verbatim; continuous training must run **the same training code** as manual training, or you're comparing apples to a different orchard.
+
+```python
+# src/continuous_training.py
+from __future__ import annotations
+
+import sys
+
+import mlflow
+import pandas as pd
+from mlflow import MlflowClient
+from sklearn.metrics import roc_auc_score
+
+from src.train import build_pipeline, load_training_window  # Lesson 2 code
+from src.triggers import MODEL_NAME, should_retrain
+
+EPSILON = 0.005          # challenger must beat champion by this much AUC
+HOLDOUT_PATH = "data/holdout.csv"   # frozen on Lesson 2, never trained on
+```
+
+`EPSILON` is the most important constant in the file. Two models trained on overlapping data will differ by ±0.002 AUC out of pure seed luck; if your gate is `challenger > champion`, you'll "promote" coin flips forever and your registry becomes a random walk. Requiring a margin means promotions happen only when the challenger is *detectably* better. There's a real trade here: with a holdout of $n$ examples, the standard error of AUC scales roughly as $1/\sqrt{n}$, so a small holdout forces a large $\epsilon$ and you'll under-promote. 0.005 on a ~2,000-row holdout is a sane default for the churn model; tune it to your holdout size, and mark it as tunable rather than sacred.
+
+```python
+def train_challenger(reasons: list[str]) -> str:
+    """Train on the freshest data window; return the new model version."""
+    train_df = load_training_window(days=180)  # fresh window incl. recent traffic
+    X, y = train_df.drop(columns=["churned"]), train_df["churned"]
+
+    with mlflow.start_run(run_name="ct-challenger") as run:
+        mlflow.set_tags({
+            "pipeline": "continuous_training",
+            "trigger_reasons": "; ".join(reasons),
+        })
+        pipe = build_pipeline()
+        pipe.fit(X, y)
+        mlflow.sklearn.log_model(
+            pipe,
+            name="model",
+            registered_model_name=MODEL_NAME,
+            input_example=X.head(2),
+        )
+        info = MlflowClient().get_latest_versions(MODEL_NAME)[0]
+        print(f"trained challenger: {MODEL_NAME} v{info.version}")
+        return info.version
+```
+
+Three things to notice. The trigger reasons become **run tags** — six months from now, `mlflow ui` shows you at a glance which versions came from drift events versus schedule ticks. `registered_model_name` registers the model in the same call that logs it, so there is no window where a trained-but-unregistered model can get lost. And the training window slides: `load_training_window(days=180)` includes the recent (drifted!) data, which is the entire point — retraining on the old window would reproduce the old model.
+
+```python
+def evaluate_on_holdout(version_or_alias: str) -> float:
+    """Score any registry model on the frozen holdout. Same data, both models."""
+    model = mlflow.sklearn.load_model(f"models:/{MODEL_NAME}/{version_or_alias}")
+    holdout = pd.read_csv(HOLDOUT_PATH)
+    X, y = holdout.drop(columns=["churned"]), holdout["churned"]
+    return roc_auc_score(y, model.predict_proba(X)[:, 1])
+```
+
+The frozen holdout is the referee. If you evaluated each model on "its own" test split, the comparison would be meaningless — different rows, different difficulty. One fixed dataset, both models, one metric. (In a real churn system you'd *refresh* this holdout quarterly with recent labeled data, because a two-year-old holdout eventually rewards models that fit a dead distribution. Refresh it deliberately and version it in DVC like Lesson 2 taught — never let it drift silently.)
+
+```python
+def promote_or_flag(challenger_version: str) -> bool:
+    client = MlflowClient()
+    champion = client.get_model_version_by_alias(MODEL_NAME, "champion")
+
+    champ_auc = evaluate_on_holdout(f"@champion")
+    chal_auc = evaluate_on_holdout(challenger_version)
+    print(f"champion  v{champion.version}: AUC {champ_auc:.4f}")
+    print(f"challenger v{challenger_version}: AUC {chal_auc:.4f}")
+
+    if chal_auc >= champ_auc + EPSILON:
+        # keep an escape hatch BEFORE flipping anything
+        client.set_registered_model_alias(MODEL_NAME, "previous", champion.version)
+        client.set_registered_model_alias(MODEL_NAME, "champion", challenger_version)
+        print(f"PROMOTED v{challenger_version} -> @champion "
+              f"(+{chal_auc - champ_auc:.4f} AUC); @previous = v{champion.version}")
+        return True
+
+    client.set_registered_model_alias(MODEL_NAME, "challenger", challenger_version)
+    print(f"FLAGGED v{challenger_version}: not better by >= {EPSILON}. "
+          f"Champion v{champion.version} stays. Human review needed.")
+    return False
+```
+
+The order of alias operations matters: `@previous` is set **before** `@champion` moves. If the process dies between the two lines, the worst case is a harmless extra alias — never a state where you've lost track of what was serving. This two-line dance is your rollback insurance, and it's why the rollback playbook later today is one command instead of an archaeology dig.
+
+Visually, a promotion is just aliases sliding up the version list — no model bytes move, no artifacts are copied:
+
+<svg viewBox="0 0 720 300" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Alias flip on promotion">
+  <style>text{font-family:ui-sans-serif,system-ui;fill:currentColor}</style>
+  <text x="130" y="28" font-size="15" font-weight="bold">Before gate</text>
+  <text x="530" y="28" font-size="15" font-weight="bold">After promotion</text>
+  <!-- before column -->
+  <rect x="60" y="50" width="180" height="44" rx="8" fill="#6366f1" fill-opacity="0.25" stroke="currentColor"/>
+  <text x="150" y="77" font-size="13" text-anchor="middle">v6</text>
+  <rect x="60" y="110" width="180" height="44" rx="8" fill="#22c55e" fill-opacity="0.3" stroke="currentColor" stroke-width="2"/>
+  <text x="150" y="137" font-size="13" text-anchor="middle">v7</text>
+  <rect x="60" y="170" width="180" height="44" rx="8" fill="#f59e0b" fill-opacity="0.3" stroke="currentColor" stroke-dasharray="5 4"/>
+  <text x="150" y="197" font-size="13" text-anchor="middle">v8 (new challenger)</text>
+  <text x="255" y="77" font-size="12">@previous</text>
+  <text x="255" y="137" font-size="12" font-weight="bold">@champion</text>
+  <text x="255" y="197" font-size="12">just trained</text>
+  <!-- gate -->
+  <polygon points="390,120 430,150 390,180 350,150" fill="#ec4899" fill-opacity="0.3" stroke="currentColor"/>
+  <text x="390" y="155" font-size="11" text-anchor="middle">gate</text>
+  <text x="390" y="205" font-size="11" text-anchor="middle">AUC₈ ≥ AUC₇ + ε ?</text>
+  <!-- after column -->
+  <rect x="470" y="50" width="180" height="44" rx="8" fill="#6366f1" fill-opacity="0.25" stroke="currentColor"/>
+  <text x="560" y="77" font-size="13" text-anchor="middle">v6</text>
+  <rect x="470" y="110" width="180" height="44" rx="8" fill="#6366f1" fill-opacity="0.25" stroke="currentColor"/>
+  <text x="560" y="137" font-size="13" text-anchor="middle">v7</text>
+  <rect x="470" y="170" width="180" height="44" rx="8" fill="#22c55e" fill-opacity="0.3" stroke="currentColor" stroke-width="2"/>
+  <text x="560" y="197" font-size="13" text-anchor="middle">v8</text>
+  <text x="560" y="245" font-size="12" text-anchor="middle">@previous → v7&#160;&#160;&#160;@champion → v8</text>
+  <line x1="435" y1="150" x2="462" y2="150" stroke="currentColor" marker-end="url(#arr10)"/>
+  <defs><marker id="arr10" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 z" fill="currentColor"/></marker></defs>
+</svg>
+
+Finally, the entry point ties trigger → train → gate together and encodes the outcome in the **exit code**, because that's the language orchestrators speak:
+
+```python
+def main() -> int:
+    decision = should_retrain()
+    if not decision.retrain:
+        print("no trigger fired; nothing to do")
+        return 0
+    print("retraining because:", *decision.reasons, sep="\n  - ")
+    version = train_challenger(decision.reasons)
+    promoted = promote_or_flag(version)
+    return 0 if promoted else 3   # 3 = "trained but not promoted" -> alert
+
+
+if __name__ == "__main__":
+    sys.exit(main())
+```
+
+Exit code 0 for both "nothing to do" and "promoted" (healthy outcomes), a distinct nonzero code for "challenger flagged" so CI marks the run failed and pings a human. A flagged challenger is not an error in the Python sense — the code did its job — but it *is* a state that needs eyes, and abusing the exit code is the cheapest possible alerting integration.
+
+## Orchestration: cron is fine until it isn't
+
+You need something to run `continuous_training.py` on a schedule and on demand. The honest hierarchy:
+
+| Option | Setup cost | Right when | Wrong when |
+|---|---|---|---|
+| **cron / GitHub Actions schedule** | Minutes | One pipeline, linear steps, logs-in-CI is enough | You need retries per step, backfills, or dependencies between pipelines |
+| **Prefect** | An afternoon | Python-native flows, per-task retries/caching, nice UI, you're a small team | Heavy enterprise scheduling with dozens of teams |
+| **Airflow** | Days (it's infrastructure) | Many DAGs, many teams, backfills, sensors, an ops culture around it | A single retraining job — it's a battleship for a fishing trip |
+
+For our course-scale system, GitHub Actions is the right call — it reuses the CI machinery from Lesson 8, gives you manual dispatch for free, and its cron syntax is the same cron you'd write anywhere. `.github/workflows/continuous-training.yml`:
+
+```yaml
+name: continuous-training
+on:
+  schedule:
+    - cron: "0 3 * * 1"        # Mondays 03:00 UTC — the schedule backstop
+  workflow_dispatch: {}         # manual "retrain now" button
+  repository_dispatch:
+    types: [drift-alert]        # Lesson 9's monitor can POST this event
+
+jobs:
+  retrain:
+    runs-on: ubuntu-latest
+    env:
+      MLFLOW_TRACKING_URI: ${{ secrets.MLFLOW_TRACKING_URI }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - run: pip install -r requirements.lock   # Lesson 2's pinned deps
+      - run: dvc pull                           # Lesson 2's versioned data
+      - name: Run the loop
+        run: python -m src.continuous_training
+      - name: Redeploy on promotion
+        if: success()
+        run: gh workflow run deploy.yml         # Lesson 8's deploy pipeline
+        env: { GH_TOKEN: "${{ secrets.GITHUB_TOKEN }}" }
+```
+
+The three `on:` blocks are the three trigger *transports*: `schedule` is the clock, `repository_dispatch` lets the Lesson 9 monitoring job fire a retrain the moment drift crosses threshold (one `curl` to the GitHub API), and `workflow_dispatch` is the human override. Note what does **not** happen here: the workflow doesn't decide anything. All promote/flag logic lives in the Python script, where it's unit-testable; the YAML is a dumb transport. Keeping decisions out of YAML is the single best habit for debuggable pipelines — you can run the entire brain locally with `python -m src.continuous_training`.
+
+One GitHub-Actions-specific caveat: scheduled workflows on free runners can start up to ~15 minutes late and are silently disabled after 60 days of repo inactivity. For a weekly backstop that's fine; for anything tighter, use a real scheduler.
+
+## The rollback playbook
+
+Promotions will occasionally be wrong — the holdout said yes, production says no (a segment the holdout underrepresents, a feature pipeline skew, a plain bug). Because serving (Lesson 6) loads `models:/churn-classifier@champion` and we always park the outgoing model at `@previous`, rollback is an alias flip plus a redeploy. Write it down as a script *now*, not during the incident:
+
+```python
+# src/rollback.py
+"""Roll @champion back to @previous. Run when production says the new model is bad."""
+import sys
+
+from mlflow import MlflowClient
+
+from src.triggers import MODEL_NAME
+
+
+def rollback() -> None:
+    client = MlflowClient()
+    bad = client.get_model_version_by_alias(MODEL_NAME, "champion")
+    good = client.get_model_version_by_alias(MODEL_NAME, "previous")
+    if bad.version == good.version:
+        sys.exit("champion == previous; nothing to roll back to. Escalate.")
+
+    client.set_registered_model_alias(MODEL_NAME, "champion", good.version)
+    # quarantine the bad version so the next CT run can't re-promote it
+    client.set_model_version_tag(MODEL_NAME, bad.version, "quarantined", "true")
+    print(f"ROLLED BACK: @champion v{bad.version} -> v{good.version}. "
+          f"v{bad.version} tagged quarantined. Now redeploy the service.")
+
+
+if __name__ == "__main__":
+    rollback()
+```
+
+The `quarantined` tag closes a subtle loop-hole: without it, the very next scheduled run could re-evaluate the bad model, find it still wins on the (blind-spot-having) holdout, and re-promote the thing you just rolled back. Add one line to `promote_or_flag` to respect it — `if client.get_model_version(MODEL_NAME, challenger_version).tags.get("quarantined"): flag instead`.
+
+The full playbook, as you'd paste it into the on-call doc:
+
+1. **Detect** — Lesson 9's dashboards: error rate, score distribution shift, or business metric drop after a deploy.
+2. **Flip** — `python -m src.rollback` (seconds; no training, no build).
+3. **Reload** — restart/redeploy the serving container so it re-resolves `@champion` (Lesson 8's deploy workflow, or `docker restart` locally). If you built Lesson 6's optional `/reload` admin endpoint, it's zero-downtime.
+4. **Verify** — `curl` the service's `/model-info` endpoint; confirm the version matches `@previous`'s old value.
+5. **Postmortem** — pull the quarantined run from MLflow, diff its training-window data stats against the champion's, find the holdout blind spot, fix the *gate* (add the missing metric or segment), un-quarantine only after the gate would now catch it.
+
+Step 5 is the one teams skip and regret: a rollback without a gate improvement means the same bad promotion happens again next month.
+
+## Capstone: run the whole loop
+
+Time to fire the machine end-to-end using everything from all ten lessons. From the repo root, with the MLflow server (Lesson 3) and the serving container (Lessons 5–6) running:
+
+```bash
+# 1. Baseline: confirm the current champion serves
+curl -s localhost:8000/model-info
+# {"model": "churn-classifier", "alias": "champion", "version": "7"}
+
+# 2. Simulate a month of drifted traffic (Lesson 9's script)
+python -m src.simulate_traffic --drift-strength 0.6 --n 5000
+
+# 3. Refresh the monitoring report (Lesson 9)
+python -m src.monitor      # writes monitoring/drift_summary.json
+
+# 4. Run the loop
+python -m src.continuous_training
+```
+
+Expected output — read it as the story of the whole course happening in twenty seconds:
+
+```text
+retraining because:
+  - drift: 42% of features drifted (threshold 30%)
+trained challenger: churn-classifier v8
+champion  v7: AUC 0.8312
+challenger v8: AUC 0.8471
+PROMOTED v8 -> @champion (+0.0159 AUC); @previous = v7
+```
+
+```bash
+# 5. Redeploy and verify the flip reached production
+gh workflow run deploy.yml && sleep 60
+curl -s localhost:8000/model-info
+# {"model": "churn-classifier", "alias": "champion", "version": "8"}
+
+# 6. Rehearse the fire drill (then flip back)
+python -m src.rollback
+# ROLLED BACK: @champion v8 -> v7. v8 tagged quarantined. Now redeploy the service.
+```
+
+Run the rollback rehearsal even though v8 is fine — an untested rollback script is a rumor, not a playbook. (Then re-promote v8 and clear the tag.)
+
+And with that, the system you built over ten lessons is a closed loop. Here is the map of what each lesson contributed:
+
+```{mermaid}
+flowchart TB
+    subgraph Build
+        d1[Lesson 1: The plan<br/>deployment gap, contracts]
+        d2[Lesson 2: Reproducible training<br/>pinned deps, DVC data, seeds]
+        d3[Lesson 3: MLflow tracking<br/>params, metrics, artifacts]
+        d4[Lesson 4: Registry & versioning<br/>aliases: champion / previous]
+    end
+    subgraph Ship
+        d5[Lesson 5: Docker packaging]
+        d6[Lesson 6: FastAPI serving<br/>loads models:/…@champion]
+        d7[Lesson 7: vLLM<br/>the LLM-serving sibling]
+        d8[Lesson 8: CI/CD<br/>test, build, deploy on green]
+    end
+    subgraph Operate
+        d9[Lesson 9: Monitoring<br/>logs, drift, dashboards]
+        d10[Lesson 10: Continuous training<br/>triggers, gate, promote, rollback]
+    end
+    d1 --> d2 --> d3 --> d4 --> d5 --> d6 --> d8
+    d6 -.same patterns.-> d7
+    d8 --> d9 --> d10
+    d10 -- "new @champion" --> d4
+    d10 -- "redeploy" --> d8
+```
+
+Notice the two back-edges from Lesson 10 — into the registry and into CI/CD. Those edges are what "MLOps" actually names: not any single tool, but the fact that the graph has a cycle.
+
+## 🧪 Your task
+
+The promotion gate currently checks one metric, once, with no cooldown — so a lucky challenger on a noisy week can still slip through, and a flapping drift signal could retrain daily. Harden it. Modify `promote_or_flag` (and add a small state file) so that promotion requires **all three**: (1) challenger AUC ≥ champion AUC + $\epsilon$ as before, (2) challenger Brier score ≤ champion Brier score (calibration must not get worse — churn scores feed a discount budget, so probabilities matter, not just ranking), and (3) at least 7 days since the last promotion (a cooldown), else flag with a reason. Every rejection must print *which* condition failed.
+
+*Hint:* `sklearn.metrics.brier_score_loss(y, proba)` — lower is better, so the comparison flips relative to AUC. For the cooldown, don't invent infrastructure: `json.dump({"last_promoted": dt.datetime.now(dt.timezone.utc).isoformat()}, ...)` to `monitoring/ct_state.json` on promotion, read it back at the top of the gate, and treat a missing file as "no cooldown active".
+
+<details><summary>Solution</summary>
+
+```python
+# additions to src/continuous_training.py
+import datetime as dt
+import json
+from pathlib import Path
+
+from sklearn.metrics import brier_score_loss
+
+STATE_PATH = Path("monitoring/ct_state.json")
+COOLDOWN_DAYS = 7
+
+
+def _scores_on_holdout(version_or_alias: str) -> tuple[float, float]:
+    """Return (auc, brier) for one model on the frozen holdout."""
+    model = mlflow.sklearn.load_model(f"models:/{MODEL_NAME}/{version_or_alias}")
+    holdout = pd.read_csv(HOLDOUT_PATH)
+    X, y = holdout.drop(columns=["churned"]), holdout["churned"]
+    proba = model.predict_proba(X)[:, 1]
+    return roc_auc_score(y, proba), brier_score_loss(y, proba)
+
+
+def _cooldown_active() -> str | None:
+    if not STATE_PATH.exists():
+        return None
+    state = json.loads(STATE_PATH.read_text())
+    last = dt.datetime.fromisoformat(state["last_promoted"])
+    elapsed = dt.datetime.now(dt.timezone.utc) - last
+    if elapsed.days < COOLDOWN_DAYS:
+        return f"cooldown: last promotion {elapsed.days}d ago (< {COOLDOWN_DAYS}d)"
+    return None
+
+
+def promote_or_flag(challenger_version: str) -> bool:
+    client = MlflowClient()
+    champion = client.get_model_version_by_alias(MODEL_NAME, "champion")
+
+    champ_auc, champ_brier = _scores_on_holdout("@champion")
+    chal_auc, chal_brier = _scores_on_holdout(challenger_version)
+    print(f"champion   v{champion.version}: AUC {champ_auc:.4f}  Brier {champ_brier:.4f}")
+    print(f"challenger v{challenger_version}: AUC {chal_auc:.4f}  Brier {chal_brier:.4f}")
+
+    failures = []
+    if chal_auc < champ_auc + EPSILON:
+        failures.append(f"AUC gate: {chal_auc:.4f} < {champ_auc:.4f} + {EPSILON}")
+    if chal_brier > champ_brier:          # lower Brier is better
+        failures.append(f"calibration gate: Brier {chal_brier:.4f} > {champ_brier:.4f}")
+    if (cd := _cooldown_active()) is not None:
+        failures.append(cd)
+
+    if not failures:
+        client.set_registered_model_alias(MODEL_NAME, "previous", champion.version)
+        client.set_registered_model_alias(MODEL_NAME, "champion", challenger_version)
+        STATE_PATH.parent.mkdir(exist_ok=True)
+        STATE_PATH.write_text(json.dumps(
+            {"last_promoted": dt.datetime.now(dt.timezone.utc).isoformat()}
+        ))
+        print(f"PROMOTED v{challenger_version} -> @champion; @previous = v{champion.version}")
+        return True
+
+    client.set_registered_model_alias(MODEL_NAME, "challenger", challenger_version)
+    print(f"FLAGGED v{challenger_version}. Champion v{champion.version} stays. Failed gates:")
+    for f in failures:
+        print(f"  - {f}")
+    return False
+```
+
+Test it cheaply without retraining: run `promote_or_flag` twice in a row against an already-registered version — the first call promotes, the second must print the cooldown failure. Then hand-corrupt the challenger's probabilities in a scratch copy of the holdout evaluation (e.g. `proba = proba ** 3`) to confirm the Brier gate fires while AUC — which only cares about ranking — stays identical. That AUC-unchanged/Brier-broken case is exactly why the second gate exists.
+
+</details>
+
+## Key takeaways
+
+- Retraining has exactly three trigger families — **schedule** (backstop), **drift** (early warning), **performance** (ground truth) — and production systems OR all three; each covers the others' blind spots.
+- A trigger means *retrain*, never *deploy*. Promotion is a separate gate: challenger vs champion on one **frozen holdout**, with a margin $\epsilon$ so seed noise can't get promoted.
+- Aliases make promotion and rollback O(1): set `@previous` **before** flipping `@champion`, and rollback is one script plus a redeploy — rehearse it before you need it.
+- Quarantine rolled-back versions, or the loop will cheerfully re-promote the model you just removed.
+- Keep decisions in Python and transport in YAML: the orchestrator (cron/Actions until you genuinely need Prefect/Airflow) should only run the script and route its exit code.
+- The ten-lesson system is a cycle, not a pipeline: monitoring feeds triggers, triggers feed training, training feeds the registry, the registry feeds serving — and the loop runs without you.
+
+That's the course: from a notebook model to a self-correcting production system in ten lessons — take the loop you built, point it at your own model, and let it run.
+
+------------------------------------------------------------------------
+
+[🏠 🚢 Course home](index.html)  &nbsp;|&nbsp;  [← Lesson 09](lesson09.html)  &nbsp;|&nbsp;  [📚 All mini-courses](../../mini-courses.html)

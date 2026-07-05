@@ -1,0 +1,520 @@
+---
+aliases: ["/mini-courses/mlops/day01.html"]
+title: "🚢 ML in Production — MLOps · Lesson 1 — The Deployment Gap & the Plan"
+page-layout: full
+toc: true
+toc-location: left
+toc-title: "In this lesson"
+toc-depth: 2
+---
+
+[🏠 🚢 Course home](index.html)  &nbsp;|&nbsp;  [Lesson 02 →](lesson02.html)  &nbsp;|&nbsp;  [📚 All mini-courses](../../mini-courses.html)
+
+------------------------------------------------------------------------
+
+# Lesson 1 — The Deployment Gap & the Plan
+
+Welcome to the course. Over the next ten lessons we take one model — a churn classifier we'll simply call *the model* — from a notebook-grade script all the way to a monitored, auto-retraining production service. This is the foundation lesson: we'll understand *why* the distance between "my notebook says AUC 0.84" and "this thing serves predictions reliably at 3am" is where most ML projects die, we'll make the single most consequential architecture decision (batch vs online vs streaming serving), and we'll lay down the repo skeleton and a baseline training script that every subsequent day builds on. Nothing today is throwaway — the exact files you write in the next hour are the ones Lesson 8's CI pipeline will lint, Lesson 5's Dockerfile will copy, and Lesson 10's retraining job will invoke.
+
+::: {.callout-note appearance="simple"}
+🎯 **In this lesson you will:** understand the deployment gap and where post-training effort actually goes, choose between batch/online/streaming serving with a concrete decision procedure, set up the full project repo layout for the course, write and run a baseline sklearn training script with a deterministic synthetic dataset, add a first smoke test
+:::
+
+## The deployment gap: why the model is the easy part
+
+The famous claim — often traced to Sculley et al.'s *Hidden Technical Debt in Machine Learning Systems* (NeurIPS 2015) — is that the ML code is a tiny box in the middle of a much larger system. A decade later this is still the single most reliable prediction about any ML project: **training the model is roughly 10% of the work; the other 90% is everything that keeps it correct, available, and current after training.**
+
+Why is the gap so large? Because a trained model is a *pure function* frozen in time, and production is neither pure nor frozen:
+
+- **The world moves, the model doesn't.** The day you deploy, your training data starts aging. Customer behavior shifts, upstream schemas change, a marketing campaign changes the base churn rate. A model without a retraining and monitoring story is a depreciating asset with no maintenance plan.
+- **The notebook lies about its environment.** "Works on my machine" for ML means: this Python, this sklearn version, this random seed, this CSV that happened to be on disk. None of that survives contact with a fresh server unless you make it survive (Lessons 2 and 5).
+- **A prediction is a promise with an SLA.** Once another system calls your model, you own latency, throughput, uptime, input validation, and versioned behavior. `model.predict(X)` becomes an API contract (Lesson 6).
+- **Nobody can answer "which model is this?"** Without tracking and a registry (Lessons 3–4), the production model is "whatever pickle Bob copied in March," and reproducing a bad prediction is archaeology.
+
+Here's the honest shape of the effort. The visible tip is what tutorials cover; the mass below the waterline is this course.
+
+<svg viewBox="0 0 700 360" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Iceberg of ML effort: model training above the waterline, everything else below">
+  <defs>
+    <linearGradient id="ice" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#38bdf8" stop-opacity="0.55"/>
+      <stop offset="100%" stop-color="#6366f1" stop-opacity="0.35"/>
+    </linearGradient>
+  </defs>
+  <!-- waterline -->
+  <line x1="20" y1="100" x2="680" y2="100" stroke="#38bdf8" stroke-width="2" stroke-dasharray="6 5" opacity="0.8"/>
+  <text x="665" y="92" text-anchor="end" font-size="12" fill="currentColor" opacity="0.7">waterline: "the demo works"</text>
+  <!-- iceberg -->
+  <polygon points="350,30 420,100 550,180 470,300 350,340 230,300 150,180 280,100" fill="url(#ice)" stroke="currentColor" stroke-opacity="0.4"/>
+  <!-- tip label -->
+  <text x="350" y="72" text-anchor="middle" font-size="14" font-weight="bold" fill="currentColor">model training ≈ 10%</text>
+  <!-- below labels -->
+  <text x="350" y="140" text-anchor="middle" font-size="13" fill="currentColor">reproducibility · data versioning (Lesson 2)</text>
+  <text x="350" y="170" text-anchor="middle" font-size="13" fill="currentColor">tracking · registry (Lessons 3–4)</text>
+  <text x="350" y="200" text-anchor="middle" font-size="13" fill="currentColor">packaging · serving (Lessons 5–7)</text>
+  <text x="350" y="230" text-anchor="middle" font-size="13" fill="currentColor">CI/CD · testing (Lesson 8)</text>
+  <text x="350" y="260" text-anchor="middle" font-size="13" fill="currentColor">monitoring · drift (Lesson 9)</text>
+  <text x="350" y="290" text-anchor="middle" font-size="13" fill="currentColor">continuous retraining (Lesson 10)</text>
+</svg>
+
+If you've read the encyclopedia's MLOps chapter, this is the practical companion: there we defined the concepts; here we build each layer of the iceberg with our own hands, one lesson at a time.
+
+## Batch, online, or streaming? The first real decision
+
+Before writing any serving code, you must answer one question: **when does the consumer of a prediction need it, relative to when the input becomes available?** Everything else — infrastructure, cost, complexity — follows from that answer.
+
+| Mode | You predict… | Freshness | Typical latency budget | Infra complexity | Example |
+|---|---|---|---|---|---|
+| **Batch** | on a schedule, for all entities at once | hours–days stale | none (offline) | low: a cron job + a table | nightly churn scores for a CRM campaign |
+| **Online** | on demand, per request | computed now, from features that may be slightly stale | 10–500 ms | medium: an API, autoscaling, monitoring | churn risk shown when a support agent opens an account |
+| **Streaming** | continuously, as events arrive | seconds | sub-second end-to-end | high: Kafka/Flink-style pipelines, stateful features | fraud scoring on each card transaction |
+
+The decision procedure, in order:
+
+1. **Can the consumer tolerate predictions computed last night?** If yes — and for churn campaigns, weekly emails, and dashboards the answer is almost always yes — use **batch**. It is dramatically cheaper and simpler: no service to keep alive, failures are retryable, and "deployment" is a scheduled script writing to a table.
+2. **Does the prediction depend on information that only exists at request time** (the page the user is on, the text they just typed)? Then batch is impossible and you need **online** serving.
+3. **Is the input an unbounded event stream where value decays in seconds** (fraud, anomaly detection, real-time bidding)? Only then pay the **streaming** tax.
+
+A useful heuristic: teams over-choose online serving because it feels more "real." Start with the cheapest mode that satisfies the freshness requirement, and note that hybrid setups are common — batch-precompute scores for all customers nightly, serve them from a cache via an API, and recompute online only for entities whose features changed.
+
+**For this course we choose online serving** — not because churn strictly requires it (a nightly batch job would honestly serve most churn use-cases), but because online serving is the superset skill: it forces us through containerization, APIs, latency-aware monitoring, and rolling deployments. Once you can do online, batch is a `for` loop.
+
+## The running example and the ten-lesson architecture
+
+Our model predicts whether a telecom-style customer will churn in the next 30 days, from account features (tenure, plan, charges, support calls). Deliberately boring — the point of this course is everything *around* the model, so the model itself should never be the interesting part.
+
+Here is the full system we'll have by Lesson 10. Keep this diagram in mind all week; each lesson lights up one or two boxes.
+
+```{mermaid}
+flowchart LR
+    subgraph DEV["Lessons 1–2 · develop"]
+        D[(training data)] --> T["train.py<br/>(reproducible)"]
+    end
+    subgraph TRACK["Lessons 3–4 · track & version"]
+        T -->|params, metrics, artifacts| ML["MLflow<br/>tracking server"]
+        ML --> REG["Model Registry<br/>churn-model @ v3 'production'"]
+    end
+    subgraph SHIP["Lessons 5–8 · package & serve"]
+        REG --> IMG["Docker image"]
+        IMG --> API["FastAPI service<br/>/predict"]
+        CI["GitHub Actions CI/CD"] -.tests, build, deploy.-> IMG
+    end
+    subgraph RUN["Lessons 9–10 · operate"]
+        API --> MON["Monitoring<br/>latency · drift · quality"]
+        MON -->|drift alert| RT["Retraining job"]
+        RT -->|new candidate| T
+    end
+    U["client app"] -->|"POST /predict"| API
+```
+
+Read it left to right: a training script produces a model; the tracking server records *how* it was produced; the registry blesses one version as production; CI builds it into a container serving an API; monitoring watches the live traffic; and when drift crosses a threshold, retraining closes the loop back to the start. That closed loop — not any single box — is what "ML in production" means.
+
+## Setting up the repo
+
+Everything lives in one repository. Create the skeleton now; we fill the empty directories in their respective lessons, but having them from Lesson 1 means the structure never needs refactoring mid-course.
+
+```bash
+mkdir churn-mlops && cd churn-mlops
+git init
+
+mkdir -p src/churn configs tests .github/workflows data models
+touch src/churn/__init__.py
+touch Dockerfile .github/workflows/ci.yaml   # empty placeholders for Lessons 5 & 8
+```
+
+The layout, and why each piece exists:
+
+```text
+churn-mlops/
+├── src/
+│   └── churn/            # importable package: `from churn import train`
+│       ├── __init__.py
+│       ├── data.py       # data loading/generation (current)
+│       └── train.py      # training entrypoint (current)
+├── configs/
+│   └── train.yaml        # all knobs live here, not in code (current)
+├── tests/
+│   └── test_train.py     # smoke test (current) → full suite Lesson 8
+├── data/                 # local data cache — gitignored, DVC-managed Lesson 2
+├── models/               # local model artifacts — gitignored, registry Lesson 4
+├── Dockerfile            # Lesson 5
+├── .github/workflows/
+│   └── ci.yaml           # Lesson 8
+├── pyproject.toml
+└── .gitignore
+```
+
+Two conventions here are load-bearing:
+
+- **`src/` layout, not flat layout.** Putting the package under `src/` means you *cannot* accidentally import it from the working directory — you must install it (`pip install -e .`). That sounds like friction; it's actually the first reproducibility guarantee, because it forces the same import path in your notebook, in Docker, and in CI. Flat layouts are the #1 source of "works locally, `ModuleNotFoundError` in the container."
+- **`configs/` separate from code.** Every value someone might want to change without editing Python — data size, model hyperparameters, output paths — lives in YAML. On Lesson 3 MLflow will log this file wholesale; on Lesson 10 the retraining job will override parts of it. Hardcoded constants can't be logged or overridden.
+
+Now the packaging metadata:
+
+```toml
+# pyproject.toml
+[project]
+name = "churn"
+version = "0.1.0"
+requires-python = ">=3.11"
+dependencies = [
+    "scikit-learn>=1.5",
+    "pandas>=2.2",
+    "pyyaml>=6.0",
+    "joblib>=1.4",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0"]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+```
+
+Note the *floor* pins (`>=`) — good enough for Lesson 1. On Lesson 2 we'll generate a fully locked environment, because `>=` is exactly the kind of looseness that makes this lesson's model unreproducible next month.
+
+```gitignore
+# .gitignore
+data/
+models/
+__pycache__/
+*.egg-info/
+.venv/
+```
+
+Install in editable mode and verify:
+
+```bash
+python -m venv .venv && source .venv/bin/activate
+pip install -e ".[dev]"
+python -c "import churn; print('package importable ✔')"
+```
+
+## The baseline training script
+
+Time for the heart of this lesson. We build it in three stages: config, data, training — three small files instead of one monolith, because each will evolve independently (data gets DVC on Lesson 2, training gets MLflow on Lesson 3).
+
+### Stage 1: the config
+
+```yaml
+# configs/train.yaml
+data:
+  n_customers: 20000
+  seed: 42
+
+model:
+  C: 1.0            # inverse regularization for LogisticRegression
+  max_iter: 1000
+
+split:
+  test_size: 0.2
+  seed: 42
+
+output:
+  model_path: models/churn_model.joblib
+```
+
+Every number that appears anywhere in training is here. When Lesson 10's retraining job wants a bigger dataset or Lesson 3's experiments sweep `C`, they edit *this*, not the code.
+
+### Stage 2: deterministic data
+
+Real churn projects pull from a warehouse; for a self-contained course we *generate* a realistic churn dataset. Crucially, we generate it **deterministically** — same seed, same bytes — which is a stand-in for the data-versioning discipline Lesson 2 formalizes.
+
+```python
+# src/churn/data.py
+"""Synthetic churn dataset. Deterministic: same seed -> identical DataFrame."""
+import numpy as np
+import pandas as pd
+
+PLANS = ["basic", "standard", "premium"]
+
+def make_churn_data(n_customers: int = 20000, seed: int = 42) -> pd.DataFrame:
+    rng = np.random.default_rng(seed)
+
+    tenure_months = rng.integers(1, 72, size=n_customers)
+    monthly_charges = np.round(rng.uniform(20, 120, size=n_customers), 2)
+    support_calls = rng.poisson(1.5, size=n_customers)
+    plan = rng.choice(PLANS, size=n_customers, p=[0.5, 0.3, 0.2])
+    has_autopay = rng.random(n_customers) < 0.6
+
+    # Churn logit: short tenure, high charges, many support calls -> more churn;
+    # autopay and premium plan -> less churn.
+    logit = (
+        -1.2
+        - 0.045 * tenure_months
+        + 0.018 * monthly_charges
+        + 0.55 * support_calls
+        - 0.9 * has_autopay
+        - 0.6 * (plan == "premium")
+    )
+    p_churn = 1 / (1 + np.exp(-logit))
+    churned = rng.random(n_customers) < p_churn
+
+    return pd.DataFrame({
+        "tenure_months": tenure_months,
+        "monthly_charges": monthly_charges,
+        "support_calls": support_calls,
+        "plan": plan,
+        "has_autopay": has_autopay.astype(int),
+        "churned": churned.astype(int),
+    })
+```
+
+Methodology notes, block by block:
+
+- **`np.random.default_rng(seed)`, not `np.random.seed()`.** The modern Generator API gives you a *local* random state. Global seeding (`np.random.seed`) is action-at-a-distance: any library that also touches the global state silently changes your data. With a local `rng`, determinism is airtight — this function is a pure function of `(n_customers, seed)`.
+- **The logit is the ground truth.** We define churn probability as a known linear function of features plus noise. This means we *know* the best achievable performance, which makes every later stage debuggable: if Lesson 9's monitoring reports AUC 0.65 when the data-generating process supports ~0.80, something in the pipeline broke — not the world.
+- **Feature signs are realistic on purpose.** Tenure protects, support calls scream risk. On Lesson 9 we'll *shift these distributions deliberately* to simulate drift and watch the monitors fire.
+- **Shapes:** every array is `(n_customers,)`; the returned frame is `(20000, 6)` — five features and the `churned` label.
+
+### Stage 3: the training pipeline
+
+```python
+# src/churn/train.py
+"""Baseline training: config in, metrics + serialized pipeline out."""
+import argparse
+import json
+from pathlib import Path
+
+import joblib
+import yaml
+from sklearn.compose import ColumnTransformer
+from sklearn.linear_model import LogisticRegression
+from sklearn.metrics import roc_auc_score, f1_score
+from sklearn.model_selection import train_test_split
+from sklearn.pipeline import Pipeline
+from sklearn.preprocessing import OneHotEncoder, StandardScaler
+
+from churn.data import make_churn_data
+
+NUMERIC = ["tenure_months", "monthly_charges", "support_calls"]
+CATEGORICAL = ["plan"]
+PASSTHROUGH = ["has_autopay"]
+TARGET = "churned"
+
+
+def build_pipeline(C: float, max_iter: int) -> Pipeline:
+    preprocess = ColumnTransformer([
+        ("num", StandardScaler(), NUMERIC),
+        ("cat", OneHotEncoder(handle_unknown="ignore"), CATEGORICAL),
+        ("pass", "passthrough", PASSTHROUGH),
+    ])
+    return Pipeline([
+        ("preprocess", preprocess),
+        ("clf", LogisticRegression(C=C, max_iter=max_iter)),
+    ])
+
+
+def train(config: dict) -> dict:
+    df = make_churn_data(**config["data"])
+    X, y = df.drop(columns=[TARGET]), df[TARGET]
+
+    X_train, X_test, y_train, y_test = train_test_split(
+        X, y,
+        test_size=config["split"]["test_size"],
+        random_state=config["split"]["seed"],
+        stratify=y,
+    )
+
+    pipe = build_pipeline(**config["model"])
+    pipe.fit(X_train, y_train)
+
+    proba = pipe.predict_proba(X_test)[:, 1]
+    metrics = {
+        "roc_auc": round(roc_auc_score(y_test, proba), 4),
+        "f1": round(f1_score(y_test, proba >= 0.5), 4),
+        "churn_rate_test": round(float(y_test.mean()), 4),
+        "n_train": len(X_train),
+    }
+
+    out = Path(config["output"]["model_path"])
+    out.parent.mkdir(parents=True, exist_ok=True)
+    joblib.dump(pipe, out)
+    return metrics
+
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--config", default="configs/train.yaml")
+    args = parser.parse_args()
+    config = yaml.safe_load(Path(args.config).read_text())
+    print(json.dumps(train(config), indent=2))
+```
+
+Walking through the decisions that matter for production:
+
+- **One `Pipeline`, preprocessing included.** This is the single most important line of defense against *training–serving skew*. If scaling and one-hot encoding live inside the serialized object, the API on Lesson 6 calls `pipe.predict_proba(raw_dataframe)` and *cannot* apply different preprocessing than training did. The classic failure mode we're preventing: someone scales features in the training notebook, forgets to scale in the serving code, and the model quietly outputs garbage — no error, just wrong probabilities.
+- **`ColumnTransformer` names its columns.** `NUMERIC`/`CATEGORICAL`/`PASSTHROUGH` as module-level constants become the de-facto input schema. On Lesson 6, FastAPI's request model is derived from exactly these lists; on Lesson 9, the drift monitor iterates over them. Define the schema once.
+- **`handle_unknown="ignore"` on the encoder.** In the notebook this is optional; in production it's the difference between "new plan tier launched, model degrades gracefully" and "new plan tier launched, every request 500s with `ValueError: Found unknown categories`." Trust-boundary robustness starts at training time.
+- **`stratify=y` on the split.** Churn is imbalanced (~25% here, often <5% in reality). An unstratified split can hand you a test set whose base rate differs from training, corrupting every threshold-dependent metric.
+- **Shapes flowing through:** raw `X_test` is `(4000, 5)`; after the ColumnTransformer it becomes `(4000, 7)` — 3 scaled numerics + 3 one-hot plan columns + 1 passthrough. `predict_proba` returns `(4000, 2)`; the `[:, 1]` slice takes the churn-class column, `(4000,)`.
+- **`train()` takes a dict and returns a dict.** The `__main__` block is a thin shell around a pure function. That's deliberate: on Lesson 3 MLflow wraps `train()`, on Lesson 8 pytest calls it directly, on Lesson 10 the retraining job calls it with a modified config. Scripts whose logic lives under `if __name__ == "__main__":` can only ever be run, never composed.
+- **Metrics printed as JSON**, not prose. A structured stdout contract means Lesson 8's CI can `json.loads` the output and gate the deploy on `roc_auc`.
+
+Run it:
+
+```bash
+python -m src.churn.train --config configs/train.yaml
+# or, since the package is installed:
+python -m churn.train
+```
+
+Expected output (identical on every machine, thanks to the seeds — verify yours matches, this is the point):
+
+```json
+{
+  "roc_auc": 0.8079,
+  "f1": 0.5765,
+  "churn_rate_test": 0.2402,
+  "n_train": 16000
+}
+```
+
+An AUC around 0.81 against a known data-generating process with irreducible noise — a healthy, boring baseline. Resist the urge to gradient-boost it upward; a stronger model changes nothing about the next nine lessons, and the fixed baseline gives us a stable reference point for detecting regressions.
+
+### Stage 4: the first test
+
+A production repo without tests isn't a production repo. One smoke test today; Lesson 8 grows the suite.
+
+```python
+# tests/test_train.py
+from churn.data import make_churn_data
+from churn.train import train
+
+def test_data_is_deterministic():
+    a = make_churn_data(n_customers=500, seed=7)
+    b = make_churn_data(n_customers=500, seed=7)
+    assert a.equals(b)
+
+def test_train_smoke(tmp_path):
+    config = {
+        "data": {"n_customers": 2000, "seed": 0},
+        "model": {"C": 1.0, "max_iter": 1000},
+        "split": {"test_size": 0.2, "seed": 0},
+        "output": {"model_path": str(tmp_path / "m.joblib")},
+    }
+    metrics = train(config)
+    assert metrics["roc_auc"] > 0.7          # sanity floor, not a benchmark
+    assert (tmp_path / "m.joblib").exists()
+```
+
+Two things to notice. The determinism test is the seed of Lesson 2's whole reproducibility story — it asserts the property everything else depends on. And the smoke test runs on 2,000 rows in under a second because `train()` accepts a config dict: **testability was bought by the function signature, not by test infrastructure.** The `tmp_path` fixture keeps test artifacts out of `models/`.
+
+```bash
+pytest -q
+# ..                                                     [100%]
+# 2 passed in 1.42s
+```
+
+Commit the lesson's work:
+
+```bash
+git add -A && git commit -m "Lesson 1: repo skeleton, baseline training, smoke tests"
+```
+
+## Where each file goes next
+
+Your repo now has empty placeholders and live code. This table is the course contract — each artifact you created today has an appointment:
+
+| Artifact | Today | Becomes |
+|---|---|---|
+| `src/churn/data.py` | synthetic generator | DVC-versioned data stage (Lesson 2) |
+| `src/churn/train.py` | prints JSON metrics | logs to MLflow (Lesson 3), registers models (Lesson 4), invoked by retraining (Lesson 10) |
+| `configs/train.yaml` | local knobs | logged config artifact (Lesson 3), overridden by CT job (Lesson 10) |
+| `models/*.joblib` | local file | registry version with stage labels (Lesson 4), baked into image (Lesson 5) |
+| `Dockerfile` | empty | the production packaging (Lesson 5) |
+| `.github/workflows/ci.yaml` | empty | test + build + deploy pipeline (Lesson 8) |
+| `tests/` | 2 smoke tests | full pyramid: data, model, API contract tests (Lesson 8) |
+
+## 🧪 Your task
+
+Your stakeholders don't want probabilities — they want a **top-K list**: "give me the 500 customers most likely to churn, so the retention team can call them." This is a classic batch-serving deliverable, and it exposes a metric gap: AUC doesn't tell you how good the *top* of your ranking is.
+
+Extend the project with a `precision_at_k` metric: among the K test customers with the highest predicted churn probability, what fraction actually churned? Add `precision_at_500` to the metrics dict returned by `train()`, wired through the config (`eval: {k: 500}` in `train.yaml`), and add a test asserting it beats the base churn rate (if it doesn't, the model ranks no better than random and the calling campaign is a waste of money).
+
+*Hint:* `np.argsort(proba)` sorts ascending — you want the last K indices, then index into `y_test.to_numpy()` (positional indices against a pandas Series with a shuffled index is a classic silent bug).
+
+<details><summary>Solution</summary>
+
+```python
+# add to src/churn/train.py
+import numpy as np
+
+def precision_at_k(y_true, proba, k: int) -> float:
+    """Fraction of true churners among the k highest-scored customers."""
+    k = min(k, len(proba))
+    top_k_idx = np.argsort(proba)[-k:]          # ascending sort -> take the tail
+    y = np.asarray(y_true)                       # positional indexing, not label
+    return float(y[top_k_idx].mean())
+```
+
+Wire it into `train()`, after `proba` is computed:
+
+```python
+    k = config.get("eval", {}).get("k", 500)
+    metrics = {
+        "roc_auc": round(roc_auc_score(y_test, proba), 4),
+        "f1": round(f1_score(y_test, proba >= 0.5), 4),
+        f"precision_at_{k}": round(precision_at_k(y_test, proba, k), 4),
+        "churn_rate_test": round(float(y_test.mean()), 4),
+        "n_train": len(X_train),
+    }
+```
+
+Config addition:
+
+```yaml
+# configs/train.yaml
+eval:
+  k: 500
+```
+
+And the test:
+
+```python
+# tests/test_train.py
+def test_precision_at_k_beats_base_rate(tmp_path):
+    config = {
+        "data": {"n_customers": 5000, "seed": 0},
+        "model": {"C": 1.0, "max_iter": 1000},
+        "split": {"test_size": 0.2, "seed": 0},
+        "eval": {"k": 100},
+        "output": {"model_path": str(tmp_path / "m.joblib")},
+    }
+    metrics = train(config)
+    assert metrics["precision_at_100"] > metrics["churn_rate_test"]
+```
+
+Running `python -m churn.train` now prints something like:
+
+```json
+{
+  "roc_auc": 0.8079,
+  "f1": 0.5765,
+  "precision_at_500": 0.674,
+  "churn_rate_test": 0.2402,
+  "n_train": 16000
+}
+```
+
+Read that as: calling the model's top 500 reaches ~67% actual churners versus ~24% for a random call list — a 2.8× lift. That sentence, not the AUC, is what you tell the retention team. The `np.asarray(y_true)` line is the load-bearing subtlety: `y_test` is a pandas Series carrying its original shuffled index, so `y_test[top_k_idx]` would do *label*-based lookup with positional indices — sometimes crashing, sometimes silently selecting wrong rows. Converting to a NumPy array makes the indexing positional and correct.
+
+</details>
+
+## Key takeaways
+
+- Training is ~10% of an ML system; the deployment gap is everything that keeps a frozen model correct in a moving world — reproducibility, tracking, packaging, serving, CI/CD, monitoring, retraining.
+- Serving mode is decided by **prediction freshness needs**, in order of cost: batch (schedule → table), online (request → API), streaming (event → sub-second). Choose the cheapest mode that satisfies the consumer; we chose online because it's the superset skill.
+- The `src/` layout forces installation, which is your first reproducibility guarantee; configs live in YAML so they can be logged, tested, and overridden.
+- Ship preprocessing *inside* the serialized `Pipeline` — it makes training–serving skew structurally impossible.
+- Write training as a pure `train(config) -> metrics` function: the same function is then callable by MLflow, pytest, CI, and the retraining job without modification.
+- Deterministic data + fixed seeds + a known data-generating process give you a debuggable baseline: any future metric surprise is a pipeline bug, not a mystery.
+
+In the next lesson: we make this lesson's "it ran on my laptop" claim bulletproof — locked environments, versioned data with DVC, and a training run any machine can reproduce byte-for-byte.
+
+------------------------------------------------------------------------
+
+[🏠 🚢 Course home](index.html)  &nbsp;|&nbsp;  [Lesson 02 →](lesson02.html)  &nbsp;|&nbsp;  [📚 All mini-courses](../../mini-courses.html)

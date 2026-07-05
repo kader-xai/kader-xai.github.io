@@ -1,0 +1,464 @@
+---
+aliases: ["/mini-courses/mlops/day03.html"]
+title: "🚢 ML in Production — MLOps · Lesson 3 — Experiment Tracking with MLflow"
+page-layout: full
+toc: true
+toc-location: left
+toc-title: "In this lesson"
+toc-depth: 2
+---
+
+[🏠 🚢 Course home](index.html)  &nbsp;|&nbsp;  [← Lesson 02](lesson02.html)  &nbsp;|&nbsp;  [Lesson 04 →](lesson04.html)  &nbsp;|&nbsp;  [📚 All mini-courses](../../mini-courses.html)
+
+------------------------------------------------------------------------
+
+# Lesson 3 — Experiment Tracking with MLflow
+
+In the previous lesson you made a training run reproducible: pinned dependencies, seeded randomness, hashed data, and a `train.py` that produces the same model twice. That solves *"can I rebuild it?"* — but not *"which of my forty attempts was the good one, and what made it good?"* Reproducibility without a record is a time machine with no logbook: you can go back, but you don't know where "back" is. In this lesson we bolt a memory onto Lesson 2's pipeline. You'll stand up a local MLflow tracking server, instrument `train.py` so every run records its parameters, metrics, and artifacts automatically, log the model itself with a typed signature so downstream consumers (Lesson 4's registry, Lesson 6's API) know exactly what it eats and emits, and finish with a small hyperparameter sweep you can compare visually in the MLflow UI. The encyclopedia's MLOps chapter covers the *why* of experiment tracking; today is the *how*, end to end.
+
+::: {.callout-note appearance="simple"}
+🎯 **In this lesson you will:** run a local MLflow tracking server backed by SQLite, instrument `train.py` with params/metrics/artifacts logging, log the model with a signature and input example, execute an 8-run hyperparameter sweep as nested runs, and query & compare runs both in the UI and programmatically.
+:::
+
+## The anatomy of a tracked run
+
+Before touching the API, get the mental model right, because every MLflow function maps onto one box in it. MLflow Tracking has exactly four nouns:
+
+- **Experiment** — a named folder of related runs (`churn-model` for us). One project, usually a handful of experiments.
+- **Run** — one execution of training. It has a unique `run_id`, a start/end time, and a status.
+- **Backend store** — a database (SQLite today, Postgres in prod) holding the *structured* stuff: params, metrics, tags.
+- **Artifact store** — a blob location (local folder today, S3 in prod) holding the *files*: plots, the serialized model, config dumps.
+
+And every run records exactly four kinds of things:
+
+<svg viewBox="0 0 720 300" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif">
+  <rect x="10" y="10" width="700" height="280" rx="14" fill="#6366f1" fill-opacity="0.08" stroke="currentColor" stroke-opacity="0.4"/>
+  <text x="360" y="42" text-anchor="middle" font-size="17" font-weight="bold" fill="currentColor">One MLflow Run  (run_id: 3f2a9c…)</text>
+  <rect x="35" y="65" width="310" height="95" rx="10" fill="#6366f1" fill-opacity="0.25" stroke="currentColor" stroke-opacity="0.5"/>
+  <text x="190" y="90" text-anchor="middle" font-size="14" font-weight="bold" fill="currentColor">Params — write once</text>
+  <text x="190" y="112" text-anchor="middle" font-size="12" fill="currentColor">learning_rate = 0.05</text>
+  <text x="190" y="130" text-anchor="middle" font-size="12" fill="currentColor">max_depth = 6, seed = 42</text>
+  <text x="190" y="150" text-anchor="middle" font-size="11" fill="currentColor" opacity="0.7">strings, immutable per run</text>
+  <rect x="375" y="65" width="310" height="95" rx="10" fill="#22c55e" fill-opacity="0.25" stroke="currentColor" stroke-opacity="0.5"/>
+  <text x="530" y="90" text-anchor="middle" font-size="14" font-weight="bold" fill="currentColor">Metrics — time series</text>
+  <text x="530" y="112" text-anchor="middle" font-size="12" fill="currentColor">val_auc = 0.874 (step 0…N)</text>
+  <text x="530" y="130" text-anchor="middle" font-size="12" fill="currentColor">log_loss per epoch</text>
+  <text x="530" y="150" text-anchor="middle" font-size="11" fill="currentColor" opacity="0.7">floats, can repeat with steps</text>
+  <rect x="35" y="180" width="310" height="95" rx="10" fill="#f59e0b" fill-opacity="0.25" stroke="currentColor" stroke-opacity="0.5"/>
+  <text x="190" y="205" text-anchor="middle" font-size="14" font-weight="bold" fill="currentColor">Artifacts — files</text>
+  <text x="190" y="227" text-anchor="middle" font-size="12" fill="currentColor">confusion_matrix.png</text>
+  <text x="190" y="245" text-anchor="middle" font-size="12" fill="currentColor">model/ (MLmodel, pickle, env)</text>
+  <text x="190" y="265" text-anchor="middle" font-size="11" fill="currentColor" opacity="0.7">anything binary → artifact store</text>
+  <rect x="375" y="180" width="310" height="95" rx="10" fill="#ec4899" fill-opacity="0.25" stroke="currentColor" stroke-opacity="0.5"/>
+  <text x="530" y="205" text-anchor="middle" font-size="14" font-weight="bold" fill="currentColor">Tags — metadata</text>
+  <text x="530" y="227" text-anchor="middle" font-size="12" fill="currentColor">git_sha = a1b2c3d</text>
+  <text x="530" y="245" text-anchor="middle" font-size="12" fill="currentColor">data_hash = 9e10f…</text>
+  <text x="530" y="265" text-anchor="middle" font-size="11" fill="currentColor" opacity="0.7">mutable key/value labels</text>
+</svg>
+
+The split matters operationally. Params and metrics land in the **backend store** and are cheap to query ("give me all runs with `max_depth=6` sorted by AUC"). Artifacts land in the **artifact store** and are cheap to *hold* but expensive to query — you fetch them by run, never search inside them. If you find yourself wanting to filter runs by something, it should have been a param, metric, or tag, not a JSON artifact.
+
+Notice where Lesson 2's work slots in: the git SHA and the data hash you computed in the previous lesson become **tags** today. That's the link between "reproducible" and "tracked" — a run record that points at the exact code and data that produced it.
+
+## Spinning up a local tracking server
+
+You *can* use MLflow with zero servers — by default it writes to a local `./mlruns` folder. Don't. The file-store backend can't back the Model Registry we need on Lesson 4, and it's painfully slow to query past a few hundred runs. The correct lazy setup is one command: a local server with SQLite behind it. Same API, registry-capable, and swapping SQLite → Postgres later is a URI change.
+
+```bash
+pip install "mlflow>=3.1" scikit-learn pandas matplotlib
+
+# from the project root, in its own terminal
+mlflow server \
+  --backend-store-uri sqlite:///mlflow.db \
+  --host 127.0.0.1 --port 5000
+```
+
+This gives you:
+
+- `http://127.0.0.1:5000` — the tracking UI in your browser.
+- `mlflow.db` — a SQLite file holding experiments, runs, params, metrics, tags.
+- `./mlartifacts/` — the artifact store, proxied through the server (clients upload artifacts *via* HTTP, so they never need direct filesystem/S3 access — exactly how it'll work in prod).
+
+The moving parts, and how they map to a production deployment later:
+
+```{mermaid}
+flowchart LR
+    subgraph client["Your machine — train.py"]
+        A["mlflow client<br/>log_param / log_metric / log_model"]
+    end
+    subgraph server["Tracking server :5000"]
+        B["REST API + UI"]
+    end
+    subgraph stores["Storage"]
+        C[("Backend store<br/>sqlite:///mlflow.db<br/>(prod: Postgres)")]
+        D[/"Artifact store<br/>./mlartifacts<br/>(prod: S3 / GCS)"/]
+    end
+    A -- "HTTP" --> B
+    B -- "params, metrics, tags" --> C
+    B -- "files, models" --> D
+    E["Browser — compare runs"] --> B
+```
+
+Point your code at it with one environment variable (preferred over hardcoding, so CI on Lesson 8 can point the same script at a different server):
+
+```bash
+export MLFLOW_TRACKING_URI=http://127.0.0.1:5000
+```
+
+Quick smoke test that the plumbing works before we invest in instrumentation:
+
+```python
+import mlflow
+
+mlflow.set_experiment("smoke-test")          # creates it if missing
+with mlflow.start_run(run_name="hello"):
+    mlflow.log_param("answer", 42)
+    mlflow.log_metric("quality", 0.99)
+print("tracking URI:", mlflow.get_tracking_uri())
+```
+
+```text
+tracking URI: http://127.0.0.1:5000
+🏃 View run hello at: http://127.0.0.1:5000/#/experiments/1/runs/…
+```
+
+Open the printed link — you should see one run with one param and one metric. If instead you see a new `mlruns/` directory appear next to your script, `MLFLOW_TRACKING_URI` isn't set in that shell, and MLflow silently fell back to the file store. That silent fallback is the #1 source of "where did my runs go?" — everything *works*, it just works into a folder nobody looks at.
+
+`set_experiment` is also your organizing tool. Convention that scales: one experiment per model-purpose, not per person or per lesson — `churn-model` for the real work, `churn-scratch` for throwaway exploration. Runs are cheap; experiments should be few and long-lived, because comparison happens *within* an experiment.
+
+## Instrumenting train.py: params, metrics, artifacts
+
+Now the real work: take Lesson 2's `train.py` and thread tracking through it. The guiding rule — **log every input that could change the output, and every output you'd want when deciding between two runs.** Inputs → params/tags. Outputs → metrics/artifacts.
+
+Stage 1: config and data, same shape as Lesson 2 (synthetic churn stand-in so the lesson runs anywhere; swap in your real loader if you have one):
+
+```python
+# src/train.py
+import hashlib
+import subprocess
+from dataclasses import dataclass, asdict
+
+import mlflow
+import numpy as np
+import pandas as pd
+from sklearn.datasets import make_classification
+from sklearn.ensemble import HistGradientBoostingClassifier
+from sklearn.metrics import roc_auc_score, log_loss, f1_score
+from sklearn.model_selection import train_test_split
+
+@dataclass
+class Config:
+    seed: int = 42
+    test_size: float = 0.2
+    learning_rate: float = 0.1
+    max_depth: int = 4
+    max_iter: int = 200
+    l2_regularization: float = 0.0
+
+def load_data(seed: int) -> pd.DataFrame:
+    X, y = make_classification(
+        n_samples=8000, n_features=12, n_informative=6,
+        weights=[0.8, 0.2],           # churn is imbalanced
+        random_state=seed,
+    )
+    cols = [f"f{i}" for i in range(X.shape[1])]
+    df = pd.DataFrame(X, columns=cols)
+    df["churned"] = y
+    return df
+```
+
+One dataclass for config pays off immediately: `asdict(cfg)` is exactly what `mlflow.log_params` wants, so config and logged params *cannot* drift apart. Hand-writing ten `log_param` calls is how you end up with a run that says `max_depth=4` while the model was actually trained with 6.
+
+Stage 2: the training function, instrumented. Read it once, then we'll walk the logging calls:
+
+```python
+def train(cfg: Config) -> str:
+    df = load_data(cfg.seed)
+    X, y = df.drop(columns="churned"), df["churned"]
+    X_train, X_val, y_train, y_val = train_test_split(
+        X, y, test_size=cfg.test_size, stratify=y, random_state=cfg.seed
+    )
+
+    with mlflow.start_run() as run:
+        # --- inputs: params + provenance tags -----------------
+        mlflow.log_params(asdict(cfg))
+        mlflow.set_tags({
+            "git_sha": subprocess.run(
+                ["git", "rev-parse", "--short", "HEAD"],
+                capture_output=True, text=True).stdout.strip() or "no-git",
+            "data_hash": hashlib.sha256(
+                pd.util.hash_pandas_object(df).values).hexdigest()[:12],
+            "model_family": "hist_gradient_boosting",
+        })
+
+        # --- train, logging the learning curve ----------------
+        model = HistGradientBoostingClassifier(
+            learning_rate=cfg.learning_rate,
+            max_depth=cfg.max_depth,
+            max_iter=1,                 # we'll grow it manually
+            l2_regularization=cfg.l2_regularization,
+            warm_start=True,
+            random_state=cfg.seed,
+        )
+        for step in range(1, cfg.max_iter + 1):
+            model.max_iter = step
+            model.fit(X_train, y_train)
+            if step % 20 == 0 or step == cfg.max_iter:
+                p = model.predict_proba(X_val)[:, 1]
+                mlflow.log_metric("val_log_loss", log_loss(y_val, p), step=step)
+                mlflow.log_metric("val_auc", roc_auc_score(y_val, p), step=step)
+
+        # --- final outputs: metrics --------------------------
+        p_val = model.predict_proba(X_val)[:, 1]
+        mlflow.log_metrics({
+            "val_auc": roc_auc_score(y_val, p_val),
+            "val_log_loss": log_loss(y_val, p_val),
+            "val_f1": f1_score(y_val, p_val > 0.5),
+        })
+        return run.info.run_id
+```
+
+Walking through the decisions:
+
+- **`with mlflow.start_run() as run:`** — the context manager guarantees the run is marked `FINISHED` on clean exit and `FAILED` if an exception escapes. If you call `start_run()` without the `with` and your script crashes, the run stays `RUNNING` forever and pollutes every "show me active runs" query. Always the context manager.
+- **`log_params(asdict(cfg))`** — one call, whole config. Params are stored as *strings* and are **write-once**: logging the same key twice with a different value raises `MlflowException`. That's a feature — a param that changes mid-run was never a param, it's a metric.
+- **`set_tags(...)`** — the provenance from Lesson 2. Tags are mutable and queryable; six weeks from now, `tags.data_hash` is how you'll prove a metric regression came from a data change, not a code change.
+- **`log_metric(..., step=step)`** — the `step` argument turns a metric into a time series. The UI plots it as a learning curve, which is how you'll spot "this run had a great final score but was still improving — train it longer" versus "converged at step 60, the rest was wasted compute". The warm-start loop exists purely so we *have* per-step values; with a model that exposes a callback (XGBoost, LightGBM, PyTorch) you'd log from the callback instead.
+- Note `val_auc` appears both inside the loop *and* at the end — that's fine. Metrics can be logged repeatedly; the UI shows the last value in tables and the full series in charts.
+
+The metric we're steering by is validation log-loss,
+
+$$\mathcal{L} = -\frac{1}{N}\sum_{i=1}^{N}\left[y_i \log \hat{p}_i + (1-y_i)\log(1-\hat{p}_i)\right],$$
+
+alongside AUC — log-loss because it's sensitive to calibration (which matters when Lesson 6's API returns churn *probabilities*), AUC because it's threshold-free and what the business dashboard will show.
+
+Stage 3: artifacts — the files you'd want open in front of you when comparing two candidate models:
+
+```python
+import matplotlib
+matplotlib.use("Agg")                    # headless: no display needed in CI
+import matplotlib.pyplot as plt
+from sklearn.metrics import ConfusionMatrixDisplay
+
+def log_evaluation_artifacts(model, X_val, y_val):
+    fig, ax = plt.subplots(figsize=(4, 4))
+    ConfusionMatrixDisplay.from_estimator(model, X_val, y_val, ax=ax)
+    mlflow.log_figure(fig, "plots/confusion_matrix.png")
+    plt.close(fig)
+
+    mlflow.log_dict(
+        {"feature_names": list(X_val.columns)}, "feature_names.json"
+    )
+```
+
+Two conveniences worth knowing: `log_figure` takes a live matplotlib figure and a *destination path inside the run's artifact folder* — no temp files on your side. `log_dict` does the same for JSON/YAML. The general-purpose `mlflow.log_artifact("local/path/file.png")` exists for anything else (a `dvc.lock`, a data profile, Lesson 2's `requirements.txt` — actually, do log that one: `mlflow.log_artifact("requirements.txt")` makes every run carry its own environment record). Call `log_evaluation_artifacts(model, X_val, y_val)` right before `return` inside the run context — artifacts logged outside a `with mlflow.start_run()` block go to a brand-new auto-created run, which is a classic head-scratcher.
+
+## Logging the model itself — signature and input example
+
+Metrics tell you which run won; the **logged model** is what actually ships. `mlflow.sklearn.log_model` stores the pickled model *plus* an `MLmodel` metadata file, the pinned environment (`conda.yaml`, `requirements.txt`), and — if you provide them — a **signature** and **input example**. Add this before the `return` in `train()`:
+
+```python
+from mlflow.models import infer_signature
+
+        # --- the model, as a deployable artifact --------------
+        signature = infer_signature(X_val, model.predict_proba(X_val)[:, 1])
+        mlflow.sklearn.log_model(
+            model,
+            name="model",                       # MLflow 2.x: artifact_path="model"
+            signature=signature,
+            input_example=X_val.iloc[:3],
+        )
+```
+
+Why each argument earns its place:
+
+- **`signature`** is a typed contract: column names, dtypes, and output shape, inferred from real data and a real prediction. It's inferred from `predict_proba(...)[:, 1]` — not `predict` — because the *probability* is our serving output, and the signature should describe what the service returns, not what sklearn's default method returns. From Lesson 4 onward, MLflow *enforces* this schema at inference time: a request with a missing column or an `int` where a `float` is expected fails loudly at the model boundary instead of producing a silently-wrong prediction. No signature → no validation → the bug surfaces as "AUC mysteriously dropped in prod" on Lesson 9 instead of a 400 error on Lesson 6.
+- **`input_example`** — three real rows, stored alongside the model. It's executable documentation (Lesson 6's API docs will show it), and MLflow uses it at logging time to *validate the signature actually works* — it runs the example through the schema and warns if they disagree. It also becomes the smoke-test payload in Lesson 8's CI.
+- One classic trap the validation catches: pandas **integer columns**. The signature records them as `long`, but at serving time a JSON payload with a missing value coerces the column to `float64`, and schema enforcement rejects it. If a feature could ever be null, cast it to float before logging: `X = X.astype({c: "float64" for c in int_cols})`. Cheaper to fix today than mid-incident.
+
+The model lands in the artifact store as a self-describing folder:
+
+```text
+model/
+├── MLmodel               # metadata: flavors, signature, example reference
+├── model.pkl             # the estimator
+├── conda.yaml            # pinned env — Lesson 2's reproducibility, carried along
+├── requirements.txt
+└── input_example.json
+```
+
+Loading it back needs nothing but the run id — no imports of your training code, no unpickling gymnastics:
+
+```python
+loaded = mlflow.pyfunc.load_model(f"runs:/{run_id}/model")
+print(loaded.metadata.get_input_schema())
+```
+
+```text
+['f0': double, 'f1': double, ..., 'f11': double]
+```
+
+That `runs:/<run_id>/model` URI is the exact handle Lesson 4's registry will promote and Lesson 6's server will load. The model is now an addressable artifact, not a file on someone's laptop.
+
+**A word on `autolog`.** `mlflow.sklearn.autolog()` — one line before training — patches sklearn to log params, training metrics, and the model automatically, and equivalents exist for XGBoost, LightGBM, PyTorch Lightning, and Transformers. Use it for scratch experiments in `churn-scratch`; it's genuinely great for zero-effort exploration. For the *production* training script, prefer the explicit calls we just wrote: autolog logs every estimator param (40+ rows of noise for our model), captures training-set metrics rather than your validation protocol, doesn't know your business metric exists, and can't log your provenance tags. The two compose fine — `autolog(log_models=False)` plus explicit `log_metrics` and `log_model` is a reasonable middle ground — but the contract-critical pieces (signature, input example, val metrics, tags) should never be implicit.
+
+## A hyperparameter sweep, organized as nested runs
+
+Time to earn the tracking. A sweep is where untracked workflows collapse — eight configurations, eight terminal scrollbacks, and by lunch you're rerunning things because you forgot which was which. With MLflow, the sweep is a **parent run** (the sweep itself) containing **nested child runs** (one per configuration), so the UI groups them and the experiment list doesn't flood.
+
+```python
+# src/sweep.py
+from itertools import product
+from dataclasses import replace
+import mlflow
+from train import Config, train_one   # train() refactored to accept an open run
+
+mlflow.set_experiment("churn-model")
+
+grid = {
+    "learning_rate": [0.05, 0.1],
+    "max_depth": [3, 6],
+    "l2_regularization": [0.0, 1.0],
+}
+combos = [dict(zip(grid, v)) for v in product(*grid.values())]
+
+with mlflow.start_run(run_name="sweep-hgb-v1"):
+    mlflow.set_tag("sweep_grid", str(grid))
+    for i, params in enumerate(combos):
+        cfg = replace(Config(), **params)
+        with mlflow.start_run(run_name=f"trial-{i:02d}", nested=True):
+            train_one(cfg)              # all the logging from before
+```
+
+The only new machinery is `nested=True`; everything inside each child run is exactly the code from the previous sections (refactor `train()` so the `with mlflow.start_run()` moves out to the caller — the body becomes `train_one(cfg)`). Eight combinations, one parent, eight children:
+
+```{mermaid}
+flowchart TD
+    P["Parent run: sweep-hgb-v1<br/>tag: sweep_grid"] --> A["trial-00<br/>lr=0.05, depth=3, l2=0"]
+    P --> B["trial-01<br/>lr=0.05, depth=3, l2=1"]
+    P --> C["trial-02<br/>lr=0.05, depth=6, l2=0"]
+    P --> D["…"]
+    P --> E["trial-07<br/>lr=0.1, depth=6, l2=1"]
+    C -- "best val_auc" --> W(["runs:/3f2a9c…/model<br/>→ Lesson 4: register this"])
+    style W fill:#22c55e,fill-opacity:0.3
+```
+
+**Comparing in the UI.** Open `http://127.0.0.1:5000`, click the `churn-model` experiment, expand the parent run. The workflow that matters:
+
+1. Sort the run table by `val_auc` descending — winner on top in one click.
+2. Check all eight children → **Compare**. The parallel-coordinates plot draws one line per run across the param axes into the metric axis; when all the high-AUC lines pass through `max_depth=6`, you've learned depth dominates this grid without reading a single number.
+3. In the **Chart view**, plot `val_log_loss` vs `step` for all runs at once — overlaid learning curves show which configs converged early and which were still descending (candidates for a larger `max_iter` in sweep v2).
+4. Column-config the table to show `tags.data_hash` — all eight identical? Good, the comparison is apples-to-apples. This is the check that separates a real sweep from eight incomparable runs.
+
+**Comparing programmatically.** The UI is for exploring; scripts (and Lesson 8's CI gate) need the same answer as a DataFrame:
+
+```python
+import mlflow
+
+runs = mlflow.search_runs(
+    experiment_names=["churn-model"],
+    filter_string="attributes.status = 'FINISHED' and metrics.val_auc > 0.5",
+    order_by=["metrics.val_auc DESC"],
+)
+cols = ["run_id", "params.learning_rate", "params.max_depth",
+        "params.l2_regularization", "metrics.val_auc"]
+print(runs[cols].head(3).to_string(index=False))
+
+best = runs.iloc[0]
+print("\nbest model:", f"runs:/{best.run_id}/model")
+```
+
+```text
+                          run_id params.learning_rate params.max_depth params.l2_regularization  metrics.val_auc
+3f2a9c1e0b7d4f6a8c2e5d9b1a3c7e0f                  0.1                6                      1.0           0.9231
+7b8d2f4a9c1e3b5d7f0a2c4e6b8d0f2a                  0.1                6                      0.0           0.9198
+1c3e5a7b9d0f2a4c6e8b0d2f4a6c8e1b                 0.05                6                      1.0           0.9187
+```
+
+`search_runs` speaks a small SQL-ish filter language over `metrics.*`, `params.*`, `tags.*`, and `attributes.*` — remember params compare as strings (`params.max_depth = '6'`, quotes required). That `runs:/{run_id}/model` URI on the last line is the next lesson's opening move: the best run's model, promoted into the Model Registry by name and version instead of by copied file path.
+
+## 🧪 Your task
+
+Your sweep currently selects on `val_auc` alone — but the churn team cares about the model being *well-calibrated*, and you should be suspicious of any single-metric winner. Extend the instrumentation: log a **calibration curve** artifact and a **brier score** metric for every trial, then write a selection snippet that picks the best run by AUC *subject to* a brier-score ceiling, and prints its model URI.
+
+Concretely: (1) add `metrics.val_brier` (`sklearn.metrics.brier_score_loss`) and a `plots/calibration.png` figure (`sklearn.calibration.CalibrationDisplay.from_estimator`) to `train_one`; (2) rerun the sweep; (3) use `search_runs` with a compound `filter_string` to select the best run with `val_brier < 0.1`, and load its model with `mlflow.pyfunc.load_model` to prove the URI resolves.
+
+*Hint: `CalibrationDisplay.from_estimator(model, X_val, y_val, n_bins=10, ax=ax)` gives you the figure for `log_figure`, and `filter_string` conditions combine with `and` — but check the dtype of what `brier_score_loss` needs as its first argument (labels, not probabilities).*
+
+<details><summary>Solution</summary>
+
+```python
+# --- additions to train_one, before log_model ---------------
+from sklearn.metrics import brier_score_loss
+from sklearn.calibration import CalibrationDisplay
+import matplotlib.pyplot as plt
+
+p_val = model.predict_proba(X_val)[:, 1]
+mlflow.log_metric("val_brier", brier_score_loss(y_val, p_val))
+
+fig, ax = plt.subplots(figsize=(4, 4))
+CalibrationDisplay.from_estimator(model, X_val, y_val, n_bins=10, ax=ax)
+ax.set_title("Reliability diagram (val)")
+mlflow.log_figure(fig, "plots/calibration.png")
+plt.close(fig)
+```
+
+```python
+# --- select.py: constrained best-run selection ---------------
+import mlflow
+
+mlflow.set_tracking_uri("http://127.0.0.1:5000")
+
+runs = mlflow.search_runs(
+    experiment_names=["churn-model"],
+    filter_string=(
+        "attributes.status = 'FINISHED' "
+        "and metrics.val_brier < 0.1 "
+        "and metrics.val_auc > 0.5"
+    ),
+    order_by=["metrics.val_auc DESC"],
+    max_results=5,
+)
+
+if runs.empty:
+    raise SystemExit("No run satisfies the brier ceiling — widen the sweep.")
+
+best = runs.iloc[0]
+uri = f"runs:/{best.run_id}/model"
+print(f"selected {best.run_id}"
+      f"  auc={best['metrics.val_auc']:.4f}"
+      f"  brier={best['metrics.val_brier']:.4f}")
+print("model uri:", uri)
+
+# prove it resolves and honors the signature
+model = mlflow.pyfunc.load_model(uri)
+print(model.metadata.get_input_schema())
+```
+
+Expected shape of the output:
+
+```text
+selected 3f2a9c1e0b7d4f6a8c2e5d9b1a3c7e0f  auc=0.9231  brier=0.0712
+model uri: runs:/3f2a9c1e0b7d4f6a8c2e5d9b1a3c7e0f/model
+['f0': double, 'f1': double, ..., 'f11': double]
+```
+
+Note the empty-result guard: a constrained selection can legitimately match nothing, and "pick `iloc[0]` of an empty frame" would crash CI with an IndexError instead of the actionable message.
+
+</details>
+
+## Key takeaways
+
+- MLflow Tracking = experiments → runs → **params** (write-once inputs), **metrics** (numeric time series), **artifacts** (files), **tags** (mutable provenance). Anything you'd filter by must not be buried in an artifact.
+- Run a real server from day one: `mlflow server --backend-store-uri sqlite:///mlflow.db`. The default file store can't back Lesson 4's registry, and an unset `MLFLOW_TRACKING_URI` silently logs into a local folder.
+- Log config with `log_params(asdict(cfg))` so recorded params can't drift from actual params; carry Lesson 2's git SHA and data hash as tags.
+- `log_metric(..., step=...)` turns metrics into learning curves — convergence behavior is information a final score can't give you.
+- Always log the model with a **signature** (inferred from real data and your *serving* output) and an **input example** — it's the contract that the registry, the API, and CI will all enforce.
+- `autolog` is for scratch experiments; the production `train.py` logs explicitly, because the contract-critical pieces can't be implicit.
+- Sweeps = parent run + `nested=True` children; select winners with `search_runs` and a filter string, and end up with a `runs:/<id>/model` URI — an address, not a file.
+
+In the next lesson: that winning `runs:/…/model` URI gets a proper name, a version number, and a promotion workflow — the Model Registry, where "the best run from Tuesday's sweep" becomes `churn-model` version 7, staged, approved, and ready to deploy.
+
+------------------------------------------------------------------------
+
+[🏠 🚢 Course home](index.html)  &nbsp;|&nbsp;  [← Lesson 02](lesson02.html)  &nbsp;|&nbsp;  [Lesson 04 →](lesson04.html)  &nbsp;|&nbsp;  [📚 All mini-courses](../../mini-courses.html)
