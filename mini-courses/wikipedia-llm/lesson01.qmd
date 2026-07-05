@@ -1,0 +1,465 @@
+---
+title: "📖 Build Your Own Wikipedia LLM · Lesson 1 — The Mission, the Machine, and the Map"
+page-layout: full
+toc: true
+toc-location: left
+toc-title: "In this lesson"
+toc-depth: 2
+---
+
+[🏠 📖 Course home](index.html)  &nbsp;|&nbsp;  [Lesson 02 →](lesson02.html)  &nbsp;|&nbsp;  [📚 All mini-courses](../../mini-courses.html)
+
+------------------------------------------------------------------------
+
+# Lesson 1 — The Mission, the Machine, and the Map
+
+Somewhere on dumps.wikimedia.org sits a ~22 GB compressed file containing essentially everything English Wikipedia knows. By the end of this course, you will have turned that file into a language model you trained yourself — not fine-tuned somebody else's weights, not prompted an API, but pretrained from random initialization on hardware you rented for the price of a pizza night. Then you'll teach it to chat: instruction tuning, preference optimization, the whole modern post-training stack, all in code you wrote and understand line by line.
+
+This lesson is the ground floor. Before we download a single byte of Wikipedia, we need three things: a clear map of the entire build (so every later lesson slots into a picture you already hold), an honest budget (so you know exactly what this costs before you commit), and a running rented GPU box with our repo skeleton on it. That last part gets the deep treatment here — vast.ai, SSH, tmux, rsync, and the discipline of not paying for idle silicon — because every GPU-touching lesson from here on assumes you can rent, connect, and disconnect without thinking about it.
+
+::: {.callout-note appearance="simple"}
+🎯 **In this lesson you will:** understand the full dump-to-chat-model pipeline, see the complete cost breakdown ($15–30 total), create a vast.ai account, rent and connect to an RTX 4090 instance, learn the tmux/rsync/stop-the-meter workflow, and set up the `wikillm/` repo with `requirements.txt` and the full `configs/base.yaml`.
+:::
+
+## The mission: one pipeline, eleven lessons
+
+Here is the entire course as one flow. Every artifact on this diagram is a real file or directory you will create; the lesson numbers tell you where.
+
+```{mermaid}
+flowchart LR
+    subgraph DATA["Data — Lessons 2–4"]
+        A["Raw dump<br/>enwiki pages-articles<br/>~22 GB .bz2"] --> B["Extracted JSONL<br/>wikiextractor<br/>Lesson 2"]
+        B --> C["Clean corpus<br/>filters + sha1 dedup<br/>+ MinHash-LSH<br/>Lesson 3"]
+        C --> D["BPE tokenizer<br/>vocab 32768<br/>Lesson 4"]
+        C --> E["Packed tokens<br/>~4B tokens .bin<br/>Lesson 4"]
+        D --> E
+    end
+    subgraph PRETRAIN["Pretraining — Lessons 5–7"]
+        E --> F["WikiGPT-124M<br/>model.py<br/>Lesson 5"]
+        F --> G["train.py<br/>bf16 + compile<br/>Lesson 6"]
+        G --> H["Base model<br/>20–24h on 4090<br/>Lesson 7"]
+    end
+    subgraph POST["Post-training — Lessons 8–11"]
+        H --> I["Synthetic SFT data<br/>Qwen2.5-7B teacher<br/>Lesson 8"]
+        I --> J["SFT chat model<br/>Lesson 9"]
+        J --> K["DPO model<br/>preference pairs<br/>Lesson 10"]
+        K --> L["Served + shared<br/>Lesson 11"]
+    end
+```
+
+Read it right to left once, too — that's how you should think about it. The final chat model (Lesson 11) is a DPO-tuned (Lesson 10) version of an SFT model (Lesson 9) trained on synthetic instructions (Lesson 8) generated from a base model (Lesson 7) that a training loop (Lesson 6) ran over an architecture (Lesson 5) fed by packed tokens (Lesson 4) from a cleaned corpus (Lesson 3) extracted from a dump (Lesson 2). Nothing on this map is optional, and nothing is hand-waved: each box is a script in `src/` that you will write and run.
+
+Three design decisions frame everything and are worth stating now:
+
+1. **The model is fixed.** WikiGPT-124M: a modern decoder-only transformer — 12 layers, 12 heads, 768-dim embeddings, 1024 context, 32,768-token custom BPE vocab, RMSNorm pre-norm, RoPE positions, SwiGLU feed-forward, no biases, weight-tied embeddings, ≈124M parameters, trained in bf16. It's the GPT-2-small weight class rebuilt with the architectural choices of 2024-era models (Llama-style). Small enough to pretrain on one consumer GPU in a day, big enough to genuinely chat.
+2. **The hardware is rented.** One RTX 4090 on vast.ai at roughly $0.35–0.45/hr does everything, including serving the 7B teacher model for synthetic data. You never need to own a GPU.
+3. **The data is public and so are your byproducts.** Wikipedia is CC BY-SA; your synthetic SFT and preference datasets go up on a public GitHub repo so anyone can reproduce your run.
+
+## Why Wikipedia is the perfect solo-builder corpus
+
+You could pretrain on Common Crawl, but you'd spend most of your effort (and most of a large team's effort, historically) fighting spam, boilerplate, adult content, SEO sludge, and near-duplicate mirrors. Wikipedia inverts the problem — the hard curation was done for you by twenty years of volunteer editors:
+
+- **Quality per token is exceptional.** Encyclopedic register, cited claims, coherent long-form structure. For a 124M model that will only ever see ~4B tokens, every token has to count; you have no budget for sludge. (For calibration: Chinchilla-optimal for 124M params is ~2.5B tokens, so 4B tokens is a comfortably over-trained, inference-friendly regime.)
+- **The license is clean.** CC BY-SA 4.0. You can train on it, publish the model, publish derived datasets, and tell everyone exactly what's in the mix. No terms-of-service ambiguity, no takedown risk.
+- **The size is exactly right.** After extraction, cleaning, and deduplication (Lessons 2–3), English Wikipedia yields roughly **4–5B tokens** with our 32k tokenizer — almost precisely the training budget a 124M model wants. It's as if the corpus was sized for this project.
+- **It's one download.** A single `pages-articles-multistream` file from dumps.wikimedia.org. No crawling infrastructure, no rate limits, no assembling a thousand shards from a dozen sources.
+
+The honest trade-off: a Wikipedia-only model will sound like Wikipedia — declarative, formal, weak at casual chit-chat and code. Lessons 8–10 fix the *format* problem (following instructions, dialogue turns) with synthetic data, but the knowledge and style ceiling is the corpus. That's not a bug; it's the clearest possible demonstration of the principle *the model is the data*.
+
+## The economics: every stage, priced
+
+Here is the complete budget. CPU-only stages run free on your own machine (or a few cents on a cheap CPU instance if your laptop is weak or your bandwidth is bad). GPU stages run on the rented 4090.
+
+| Stage | Lessons | Hardware | Wall-clock | Cost |
+|---|---|---|---|---|
+| Download + extract dump | 2 | Your machine (CPU) | 2–4 h | $0 |
+| Clean, filter, dedup | 3 | Your machine (CPU) | 3–6 h | $0 |
+| Train BPE tokenizer + pack tokens | 4 | Your machine (CPU) | 1–2 h | $0 |
+| **Pretrain WikiGPT-124M, ~4B tokens** | 6–7 | 1× RTX 4090 | **20–24 h** | **$8–12** |
+| Evaluate base model (ppl + samples) | 7 | 1× RTX 4090 | <1 h | <$0.50 |
+| Serve teacher (Qwen2.5-7B via vLLM), generate SFT data | 8 | 1× RTX 4090 | 4–8 h | $2–4 |
+| SFT training | 9 | 1× RTX 4090 | 1–2 h | ~$1 |
+| Preference data + DPO | 10 | 1× RTX 4090 | 2–3 h | $1–2 |
+| Judge eval + serving demo | 10–11 | 1× RTX 4090 | 1–2 h | ~$1 |
+| Storage on stopped instances, retries, buffer | — | — | — | $2–8 |
+| **Total** | | | | **$15–30** |
+
+<svg viewBox="0 0 720 190" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Budget breakdown bar">
+  <text x="10" y="22" fill="currentColor" font-size="15" font-weight="bold">Where the money goes (midpoint estimates, ~$21 total)</text>
+  <rect x="10"  y="45" width="340" height="34" rx="4" fill="rgba(99,110,250,0.35)" stroke="currentColor" stroke-opacity="0.5"/>
+  <rect x="350" y="45" width="102" height="34" rx="4" fill="rgba(0,180,140,0.35)" stroke="currentColor" stroke-opacity="0.5"/>
+  <rect x="452" y="45" width="68"  height="34" rx="4" fill="rgba(230,150,0,0.35)" stroke="currentColor" stroke-opacity="0.5"/>
+  <rect x="520" y="45" width="51"  height="34" rx="4" fill="rgba(220,80,120,0.35)" stroke="currentColor" stroke-opacity="0.5"/>
+  <rect x="571" y="45" width="139" height="34" rx="4" fill="rgba(128,128,128,0.25)" stroke="currentColor" stroke-opacity="0.5"/>
+  <text x="20"  y="67" fill="currentColor" font-size="13">Pretraining $10</text>
+  <text x="356" y="67" fill="currentColor" font-size="13">Teacher $3</text>
+  <text x="458" y="67" fill="currentColor" font-size="13">SFT $2</text>
+  <text x="524" y="67" fill="currentColor" font-size="13">DPO</text>
+  <text x="580" y="67" fill="currentColor" font-size="13">Buffer/storage $4.5</text>
+  <text x="10" y="110" fill="currentColor" font-size="13" opacity="0.85">One 24h pretraining run at $0.40/hr ≈ $9.60 — the single biggest line item.</text>
+  <text x="10" y="132" fill="currentColor" font-size="13" opacity="0.85">Everything before the GPU (Lessons 2–4) is free: it runs on your own CPU.</text>
+  <text x="10" y="154" fill="currentColor" font-size="13" opacity="0.85">The buffer exists because you WILL leave an instance running once. Everyone does.</text>
+</svg>
+
+Two rules keep you at the bottom of that range: **never leave an instance running idle** (this lesson teaches you the stop/destroy discipline), and **the CPU work never touches the GPU box** (bandwidth is cheap on your laptop and expensive in wasted GPU-hours).
+
+We'll track every training run in **Weights & Biases** (free tier, project name `wikillm`): losses, learning rate, grad-norm, tokens/s, eval perplexity, and sample generations. If you prefer self-hosted, MLflow or TensorBoard work as drop-in alternatives — that's the only time we'll mention them; the lessons standardize on W&B.
+
+## vast.ai deep dive: account and finding a machine
+
+vast.ai is a marketplace: individuals and small datacenters rent out GPUs, you bid on them. That's why a 4090 costs $0.35–0.45/hr instead of the $1+ the big clouds charge for less. The trade-off is variance — machines differ in disk speed, internet bandwidth, and reliability — so you filter carefully.
+
+**Setup (one time):**
+
+1. Create an account at [vast.ai](https://vast.ai), add $10–15 of credit (card or crypto).
+2. Add your SSH public key under *Account → SSH Keys*. If you don't have one: `ssh-keygen -t ed25519` and paste the contents of `~/.ssh/id_ed25519.pub`.
+3. Install the CLI and set your API key (from *Account → API Key*):
+
+```bash
+pip install vastai
+vastai set api-key YOUR_API_KEY_HERE
+```
+
+**Searching for the right offer.** This is the command you'll run at the start of every GPU lesson:
+
+```bash
+vastai search offers \
+  'gpu_name=RTX_4090 num_gpus=1 verified=true rentable=true disk_space>=200 inet_down>=500 reliability>0.98' \
+  -o 'dph+'
+```
+
+Every filter earns its place:
+
+- `gpu_name=RTX_4090 num_gpus=1` — our reference GPU. 24 GB VRAM fits WikiGPT-124M pretraining with large batches *and* fits the 7B teacher model in Lesson 8. One GPU keeps the code single-device-simple.
+- `verified=true` — vast.ai has tested the machine. Unverified boxes are cheaper and sometimes fine, but a dead instance 18 hours into a 22-hour run costs more than the discount.
+- `disk_space>=200` — the raw dump (~22 GB), extracted JSONL (~80 GB), clean corpus, token binaries (~8 GB), and checkpoints add up. 200 GB gives headroom; disk is nearly free compared to GPU time.
+- `inet_down>=500` — Mbps. You'll download the Wikipedia dump and the 15 GB teacher model onto this box; slow internet is billed GPU idle time.
+- `reliability>0.98` — the host's historical uptime score. Below this, long runs get risky.
+- `-o 'dph+'` — sort by dollars-per-hour ascending, cheapest first.
+
+The output looks like this (columns trimmed):
+
+```
+ID        GPU        $/hr    Disk   Net_down  R
+8123456   RTX_4090   0.354   512    842.1     99.2
+8234567   RTX_4090   0.379   250    1210.4    99.6
+...
+```
+
+Pick from the top few — prefer higher `Net_down` if prices are within a cent or two. You can do the same search in the web console (cloud.vast.ai) with sliders; the CLI matters because it's scriptable and reproducible in lesson instructions.
+
+## vast.ai deep dive: create, connect, and the on-start script
+
+**The on-start script** runs automatically when the instance boots. Ours installs the small set of system tools the docker image lacks. Save this locally as `onstart.sh`:
+
+```bash
+#!/bin/bash
+# onstart.sh — runs on instance boot. Keep it idempotent and fast.
+touch ~/.no_auto_tmux                 # vast auto-starts tmux on ssh; we manage tmux ourselves
+apt-get update -qq
+apt-get install -y -qq tmux rsync htop git aria2 > /dev/null
+pip install --quiet --upgrade wandb pyyaml numpy tqdm tokenizers
+echo "onstart complete" > /root/onstart.done
+```
+
+Why each line: `~/.no_auto_tmux` stops vast's default auto-tmux from nesting inside your own sessions (nested tmux is misery); `aria2` gives us multi-connection downloads for the Wikipedia dump in Lesson 2; the pip line pre-installs the light dependencies so the box is ready the moment you connect. Heavy, lesson-specific installs (vLLM in Lesson 8) happen in their own lessons.
+
+**Create the instance** using an offer ID from your search:
+
+```bash
+vastai create instance 8123456 \
+  --image pytorch/pytorch:2.4.0-cuda12.4-cudnn9-devel \
+  --disk 200 \
+  --onstart-file onstart.sh \
+  --ssh --direct
+```
+
+- `--image pytorch/pytorch:...-devel` — official PyTorch image with CUDA toolkit included. The `devel` variant matters: `torch.compile` needs the CUDA compiler at runtime; the `runtime` image will fail Lesson 6 in a confusing way.
+- `--disk 200` — reserve the disk you filtered for.
+- `--ssh --direct` — SSH access on a direct port rather than through vast's proxy; faster rsync.
+
+**Connect.** Get the address and check the GPU is real:
+
+```bash
+vastai show instances
+# note the ssh host/port, or just:
+vastai ssh-url 12345678       # prints e.g. ssh://root@ssh5.vast.ai:34567
+
+ssh -p 34567 root@ssh5.vast.ai
+# on the box:
+nvidia-smi                    # you should see one RTX 4090, 24564MiB
+cat /root/onstart.done        # confirms the on-start script finished
+```
+
+Then add the box to `~/.ssh/config` on your laptop so every later command in the course can just say `ssh wikillm`:
+
+```
+Host wikillm
+    HostName ssh5.vast.ai
+    Port 34567
+    User root
+    IdentityFile ~/.ssh/id_ed25519
+    ServerAliveInterval 30
+```
+
+`ServerAliveInterval 30` keeps NAT routers from silently killing idle connections — without it, long-running interactive sessions drop and you'll wrongly blame vast.
+
+## Survival skills: tmux, rsync, and stopping the meter
+
+**tmux discipline.** Any process started in a bare SSH session dies when the connection drops — and over a 22-hour pretraining run, your connection *will* drop. The rule is absolute: **anything that runs longer than a coffee break runs inside tmux.**
+
+```bash
+tmux new -s train        # create a named session
+# ... launch your long job here ...
+# detach: press Ctrl-b, then d  — the job keeps running
+tmux attach -t train     # reattach after reconnecting, from any ssh session
+tmux ls                  # list sessions if you forget the name
+```
+
+**rsync, both directions.** Data goes up, checkpoints come down. `rsync` over the SSH alias resumes interrupted transfers and skips unchanged files:
+
+```bash
+# laptop -> box: push the repo (from the directory CONTAINING wikillm/)
+rsync -avz --exclude 'data/' --exclude 'checkpoints/' wikillm/ wikillm:/root/wikillm/
+
+# box -> laptop: pull checkpoints down (do this regularly during long runs!)
+rsync -avz wikillm:/root/wikillm/checkpoints/ ./wikillm/checkpoints/
+```
+
+`-a` preserves permissions and timestamps, `-v` shows progress, `-z` compresses (huge win for JSONL, harmless for binaries). We exclude `data/` going up because raw data is downloaded directly on the box (its pipe to Wikimedia is faster than your uplink), and `checkpoints/` because those only ever flow downward.
+
+**Stopping the meter.** The instance lifecycle, and what each state costs:
+
+```{mermaid}
+flowchart LR
+    S["Search offers<br/>$0"] --> C["Create instance<br/>billing starts"]
+    C --> R["Running<br/>GPU $/hr + storage"]
+    R -->|"vastai stop instance ID"| P["Stopped<br/>storage only, ~$0.05–0.10/hr<br/>GPU may be re-rented!"]
+    P -->|"vastai start instance ID<br/>if GPU still free"| R
+    R -->|"vastai destroy instance ID"| D["Destroyed<br/>$0 — disk is GONE"]
+    P -->|"vastai destroy instance ID"| D
+```
+
+```bash
+vastai stop instance 12345678      # pause billing for GPU; disk persists, small storage fee
+vastai start instance 12345678     # resume — works only if nobody rented the GPU meanwhile
+vastai destroy instance 12345678   # everything gone, billing fully stops
+```
+
+The critical caveat: a **stopped** instance does not reserve the GPU. If someone rents it while you're stopped, you can't start again until they leave — you'd have to create a fresh instance and re-upload. So the working policy for this course is: **rsync anything you care about down to your laptop, then destroy.** Stop (rather than destroy) only for short breaks measured in hours, mid-lesson. And during the big pretraining run in Lesson 7, pull checkpoints down every few hours — a $10 run should never be hostage to one host's power outage. Our `train.py` (Lesson 6) is built restartable from any checkpoint for exactly this reason.
+
+**Cost for this lesson:** creating the box, poking around, and uploading the repo is well under an hour: **≈ $0.50**.
+
+## The repo: skeleton, requirements.txt, and the full config
+
+Now the artifact this lesson leaves behind. On your **laptop** (the repo's home is your machine; the GPU box is disposable):
+
+```bash
+mkdir -p wikillm/{configs,data/{raw,extracted,clean,tokens},tokenizer,checkpoints,src}
+cd wikillm
+git init
+printf 'data/\ncheckpoints/\ntokenizer/*.json\nwandb/\n__pycache__/\n' > .gitignore
+touch src/{extract.py,clean.py,dedup.py,train_tokenizer.py,pack_tokens.py,model.py,train.py,sample.py,eval_ppl.py,gen_sft_data.py,train_sft.py,gen_pref_data.py,train_dpo.py,judge_eval.py,serve.py}
+```
+
+The final layout — every lesson fills in specific files, so keep this map handy:
+
+```
+wikillm/
+├── configs/
+│   └── base.yaml            # this lesson
+├── data/
+│   ├── raw/                 # Lesson 2: the .bz2 dump
+│   ├── extracted/           # Lesson 2: JSONL from wikiextractor
+│   ├── clean/               # Lesson 3: filtered, deduped corpus
+│   └── tokens/              # Lesson 4: packed train.bin / val.bin
+├── tokenizer/
+│   └── tokenizer.json       # Lesson 4
+├── checkpoints/             # Lessons 6–10
+├── src/
+│   ├── extract.py           # Lesson 2
+│   ├── clean.py             # Lesson 3
+│   ├── dedup.py             # Lesson 3
+│   ├── train_tokenizer.py   # Lesson 4
+│   ├── pack_tokens.py       # Lesson 4
+│   ├── model.py             # Lesson 5
+│   ├── train.py             # Lesson 6
+│   ├── sample.py            # Lesson 7
+│   ├── eval_ppl.py          # Lesson 7
+│   ├── gen_sft_data.py      # Lesson 8
+│   ├── train_sft.py         # Lesson 9
+│   ├── gen_pref_data.py     # Lesson 10
+│   ├── train_dpo.py         # Lesson 10
+│   ├── judge_eval.py        # Lesson 10
+│   └── serve.py             # Lesson 11
+└── requirements.txt         # this lesson
+```
+
+**`requirements.txt`** — the CPU-side dependencies (torch comes with the docker image on the GPU box; vLLM is installed only in Lesson 8 because it's heavy and version-sensitive):
+
+```
+# wikillm/requirements.txt
+torch>=2.4          # local dev; the vast.ai image ships its own build
+numpy>=1.26
+tokenizers>=0.19    # HF fast BPE — Lesson 4
+wikiextractor>=3.0.7  # Lesson 2
+datasketch>=1.6     # MinHash-LSH fuzzy dedup — Lesson 3
+fasttext-wheel>=0.9.2 # language-ID filter — Lesson 3
+pyyaml>=6.0
+tqdm>=4.66
+wandb>=0.17
+requests>=2.31
+# vllm — installed on the GPU box in Lesson 8 only, pinned there
+```
+
+**`configs/base.yaml`** — the single source of truth for the entire build. Every script reads this file; when a later lesson needs a knob, it's already here. Read the comments — they're a preview of decisions Lessons 5 and 6 will justify in depth:
+
+```yaml
+# configs/base.yaml — WikiGPT-124M, the whole build in one file.
+# Model numbers are FIXED for the course. Do not tune these mid-run.
+
+model:
+  vocab_size: 32768        # custom BPE, trained in Lesson 4 (power of 2: kernel-friendly)
+  n_layer: 12
+  n_head: 12
+  n_embd: 768              # head_dim = 768/12 = 64
+  block_size: 1024         # max context length; RoPE positions computed up to this
+  d_ff: 2560               # SwiGLU hidden dim; 3 matrices/FFN, sized so total ≈124M params
+  norm: rmsnorm            # pre-norm placement (Lesson 5)
+  rope_theta: 10000.0
+  bias: false              # no bias terms anywhere — simpler and no quality loss
+  tie_embeddings: true     # input embedding = output head (saves 25M params)
+  dropout: 0.0             # single-epoch-ish regime over 4B tokens: dropout only hurts
+
+tokenizer:
+  path: tokenizer/tokenizer.json
+  # Chat special tokens reserved from the START (Lesson 4) so SFT/DPO (Lessons 9-10)
+  # never have to resize the embedding matrix:
+  special_tokens: ["<|user|>", "<|assistant|>", "<|end|>"]
+
+data:
+  train_bin: data/tokens/train.bin
+  val_bin: data/tokens/val.bin
+
+train:
+  device: cuda
+  dtype: bfloat16          # bf16 end to end; fp32 master handled by autocast (Lesson 6)
+  compile: true            # torch.compile: ~1.5-2x tokens/s on a 4090
+  micro_batch_size: 32     # sequences of block_size that fit in 24 GB in bf16
+  grad_accum_steps: 16     # 32 * 16 * 1024 = 524,288 tokens per optimizer step
+  max_iters: 7700          # 7700 * 0.52M ≈ 4.0B tokens total
+  lr: 6.0e-4
+  min_lr: 6.0e-5           # cosine decays to lr/10
+  lr_schedule: cosine
+  warmup_iters: 700        # ~10% linear warmup; skipping it diverges at this lr
+  weight_decay: 0.1
+  beta1: 0.9
+  beta2: 0.95              # lower beta2 than default: standard for LLM pretraining stability
+  grad_clip: 1.0
+  eval_interval: 500       # iters between val-perplexity evals
+  eval_iters: 100
+  checkpoint_dir: checkpoints
+  checkpoint_interval: 1000  # ~every 3h of wall-clock; pairs with the rsync-down habit
+  seed: 1337
+
+wandb:
+  project: wikillm
+  run_name: wikigpt-124m-base
+```
+
+A quick sanity check on the headline number, since you should never trust a config you haven't audited: embeddings $32768 \times 768 \approx 25.2\text{M}$ (tied, counted once); per layer, attention is $4 \times 768^2 \approx 2.36\text{M}$ and the SwiGLU FFN is $3 \times 768 \times 2560 \approx 5.90\text{M}$; twelve layers gives $\approx 99.1\text{M}$; total $\approx 124.3\text{M}$. The name checks out.
+
+## First contact: put the repo on the box
+
+Close the loop — repo from laptop to rented GPU, one command thanks to the SSH alias:
+
+```bash
+rsync -avz --exclude 'data/' --exclude 'checkpoints/' --exclude '.git/' \
+      wikillm/ wikillm:/root/wikillm/
+
+ssh wikillm
+# on the box:
+cd /root/wikillm && ls src/ && python -c "import torch; print(torch.__version__, torch.cuda.get_device_name(0))"
+# expected: 2.4.0  NVIDIA GeForce RTX 4090
+```
+
+If that prints your PyTorch version and the GPU name, you have everything Lesson 2 needs: a verified 4090 with 200 GB of disk, fast internet, the repo skeleton, and the full course config sitting at `/root/wikillm/configs/base.yaml`.
+
+Then practice the most important habit in the course — when you're done for the session:
+
+```bash
+vastai stop instance YOUR_ID       # short break, or:
+vastai destroy instance YOUR_ID    # done for the day (repo lives on your laptop; nothing lost)
+```
+
+## 🧪 Your task
+
+Prove the box is what you paid for. Write a script `gpu_check.py` (keep it out of `src/` — it's a scratch tool) that (1) prints the GPU name and VRAM, (2) confirms bf16 support, and (3) benchmarks bf16 matmul throughput in TFLOPS with a properly warmed-up, CUDA-synchronized timing loop. Run it on your instance inside a tmux session, then detach, reattach, and read the result — a full dry run of the workflow. A healthy 4090 should land roughly in the 120–165 TFLOPS range on large bf16 matmuls. Then stop your instance.
+
+<details><summary>Solution</summary>
+
+```python
+# gpu_check.py — sanity + bf16 matmul benchmark
+import time
+import torch
+
+assert torch.cuda.is_available(), "No CUDA device — wrong image or broken host"
+dev = torch.device("cuda")
+props = torch.cuda.get_device_properties(dev)
+print(f"GPU: {props.name}, VRAM: {props.total_memory / 2**30:.1f} GiB")
+assert torch.cuda.is_bf16_supported(), "No bf16 — this box cannot run the course"
+
+N = 8192                                   # big enough to saturate the GPU
+a = torch.randn(N, N, dtype=torch.bfloat16, device=dev)
+b = torch.randn(N, N, dtype=torch.bfloat16, device=dev)
+
+for _ in range(10):                        # warmup: cuBLAS autotunes on first calls
+    a @ b
+torch.cuda.synchronize()                   # matmuls are async; sync before timing
+
+iters = 50
+t0 = time.perf_counter()
+for _ in range(iters):
+    a @ b
+torch.cuda.synchronize()                   # and sync after, or you time the launch, not the math
+dt = time.perf_counter() - t0
+
+flops = 2 * N**3 * iters                   # matmul = 2*N^3 FLOPs
+print(f"bf16 matmul: {flops / dt / 1e12:.1f} TFLOPS")
+assert flops / dt / 1e12 > 80, "Suspiciously slow — thermally throttled or shared host?"
+print("Box is healthy.")
+```
+
+Workflow:
+
+```bash
+rsync -avz gpu_check.py wikillm:/root/
+ssh wikillm
+tmux new -s check
+python /root/gpu_check.py
+# Ctrl-b d to detach, then reattach to confirm the session survived:
+tmux attach -t check
+exit                       # leave tmux, leave ssh
+vastai stop instance YOUR_ID
+```
+
+The two `torch.cuda.synchronize()` calls are the part people get wrong: CUDA kernel launches return immediately, so without them you'd measure the Python loop, not the GPU, and report a nonsense number like 5000 TFLOPS. If your box benches far below ~100 TFLOPS, destroy it and rent a different offer — a throttled host would stretch Lesson 7's run (and bill) by hours.
+
+</details>
+
+## Key takeaways
+
+- The whole course is one pipeline: dump → extract → clean/dedup → 32k BPE tokenizer → packed ~4B tokens → WikiGPT-124M pretrain → synthetic SFT → DPO → served chat model. Every stage is a script in `wikillm/src/`.
+- Wikipedia is the ideal solo corpus: pre-curated quality, clean CC BY-SA license, ~4–5B tokens — matching a 124M model's training budget — in a single download.
+- Total cost is $15–30, dominated by one 20–24h pretraining run on a ~$0.40/hr RTX 4090; all data preparation is free on your own CPU.
+- vast.ai filters that matter: `RTX_4090`, `verified=true`, `disk_space>=200`, `inet_down>=500`, `reliability>0.98`, sorted by price; the `pytorch/pytorch` **devel** image, `--onstart-file`, and `--ssh --direct`.
+- The three survival habits: everything long-running lives in tmux; rsync artifacts down before you trust a host; stop or destroy the instance the moment you're done — stopped instances bill storage and can lose their GPU to another renter.
+- `configs/base.yaml` is the single source of truth: vocab 32768, 12×12×768, block 1024, RMSNorm + RoPE + SwiGLU, no biases, tied embeddings ≈124M params, bf16, ~0.52M tokens/step for ~7700 steps ≈ 4B tokens.
+
+## Coming up
+
+In the next lesson we point `aria2` at dumps.wikimedia.org, pull the full `pages-articles-multistream` dump, and turn 22 GB of wiki-markup into clean JSONL with `src/extract.py`.
+
+------------------------------------------------------------------------
+
+[🏠 📖 Course home](index.html)  &nbsp;|&nbsp;  [Lesson 02 →](lesson02.html)  &nbsp;|&nbsp;  [📚 All mini-courses](../../mini-courses.html)

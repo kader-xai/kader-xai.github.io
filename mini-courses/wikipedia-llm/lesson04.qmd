@@ -1,0 +1,423 @@
+---
+title: "📖 Build Your Own Wikipedia LLM · Lesson 4 — Tokenizer: Training BPE on Your Corpus"
+page-layout: full
+toc: true
+toc-location: left
+toc-title: "In this lesson"
+toc-depth: 2
+---
+
+[🏠 📖 Course home](index.html)  &nbsp;|&nbsp;  [← Lesson 03](lesson03.html)  &nbsp;|&nbsp;  [Lesson 05 →](lesson05.html)  &nbsp;|&nbsp;  [📚 All mini-courses](../../mini-courses.html)
+
+------------------------------------------------------------------------
+
+# Lesson 4 — Tokenizer: Training BPE on Your Corpus
+
+In Lesson 3 you turned the raw Wikipedia extract into `data/clean/` — a few hundred JSONL shards of deduplicated, boilerplate-free article text, roughly 18–20 GB of UTF-8 adding up to ~4–5B tokens' worth of English. The model, though, will never see a single character of it. A transformer consumes integer IDs, and the component that decides which integers — how text gets chopped into pieces, how many pieces per sentence, which pieces even exist — is the tokenizer. It is the one artifact you *cannot* change after pretraining starts: every learned embedding row is welded to a token ID, so a tokenizer swap means throwing the model away.
+
+That makes this lesson the last cheap decision point of the whole course. In it we train our own 32,768-token byte-level BPE on our own corpus, reserve the chat special tokens we won't need until Lessons 9–10, prove it beats GPT-2's tokenizer on Wikipedia text, and then burn the entire corpus down into two flat binary files — `train.bin` and `val.bin` — that Lesson 6's training loop will memory-map at 50k tokens/second without ever touching JSON again.
+
+::: {.callout-note appearance="simple"}
+🎯 **In this lesson you will:** write `src/train_tokenizer.py` to train a 32,768-vocab byte-level BPE with `<|user|>`, `<|assistant|>`, `<|end|>`, `<|pad|>` reserved from the start; measure its fertility against GPT-2's tokenizer; and write `src/pack_tokens.py` to stream-encode ~4B tokens into uint16 `train.bin`/`val.bin` memmaps with `<|end|>` document boundaries and a 99.5/0.5 split.
+:::
+
+## Why byte-level, and why exactly 32,768
+
+**Byte-level** first, because it kills an entire class of bugs. A character-level or word-level tokenizer needs an `<unk>` token for anything it hasn't seen — and Wikipedia is a worst case for "anything": IPA pronunciation guides, CJK names in etymology sections, mathematical symbols, Cyrillic redirects. Byte-level BPE starts from the 256 possible bytes, so *every* string in existence is representable — worst case it falls back to raw bytes. There is no `<unk>`, ever. Unseen text costs more tokens, never a crash or a lossy substitution. The intuition for BPE itself: start with bytes, then repeatedly find the most frequent adjacent pair in the training corpus and merge it into a new token. Do that 32,508 times and the byte pair ` t`+`he` has long since become ` the`, `token`+`izer` fragments have fused, and frequent Wikipedia-isms (` References`, ` census`, ` municipality`) are single tokens — because *your* corpus voted them in.
+
+<svg viewBox="0 0 720 300" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Byte-level BPE: bytes are merged into subwords, subwords map to integer IDs">
+  <style>
+    .t { font-family: ui-monospace, monospace; font-size: 15px; fill: currentColor; }
+    .lbl { font-family: sans-serif; font-size: 13px; fill: currentColor; opacity: 0.75; }
+    .box { fill: currentColor; fill-opacity: 0.10; stroke: currentColor; stroke-opacity: 0.55; rx: 6; }
+    .arrow { stroke: currentColor; stroke-opacity: 0.6; stroke-width: 1.5; fill: none; marker-end: url(#ah); }
+  </style>
+  <defs><marker id="ah" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6" fill="none" stroke="currentColor" stroke-opacity="0.6"/></marker></defs>
+  <text x="20" y="38" class="lbl">1. bytes (Ġ = leading space) — 10 tokens</text>
+  <g>
+    <rect class="box" x="20"  y="50" width="40" height="34"/><text class="t" x="32"  y="73">Ġ</text>
+    <rect class="box" x="66"  y="50" width="34" height="34"/><text class="t" x="76"  y="73">t</text>
+    <rect class="box" x="106" y="50" width="34" height="34"/><text class="t" x="116" y="73">o</text>
+    <rect class="box" x="146" y="50" width="34" height="34"/><text class="t" x="156" y="73">k</text>
+    <rect class="box" x="186" y="50" width="34" height="34"/><text class="t" x="196" y="73">e</text>
+    <rect class="box" x="226" y="50" width="34" height="34"/><text class="t" x="236" y="73">n</text>
+    <rect class="box" x="266" y="50" width="34" height="34"/><text class="t" x="276" y="73">i</text>
+    <rect class="box" x="306" y="50" width="34" height="34"/><text class="t" x="316" y="73">z</text>
+    <rect class="box" x="346" y="50" width="34" height="34"/><text class="t" x="356" y="73">e</text>
+    <rect class="box" x="386" y="50" width="34" height="34"/><text class="t" x="396" y="73">r</text>
+  </g>
+  <path class="arrow" d="M 220 92 L 220 118"/>
+  <text x="20" y="135" class="lbl">2. after frequent-pair merges — 4 tokens</text>
+  <g>
+    <rect class="box" x="20"  y="147" width="70"  height="34"/><text class="t" x="34"  y="170">Ġto</text>
+    <rect class="box" x="96"  y="147" width="80"  height="34"/><text class="t" x="112" y="170">ken</text>
+    <rect class="box" x="182" y="147" width="60"  height="34"/><text class="t" x="196" y="170">iz</text>
+    <rect class="box" x="248" y="147" width="60"  height="34"/><text class="t" x="262" y="170">er</text>
+  </g>
+  <path class="arrow" d="M 220 189 L 220 215"/>
+  <text x="20" y="232" class="lbl">3. final vocab entries → integer IDs (illustrative) — 2 tokens</text>
+  <g>
+    <rect class="box" x="20"  y="244" width="130" height="34"/><text class="t" x="38"  y="267">Ġtoken</text>
+    <rect class="box" x="156" y="244" width="90"  height="34"/><text class="t" x="176" y="267">izer</text>
+    <text class="t" x="290" y="267" opacity="0.8">→  [ 4172, 6580 ]</text>
+  </g>
+</svg>
+
+**Why 32,768.** Three constraints triangulate to this number for a 124M-parameter model:
+
+1. **Parameter budget.** The (tied) embedding matrix is `vocab × n_embd` = 32768 × 768 ≈ 25.2M parameters — already ~20% of the model. GPT-2's 50,257 vocab would cost 38.6M, spending an extra 13M parameters on rare tokens the model would see a handful of times in 4B tokens. At 124M scale, those parameters buy more as attention and FFN capacity.
+2. **Sequence-length budget.** Go too small (say 16k) and fertility rises — the same article needs ~8–10% more tokens, so every training step and every 1024-token context window carries less text. Compute scales linearly with token count; a fatter vocab is literally a compression codec for your FLOPs. 32k is the sweet spot where the fertility curve has flattened for English.
+3. **Hardware shape.** $32768 = 2^{15}$, divisible by 64 and 128 — the final `logits = hidden @ W_emb.T` matmul gets clean tensor-core tile shapes with no padding row. And critically: every ID fits in an unsigned 16-bit integer ($32768 \le 65536$), so the packed corpus in this lesson is **2 bytes per token** — 8 GB instead of 16 GB for the same 4B tokens.
+
+## Reserve the chat tokens now, not later
+
+The spec for this course's chat format (Lessons 9–10) uses three special tokens — `<|user|>`, `<|assistant|>`, `<|end|>` — plus `<|pad|>` for batching. We reserve all four **now**, before a single pretraining step, and this is not optional bookkeeping.
+
+Here's what breaks if you don't. Token IDs are positions in the embedding matrix. If you finish pretraining with a 32,768 vocab and *then* add 4 chat tokens, you must resize the embedding to 32,772 and initialize the new rows randomly. Those rows have received zero gradient updates over 4B tokens; their vectors sit in an arbitrary corner of embedding space, and the first thing SFT does is feed them into a network that has never seen them. The result is a well-documented failure mode: loss spikes at the start of fine-tuning, degenerate generations around the chat delimiters, and — since the output head is tied to the embedding — corrupted logits for *every* token, not just the new ones. You also lose the clean $2^{15}$ shape.
+
+Reserved now, the four tokens occupy IDs 0–3 forever, and one of them isn't even idle during pretraining: **`<|end|>` doubles as our document separator.** `pack_tokens.py` appends it after every article, so across 4B tokens the model sees `<|end|>` roughly 6–7 million times and learns real semantics for it — "the previous context is over, what follows is unrelated." When SFT later uses `<|end|>` to terminate assistant turns, the model already knows the token cold. `<|user|>` and `<|assistant|>` genuinely never appear in pretraining data, but their embedding rows still receive weight-decay and (tied-head) gradient signal that keeps them in-distribution — a far better starting point than a random vector bolted on afterward.
+
+One subtlety the code must guarantee: special tokens are registered as *added tokens* in the tokenizer, meaning the encoder treats them atomically and — important for safety — the literal string `<|assistant|>` appearing inside a Wikipedia article would be treated as the special token. We'll verify in the sanity section that each encodes to exactly one ID, and Lesson 8's data generator will strip these literals from synthetic data to prevent injection.
+
+## `src/train_tokenizer.py`
+
+Two practical decisions before the code:
+
+- **Train on a sample, not the full corpus.** The BPE trainer holds pair-frequency statistics in RAM; feeding it 18 GB is slow and unnecessary. Merge rankings converge with far less data — a ~2 GB uniform sample over shards (hundreds of thousands of articles) produces a vocabulary statistically indistinguishable from full-corpus training. We shuffle the *shard list* with a fixed seed so the sample spans the whole alphabet of article titles, not just the `A`s.
+- **GPT-2-style byte-level pre-tokenization.** The `ByteLevel` pre-tokenizer maps bytes to printable stand-ins (space becomes `Ġ`) and splits on a regex so merges never cross word boundaries or glue letters to punctuation. This is the battle-tested default; we keep `add_prefix_space=False` so encoding is exactly inverse to decoding on raw text.
+
+The full file for the repo:
+
+```python
+"""Train a 32,768-token byte-level BPE tokenizer on the cleaned corpus.
+
+Usage:
+    python src/train_tokenizer.py --clean_dir data/clean --sample_gb 2.0
+
+Writes tokenizer/tokenizer.json. Special tokens get the lowest IDs:
+    0=<|end|>  1=<|user|>  2=<|assistant|>  3=<|pad|>
+<|end|> is used as the document separator during pretraining (Lesson 6)
+and as the turn terminator during SFT/DPO (Lessons 9-10).
+"""
+import argparse
+import json
+import random
+from pathlib import Path
+
+from tokenizers import Tokenizer, decoders, models, pre_tokenizers, trainers
+
+VOCAB_SIZE = 32768
+SPECIAL_TOKENS = ["<|end|>", "<|user|>", "<|assistant|>", "<|pad|>"]
+
+
+def iter_sample(clean_dir: Path, sample_gb: float, seed: int = 1337):
+    """Yield article texts until ~sample_gb of UTF-8 has been seen.
+
+    Shard order is shuffled deterministically so the sample covers the
+    whole dump, not just the alphabetically-first articles.
+    """
+    files = sorted(clean_dir.glob("*.jsonl"))
+    assert files, f"no shards in {clean_dir} — run Lesson 3 first"
+    random.Random(seed).shuffle(files)
+    budget, seen = int(sample_gb * 1024**3), 0
+    for fp in files:
+        with fp.open(encoding="utf-8") as f:
+            for line in f:
+                text = json.loads(line)["text"]
+                seen += len(text.encode("utf-8"))
+                yield text
+                if seen >= budget:
+                    return
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--clean_dir", type=Path, default=Path("data/clean"))
+    ap.add_argument("--out", type=Path, default=Path("tokenizer/tokenizer.json"))
+    ap.add_argument("--sample_gb", type=float, default=2.0)
+    args = ap.parse_args()
+
+    tok = Tokenizer(models.BPE())                     # no unk_token: byte-level never needs one
+    tok.pre_tokenizer = pre_tokenizers.ByteLevel(add_prefix_space=False)
+    tok.decoder = decoders.ByteLevel()
+
+    trainer = trainers.BpeTrainer(
+        vocab_size=VOCAB_SIZE,                        # includes the 256 byte alphabet + specials
+        special_tokens=SPECIAL_TOKENS,                # reserved FIRST -> IDs 0..3, stable forever
+        initial_alphabet=pre_tokenizers.ByteLevel.alphabet(),  # force all 256 bytes into vocab
+        show_progress=True,
+    )
+    tok.train_from_iterator(iter_sample(args.clean_dir, args.sample_gb), trainer)
+
+    args.out.parent.mkdir(parents=True, exist_ok=True)
+    tok.save(str(args.out))
+
+    # self-check: exact vocab size, specials are single atomic IDs
+    assert tok.get_vocab_size() == VOCAB_SIZE, tok.get_vocab_size()
+    for i, s in enumerate(SPECIAL_TOKENS):
+        ids = tok.encode(s).ids
+        assert ids == [i], f"{s} -> {ids}, expected [{i}]"
+    rt = "Ångström (1814–1874) coined 10⁻¹⁰ m — 東京 too."
+    assert tok.decode(tok.encode(rt).ids) == rt, "round-trip failed"
+    print(f"saved {args.out}: vocab={tok.get_vocab_size()}, specials OK, round-trip OK")
+
+
+if __name__ == "__main__":
+    main()
+```
+
+Line-by-line on the load-bearing choices:
+
+- `models.BPE()` with no `unk_token` — the whole point of byte-level; if an unknown token were possible, we'd want a loud crash, not a silent `<unk>`.
+- `initial_alphabet=ByteLevel.alphabet()` — forces all 256 byte symbols into the vocab even if some byte never occurs in the sample. Skip this and a rare byte in the *full* corpus (but absent from your 2 GB sample) becomes unencodable — the exact crash byte-level exists to prevent.
+- `special_tokens=SPECIAL_TOKENS` **first** in the trainer — they get IDs 0–3 and are marked as added tokens the encoder never splits. `vocab_size=32768` is the *total*: 4 specials + 256 bytes + 32,508 learned merges.
+- The final asserts are the contract every later lesson relies on: exact vocab size (the model's `vocab_size` in Lesson 5 is hardcoded to 32768), specials atomic at IDs 0–3, and lossless round-trip on gnarly Unicode.
+
+## Run it: same box, tmux, pennies
+
+This lesson is CPU-only, but the corpus already lives on your vast.ai instance from Lessons 2–3, so run it there rather than rsyncing 20 GB home. If you destroyed that instance, re-rent one with the same filter as Lesson 2 (`vastai search offers 'gpu_name=RTX_4090 num_cpus>=16 disk_space>=100 reliability>0.98' -o 'dph'`) and re-run the Lesson 2–3 pipeline — this is exactly why those scripts were idempotent.
+
+```bash
+vastai show instances                      # grab PORT and HOST
+ssh -p PORT root@HOST
+tmux new -s tokenizer                      # survives SSH drops, as always
+cd wikillm
+pip install "tokenizers>=0.19" tiktoken   # tiktoken only for the fertility bench below
+
+python src/train_tokenizer.py --clean_dir data/clean --sample_gb 2.0
+python src/pack_tokens.py                  # written below; run after the fertility check
+
+# back on your laptop: the tokenizer is tiny (~1.5 MB) — keep a copy under version control
+rsync -avz -e "ssh -p PORT" root@HOST:wikillm/tokenizer/tokenizer.json tokenizer/
+```
+
+Add both libraries to `requirements.txt` now (`tokenizers>=0.19`, `tiktoken>=0.7`). Tokenizer training takes ~10–20 min on 16 vCPUs; packing the full corpus (next sections) another ~30–60 min. **Cost for the whole lesson: ~1.5–2 h on the 4090 box ≈ $0.60–0.90.** The GPU idles — that's fine; renting a separate CPU box to save fifty cents isn't worth the data transfer.
+
+## Fertility check: your 32k vs GPT-2's 50k
+
+*Fertility* = average tokens per word. Lower is better: fewer tokens per sentence means more text per 1024-token context window and more text per training FLOP. The interesting question: can our 32,768 vocab, trained *on Wikipedia*, match GPT-2's 50,257 vocab trained on WebText? Measure it on held-out articles (use a shard the sampler likely skipped, or just note that 2 GB of 18 GB means most text is unseen anyway):
+
+```python
+# bench_fertility.py -- quick check, not a repo file
+import json, itertools
+from pathlib import Path
+import tiktoken
+from tokenizers import Tokenizer
+
+ours = Tokenizer.from_file("tokenizer/tokenizer.json")
+gpt2 = tiktoken.get_encoding("gpt2")
+
+texts = []
+with Path("data/clean/shard_0042.jsonl").open() as f:      # held-out shard
+    for line in itertools.islice(f, 2000):
+        texts.append(json.loads(line)["text"])
+
+n_words = sum(len(t.split()) for t in texts)
+n_bytes = sum(len(t.encode("utf-8")) for t in texts)
+n_ours  = sum(len(e.ids) for e in ours.encode_batch(texts))
+n_gpt2  = sum(len(ids) for ids in gpt2.encode_ordinary_batch(texts))
+
+for name, n in [("WikiGPT-32k", n_ours), ("GPT-2 50k", n_gpt2)]:
+    print(f"{name}: {n/n_words:.3f} tokens/word  {n_bytes/n:.2f} bytes/token")
+```
+
+Representative results on 2,000 held-out articles (yours will vary by a percent or two):
+
+| Tokenizer | Vocab | Tokens/word | Bytes/token | Tokens for the same 4.5B-word corpus |
+|---|---|---|---|---|
+| GPT-2 (`tiktoken`) | 50,257 | 1.33 | 4.36 | ~4.28B |
+| **WikiGPT-32k (ours)** | **32,768** | **1.27** | **4.58** | **~4.09B** |
+
+Read that table carefully, because it's the payoff of the whole lesson: with **35% fewer vocabulary entries**, the domain-matched tokenizer produces **~4–5% fewer tokens** on Wikipedia text. Domain fit beats raw vocab size — GPT-2 spends thousands of entries on Reddit-flavored strings our corpus never uses, while ours has single tokens for encyclopedia furniture. That 4–5% is a direct discount on pretraining cost: same text, fewer tokens, fewer GPU-hours. If your numbers show fertility *worse* than ~1.35, something's off — usually a cleaning bug from Lesson 3 (markup residue polluting the merge statistics) — fix it before packing.
+
+## `src/pack_tokens.py`: the corpus becomes two files
+
+The training loop in Lesson 6 wants random 1024-token windows served at GPU speed. Parsing JSON at train time would be absurd; instead we encode everything **once** into flat binary files of uint16 IDs. At train time, `np.memmap("train.bin", dtype=np.uint16)` gives array indexing over 8 GB with the OS paging data in lazily — zero deserialization, near-zero RAM.
+
+Design decisions, each of which shows up as a line of code:
+
+- **uint16.** Every ID < 32,768 < 65,536. 4B tokens × 2 bytes = **~8 GB** for `train.bin`. int32 would double that and halve your page-cache hit rate for no benefit. The script *asserts* the vocab fits rather than trusting us.
+- **`<|end|>` after every document.** The Lesson 6 loader samples windows that freely cross article boundaries (simple, no padding waste); `<|end|>` is the model's only signal that context resets. Forget it and the model learns spurious continuations from one article's end to another's start — and never learns the terminator it needs for chat.
+- **99.5/0.5 split, by document, deterministic.** Every 200th document goes to `val.bin` — ~20M tokens (~40 MB), far more than perplexity evaluation needs, while giving up almost no training data. Splitting by *document* (not by token position) prevents leakage of half-seen articles into validation; it's a valid held-out set precisely because Lesson 3's MinHash dedup already removed near-duplicate articles that would otherwise straddle the split. Deterministic (`n_docs % 200`) means re-running produces byte-identical files — restartability, the course religion.
+- **Throughput: batch encode, and deliberately *no* Python multiprocessing.** The classic trick is a `multiprocessing.Pool` of encoder workers — needed with pure-Python tokenizers, redundant here. HF `tokenizers` is Rust; `encode_batch` releases the GIL and fans out across all cores via its internal thread pool. One process calling `encode_batch` on 2,048 docs at a time saturates 16 vCPUs at ~1.5–3M tokens/s. Adding multiprocessing on top would just pay pickling overhead and complicate ordered, single-writer output. (If you ever *do* pack from a slow pure-Python encoder, the pattern is: shard the file list across a `Pool`, each worker writes `part_XXX.bin`, then `cat` them — ordering per shard preserved, one writer per file.)
+- **Append-writes, memmap at read time.** We don't preallocate an `np.memmap` for writing — that needs the exact token count up front, i.e., a full extra encoding pass. Sequential `f.write(arr.tobytes())` produces the identical bytes-on-disk; "memmap" is a property of how Lesson 6 *reads* the file.
+
+The full file for the repo:
+
+```python
+"""Stream-encode the cleaned corpus into flat uint16 token files.
+
+Usage:
+    python src/pack_tokens.py --clean_dir data/clean --out_dir data/tokens
+
+Output:
+    data/tokens/train.bin   ~99.5% of tokens (~4B tokens, ~8 GB)
+    data/tokens/val.bin     ~0.5%            (~20M tokens, ~40 MB)
+
+Every document is terminated with <|end|> (ID 0) so the model learns
+document boundaries; Lesson 6 reads these files with np.memmap.
+Deterministic: same inputs -> byte-identical outputs.
+"""
+import argparse
+import json
+import time
+from pathlib import Path
+
+import numpy as np
+from tokenizers import Tokenizer
+
+BATCH_DOCS = 2048   # docs per encode_batch call; Rust threads across all cores
+VAL_EVERY = 200     # every 200th document -> val.bin  (0.5% split)
+
+
+def iter_docs(clean_dir: Path):
+    for fp in sorted(clean_dir.glob("*.jsonl")):        # sorted -> deterministic order
+        with fp.open(encoding="utf-8") as f:
+            for line in f:
+                yield json.loads(line)["text"]
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--clean_dir", type=Path, default=Path("data/clean"))
+    ap.add_argument("--out_dir", type=Path, default=Path("data/tokens"))
+    ap.add_argument("--tokenizer", type=Path, default=Path("tokenizer/tokenizer.json"))
+    args = ap.parse_args()
+
+    tok = Tokenizer.from_file(str(args.tokenizer))
+    end_id = tok.token_to_id("<|end|>")
+    assert end_id is not None, "tokenizer must reserve <|end|> (rerun train_tokenizer.py)"
+    assert tok.get_vocab_size() <= 65536, "vocab must fit uint16"
+
+    args.out_dir.mkdir(parents=True, exist_ok=True)
+    train_f = (args.out_dir / "train.bin").open("wb")
+    val_f = (args.out_dir / "val.bin").open("wb")
+
+    batch, dests = [], []
+    n_docs = n_train = n_val = 0
+    t0 = time.time()
+
+    def flush():
+        nonlocal n_train, n_val
+        if not batch:
+            return
+        for enc, dest in zip(tok.encode_batch(batch), dests):   # parallel in Rust
+            arr = np.asarray(enc.ids + [end_id], dtype=np.uint16)  # doc + boundary
+            if dest is val_f:
+                n_val += arr.size
+            else:
+                n_train += arr.size
+            dest.write(arr.tobytes())
+        batch.clear()
+        dests.clear()
+
+    for text in iter_docs(args.clean_dir):
+        batch.append(text)
+        dests.append(val_f if n_docs % VAL_EVERY == 0 else train_f)  # split by DOCUMENT
+        n_docs += 1
+        if len(batch) >= BATCH_DOCS:
+            flush()
+            if (n_docs // BATCH_DOCS) % 50 == 0:
+                tot = n_train + n_val
+                print(f"{n_docs:>10,} docs | {tot:>13,} tokens | "
+                      f"{tot / (time.time() - t0):>10,.0f} tok/s", flush=True)
+    flush()
+    train_f.close()
+    val_f.close()
+    print(f"done: {n_docs:,} docs")
+    print(f"  train.bin  {n_train:,} tokens  ({n_train * 2 / 1e9:.2f} GB)")
+    print(f"  val.bin    {n_val:,} tokens  ({n_val * 2 / 1e9:.3f} GB)")
+
+
+if __name__ == "__main__":
+    main()
+```
+
+At ~2M tok/s this chews through the corpus in ~35–45 minutes. Watch the throughput line: if it's an order of magnitude lower, you're probably I/O-bound on a network volume — copy `data/clean/` to local NVMe (`nvme` disk is the default on most 4090 offers) and rerun. Disk math for the instance: 20 GB clean + 8 GB tokens + the raw dump you can now delete — comfortably inside the 100 GB you rented in Lesson 2.
+
+```{mermaid}
+flowchart LR
+  A[data/clean/*.jsonl<br/>~18 GB text<br/>~6.5M articles] --> B[train_tokenizer.py<br/>~2 GB shuffled sample<br/>BPE trainer]
+  B --> C[tokenizer/tokenizer.json<br/>4 specials + 256 bytes<br/>+ 32,508 merges]
+  C --> D[pack_tokens.py<br/>encode_batch, 2048 docs<br/>+ append end token per doc]
+  A --> D
+  D --> E[train.bin<br/>~4B tokens · uint16 · ~8 GB<br/>99.5% of documents]
+  D --> F[val.bin<br/>~20M tokens · ~40 MB<br/>every 200th document]
+  E --> G[Lesson 6: np.memmap<br/>random 1024-token windows]
+  F --> G
+```
+
+## Sanity: decode what you packed
+
+Never trust an 8 GB binary you haven't read back. Two checks, thirty seconds, run them on the instance before you call the lesson done:
+
+```python
+# sanity_roundtrip.py -- run once after packing
+import numpy as np
+from tokenizers import Tokenizer
+
+tok = Tokenizer.from_file("tokenizer/tokenizer.json")
+
+for name in ("data/tokens/train.bin", "data/tokens/val.bin"):
+    m = np.memmap(name, dtype=np.uint16, mode="r")
+    assert m.max() < 32768, f"{name}: ID out of range — wrong dtype or tokenizer"
+    ends = int((m[:5_000_000] == 0).sum())          # <|end|> is ID 0
+    print(f"{name}: {m.size:,} tokens, {ends} doc boundaries in first 5M")
+    print(tok.decode(list(m[:120]), skip_special_tokens=False))
+    print("-" * 60)
+```
+
+The decoded head of `train.bin` must read as the clean text of your first article — real prose, no `Ġ` artifacts, no markup residue — and the boundary count should imply a plausible mean document length (5M tokens / ~8k boundaries ≈ 600 tokens/article — Wikipedia's long tail of stubs pulls the mean down; if you see ≈ 0 boundaries, you dropped the `<|end|>` append). `skip_special_tokens=False` matters: you *want* to see `<|end|>` printed between articles — seeing the seams is the point. If both checks pass, the corpus is now, from the model's point of view, finished: Lessons 5–7 never touch text again, only these two files.
+
+## 🧪 Your task
+
+The vocabulary is a mirror of the corpus — so read it. Write a script that (1) prints the 20 *longest* tokens in your vocab (by character count, specials excluded), (2) prints 10 random tokens from the last 500 learned merges (the "barely made it in" tier), and (3) proves that encoding the string `"A <|user|> tag inside an article"` yields the atomic special-token ID — then explain in one sentence why point 3 will matter in Lesson 8.
+
+<details><summary>Solution</summary>
+
+```python
+import random
+from tokenizers import Tokenizer
+
+tok = Tokenizer.from_file("tokenizer/tokenizer.json")
+vocab = tok.get_vocab()                              # token string -> id
+specials = {"<|end|>", "<|user|>", "<|assistant|>", "<|pad|>"}
+
+# 1. longest tokens
+longest = sorted((t for t in vocab if t not in specials), key=len, reverse=True)[:20]
+for t in longest:
+    print(f"{len(t):3d}  {t!r}")
+
+# 2. sample of the last-admitted merges (highest IDs = lowest frequency)
+tail = sorted(vocab.items(), key=lambda kv: kv[1])[-500:]
+for t, i in random.Random(0).sample(tail, 10):
+    print(f"id={i}  {t!r}")
+
+# 3. special-token atomicity
+ids = tok.encode("A <|user|> tag inside an article").ids
+uid = tok.token_to_id("<|user|>")
+assert uid in ids, "special token was split!"
+print("atomic <|user|> id:", uid)
+```
+
+Typical findings: the longest tokens are Wikipedia skeleton — things like `ĠDisestablishments`, `Ġencyclopedia`, long place-name fragments — and the last-500 tier is where you spot cleaning failures (if you see `ĠrefĠname` or `Ġ|Ġalign` there, Lesson 3 markup leaked into the corpus and into your vocab). Point 3 matters because the encoder treats the *literal string* `<|user|>` in any text as the control token: user-visible text containing it becomes a prompt-injection vector, so Lesson 8's synthetic-data generator (and Lesson 11's server) must strip or escape these literals from untrusted content.
+
+</details>
+
+## Key takeaways
+
+- The tokenizer is frozen at pretraining time — every embedding row is welded to an ID, so this is the last lesson where vocabulary decisions are cheap.
+- Byte-level BPE = no `<unk>`, ever: 256 base bytes guarantee any string encodes; `initial_alphabet` ensures the guarantee survives training on a sample.
+- 32,768 = $2^{15}$: ~25M embedding params (20% of the model), tensor-core-friendly logits shape, and every ID fits uint16 → 2 bytes/token, 8 GB corpus.
+- Reserve `<|user|>`, `<|assistant|>`, `<|end|>`, `<|pad|>` **before** pretraining: post-hoc vocab resizing gives SFT randomly-initialized embedding rows and a loss spike; reserved tokens ride along from step 0, and `<|end|>` gets millions of real training occurrences as the document separator.
+- Domain-matched fertility win: our 32k Wikipedia tokenizer hits ~1.27 tokens/word vs GPT-2's ~1.33 with 35% fewer vocab entries — ~4–5% fewer tokens for the same text, a direct discount on pretraining GPU-hours.
+- Pack once, memmap forever: `encode_batch` (Rust threads, no Python multiprocessing needed) streams ~4B tokens into `train.bin`/`val.bin` in under an hour; document-level 99.5/0.5 split avoids leakage; always decode the head of the binary before trusting it.
+- Lesson cost: ~$0.60–0.90 of idle-GPU CPU time on the same vast.ai box.
+
+## Coming up
+
+The data is now integers — in Lesson 5 we build the machine that eats them: WikiGPT-124M itself, `src/model.py` written line by line — RMSNorm, RoPE, SwiGLU, weight tying, and why each of those choices earns its place in a 124M-parameter budget.
+
+------------------------------------------------------------------------
+
+[🏠 📖 Course home](index.html)  &nbsp;|&nbsp;  [← Lesson 03](lesson03.html)  &nbsp;|&nbsp;  [Lesson 05 →](lesson05.html)  &nbsp;|&nbsp;  [📚 All mini-courses](../../mini-courses.html)

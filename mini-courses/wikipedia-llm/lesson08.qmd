@@ -1,0 +1,556 @@
+---
+title: "📖 Build Your Own Wikipedia LLM · Lesson 8 — Synthetic Instruction Data: Your Teacher, Your Dataset, on GitHub"
+page-layout: full
+toc: true
+toc-location: left
+toc-title: "In this lesson"
+toc-depth: 2
+---
+
+[🏠 📖 Course home](index.html)  &nbsp;|&nbsp;  [← Lesson 07](lesson07.html)  &nbsp;|&nbsp;  [Lesson 09 →](lesson09.html)  &nbsp;|&nbsp;  [📚 All mini-courses](../../mini-courses.html)
+
+------------------------------------------------------------------------
+
+# Lesson 8 — Synthetic Instruction Data: Your Teacher, Your Dataset, on GitHub
+
+In Lesson 7 you walked away with something real: `checkpoints/ckpt_final.pt`, a base WikiGPT-124M that has read ~4B tokens of Wikipedia and can continue any prompt with plausible encyclopedic prose. But try talking to it. Prompt it with "What is photosynthesis?" and it won't *answer* — it will continue, maybe with "is a question often asked by students of biology…" or a list of related questions. A base model is an autocomplete engine. It has knowledge but no concept of a conversation, an instruction, or a role.
+
+The fix is supervised fine-tuning (SFT) on (instruction, response) pairs — and the interesting part of this course is that we don't download someone else's dataset. We *manufacture* our own: a bigger open model (Qwen2.5-7B-Instruct) acts as the teacher, your cleaned Wikipedia corpus acts as the grounding material, and a generation script turns the two into 50–80k high-quality, provenance-tracked instruction pairs. Then we publish the whole thing to a public GitHub repo so anyone can reproduce your model. This lesson builds `src/gen_sft_data.py` end to end.
+
+::: {.callout-note appearance="simple"}
+🎯 **In this lesson you will:** serve Qwen2.5-7B-Instruct with vLLM on your rented 4090, build a self-instruct-style seed prompt library over five grounded task types, write `src/gen_sft_data.py` to generate + filter + dedup ~50–80k chat-formatted instruction pairs for about $2 of GPU time, and publish the dataset to a public GitHub repo with schema, provenance, and license documentation.
+:::
+
+## Why generate your own data (and why ground it in Wikipedia)
+
+Three reasons we synthesize instead of downloading:
+
+1. **Distribution match.** WikiGPT's entire world is Wikipedia. Generic instruction sets (coding help, creative writing, roleplay) ask a 124M model to answer questions it has *never seen the substrate for* — that teaches confident hallucination. Instruction data grounded in the exact corpus the model pretrained on teaches it to surface knowledge it actually has.
+2. **Scale economics.** A 7B teacher on a 4090 generates thousands of pairs per hour for pennies. Human-annotated data of this size costs tens of thousands of dollars.
+3. **You own the pipeline.** When Lesson 9's SFT run exposes a weakness (say, the model can't do extraction), you regenerate with a different task mix in an afternoon. That loop is impossible with a frozen third-party dataset.
+
+The method is *self-instruct with grounding*: instead of asking the teacher to invent instructions from thin air (which drifts into repetitive, generic phrasing), every generation call feeds the teacher a **real passage from your `data/clean/` corpus** and a task-specific seed prompt. The passage anchors the facts; the seed prompt controls the task type; sampling temperature provides diversity.
+
+```{mermaid}
+flowchart LR
+    A[data/clean/<br/>Wikipedia passages] --> B[Passage sampler<br/>150–400 words]
+    S[Seed prompt library<br/>5 task types] --> C
+    B --> C[Teacher LLM<br/>Qwen2.5-7B-Instruct<br/>via vLLM, JSON mode]
+    C --> D[Quality filters<br/>length · refusals ·<br/>passage-copy check]
+    D --> E[Dedup<br/>exact sha1 +<br/>normalized prefix]
+    E --> F[data/sft/sft_train.jsonl<br/>50–80k chat pairs]
+    F --> G[Public GitHub repo<br/>README + shards + license]
+```
+
+## Spin up the teacher: vLLM on your 4090
+
+You can reuse the same vast.ai instance from Lesson 7 (the pretraining run is done; the GPU is idle) or rent a fresh one. Same workflow as always:
+
+```bash
+# On your laptop — find a 4090 if you don't have one running
+vastai search offers 'gpu_name=RTX_4090 num_gpus=1 disk_space>80 inet_down>200' -o 'dph'
+vastai create instance <OFFER_ID> --image pytorch/pytorch:2.4.0-cuda12.4-cudnn9-devel --disk 80
+
+vastai show instances          # grab ssh host/port
+ssh -p <PORT> root@<HOST>
+tmux new -s teacher            # everything long-running lives in tmux
+```
+
+Install vLLM and start the server. vLLM exposes an **OpenAI-compatible HTTP API**, which is the whole trick: our generation script speaks the standard `openai` client protocol, so the teacher is swappable — point the same script at any OpenAI-compatible endpoint (a bigger model on another provider, a friend's server) by changing one URL.
+
+```bash
+pip install vllm==0.6.3 openai
+
+# Serve the teacher (takes ~2 min to download 15GB of weights the first time)
+vllm serve Qwen/Qwen2.5-7B-Instruct \
+    --max-model-len 4096 \
+    --gpu-memory-utilization 0.92 \
+    --port 8000
+```
+
+Why each flag:
+
+- `--max-model-len 4096` — our prompts are (passage ≤ 400 words) + (seed template) + (response ≤ ~500 tokens), comfortably under 4k. Capping the context length shrinks the per-sequence KV-cache reservation, which is what lets a 7B model *and* a deep request queue coexist on 24GB.
+- `--gpu-memory-utilization 0.92` — Qwen2.5-7B in bf16 is ~15.2GB of weights. On a 24GB 4090 that leaves ~7GB; this flag tells vLLM to claim 92% of the card and spend everything above the weights on KV cache. More KV cache = more concurrent sequences = higher aggregate throughput.
+- **If you OOM** (another process holding memory, or a 4090 variant with less free VRAM): serve the AWQ-quantized variant instead — `vllm serve Qwen/Qwen2.5-7B-Instruct-AWQ --quantization awq ...` — weights drop to ~5.5GB with negligible quality loss for this task.
+
+Sanity-check from a second tmux window (`tmux new -s work`):
+
+```bash
+curl -s http://localhost:8000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{"model": "Qwen/Qwen2.5-7B-Instruct",
+       "messages": [{"role": "user", "content": "Say OK."}],
+       "max_tokens": 5}' | python -c "import sys,json; print(json.load(sys.stdin)['choices'][0]['message']['content'])"
+```
+
+If that prints something like `OK.`, your teacher is live. With continuous batching and ~32 concurrent requests, expect **1,500–2,500 output tokens/s aggregate** — that number sets the cost of this lesson.
+
+## The task mix: five grounded task types
+
+A model SFT'd on one task type becomes a one-trick pony. We want WikiGPT to answer questions, summarize, extract, and explain — so the dataset mixes five task types, all grounded in a sampled passage. The mix is deliberately QA-heavy because QA is what people actually do with a chat model:
+
+| Task type | Share | What the pair looks like | Passage in the user turn? |
+|---|---|---|---|
+| `closed_qa` | 35% | Question answerable *from the passage*; passage included in the user message; answer cites only the passage | Yes |
+| `summarize` | 20% | "Summarize the following passage in N sentences" + passage | Yes |
+| `extract` | 15% | "List all the dates/names/places mentioned…" + passage; structured answer | Yes |
+| `eli5` | 15% | "Explain <concept from passage> in simple terms" — passage grounds the teacher's answer but is *not* shown to the student model | No |
+| `open_qa` | 15% | Standalone factual question; passage is the gold source for the teacher's answer | No |
+
+The last column is the subtle design decision. For `closed_qa`/`summarize`/`extract`, the passage appears inside the user turn — the model learns *reading comprehension over provided context* (which also sets up any future RAG use). For `eli5`/`open_qa`, the user turn is just the question — the model learns to *recall from its own pretrained weights*, and the passage only keeps the teacher's answer factual. A 124M model will be much weaker at the second kind; that's expected and honest, and the 70/30-ish split toward grounded tasks reflects it.
+
+## The chat format: reserved tokens, decided in Lesson 4
+
+Back in Lesson 4 we reserved three special tokens in the tokenizer — `<|user|>`, `<|assistant|>`, `<|end|>` — precisely so that this moment requires zero tokenizer surgery. Every training example in Lesson 9 will be rendered as:
+
+<svg viewBox="0 0 720 150" xmlns="http://www.w3.org/2000/svg" style="max-width:100%;height:auto;">
+  <rect x="10" y="30" width="110" height="40" rx="6" fill="rgba(120,120,220,0.25)" stroke="currentColor"/>
+  <text x="65" y="55" text-anchor="middle" fill="currentColor" font-size="13" font-family="monospace">&lt;|user|&gt;</text>
+  <rect x="128" y="30" width="170" height="40" rx="6" fill="rgba(128,128,128,0.15)" stroke="currentColor" stroke-dasharray="4 3"/>
+  <text x="213" y="55" text-anchor="middle" fill="currentColor" font-size="13">instruction (+passage)</text>
+  <rect x="306" y="30" width="90" height="40" rx="6" fill="rgba(120,120,220,0.25)" stroke="currentColor"/>
+  <text x="351" y="55" text-anchor="middle" fill="currentColor" font-size="13" font-family="monospace">&lt;|end|&gt;</text>
+  <rect x="404" y="30" width="130" height="40" rx="6" fill="rgba(120,120,220,0.25)" stroke="currentColor"/>
+  <text x="469" y="55" text-anchor="middle" fill="currentColor" font-size="13" font-family="monospace">&lt;|assistant|&gt;</text>
+  <rect x="542" y="30" width="110" height="40" rx="6" fill="rgba(100,200,140,0.25)" stroke="currentColor"/>
+  <text x="597" y="55" text-anchor="middle" fill="currentColor" font-size="13">response</text>
+  <rect x="660" y="30" width="55" height="40" rx="6" fill="rgba(100,200,140,0.25)" stroke="currentColor"/>
+  <text x="687" y="49" text-anchor="middle" fill="currentColor" font-size="10" font-family="monospace">&lt;|end|&gt;</text>
+  <text x="330" y="105" text-anchor="middle" fill="currentColor" font-size="12">◀── loss masked out (Lesson 9) ──▶</text>
+  <text x="628" y="105" text-anchor="middle" fill="currentColor" font-size="12">◀─ loss ON ─▶</text>
+  <line x1="10" y1="88" x2="396" y2="88" stroke="currentColor" stroke-dasharray="5 4"/>
+  <line x1="542" y1="88" x2="715" y2="88" stroke="currentColor"/>
+</svg>
+
+The dataset itself stores structured `messages`, not the rendered string — rendering (and loss-masking to assistant tokens only) is `train_sft.py`'s job in Lesson 9. Storing structure keeps the dataset format-agnostic and reusable by other people with other tokenizers. One line of `data/sft/sft_train.jsonl`:
+
+```json
+{"id": "sft-000042", "task_type": "closed_qa", "source_title": "Photosynthesis",
+ "messages": [
+   {"role": "user", "content": "Read the passage and answer: what pigment absorbs light?\n\nPassage:\nPhotosynthesis is..."},
+   {"role": "assistant", "content": "According to the passage, chlorophyll absorbs light..."}
+ ]}
+```
+
+## `src/gen_sft_data.py` — the full generator
+
+Now the script. The architecture is a straight pipeline: sample passages → build prompts from the seed library → hit the teacher concurrently (vLLM batches internally, so client-side concurrency is just a thread pool) → parse JSON → filter → dedup → write JSONL. It's restartable: output is appended per-result and existing IDs are skipped on resume, because a 3-hour generation run *will* get interrupted at least once.
+
+```python
+# src/gen_sft_data.py
+"""Generate grounded synthetic SFT data from the cleaned Wikipedia corpus.
+
+Teacher: any OpenAI-compatible endpoint (default: local vLLM serving
+Qwen2.5-7B-Instruct). Output: chat-format JSONL in data/sft/.
+
+Usage:
+    python src/gen_sft_data.py --n-pairs 60000 --out data/sft/sft_train.jsonl
+"""
+import argparse, hashlib, json, os, random, re, sys, time
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from difflib import SequenceMatcher
+from pathlib import Path
+
+from openai import OpenAI
+
+# ---------------------------------------------------------------- seed library
+# Each template asks the teacher for a JSON object {"instruction", "response"}.
+# {passage} is substituted in. Multiple phrasings per task = output diversity.
+SEED_PROMPTS = {
+    "closed_qa": [
+        "Read this Wikipedia passage and write one specific question that can be "
+        "answered ONLY from the passage, plus a correct, complete answer that "
+        "cites only facts in the passage.\n\nPassage:\n{passage}\n\n"
+        'Return JSON: {{"instruction": "<the question>", "response": "<the answer>"}}',
+        "From the passage below, create a challenging comprehension question "
+        "(who/what/when/why/how) and answer it using only the passage. Avoid "
+        "trivial questions whose answer is the passage's first sentence.\n\n"
+        "Passage:\n{passage}\n\n"
+        'Return JSON: {{"instruction": "...", "response": "..."}}',
+    ],
+    "summarize": [
+        "Write an instruction asking to summarize the passage below in 2-3 "
+        "sentences, then write that summary. The summary must be faithful and "
+        "must not copy sentences verbatim.\n\nPassage:\n{passage}\n\n"
+        'Return JSON: {{"instruction": "...", "response": "..."}}',
+        "Create a (instruction, response) pair where the instruction asks for "
+        "a one-paragraph summary of the passage for a general reader, and the "
+        "response is that summary.\n\nPassage:\n{passage}\n\n"
+        'Return JSON: {{"instruction": "...", "response": "..."}}',
+    ],
+    "extract": [
+        "Write an instruction asking to extract specific structured facts from "
+        "the passage (e.g. all dates, all named people, all locations, or all "
+        "numeric quantities - pick whichever the passage is rich in), then the "
+        "response as a bullet list. Only include facts present in the passage."
+        "\n\nPassage:\n{passage}\n\n"
+        'Return JSON: {{"instruction": "...", "response": "..."}}',
+    ],
+    "eli5": [
+        "Pick the central concept of the passage below. Write an instruction "
+        "of the form 'Explain <concept> in simple terms' (do NOT mention the "
+        "passage in the instruction), and a friendly, accurate explanation a "
+        "curious 12-year-old would understand, grounded in the passage's facts."
+        "\n\nPassage:\n{passage}\n\n"
+        'Return JSON: {{"instruction": "...", "response": "..."}}',
+    ],
+    "open_qa": [
+        "Using the passage below as your source of truth, write a standalone "
+        "factual question about its topic (the question must NOT reference "
+        "'the passage') and a self-contained, accurate answer of 2-5 sentences."
+        "\n\nPassage:\n{passage}\n\n"
+        'Return JSON: {{"instruction": "...", "response": "..."}}',
+    ],
+}
+# task-type mix (must sum to 1.0) - see lesson table for rationale
+TASK_MIX = {"closed_qa": 0.35, "summarize": 0.20, "extract": 0.15,
+            "eli5": 0.15, "open_qa": 0.15}
+# passage included in the student-visible user turn for these tasks only:
+PASSAGE_IN_USER_TURN = {"closed_qa", "summarize", "extract"}
+
+SYSTEM_PROMPT = (
+    "You are a meticulous dataset annotator. You always respond with a single "
+    "valid JSON object and nothing else. You never refuse, never add "
+    "disclaimers, and never invent facts not supported by the given passage."
+)
+
+REFUSAL_PATTERNS = re.compile(
+    r"as an ai|i cannot|i can't|i'm sorry|i am sorry|i apologize|"
+    r"language model|i don't have access|cannot assist", re.IGNORECASE)
+
+# ---------------------------------------------------------------- passages
+def iter_passages(clean_dir: Path, min_words=150, max_words=400, seed=1337):
+    """Yield (title, passage) sampled from Lesson 3's cleaned JSONL shards."""
+    files = sorted(clean_dir.glob("*.jsonl"))
+    if not files:
+        sys.exit(f"no cleaned shards found in {clean_dir} - run Lesson 3 first")
+    rng = random.Random(seed)
+    while True:
+        f = rng.choice(files)
+        with open(f, encoding="utf-8") as fh:
+            lines = fh.readlines()
+        for line in rng.sample(lines, min(64, len(lines))):
+            doc = json.loads(line)
+            words = doc["text"].split()
+            if len(words) < min_words:
+                continue
+            # random window -> different passages from the same article
+            start = rng.randint(0, max(0, len(words) - max_words))
+            n = rng.randint(min_words, max_words)
+            yield doc.get("title", ""), " ".join(words[start:start + n])
+
+# ---------------------------------------------------------------- filters
+def passes_filters(inst: str, resp: str, passage: str) -> str | None:
+    """Return None if the pair is good, else a rejection reason (for stats)."""
+    if not (12 <= len(inst) <= 2000):          return "inst_length"
+    if not (20 <= len(resp) <= 3000):          return "resp_length"
+    if REFUSAL_PATTERNS.search(resp):          return "refusal"
+    if REFUSAL_PATTERNS.search(inst):          return "refusal"
+    # reject responses that just copy the passage: cheap ratio on a prefix
+    sim = SequenceMatcher(None, resp[:600], passage[:600]).ratio()
+    if sim > 0.85:                             return "passage_copy"
+    return None
+
+def norm_key(inst: str) -> str:
+    """Dedup key: lowercase, alphanumeric-only, first 12 words."""
+    words = re.sub(r"[^a-z0-9 ]", "", inst.lower()).split()
+    return " ".join(words[:12])
+
+# ---------------------------------------------------------------- generation
+def gen_one(client, model, task_type, title, passage, temperature):
+    template = random.choice(SEED_PROMPTS[task_type])
+    resp = client.chat.completions.create(
+        model=model,
+        messages=[{"role": "system", "content": SYSTEM_PROMPT},
+                  {"role": "user", "content": template.format(passage=passage)}],
+        temperature=temperature,
+        max_tokens=700,
+        response_format={"type": "json_object"},   # JSON mode: vLLM + OpenAI both honor it
+    )
+    obj = json.loads(resp.choices[0].message.content)
+    inst, ans = obj["instruction"].strip(), obj["response"].strip()
+    reason = passes_filters(inst, ans, passage)
+    if reason:
+        return None, reason
+    user_content = (f"{inst}\n\nPassage:\n{passage}"
+                    if task_type in PASSAGE_IN_USER_TURN else inst)
+    return {"task_type": task_type, "source_title": title,
+            "messages": [{"role": "user", "content": user_content},
+                         {"role": "assistant", "content": ans}]}, None
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--clean-dir", default="data/clean")
+    ap.add_argument("--out", default="data/sft/sft_train.jsonl")
+    ap.add_argument("--n-pairs", type=int, default=60000)
+    ap.add_argument("--base-url", default="http://localhost:8000/v1")
+    ap.add_argument("--api-key", default="EMPTY")   # vLLM ignores it; real APIs need it
+    ap.add_argument("--model", default="Qwen/Qwen2.5-7B-Instruct")
+    ap.add_argument("--concurrency", type=int, default=32)
+    ap.add_argument("--temperature", type=float, default=0.8)
+    args = ap.parse_args()
+
+    client = OpenAI(base_url=args.base_url, api_key=args.api_key)
+    out_path = Path(args.out); out_path.parent.mkdir(parents=True, exist_ok=True)
+
+    # resume support: reload dedup keys from an existing output file
+    seen, exact = set(), set()
+    n_done = 0
+    if out_path.exists():
+        with open(out_path, encoding="utf-8") as fh:
+            for line in fh:
+                r = json.loads(line)
+                inst = r["messages"][0]["content"]
+                seen.add(norm_key(inst))
+                exact.add(hashlib.sha1(inst.encode()).hexdigest())
+                n_done += 1
+        print(f"resuming: {n_done} pairs already on disk")
+
+    passages = iter_passages(Path(args.clean_dir))
+    tasks = list(TASK_MIX); weights = [TASK_MIX[t] for t in tasks]
+    stats = {"ok": 0, "dup": 0, "parse_error": 0}
+    t0 = time.time()
+
+    with open(out_path, "a", encoding="utf-8") as out, \
+         ThreadPoolExecutor(max_workers=args.concurrency) as pool:
+        futures = set()
+        while n_done < args.n_pairs:
+            # keep the pool saturated so vLLM's batcher stays full
+            while len(futures) < args.concurrency * 2 and n_done + len(futures) < args.n_pairs + 200:
+                title, passage = next(passages)
+                tt = random.choices(tasks, weights=weights)[0]
+                futures.add(pool.submit(gen_one, client, args.model, tt,
+                                        title, passage, args.temperature))
+            done_set = {f for f in list(futures) if f.done()}
+            if not done_set:
+                time.sleep(0.2); continue
+            for fut in done_set:
+                futures.discard(fut)
+                try:
+                    rec, reason = fut.result()
+                except Exception:
+                    stats["parse_error"] += 1; continue   # bad JSON / timeout: just drop it
+                if rec is None:
+                    stats[reason] = stats.get(reason, 0) + 1; continue
+                inst = rec["messages"][0]["content"]
+                h = hashlib.sha1(inst.encode()).hexdigest()
+                k = norm_key(inst)
+                if h in exact or k in seen:
+                    stats["dup"] += 1; continue
+                exact.add(h); seen.add(k)
+                rec["id"] = f"sft-{n_done:06d}"
+                out.write(json.dumps(rec, ensure_ascii=False) + "\n")
+                n_done += 1; stats["ok"] += 1
+                if n_done % 500 == 0:
+                    rate = stats["ok"] / (time.time() - t0)
+                    out.flush()
+                    print(f"{n_done}/{args.n_pairs}  {rate:.1f} pairs/s  stats={stats}")
+
+    print(f"done: {n_done} pairs -> {out_path}  reject-stats={stats}")
+
+if __name__ == "__main__":
+    main()
+```
+
+Line-by-line, the decisions that matter:
+
+- **`response_format={"type": "json_object"}`** — JSON mode. vLLM constrains decoding so the output *is* valid JSON; the OpenAI API honors the same field, keeping the script portable. Without it, expect 5–10% of outputs to be JSON wrapped in markdown fences or chatty preamble, all wasted tokens. (vLLM also supports strict schema enforcement via `extra_body={"guided_json": <schema>}` if you want to pin the exact keys — JSON mode plus a `try/except` is enough here.)
+- **`temperature=0.8`** — diversity knob. At 0.2 the teacher writes the same five question shapes forever; at 1.2 factuality degrades. 0.7–0.9 is the standard band for synthetic data generation.
+- **Client-side concurrency = 32, queue depth 2×** — vLLM's continuous batcher only helps if requests are *waiting*. Sequential requests would use ~5% of the GPU; 32 in flight keeps it >90% busy, which is the difference between a 2-hour run and a 30-hour run.
+- **The passage-copy filter** (`SequenceMatcher` ratio > 0.85) kills the failure mode where a lazy teacher "summarizes" by echoing the passage — training on those teaches your model to parrot its input.
+- **The refusal filter** matters more than it looks: a few hundred "As an AI language model, I cannot…" strings in SFT data will make a 124M model refuse *constantly*, because small models latch onto high-frequency surface patterns.
+- **Two dedup layers**: exact sha1 on the user turn, plus a normalized 12-word-prefix key that catches near-duplicates like "What year was X founded?" vs "What year was X founded".
+- **Append + resume** — the script reloads dedup state from the output file on restart, so a dropped SSH session costs you nothing. (Same philosophy as `train.py`'s checkpointing in Lesson 6.)
+
+## Run it: cost, throughput, and a held-out split
+
+Sync the code and cleaned data references (your `data/clean/` shards should already be on the instance from Lesson 3 — if not, `rsync` them back up):
+
+```bash
+# from your laptop
+rsync -avz -e "ssh -p <PORT>" wikillm/src/ root@<HOST>:/workspace/wikillm/src/
+
+# on the instance, in the 'work' tmux window (teacher runs in the other one)
+cd /workspace/wikillm
+python src/gen_sft_data.py --n-pairs 60000 --out data/sft/sft_train.jsonl
+```
+
+Napkin math for the cost line: 60k accepted pairs, ~25% rejection/dup rate → ~75k teacher calls; each call is ~700 prompt tokens + ~350 output tokens. Output tokens dominate wall time: 75k × 350 ≈ **26M generated tokens**, at ~2,000 tok/s aggregate ≈ **3.6 hours**. At $0.40/hr:
+
+> **Cost for this lesson: ~2–4 GPU-hours ≈ $1–2.** (Add ~$0.15 if you rented a fresh instance and count the vLLM setup time.)
+
+While it runs, spot-check quality — this is your only chance to catch a bad seed prompt before it pollutes 20k examples:
+
+```bash
+shuf -n 5 data/sft/sft_train.jsonl | python -m json.tool --no-ensure-ascii | less
+```
+
+Read them like an examiner: Is the closed-QA answer actually in the passage? Does the summary paraphrase rather than copy? If one task type looks weak, kill the run, fix its seed prompt, and resume — the script picks up where it left off.
+
+Finally, carve out a held-out eval split (we'll want it for Lesson 9's eval loss and Lesson 11's judge eval):
+
+```bash
+python - <<'EOF'
+import json, random
+random.seed(0)
+lines = open("data/sft/sft_train.jsonl", encoding="utf-8").readlines()
+random.shuffle(lines)
+n_val = 1000
+open("data/sft/sft_val.jsonl", "w", encoding="utf-8").writelines(lines[:n_val])
+open("data/sft/sft_train.jsonl", "w", encoding="utf-8").writelines(lines[n_val:])
+print(f"train={len(lines)-n_val} val={n_val}")
+EOF
+```
+
+## Publish it: a public GitHub dataset repo
+
+A dataset nobody can download is a dataset that doesn't exist. We publish to a **public GitHub repo** — separate from `wikillm/` (code and data have different lifecycles and licenses). Two file-size realities shape the layout: GitHub blocks files >100MB and warns at 50MB, and 60k pairs is roughly 80–120MB of JSONL. So: **shard to <50MB plain-text files** (grep-able, diff-able, no special tooling for consumers), with `git lfs` as the alternative if you prefer one big file.
+
+```{mermaid}
+flowchart LR
+    A[sft_train.jsonl<br/>~100MB] --> B[split into<br/>&lt;50MB shards]
+    B --> C[README.md<br/>schema · provenance ·<br/>license · repro command]
+    C --> D[git init + commit]
+    D --> E[gh repo create --public<br/>git push]
+    E --> F[Anyone reproduces<br/>your Lesson 9 SFT run]
+```
+
+```bash
+# on the instance (or rsync the data down and do this locally)
+mkdir -p ~/wikigpt-sft-data && cd ~/wikigpt-sft-data
+
+# shard train set at 20k lines/shard (~35MB each, safely under 50MB)
+mkdir -p data
+split -l 20000 -d --additional-suffix=.jsonl \
+    /workspace/wikillm/data/sft/sft_train.jsonl data/sft_train_
+cp /workspace/wikillm/data/sft/sft_val.jsonl data/
+
+git init
+git add data/
+```
+
+The README is not decoration — it's the dataset's schema contract, reproduction recipe, and license notice. Write it before the first push:
+
+```bash
+cat > README.md <<'EOF'
+# WikiGPT-SFT: Synthetic Instruction Data Grounded in English Wikipedia
+
+~60,000 (instruction, response) pairs for supervised fine-tuning of small
+language models, generated from cleaned English Wikipedia passages. Built for
+WikiGPT-124M (see the "Build Your Own Wikipedia LLM" course) but usable for
+any chat SFT.
+
+## Schema
+One JSON object per line (`data/sft_train_*.jsonl`, `data/sft_val.jsonl`):
+- `id`           unique example id (`sft-NNNNNN`)
+- `task_type`    one of: closed_qa (35%), summarize (20%), extract (15%),
+                 eli5 (15%), open_qa (15%)
+- `source_title` title of the source Wikipedia article
+- `messages`     [{role: "user", content}, {role: "assistant", content}]
+                 For closed_qa/summarize/extract the user turn embeds the
+                 source passage; for eli5/open_qa it does not.
+
+## Provenance & generation
+- Source text: English Wikipedia, `pages-articles-multistream` dump
+  (dumps.wikimedia.org), extracted, cleaned, and deduplicated.
+- Teacher model: Qwen/Qwen2.5-7B-Instruct served locally with vLLM
+  (temperature 0.8, JSON mode).
+- Filters: length bounds, refusal-string rejection, passage-copy rejection
+  (SequenceMatcher ratio > 0.85), exact sha1 + normalized-prefix dedup.
+- Generation script: `src/gen_sft_data.py` in the wikillm repo. Reproduce:
+  `python src/gen_sft_data.py --n-pairs 60000`
+
+## License
+Source passages derive from Wikipedia, licensed **CC BY-SA 4.0**. Because
+responses are grounded in and derived from that text, this dataset is
+released under **CC BY-SA 4.0** (share-alike inherits). Attribution:
+Wikipedia contributors. Generated responses were produced by
+Qwen2.5-7B-Instruct; see the Qwen model license for its terms.
+
+## Known limitations
+Synthetic data inherits teacher errors: occasional hallucinated details in
+eli5/open_qa answers, uneven difficulty. ~1k-pair audit found >95% of
+closed_qa answers fully supported by their passage. Use accordingly.
+EOF
+
+git add README.md
+git commit -m "WikiGPT-SFT v1: 60k grounded synthetic instruction pairs"
+
+# create the public repo and push (gh CLI; or create it in the web UI and add the remote)
+gh repo create wikigpt-sft-data --public --source=. --push
+```
+
+If you'd rather keep one un-sharded file, the `git lfs` route is:
+
+```bash
+git lfs install
+git lfs track "*.jsonl"
+git add .gitattributes data/ README.md
+git commit -m "WikiGPT-SFT v1 (LFS)" && git push
+```
+
+Plain shards are friendlier to consumers (no LFS client, no LFS bandwidth quota — GitHub's free LFS tier is 1GB/month of downloads, which a popular dataset burns through fast). That's why shards are the default here.
+
+The license paragraph is the part most people get wrong, so to be explicit: Wikipedia text is **CC BY-SA 4.0**, and BY-SA is *share-alike* — derivatives of the text (which your passages, and arguably the grounded responses, are) must carry the same license. Publishing under CC BY-SA with attribution to Wikipedia contributors is both legally required and zero-cost. You'll reuse this exact repo pattern in Lesson 10 for the DPO preference pairs.
+
+One housekeeping note before you leave the instance: if you're done generating, **stop the vLLM tmux session** (`tmux kill-session -t teacher`) — or destroy the instance if Lesson 9 is a few days away. Idle teachers bill the same as busy ones.
+
+## 🧪 Your task
+
+Add a sixth task type, **`multi_hop`**: questions that require combining two facts from *different parts* of the same passage (e.g., "The article says X was born in 1879 and moved to Y in 1905 — how old was X on arrival?"). Write the seed prompt, register it in the mix at 10% (rebalance the others to keep the sum at 1.0), and add one task-specific filter: reject any `multi_hop` pair whose response is shorter than 100 characters (single-fact answers are almost always a failed multi-hop). Then generate 200 pairs of only this type and manually grade 10.
+
+<details><summary>Solution</summary>
+
+Additions to `src/gen_sft_data.py`:
+
+```python
+SEED_PROMPTS["multi_hop"] = [
+    "Read the passage and write a question whose answer requires COMBINING "
+    "two different facts stated in different sentences of the passage "
+    "(comparison, arithmetic on two numbers, or a cause stated in one place "
+    "and an effect in another). Then write the answer, explicitly walking "
+    "through both facts before concluding.\n\nPassage:\n{passage}\n\n"
+    'Return JSON: {{"instruction": "...", "response": "..."}}',
+]
+
+TASK_MIX = {"closed_qa": 0.32, "summarize": 0.18, "extract": 0.13,
+            "eli5": 0.14, "open_qa": 0.13, "multi_hop": 0.10}
+PASSAGE_IN_USER_TURN.add("multi_hop")   # the passage must be visible to the student
+```
+
+The task-specific filter, added at the top of `passes_filters` (pass `task_type` through from `gen_one`):
+
+```python
+def passes_filters(inst, resp, passage, task_type=None):
+    if task_type == "multi_hop" and len(resp) < 100:
+        return "multihop_too_short"
+    ...
+```
+
+Generate a type-only batch by temporarily setting `TASK_MIX = {"multi_hop": 1.0}` (or add a `--only-task` flag) and running:
+
+```bash
+python src/gen_sft_data.py --n-pairs 200 --out data/sft/multihop_probe.jsonl
+shuf -n 10 data/sft/multihop_probe.jsonl | python -m json.tool --no-ensure-ascii
+```
+
+When grading, the common failure is a *disguised single-hop*: the question sounds compositional but one sentence of the passage answers it outright. Expect roughly 6–8 of 10 to be genuinely multi-hop with a 7B teacher — good enough at a 10% mix share, and a concrete preview of why Lesson 10 adds preference optimization on top of SFT.
+
+</details>
+
+## Key takeaways
+
+- A base model completes; instruction data is what teaches it to *converse*. You generated your own instead of downloading, matched to the exact corpus your model pretrained on.
+- vLLM turns your rented 4090 into an OpenAI-compatible teacher endpoint (`vllm serve Qwen/Qwen2.5-7B-Instruct`); memory math (15GB weights + KV cache under `--gpu-memory-utilization 0.92`, `--max-model-len 4096`) makes 7B fit in 24GB. Any OpenAI-compatible API is a drop-in via `--base-url`.
+- Grounded self-instruct = real Wikipedia passage + task-specific seed prompt + temperature 0.8 + JSON mode. Five task types, QA-weighted, with the passage in the user turn only for comprehension-style tasks.
+- Filters are not optional: refusal strings, passage-copy similarity, length bounds, and two-layer dedup are the difference between a dataset and noise. Client-side concurrency (~32) keeps vLLM's batcher full — a ~10× throughput difference.
+- ~60k pairs cost ~2–4 GPU-hours ≈ $1–2. The whole dataset ships to a public GitHub repo as <50MB JSONL shards with a README covering schema, generation provenance, and the CC BY-SA 4.0 share-alike license Wikipedia derivatives inherit.
+
+## Coming up
+
+In Lesson 9 we point this dataset at your base checkpoint: `src/train_sft.py` renders the chat template with `<|user|>`/`<|assistant|>`/`<|end|>`, masks the loss to assistant tokens only, and in under two GPU-hours turns WikiGPT-124M from an autocomplete engine into a model that answers you.
+
+------------------------------------------------------------------------
+
+[🏠 📖 Course home](index.html)  &nbsp;|&nbsp;  [← Lesson 07](lesson07.html)  &nbsp;|&nbsp;  [Lesson 09 →](lesson09.html)  &nbsp;|&nbsp;  [📚 All mini-courses](../../mini-courses.html)

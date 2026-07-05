@@ -1,0 +1,463 @@
+---
+title: "📖 Build Your Own Wikipedia LLM · Lesson 2 — Getting Wikipedia: The Dump and the Extractor"
+page-layout: full
+toc: true
+toc-location: left
+toc-title: "In this lesson"
+toc-depth: 2
+---
+
+[🏠 📖 Course home](index.html)  &nbsp;|&nbsp;  [← Lesson 01](lesson01.html)  &nbsp;|&nbsp;  [Lesson 03 →](lesson03.html)  &nbsp;|&nbsp;  [📚 All mini-courses](../../mini-courses.html)
+
+------------------------------------------------------------------------
+
+# Lesson 2 — Getting Wikipedia: The Dump and the Extractor
+
+In Lesson 1 you saw the map: raw Wikipedia in, chat model out, with every stage living in the `wikillm/` repo. This lesson is where the pipeline stops being a diagram and starts being bytes on a disk. You are going to pull down the entire English Wikipedia — roughly 22 GB compressed, about 6.8 million real articles — verify that not a single bit got flipped in transit, and then fight your first real battle of the course: turning Wikipedia's hostile markup format into clean JSONL that every later stage (cleaning in Lesson 3, tokenizer training in Lesson 4, pretraining in Lessons 6–7) can consume.
+
+None of this needs a GPU. It needs CPU cores, disk, and bandwidth — which is great news for your budget, because CPU-heavy boxes on vast.ai rent for pennies. You'll run everything in this lesson for well under a dollar, or for free on your own machine if it has ~150 GB to spare.
+
+::: {.callout-note appearance="simple"}
+🎯 **In this lesson you will:** understand what's inside `enwiki-latest-pages-articles-multistream.xml.bz2`, download it resume-safely with aria2c and verify its SHA-1 checksum, learn why raw wikitext is hostile to language models, build `src/extract.py` on top of wikiextractor to produce `data/extracted/*.jsonl` with `{id, title, text}` records, see a pure-Python `mwxml` streaming parser for understanding, and run your first corpus stats script — all on a cheap CPU-only vast.ai instance for ~$0.50.
+:::
+
+## What you're actually downloading
+
+Wikimedia publishes full database dumps of every wiki at [dumps.wikimedia.org](https://dumps.wikimedia.org/enwiki/). There are dozens of files per dump date — page histories, abstracts, link tables, SQL dumps — and almost all of them are wrong for us. The one we want is:
+
+```
+enwiki-latest-pages-articles-multistream.xml.bz2     (~22 GB compressed, ~90 GB as XML)
+```
+
+Unpack that filename piece by piece, because every token in it is a decision:
+
+- **`pages-articles`** — the *current revision only* of every page in the main content namespaces. Not the full edit history (`pages-meta-history` is multiple **terabytes** — downloading it by accident is the classic beginner disk-killer). One snapshot of the text per article is exactly what a pretraining corpus needs.
+- **`multistream`** — the file is not one giant bz2 stream. It's thousands of small bz2 streams concatenated, each holding ~100 pages, plus a companion index file (`...multistream-index.txt.bz2`) that maps `byte-offset:page-id:title`. Any bz2 tool reads the concatenation as if it were a single file, so we lose nothing — but the index means you can seek to any single article without decompressing the 22 GB in front of it. That random access will save you hours of debugging later when you want to ask "what did the raw markup for *this* article look like?"
+- **`latest`** — a symlink to the most recent complete dump. Convenient, but a moving target: two readers of this course downloading a month apart get different files and different checksums. For reproducibility, **pin a dated dump**. Browse `https://dumps.wikimedia.org/enwiki/` and pick the newest complete date (they run on the 1st and 20th of each month); everywhere below I use `20260601` — substitute your date.
+
+<svg viewBox="0 0 720 250" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Anatomy of the multistream dump">
+  <style>text{font-family:ui-monospace,monospace;fill:currentColor}</style>
+  <text x="20" y="28" font-size="15" font-weight="bold">enwiki-…-multistream.xml.bz2 — many bz2 streams glued end to end</text>
+  <rect x="20" y="45" width="60" height="52" rx="6" fill="rgba(120,140,220,0.25)" stroke="currentColor"/>
+  <text x="33" y="76" font-size="11">hdr</text>
+  <rect x="86" y="45" width="130" height="52" rx="6" fill="rgba(120,190,140,0.25)" stroke="currentColor"/>
+  <text x="98" y="68" font-size="11">bz2 stream #1</text>
+  <text x="98" y="86" font-size="10" opacity="0.75">~100 pages</text>
+  <rect x="222" y="45" width="130" height="52" rx="6" fill="rgba(120,190,140,0.25)" stroke="currentColor"/>
+  <text x="234" y="68" font-size="11">bz2 stream #2</text>
+  <text x="234" y="86" font-size="10" opacity="0.75">~100 pages</text>
+  <text x="366" y="78" font-size="16">…</text>
+  <rect x="396" y="45" width="150" height="52" rx="6" fill="rgba(120,190,140,0.25)" stroke="currentColor"/>
+  <text x="408" y="68" font-size="11">bz2 stream #~68k</text>
+  <text x="408" y="86" font-size="10" opacity="0.75">~100 pages</text>
+  <text x="20" y="140" font-size="15" font-weight="bold">enwiki-…-multistream-index.txt.bz2 — the seek map</text>
+  <rect x="20" y="155" width="526" height="72" rx="6" fill="rgba(220,180,120,0.22)" stroke="currentColor"/>
+  <text x="36" y="180" font-size="12">616:10:AccessibleComputing</text>
+  <text x="36" y="198" font-size="12">616:12:Anarchism</text>
+  <text x="36" y="216" font-size="12">byte-offset : page-id : title  →  seek, inflate one stream, read one page</text>
+  <path d="M 90 155 C 100 120, 110 110, 130 100" fill="none" stroke="currentColor" stroke-dasharray="4 3" marker-end="none"/>
+</svg>
+
+Inside the XML, every article is a `<page>` element carrying `<title>`, `<ns>` (namespace — `0` means real article, other numbers are Talk/User/Template/etc. pages), `<id>`, and the current `<revision>` whose `<text>` holds raw **wikitext**. More on why that last part is a problem shortly.
+
+## Rent the box (or don't): vast.ai for CPU-only work
+
+Everything in this lesson is decompression and text parsing — pure CPU. On vast.ai you're always renting a GPU machine, but nothing forces you to *use* the GPU, and boxes with weak/older GPUs plus plenty of cores and disk go for $0.10–0.25/hr. If your own machine has 8+ cores and ~150 GB free, run everything locally for $0 and skip to the download. Otherwise:
+
+```bash
+pip install vastai
+vastai set api-key YOUR_KEY_FROM_THE_WEBSITE
+
+# What matters here: cores, disk, download bandwidth. GPU is irrelevant — sort by price.
+vastai search offers 'cpu_cores_effective>=16 disk_space>=200 inet_down>=500 reliability>0.98' \
+  -o 'dph'            # dph = dollars per hour, ascending
+
+# Pick an offer ID from the list. 200 GB disk is deliberate — see the budget table below.
+vastai create instance OFFER_ID \
+  --image pytorch/pytorch:2.4.0-cuda12.4-cudnn9-runtime \
+  --disk 200 \
+  --ssh
+
+vastai show instances     # wait for status: running, note the ssh host/port
+ssh -p PORT root@HOST
+```
+
+First thing on the box, always:
+
+```bash
+tmux new -s data
+```
+
+Downloads and extraction take an hour or more; tmux means an SSH drop doesn't kill the job. Detach with `Ctrl-b d`, resume with `tmux attach -t data`. This is the same discipline you'll use for the 20-hour pretraining run in Lesson 7 — build the habit now while a dropped session costs minutes, not dollars.
+
+Two workflow notes before we spend disk:
+
+- **This data must survive until Lesson 4.** Cheapest option: keep this instance and *stop* it between lessons (stopped instances pay only storage, cents per day). Alternative: `rsync -avz --progress -e "ssh -p PORT" root@HOST:/workspace/wikillm/data/extracted/ ./data/extracted/` to pull the ~16 GB of JSONL to your laptop as a backup. The raw 22 GB dump is not worth backing up — it's always re-downloadable.
+- **Sync your repo up, not code into SSH windows.** From your laptop: `rsync -avz -e "ssh -p PORT" ./wikillm/ root@HOST:/workspace/wikillm/`.
+
+### Disk-space budget
+
+Provisioning disk twice is annoying and losing a download to `ENOSPC` at 95% is worse, so budget the whole data pipeline now:
+
+| Item | Size | Lives in | Deletable after |
+|---|---|---|---|
+| Raw dump (`.xml.bz2`) | ~22 GB | `data/raw/` | Lesson 2 (re-downloadable) |
+| Multistream index | ~0.25 GB | `data/raw/` | Lesson 2 |
+| Extracted JSONL | ~16 GB | `data/extracted/` | Lesson 3 |
+| Cleaned corpus (Lesson 3) | ~13 GB | `data/clean/` | Lesson 4 |
+| Packed token shards (Lesson 4) | ~9 GB | `data/tokens/` | never (training input) |
+| Peak simultaneous need | **~55 GB** | | |
+| With headroom + checkpoints later | **200 GB provisioned** | | |
+
+The token shards are the smallest artifact of all — 4–5 billion tokens at 2 bytes each (`uint16` fits our 32,768-word vocab, a choice that pays off in Lesson 4).
+
+## Download with aria2c, verify with SHA-1
+
+`wget` works, but a 22 GB single-connection download that dies at hour two and restarts from zero is a rite of passage nobody needs. `aria2c` gives you segmented, **resume-safe** downloading: kill it, reboot, rerun the same command, and it continues from its `.aria2` control file.
+
+```bash
+apt-get update && apt-get install -y aria2
+mkdir -p /workspace/wikillm/data/raw && cd /workspace/wikillm/data/raw
+
+DUMP_DATE=20260601   # ← your pinned date
+BASE=https://dumps.wikimedia.org/enwiki/${DUMP_DATE}
+
+# -c            continue a partial download (the resume-safe flag)
+# -x 2 -s 2     max 2 connections — Wikimedia's servers politely ask for no more
+#               than 2 per IP; hammering them with 16 gets you throttled or blocked
+# --max-tries=0 retry forever, --retry-wait=10 with a 10 s pause
+aria2c -c -x 2 -s 2 --max-tries=0 --retry-wait=10 \
+  ${BASE}/enwiki-${DUMP_DATE}-pages-articles-multistream.xml.bz2
+
+# The seek index — small, grab it while you're here
+aria2c -c ${BASE}/enwiki-${DUMP_DATE}-pages-articles-multistream-index.txt.bz2
+
+# The checksum manifest for the whole dump
+aria2c -c ${BASE}/enwiki-${DUMP_DATE}-sha1sums.txt
+```
+
+If the main site is slow, Wikimedia lists [mirrors](https://dumps.wikimedia.org/mirrors.html) that allow more parallel connections — swap `BASE` for a mirror URL and raise `-x` to 8. Expect ~30–60 minutes on a 500 Mbit/s vast.ai box.
+
+**Never skip verification.** A corrupted bz2 stream can fail silently *mid-extraction*, hours in, or — worse — truncate your corpus without any error at all. Twenty seconds of hashing buys certainty:
+
+```bash
+grep multistream.xml.bz2 enwiki-${DUMP_DATE}-sha1sums.txt | sha1sum -c -
+# enwiki-20260601-pages-articles-multistream.xml.bz2: OK
+```
+
+If it prints anything other than `OK`, delete the file and rerun the aria2c command. Do not proceed on hope.
+
+## Wikitext: why the raw markup is hostile
+
+Peek inside the dump without extracting it (this is exactly the sequential-read-of-concatenated-streams trick from the anatomy diagram):
+
+```bash
+bzcat enwiki-${DUMP_DATE}-pages-articles-multistream.xml.bz2 | head -c 4000
+```
+
+Scroll past the XML scaffolding and you hit the `<text>` payload — raw wikitext. Here's a representative fragment and what a language model would actually want:
+
+```
+{{short description|Political philosophy and movement}}
+{{Infobox political ideology
+| name = Anarchism
+| founder = ...30 more lines of key = value...
+}}
+'''Anarchism''' is a [[political philosophy]] and [[Political movement|movement]]
+that is against all forms of [[authority]].<ref>{{cite book |last=Suissa |first=Judith
+|title=Anarchism and Education |year=2006}}</ref> ...
+```
+
+versus:
+
+```
+Anarchism is a political philosophy and movement that is against all forms of authority. ...
+```
+
+The hostile parts, and why each one would poison training if left in:
+
+- **Templates `{{...}}`** — macros expanded server-side when Wikipedia renders a page. In the dump they're *unexpanded*: `{{convert|5|km|mi}}` instead of "5 kilometres (3.1 mi)". They nest arbitrarily deep, there are hundreds of thousands of distinct templates, and fully expanding them requires running a chunk of MediaWiki. A model pretrained on raw templates learns to generate `{{cite web|url=...` — vocabulary spent on syntax no user ever wants.
+- **Infoboxes** — giant `key = value` templates. Structurally they're data tables, not prose; statistically they're a firehose of `|` and `=` characters that skews your BPE tokenizer (Lesson 4) toward markup merges instead of English merges.
+- **References `<ref>...</ref>`** — citation metadata inlined *mid-sentence*. Leave them in and the model learns that sentences randomly interrupt themselves with bibliographic records.
+- **Links `[[target|display text]]`** — the one friendly case: keep the display text, drop the brackets.
+- **Tables, magic words, parser functions (`{{#if:...}}`), HTML comments, `__NOTOC__`, category tags** — each a small, distinct parsing headache.
+
+Writing a correct wikitext parser is a multi-year project (MediaWiki's own is legendary). We won't write one. We'll drive a battle-tested extractor and keep our own code at the orchestration layer — where bugs are cheap.
+
+## `src/extract.py` — wikiextractor, wrapped and normalized
+
+[wikiextractor](https://github.com/attardi/wikiextractor) is the standard tool: it streams the XML, strips templates/refs/tables, resolves link display text, and emits plain text. Two quirks make a wrapper worth writing: its output layout (`AA/wiki_00`, `AB/wiki_17`, … — subdirectories of 100 MB chunks) is awkward for downstream code, and it happily emits empty-text records for pages that were pure template/redirect. Our `src/extract.py` runs it, then normalizes everything into fixed-size JSONL shards with exactly the schema the rest of the course assumes: `{"id", "title", "text"}`.
+
+Install the dependency and record it:
+
+```bash
+pip install wikiextractor==3.0.6
+echo "wikiextractor==3.0.6" >> requirements.txt
+```
+
+(3.0.6 occasionally warns about exotic templates it can't parse — those warnings are safe to ignore; the affected fragments are dropped, which is what we'd want anyway.)
+
+The full file for the repo:
+
+```python
+"""src/extract.py — raw Wikipedia dump -> data/extracted/shard_XXXX.jsonl
+
+Stage 1 of the data pipeline. Drives wikiextractor as a subprocess (it owns
+the hard problem: parsing wikitext), then normalizes its AA/wiki_00-style
+output into uniform JSONL shards of {"id","title","text"} records.
+
+Usage:
+    python src/extract.py \
+        --dump data/raw/enwiki-20260601-pages-articles-multistream.xml.bz2 \
+        --out data/extracted --processes 16
+"""
+import argparse
+import json
+import shutil
+import subprocess
+import sys
+from pathlib import Path
+
+
+def run_wikiextractor(dump: Path, tmp_dir: Path, processes: int) -> None:
+    """Invoke wikiextractor as a module. It streams the .bz2 directly —
+    no manual decompression pass, no 90 GB XML ever touches the disk."""
+    cmd = [
+        sys.executable, "-m", "wikiextractor.WikiExtractor",
+        str(dump),
+        "--json",                      # one JSON object per line instead of <doc> pseudo-XML
+        "--processes", str(processes), # parser workers; scale to your core count
+        "-o", str(tmp_dir),
+        "-b", "100M",                  # bytes per output chunk before rotating files
+        "-q",                          # quiet: no per-page log spam in tmux
+    ]
+    print(f"[extract] running: {' '.join(cmd)}", flush=True)
+    subprocess.run(cmd, check=True)    # check=True: die loudly on failure,
+                                       # never continue with a partial corpus
+
+
+def normalize(tmp_dir: Path, out_dir: Path, shard_articles: int = 100_000) -> None:
+    """Flatten wikiextractor's AA/wiki_00 tree into shard_XXXX.jsonl files
+    of exactly {"id","title","text"}, skipping empty documents."""
+    out_dir.mkdir(parents=True, exist_ok=True)
+    files = sorted(tmp_dir.glob("*/wiki_*"))  # sorted -> deterministic shard contents
+    if not files:
+        sys.exit(f"[extract] no wikiextractor output under {tmp_dir}")
+
+    shard_idx = n_in_shard = n_articles = n_skipped = 0
+    out = open(out_dir / f"shard_{shard_idx:04d}.jsonl", "w", encoding="utf-8")
+
+    for path in files:
+        with open(path, encoding="utf-8") as f:
+            for line in f:
+                doc = json.loads(line)
+                text = doc.get("text", "").strip()
+                if not text:                     # redirects & pure-template pages
+                    n_skipped += 1               # come through with empty text
+                    continue
+                rec = {"id": doc["id"], "title": doc["title"], "text": text}
+                out.write(json.dumps(rec, ensure_ascii=False) + "\n")
+                n_articles += 1
+                n_in_shard += 1
+                if n_in_shard >= shard_articles:  # fixed-size shards -> trivially
+                    out.close()                   # parallelizable in Lesson 3
+                    shard_idx += 1
+                    n_in_shard = 0
+                    out = open(out_dir / f"shard_{shard_idx:04d}.jsonl",
+                               "w", encoding="utf-8")
+    out.close()
+    print(f"[extract] kept {n_articles:,} articles "
+          f"({n_skipped:,} empty docs skipped) in {shard_idx + 1} shards")
+
+
+def main() -> None:
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--dump", type=Path, required=True)
+    ap.add_argument("--out", type=Path, default=Path("data/extracted"))
+    ap.add_argument("--processes", type=int, default=8)
+    ap.add_argument("--keep-tmp", action="store_true",
+                    help="keep raw wikiextractor output for debugging")
+    args = ap.parse_args()
+
+    tmp_dir = args.out.parent / "extracted_tmp"
+    run_wikiextractor(args.dump, tmp_dir, args.processes)
+    normalize(tmp_dir, args.out)
+    if not args.keep_tmp:
+        shutil.rmtree(tmp_dir)       # reclaim ~16 GB immediately
+
+
+if __name__ == "__main__":
+    main()
+```
+
+Why each choice matters:
+
+- **`--json`** gives machine-readable lines (`{"id","revid","url","title","text"}`); the default `<doc>` pseudo-XML format needs its own fragile parser — exactly the trap we're avoiding.
+- **`--processes 16`** is where your rented cores pay rent. Wikitext parsing is CPU-bound; throughput scales nearly linearly with workers. On 16 cores the full dump takes ~45–75 minutes; on a 4-core laptop, budget 3–4 hours.
+- **`check=True`** on the subprocess: if wikiextractor dies (disk full, corrupt input), the wrapper dies too. A pipeline that silently continues past a failed stage produces a truncated corpus you discover three lessons later, when your loss curve looks wrong and nothing explains why.
+- **Fixed-size shards, deterministically ordered**: 100k articles per file (~65–70 shards total) means Lesson 3's cleaning and dedup can fan out one worker per shard, and two runs of `extract.py` produce byte-identical output — reproducibility you'll be grateful for when debugging.
+- **Skipping empty text** quietly removes redirect stubs and template-only pages — the first, cheapest cleaning step. The real filters come in Lesson 3.
+
+Run it:
+
+```bash
+cd /workspace/wikillm
+python src/extract.py \
+  --dump data/raw/enwiki-${DUMP_DATE}-pages-articles-multistream.xml.bz2 \
+  --out data/extracted --processes 16
+# [extract] kept 6,842,317 articles (1,203,554 empty docs skipped) in 69 shards
+```
+
+(Your exact counts depend on the dump date; anywhere in the 6.7–7.0 M range is healthy.)
+
+```{mermaid}
+flowchart LR
+    A[dumps.wikimedia.org<br/>pinned dump date] -->|aria2c -c<br/>resume-safe| B[data/raw/<br/>enwiki-...-multistream.xml.bz2<br/>~22 GB]
+    B -->|sha1sum -c<br/>verify or delete| C{checksum OK?}
+    C -->|no| A
+    C -->|yes| D[wikiextractor<br/>--json --processes 16]
+    D --> E[extracted_tmp/<br/>AA/wiki_00 ... chunks]
+    E -->|normalize:<br/>drop empty docs,<br/>fixed 100k shards| F[data/extracted/<br/>shard_0000.jsonl ... shard_0068.jsonl<br/>~6.8M articles, ~16 GB]
+```
+
+## Under the hood: a pure-Python streaming parser with `mwxml`
+
+You should never treat your extractor as a black box, so here is the same pipeline's skeleton written by hand with [`mwxml`](https://github.com/mediawiki-utilities/python-mwxml) (streaming XML reader) and `mwparserfromhell` (wikitext parser). We won't use this for the real corpus — single-threaded, it takes 10+ hours, and its markup-stripping is cruder than wikiextractor's — but reading it demystifies exactly what the tool above does:
+
+```python
+"""Educational only: stream the dump page-by-page in pure Python.
+pip install mwxml mwparserfromhell
+"""
+import bz2, json
+import mwxml, mwparserfromhell
+
+dump = mwxml.Dump.from_file(
+    bz2.open("data/raw/enwiki-20260601-pages-articles-multistream.xml.bz2", "rb")
+)
+# mwxml is a *streaming* reader: constant memory, one <page> at a time.
+# This is the only sane way to touch a 90 GB XML document.
+
+for page in dump:
+    if page.namespace != 0:          # 0 = real articles; skip Talk:, Template:, ...
+        continue
+    if page.redirect is not None:    # "#REDIRECT [[Other Page]]" stubs
+        continue
+    revision = next(iter(page))      # pages-articles has exactly one revision
+    wikicode = mwparserfromhell.parse(revision.text or "")
+    text = wikicode.strip_code()     # drop templates/refs/links -> plain text
+    if text.strip():
+        print(json.dumps({"id": page.id, "title": page.title, "text": text})[:120])
+```
+
+Three ideas here carry through the whole course: **stream, never load** (a habit that returns in Lesson 4 when we pack billions of tokens); **filter by namespace early**; and **parse markup with a real parser, never regexes** — wikitext's nested templates are not a regular language, and regex "cleaning" reliably mangles them.
+
+## First look: inspect and count your corpus
+
+Never pipe data you haven't looked at into the next stage. First, eyeball a record:
+
+```bash
+head -n 1 data/extracted/shard_0000.jsonl | python -m json.tool | head -n 8
+```
+
+Check three things by hand: `text` reads as clean English prose, no `{{` or `<ref>` residue jumps out, and `title` matches the content. Then get the numbers:
+
+```bash
+python - <<'EOF'
+import json, glob, random
+
+files = sorted(glob.glob("data/extracted/shard_*.jsonl"))
+n_articles, n_chars = 0, 0
+lengths = []
+for path in files:
+    with open(path, encoding="utf-8") as f:
+        for line in f:
+            doc = json.loads(line)
+            L = len(doc["text"])
+            n_articles += 1
+            n_chars += L
+            if random.random() < 0.01:     # 1% reservoir keeps memory flat
+                lengths.append(L)
+
+lengths.sort()
+pct = lambda p: lengths[int(p * len(lengths))]
+print(f"articles:            {n_articles:>12,}")
+print(f"total characters:    {n_chars:>12,}")
+print(f"est. tokens (chars/4): {n_chars // 4:>10,}")   # ~4 chars/token for English BPE
+print(f"length p50/p90/p99:  {pct(.5):,} / {pct(.9):,} / {pct(.99):,} chars")
+EOF
+```
+
+Typical healthy output:
+
+```
+articles:               6,842,317
+total characters:      16,913,402,558
+est. tokens (chars/4):  4,228,350,639
+length p50/p90/p99:  1,624 / 8,930 / 41,207 chars
+```
+
+That estimated token count is the number to stare at: it says the extracted corpus lands right around $4\times10^9$ tokens — matching the course's pretraining budget of ~4B tokens *before* Lesson 3's cleaning trims the junk. The chars-per-token divisor of 4 is a rule of thumb for English BPE; in Lesson 4 you'll measure the real ratio of *your* tokenizer on *your* corpus and see how close the folk estimate was. The percentiles preview a Lesson 3 decision too: the p50 of ~1,600 characters means the *median* Wikipedia article is short — a lot of stubs — while the p99 tail holds the massive articles that dominate token mass.
+
+**Lesson cost check:** cheapest 16-core box ≈ $0.15/hr × (1 h download + 1 h extract + inspection) ≈ **$0.30–0.50 total**. CPU work is effectively free; save the real money for Lesson 7.
+
+## 🧪 Your task
+
+The stats above treat the corpus as one blob. Extend the inspection in two ways: (1) find the **10 longest articles** by character count and print their titles — you'll immediately recognize why they're long; (2) count how many articles are **shorter than 200 characters** and print 5 random examples of them. These stubs are the first concrete target for Lesson 3's length filter — decide for yourself, looking at real examples, whether 200 characters feels like the right threshold.
+
+<details><summary>Solution</summary>
+
+```python
+import json, glob, heapq, random
+
+files = sorted(glob.glob("data/extracted/shard_*.jsonl"))
+top = []                 # min-heap of (length, title): O(N log 10), constant memory
+stubs = []               # reservoir sample of 5 short articles
+n_stubs = 0
+
+for path in files:
+    with open(path, encoding="utf-8") as f:
+        for line in f:
+            doc = json.loads(line)
+            L = len(doc["text"])
+            # heapq keeps the 10 largest without sorting 6.8M records
+            if len(top) < 10:
+                heapq.heappush(top, (L, doc["title"]))
+            elif L > top[0][0]:
+                heapq.heapreplace(top, (L, doc["title"]))
+            if L < 200:
+                n_stubs += 1
+                # classic reservoir sampling: every stub has equal probability
+                if len(stubs) < 5:
+                    stubs.append(doc)
+                elif random.randrange(n_stubs) < 5:
+                    stubs[random.randrange(5)] = doc
+
+print("== 10 longest articles ==")
+for L, title in sorted(top, reverse=True):
+    print(f"{L:>9,} chars  {title}")
+
+print(f"\n== articles under 200 chars: {n_stubs:,} ==")
+for doc in stubs:
+    print(f"- {doc['title']!r}: {doc['text'][:80]!r}")
+```
+
+Typical findings: the longest "articles" are often list pages ("List of …") and timeline pages — mostly enumerations, not prose, which foreshadows Lesson 3's quality heuristics. The sub-200-character set is typically several hundred thousand strong and dominated by one-line stubs ("X is a village in Y district, Poland.") — individually harmless, collectively a meaningful chunk of low-information tokens. Both the heap and the reservoir keep memory constant no matter the corpus size — the stream-never-load habit again.
+
+</details>
+
+## Key takeaways
+
+- The right file is `pages-articles-multistream.xml.bz2` (~22 GB): current revisions only, with a seek index for random access. Pin a dated dump, never `latest`, for reproducibility.
+- `aria2c -c` makes the download resume-safe; `sha1sum -c` against the published manifest is non-negotiable before extraction.
+- Raw wikitext is hostile — nested templates, infoboxes, inline refs — and parsing it correctly is someone else's multi-year project. Drive wikiextractor; keep your own code at the orchestration layer.
+- `src/extract.py` normalizes the mess into deterministic, fixed-size JSONL shards of `{id, title, text}` — the schema every later stage assumes — and dies loudly on any failure instead of shipping a truncated corpus.
+- Stream, never load: `mwxml`-style page-at-a-time reading, heaps and reservoir sampling for stats. A 90 GB XML file never gets to live in RAM.
+- The extracted corpus lands at ~6.8 M articles ≈ 17 B characters ≈ 4B estimated tokens — right on the course's pretraining budget. Total lesson cost: under $0.50.
+
+## Coming up
+
+The extraction kept everything wikiextractor could parse — including boilerplate, near-duplicate pages, and non-English fragments; in Lesson 3 we build the cleaning pipeline (`clean.py` + `dedup.py`, with exact SHA-1 and fuzzy MinHash-LSH dedup) that turns this raw extract into the corpus your model will actually learn from.
+
+------------------------------------------------------------------------
+
+[🏠 📖 Course home](index.html)  &nbsp;|&nbsp;  [← Lesson 01](lesson01.html)  &nbsp;|&nbsp;  [Lesson 03 →](lesson03.html)  &nbsp;|&nbsp;  [📚 All mini-courses](../../mini-courses.html)

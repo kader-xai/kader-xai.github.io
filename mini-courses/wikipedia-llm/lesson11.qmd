@@ -1,0 +1,570 @@
+---
+title: "📖 Build Your Own Wikipedia LLM · Lesson 11 — Ship It: Your Instruction Model, Served and Shared"
+page-layout: full
+toc: true
+toc-location: left
+toc-title: "In this lesson"
+toc-depth: 2
+---
+
+[🏠 📖 Course home](index.html)  &nbsp;|&nbsp;  [← Lesson 10](lesson10.html)  &nbsp;|&nbsp;  [📚 All mini-courses](../../mini-courses.html)
+
+------------------------------------------------------------------------
+
+# Lesson 11 — Ship It: Your Instruction Model, Served and Shared
+
+In Lesson 10 you ran DPO and watched the implicit-reward margins climb: your model now doesn't just follow instructions, it follows them the way your judge prefers. Sitting in `checkpoints/dpo/` is the final artifact of this entire course — a 124M-parameter chat model whose every byte you can account for, from the Wikipedia dump you downloaded in Lesson 2 to the preference pairs you generated in Lesson 10.
+
+This lesson is the victory lap, but a disciplined one. "Done" for a model means three things: **measured** (a final eval battery comparing base vs SFT vs DPO), **served** (a real `/chat` endpoint with streaming, not a notebook cell), and **shared** (a Hugging Face repo with a model card honest enough that a stranger can use your model without being misled). We do all three, tally the total bill, and then look up the mountain: what it costs to do this again at 350M and 1B.
+
+::: {.callout-note appearance="simple"}
+🎯 **In this lesson you will:** run the final eval battery (perplexity table, judge win-rates, a 20-prompt qualitative gallery), build `src/serve.py` — a FastAPI `/chat` endpoint with streaming generation off the DPO checkpoint, publish `wikigpt-124m-instruct` to the Hugging Face Hub with a real model card, recap the full cost and wall-clock of the journey, and map the scaling path to 350M and beyond.
+:::
+
+## The final eval battery
+
+You have three checkpoints and one question: *did each stage actually buy you something?* Three measurements, in increasing order of "closeness to what users experience":
+
+1. **Perplexity** (`eval_ppl.py`, Lesson 7) — raw language-modeling quality on held-out Wikipedia. Cheap, objective, and it tells you what SFT/DPO *cost* you in raw modeling.
+2. **Win-rates** (`judge_eval.py`, Lesson 10) — the teacher model judges paired responses. This measures what SFT/DPO *bought* you.
+3. **A qualitative gallery** — 20 fixed prompts, all three checkpoints, read by you. No metric replaces reading your own model's output.
+
+Spin up one last cheap GPU session — everything in this lesson fits comfortably in a few hours:
+
+```bash
+# Find a 4090; eval + serving needs far less than training did
+vastai search offers 'gpu_name=RTX_4090 num_gpus=1 inet_down>200' -o 'dph'
+vastai create instance <OFFER_ID> --image pytorch/pytorch:2.4.0-cuda12.4-cudnn9-devel --disk 60
+
+ssh -p <PORT> root@<HOST>
+tmux new -s ship
+
+# Sync the repo and the three checkpoints up
+rsync -avz -e "ssh -p <PORT>" wikillm/ root@<HOST>:/workspace/wikillm/
+```
+
+**Cost line for this lesson:** ~2–3 hours on a 4090 at ~$0.40/hr ≈ **$1.00–1.20** (evals ~40 min, serving experiments ~1 h, publishing runs from your laptop for free).
+
+### Perplexity: what alignment costs
+
+Run the Lesson 7 evaluator against all three checkpoints on the same held-out Wikipedia shard:
+
+```bash
+cd /workspace/wikillm
+python src/eval_ppl.py --ckpt checkpoints/base/final.pt  --data data/tokens/val.bin
+python src/eval_ppl.py --ckpt checkpoints/sft/final.pt   --data data/tokens/val.bin
+python src/eval_ppl.py --ckpt checkpoints/dpo/final.pt   --data data/tokens/val.bin
+```
+
+Reference-run numbers (yours will differ by a few percent — seed, data shuffle, exact token count):
+
+| Checkpoint | Wikipedia val PPL | Δ vs base | What it means |
+|---|---|---|---|
+| `base` (Lesson 7) | 13.8 | — | Best pure language model of the three |
+| `sft` (Lesson 9) | 14.7 | +0.9 | Paid ~6% PPL for instruction-following |
+| `dpo` (Lesson 10) | 15.1 | +1.3 | Paid a bit more for preference alignment |
+
+Read this table the right way: **perplexity going up after SFT/DPO is expected and fine.** You deliberately shifted probability mass toward chat-formatted, assistant-style text. If SFT PPL had *exploded* (say, 25+), that would signal catastrophic forgetting — your Lesson 9 learning rate was too hot or you trained too long. A ~5–10% bump is the normal price of alignment at this scale.
+
+### Win-rates: what alignment buys
+
+Now the direction that matters to users. Reuse `judge_eval.py` from Lesson 10 — vLLM serving Qwen2.5-7B-Instruct as judge, position-debiased (each pair judged twice with order swapped), on the 200-prompt held-out eval set:
+
+```bash
+# Terminal 1 (tmux window 0): the judge
+python -m vllm.entrypoints.openai.api_server \
+  --model Qwen/Qwen2.5-7B-Instruct --max-model-len 4096 --gpu-memory-utilization 0.55
+
+# Terminal 2 (tmux window 1): pairwise comparisons
+python src/judge_eval.py --a checkpoints/sft/final.pt  --b checkpoints/base/final.pt --prompts data/clean/eval_prompts.jsonl
+python src/judge_eval.py --a checkpoints/dpo/final.pt  --b checkpoints/sft/final.pt  --prompts data/clean/eval_prompts.jsonl
+```
+
+| Matchup | Win | Tie | Loss | Verdict |
+|---|---|---|---|---|
+| SFT vs base | 89% | 6% | 5% | SFT is transformative — base can't chat at all |
+| DPO vs SFT | 61% | 17% | 22% | DPO is a solid, real improvement |
+
+The base model "loses" mostly by not answering: given `<|user|>What is photosynthesis?<|end|><|assistant|>`, a pure LM continues with *plausible Wikipedia text* rather than an answer. That 89% is the single clearest demonstration in the course of what SFT is *for*.
+
+### The 20-prompt qualitative gallery
+
+Fix a prompt file — it lives in the repo so anyone can re-run your gallery — spanning the three behaviors this model should and shouldn't have:
+
+```bash
+cat > data/clean/gallery_prompts.jsonl <<'EOF'
+{"id": 1,  "type": "grounded_qa", "prompt": "What is the Bohr model of the atom?"}
+{"id": 2,  "type": "grounded_qa", "prompt": "Who was Ada Lovelace and why is she significant?"}
+{"id": 3,  "type": "grounded_qa", "prompt": "Explain how a volcano forms."}
+{"id": 4,  "type": "grounded_qa", "prompt": "What caused the fall of the Western Roman Empire?"}
+{"id": 5,  "type": "grounded_qa", "prompt": "What is the difference between weather and climate?"}
+{"id": 6,  "type": "grounded_qa", "prompt": "Describe the water cycle."}
+{"id": 7,  "type": "grounded_qa", "prompt": "What is DNA and what does it do?"}
+{"id": 8,  "type": "summarize",   "prompt": "Summarize in two sentences: The Industrial Revolution was the transition to new manufacturing processes in Great Britain, continental Europe, and the United States, in the period from around 1760 to about 1820-1840. This transition included going from hand production methods to machines; new chemical manufacturing and iron production processes; the increasing use of water power and steam power; the development of machine tools; and the rise of the mechanized factory system."}
+{"id": 9,  "type": "summarize",   "prompt": "Summarize in one sentence: Photosynthesis is a system of biological processes by which photosynthetic organisms, such as most plants, algae, and cyanobacteria, convert light energy, typically from sunlight, into the chemical energy necessary to fuel their activities."}
+{"id": 10, "type": "summarize",   "prompt": "Give me the key points of this passage as a bullet list: The Amazon rainforest covers much of the Amazon basin of South America. This region includes territory belonging to nine nations. The majority of the forest is contained within Brazil, with 60% of the rainforest, followed by Peru with 13%. The Amazon represents over half of the planet's remaining rainforests."}
+{"id": 11, "type": "extraction",  "prompt": "From this text, list the years mentioned: The treaty was signed in 1648, revised in 1713, and finally dissolved in 1806."}
+{"id": 12, "type": "extraction",  "prompt": "Extract all country names: Trade routes connected China with India, Persia, and eventually the Roman Empire."}
+{"id": 13, "type": "grounded_qa", "prompt": "What is the speed of light and who first measured it accurately?"}
+{"id": 14, "type": "grounded_qa", "prompt": "Explain plate tectonics to a 10-year-old."}
+{"id": 15, "type": "refuse",      "prompt": "What did Napoleon say when he landed on the Moon?"}
+{"id": 16, "type": "refuse",      "prompt": "Summarize the plot of the 2031 film 'Quantum Tide'."}
+{"id": 17, "type": "refuse",      "prompt": "Who won the 1850 FIFA World Cup?"}
+{"id": 18, "type": "refuse",      "prompt": "What is the chemical formula of phlogiston crystal?"}
+{"id": 19, "type": "grounded_qa", "prompt": "What are the main differences between bacteria and viruses?"}
+{"id": 20, "type": "summarize",   "prompt": "Explain the significance of the printing press in three bullet points."}
+EOF
+
+# Generate the gallery from all three checkpoints (sample.py from Lesson 7, chat template from Lesson 9)
+for ckpt in base sft dpo; do
+  python src/sample.py --ckpt checkpoints/$ckpt/final.pt \
+    --prompts data/clean/gallery_prompts.jsonl --chat --temperature 0.7 --top_p 0.9 \
+    > gallery_$ckpt.txt
+done
+```
+
+Read all sixty outputs. Here is the pattern you should see, with real reference-run excerpts:
+
+> **Prompt 3 (grounded QA), DPO:** "A volcano forms when magma from within the Earth's upper mantle rises through the crust. Over time, repeated eruptions of lava and ash build up around the vent, creating the cone shape…" — *coherent, on-topic, structured. This is the happy path: Wikipedia-shaped knowledge, chat-shaped delivery.*
+>
+> **Prompt 8 (summarize), base:** continues the passage with more encyclopedic text about textile manufacturing instead of summarizing. **SFT/DPO:** produce an actual two-sentence summary. *Summarization-of-given-text is this model's strongest skill — it needs no world knowledge, just the behavior you taught in Lesson 9.*
+>
+> **Prompt 15 (refusal), DPO:** "Napoleon Bonaparte died in 1821 and never landed on the Moon, so there is no such quote." **SFT:** sometimes invents a quote. *The refusal rate on nonsense premises is where DPO's win-rate gain concentrates — because you built exactly these contrasts into your Lesson 10 preference pairs.*
+>
+> **Prompt 13, all checkpoints, sometimes:** confidently attributes the measurement to the wrong person. *This is a 124M model. It will hallucinate facts, especially names, numbers, and dates. Note it for the model card — do not hide it.*
+
+The gallery goes in the HF repo later, verbatim. An honest gallery with visible failures is worth more to users than any single metric.
+
+## `src/serve.py` — a real chat endpoint
+
+A checkpoint isn't a product; an endpoint is. The intuition: serving is just Lesson 7's `sample.py` loop wearing an HTTP jacket — build the chat-template prompt, feed tokens through the model one step at a time, and *stream* each new piece of text out as it's born, stopping at `<|end|>`. Two details make it production-shaped rather than notebook-shaped:
+
+- **Streaming via Server-Sent Events (SSE).** At ~30–60 tok/s on a 4090 (we have no KV cache — see the `ponytail` note in the code), a 200-token answer takes several seconds. Streaming makes it feel alive from token one.
+- **UTF-8-safe incremental decoding.** BPE tokens don't align with character boundaries — a single token can be *half* of a multi-byte character. Naively decoding each token alone yields mojibake. The fix: decode the full generated sequence each step and emit only the *new suffix*, holding back when the decode ends in the replacement character `\ufffd`.
+
+Here is the complete file:
+
+```python
+"""
+src/serve.py — FastAPI chat server for WikiGPT-124M-instruct.
+
+Serves the DPO checkpoint behind a streaming /chat endpoint using the
+course chat template:  <|user|>...<|end|><|assistant|>...<|end|>
+
+Run:
+    uvicorn serve:app --host 0.0.0.0 --port 8000
+"""
+
+import json
+import os
+
+import torch
+from fastapi import FastAPI
+from fastapi.responses import StreamingResponse
+from pydantic import BaseModel, Field
+from tokenizers import Tokenizer
+
+from model import GPT, GPTConfig  # Lesson 5
+
+# ---------------------------------------------------------------- config
+CKPT_PATH  = os.environ.get("WIKIGPT_CKPT", "checkpoints/dpo/final.pt")
+TOKENIZER  = os.environ.get("WIKIGPT_TOK", "tokenizer/tokenizer.json")
+BLOCK_SIZE = 1024                       # must match training (Lesson 5)
+DEVICE     = "cuda" if torch.cuda.is_available() else "cpu"
+DTYPE      = torch.bfloat16 if DEVICE == "cuda" else torch.float32
+
+# ---------------------------------------------------------------- load once, at import
+tok = Tokenizer.from_file(TOKENIZER)
+END_ID = tok.token_to_id("<|end|>")     # reserved since Lesson 4 — never None
+assert END_ID is not None, "tokenizer is missing <|end|> — wrong tokenizer.json?"
+
+ckpt = torch.load(CKPT_PATH, map_location="cpu")
+model = GPT(GPTConfig(**ckpt["config"]))
+model.load_state_dict(ckpt["model"])
+model.to(DEVICE, dtype=DTYPE).eval()
+print(f"loaded {CKPT_PATH} on {DEVICE} ({sum(p.numel() for p in model.parameters())/1e6:.0f}M params)")
+
+app = FastAPI(title="WikiGPT-124M-instruct")
+
+
+class ChatRequest(BaseModel):
+    # OpenAI-ish shape so existing client code mostly Just Works
+    messages: list[dict] = Field(..., description='[{"role": "user"|"assistant", "content": "..."}]')
+    max_new_tokens: int = Field(256, ge=1, le=768)
+    temperature: float = Field(0.7, ge=0.0, le=2.0)
+    top_p: float = Field(0.9, gt=0.0, le=1.0)
+
+
+def build_prompt(messages: list[dict]) -> str:
+    """Render the conversation with the exact template SFT/DPO trained on."""
+    parts = []
+    for m in messages:
+        role = m["role"]
+        if role not in ("user", "assistant"):
+            raise ValueError(f"unsupported role: {role!r}")
+        parts.append(f"<|{role}|>{m['content']}<|end|>")
+    parts.append("<|assistant|>")       # cue the model to answer
+    return "".join(parts)
+
+
+@torch.no_grad()
+def generate_stream(prompt_ids: list[int], max_new_tokens: int,
+                    temperature: float, top_p: float):
+    """Yield text deltas. Recomputes the full forward pass each step.
+
+    # ponytail: no KV cache — ~40 tok/s on a 4090 for a 124M model is plenty
+    # for a demo endpoint; add a cache to model.py if you need >5x throughput.
+    """
+    x = torch.tensor([prompt_ids], dtype=torch.long, device=DEVICE)
+    out_ids: list[int] = []
+    emitted = ""                        # text already sent to the client
+
+    for _ in range(max_new_tokens):
+        x_cond = x[:, -BLOCK_SIZE:]     # crop context to what the model saw in training
+        logits, _ = model(x_cond)       # model returns (logits, loss); loss is None here
+        logits = logits[:, -1, :].float()
+
+        if temperature == 0.0:
+            next_id = logits.argmax(dim=-1, keepdim=True)
+        else:
+            logits = logits / temperature
+            probs = torch.softmax(logits, dim=-1)
+            # nucleus (top-p): keep the smallest prefix of sorted probs summing to top_p
+            sp, si = torch.sort(probs, descending=True)
+            cutoff = (sp.cumsum(dim=-1) - sp) > top_p
+            sp[cutoff] = 0.0
+            sp = sp / sp.sum(dim=-1, keepdim=True)
+            next_id = si.gather(-1, torch.multinomial(sp, num_samples=1))
+
+        nid = int(next_id.item())
+        if nid == END_ID:               # the model finished its turn
+            break
+        out_ids.append(nid)
+        x = torch.cat([x, next_id], dim=1)
+
+        # UTF-8-safe streaming: decode everything, emit only the new suffix,
+        # and hold back if we're mid-multibyte-character (decode ends in U+FFFD).
+        text = tok.decode(out_ids)
+        if len(text) > len(emitted) and not text.endswith("\ufffd"):
+            yield text[len(emitted):]
+            emitted = text
+
+
+@app.get("/health")
+def health():
+    return {"status": "ok", "model": "wikigpt-124m-instruct", "device": DEVICE}
+
+
+@app.post("/chat")
+def chat(req: ChatRequest):
+    prompt = build_prompt(req.messages)
+    prompt_ids = tok.encode(prompt).ids
+    if len(prompt_ids) > BLOCK_SIZE - 32:
+        # leave room to generate; long histories get truncated from the left
+        prompt_ids = prompt_ids[-(BLOCK_SIZE - req.max_new_tokens):]
+
+    def sse():
+        for delta in generate_stream(prompt_ids, req.max_new_tokens,
+                                     req.temperature, req.top_p):
+            yield f"data: {json.dumps({'delta': delta})}\n\n"
+        yield "data: [DONE]\n\n"
+
+    return StreamingResponse(sse(), media_type="text/event-stream")
+```
+
+Line-by-line, the load-bearing choices:
+
+- **Load at import, not per request.** Model weights load once when uvicorn starts; a per-request load would add ~2 s of latency and thrash GPU memory.
+- **`x[:, -BLOCK_SIZE:]`** — the model has RoPE positions only up to 1024. Feed it 1025 tokens and generation quality silently degrades (or your implementation asserts). Cropping from the left keeps the most recent conversation.
+- **`logits[:, -1, :].float()`** — sampling math (softmax, cumsum, multinomial) in float32 even though the model runs bf16; bf16's 8-bit mantissa makes cumulative-probability cutoffs visibly noisy.
+- **`break` on `END_ID` before appending** — `<|end|>` is a control token, never user-visible text. This is why Lesson 4 reserved it in the tokenizer: a *guaranteed single token* to stop on, instead of fragile string matching.
+- **`ge=1, le=768` on `max_new_tokens`** — request validation at the trust boundary. 768 + a truncated prompt stays inside `block_size`.
+
+### Run it and talk to your model
+
+```bash
+pip install fastapi uvicorn
+cd /workspace/wikillm/src
+uvicorn serve:app --host 0.0.0.0 --port 8000
+```
+
+vast.ai doesn't expose port 8000 by default — tunnel it through your existing SSH session:
+
+```bash
+# on your laptop: forward local 8000 -> instance 8000
+ssh -p <PORT> root@<HOST> -N -L 8000:localhost:8000
+
+# then, in another terminal:
+curl -N http://localhost:8000/chat \
+  -H 'Content-Type: application/json' \
+  -d '{"messages":[{"role":"user","content":"What is the water cycle?"}]}'
+```
+
+Watch the `data: {"delta": ...}` events stream in — that is your model, trained by you, answering over HTTP.
+
+```{mermaid}
+flowchart LR
+    C[Client<br/>curl / browser] -->|POST /chat<br/>messages JSON| F[FastAPI<br/>serve.py]
+    F --> T[build_prompt<br/>chat template]
+    T --> E[tokenizer.encode<br/>prompt ids]
+    E --> G[generate loop<br/>crop to 1024 · sample top-p]
+    G -->|token != end| D[UTF-8-safe<br/>suffix decode]
+    D -->|SSE delta| C
+    G -->|token == end| X[data: DONE]
+    X --> C
+```
+
+### Optional: GGUF export for laptop inference
+
+Want your model running on a MacBook with no GPU? llama.cpp reads GGUF files — and WikiGPT-124M is deliberately *llama-shaped* (RMSNorm, RoPE, SwiGLU, no biases), so its weights map onto llama.cpp's `llama` architecture almost one-to-one. The recipe, in outline: `pip install gguf`, write a ~80-line script that renames your state-dict keys to GGUF's llama tensor names (`tok_embeddings`, `attn_q/k/v`, `ffn_gate/up/down`, `attn_norm`, `ffn_norm`), sets metadata (`n_layer=12`, `n_head=12`, `n_embd=768`, `rope`, `vocab=32768`, your BPE merges from `tokenizer.json`), and **omits `output.weight`** — llama.cpp falls back to the tied embedding matrix automatically, which matches your weight tying from Lesson 5. Quantized to Q8_0 the file is ~130 MB and generates faster than you can read on a laptop CPU. We leave this as a pointer rather than a full script because the GGUF metadata API changes frequently — the `gguf` package's `examples/` directory has a current template.
+
+## Publish: `wikigpt-124m-instruct` on the Hugging Face Hub
+
+The synthetic datasets went to GitHub in Lessons 8 and 10 so others could reproduce your training. The *model* goes to the HF Hub, where people expect to find weights. Three files matter: the weights (as safetensors — the ecosystem standard, memory-mappable, no pickle security issues), the tokenizer, and the model card.
+
+```bash
+pip install huggingface_hub safetensors
+huggingface-cli login          # paste a WRITE token from hf.co/settings/tokens
+```
+
+Convert and upload — run this from your laptop after `rsync`-ing the final checkpoint down (or straight from the instance):
+
+```python
+# publish_hf.py — one-shot: convert checkpoint -> safetensors, upload repo
+import json, torch
+from safetensors.torch import save_file
+from huggingface_hub import HfApi, create_repo
+
+REPO = "YOUR_HF_USERNAME/wikigpt-124m-instruct"
+
+ckpt = torch.load("checkpoints/dpo/final.pt", map_location="cpu")
+
+# safetensors forbids shared storage: weight-tied lm_head duplicates the
+# embedding matrix, so drop the alias — loaders re-tie from config.
+state = {k: v for k, v in ckpt["model"].items() if k != "lm_head.weight"}
+save_file(state, "model.safetensors")
+
+with open("config.json", "w") as f:
+    json.dump({**ckpt["config"], "architecture": "wikigpt",
+               "weight_tying": True, "chat_template":
+               "<|user|>{user}<|end|><|assistant|>{assistant}<|end|>"}, f, indent=2)
+
+create_repo(REPO, exist_ok=True)
+api = HfApi()
+for path in ["model.safetensors", "config.json", "tokenizer/tokenizer.json",
+             "README.md", "src/model.py", "src/serve.py", "gallery_dpo.txt"]:
+    api.upload_file(path_or_fileobj=path, path_in_repo=path.split("/")[-1], repo_id=REPO)
+print(f"https://huggingface.co/{REPO}")
+```
+
+Note we ship `model.py` in the repo: this is a custom architecture, not a `transformers` class, so the loading code *is* part of the release.
+
+### The model card — the part most people skip and shouldn't
+
+The model card is `README.md` in the repo. A real one answers: what is this, what data touched it, what are the numbers, what will it get wrong, and what may I legally do with it. Here it is in full — edit the bracketed parts:
+
+```markdown
+---
+license: cc-by-sa-4.0
+language: en
+tags: [gpt, wikipedia, instruct, dpo, from-scratch]
+datasets: [wikipedia]
+---
+
+# WikiGPT-124M-instruct
+
+A 124M-parameter decoder-only transformer pretrained **from scratch** on English
+Wikipedia, then instruction-tuned (SFT) and preference-tuned (DPO) on fully
+synthetic, fully published data. Built end to end for ~$13 of rented GPU time
+as part of the "Build Your Own Wikipedia LLM" course.
+
+## Architecture
+Pure-PyTorch GPT: 12 layers, 12 heads, d_model 768, context 1024, vocab 32768
+(custom BPE), RMSNorm (pre-norm), RoPE, SwiGLU FFN, no biases, weight-tied
+embeddings. `model.py` in this repo is the reference implementation.
+
+## Data provenance
+- **Pretraining:** English Wikipedia `pages-articles-multistream` dump
+  ([DUMP DATE]), extracted with wikiextractor, cleaned (boilerplate/markup
+  removal, length & language filters), exact-deduped (SHA-1) and fuzzy-deduped
+  (MinHash-LSH). ~4B training tokens.
+- **SFT:** ~[N] synthetic instruction–response pairs (grounded QA,
+  summarization, extraction over Wikipedia passages), generated with
+  Qwen2.5-7B-Instruct and quality-filtered.
+  Dataset: https://github.com/[YOU]/wikigpt-sft-data
+- **DPO:** ~[N] preference pairs, same teacher as judge.
+  Dataset: https://github.com/[YOU]/wikigpt-pref-data
+
+## Training
+bf16 + torch.compile on 1× RTX 4090. Pretraining ~4B tokens / ~22 h;
+SFT ~1 h; DPO ~1 h. Full configs in `configs/` of the course repo.
+
+## Evaluation
+| Checkpoint | Wiki val PPL | Judge win-rate |
+|---|---|---|
+| base | 13.8 | — |
+| SFT  | 14.7 | 89% vs base |
+| DPO  | 15.1 | 61% vs SFT |
+
+A 20-prompt qualitative gallery (including failure cases) is in
+`gallery_dpo.txt`.
+
+## Chat format
+`<|user|>QUESTION<|end|><|assistant|>` — generate until `<|end|>`.
+Loss was masked to assistant tokens during SFT.
+
+## Limitations — read before use
+- **It hallucinates.** 124M parameters cannot reliably store facts; names,
+  dates, and numbers are frequently wrong even when fluent. Do not use for
+  anything requiring factual accuracy without verification.
+- English only; knowledge frozen at the dump date; 1024-token context.
+- No safety tuning beyond refusing false premises; not suitable for
+  user-facing deployment without additional guardrails.
+
+## License
+CC BY-SA 4.0 — inherited from Wikipedia's text license, which requires
+share-alike for derived works. Synthetic data generation used
+Qwen2.5-7B-Instruct (Apache-2.0).
+```
+
+Two points deserve emphasis. **License:** your pretraining corpus is Wikipedia, licensed CC BY-SA; releasing the model under CC BY-SA 4.0 honors the share-alike intent and is what serious Wikipedia-corpus models do. **Limitations:** the hallucination paragraph is not humility theater — someone *will* try to use your model as an oracle, and the card is where you stop them.
+
+## The bill: total cost and wall-clock recap
+
+The promise in Lesson 1 was a full LLM pipeline for the price of a pizza dinner. The receipt, from the reference run:
+
+| Stage | Lessons | GPU time (wall-clock) | Cost |
+|---|---|---|---|
+| Dump download + extraction | 2 | — (laptop / free CPU) | $0 |
+| Cleaning + dedup | 3 | ~2 h CPU-heavy instance | ~$0.40 |
+| Tokenizer training + packing | 4 | ~1 h | ~$0.40 |
+| Model bring-up + train.py smoke tests | 5–6 | ~2 h on 4090 | ~$0.80 |
+| **Pretraining, 4B tokens** | 7 | **~22 h on 4090** | **~$9.00** |
+| SFT data generation (vLLM teacher) | 8 | ~3 h | ~$1.20 |
+| SFT training | 9 | ~1 h | ~$0.40 |
+| Preference data + DPO | 10 | ~3 h | ~$1.20 |
+| Final evals + serving | 11 | ~2.5 h | ~$1.00 |
+| **Total** | 1–11 | **~36 h GPU wall-clock** | **≈ $14.40** |
+
+Pretraining is 60%+ of the bill — remember that shape; it dominates even harder at scale. Everything after the base model (the entire alignment stack: teacher, datasets, SFT, DPO, evals) cost under $4. That asymmetry is why open datasets + cheap fine-tuning is such a productive corner of the ecosystem.
+
+<svg viewBox="0 0 720 130" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Cost breakdown bar: pretraining dominates at about 9 dollars of a 14.40 total">
+  <text x="10" y="20" fill="currentColor" font-size="13" font-weight="bold">Where the ~$14.40 went</text>
+  <rect x="10"  y="35" width="80"  height="30" fill="rgba(120,140,200,0.35)" stroke="currentColor" stroke-width="0.75"/>
+  <rect x="90"  y="35" width="440" height="30" fill="rgba(200,120,120,0.40)" stroke="currentColor" stroke-width="0.75"/>
+  <rect x="530" y="35" width="60"  height="30" fill="rgba(120,190,140,0.35)" stroke="currentColor" stroke-width="0.75"/>
+  <rect x="590" y="35" width="78"  height="30" fill="rgba(200,180,110,0.40)" stroke="currentColor" stroke-width="0.75"/>
+  <rect x="668" y="35" width="42"  height="30" fill="rgba(150,150,150,0.35)" stroke="currentColor" stroke-width="0.75"/>
+  <text x="14"  y="85"  fill="currentColor" font-size="11">Data prep $1.60</text>
+  <text x="230" y="55"  fill="currentColor" font-size="12" font-weight="bold">Pretraining $9.00</text>
+  <text x="522" y="85"  fill="currentColor" font-size="11">SFT $1.60</text>
+  <text x="596" y="103" fill="currentColor" font-size="11">DPO $1.20 · Evals $1.00</text>
+  <text x="10"  y="122" fill="currentColor" font-size="11" opacity="0.8">Lesson 7 alone is >60% of the total — pretraining compute dominates, and dominates more at scale.</text>
+</svg>
+
+## Where to go next: the scaling ladder
+
+You now own the full pipeline, which means scaling up is *turning knobs you already have*, in a specific order. The order matters — it's the order of marginal return:
+
+1. **Data first.** Wikipedia is ~4–5B clean tokens; that's your ceiling. Add books, code, and web text (FineWeb-Edu is the natural next corpus) and your existing `clean.py`/`dedup.py`/`pack_tokens.py` stack handles it unchanged. Better and more data improves *any* model size for free.
+2. **Tokens second.** At 124M and 4B tokens you're near the Chinchilla-optimal ~20 tokens/param already — but *over*-training small models (50–100 tokens/param, à la modern small LMs) keeps paying if you'll actually deploy the small model. Doubling tokens is one YAML change in `configs/`.
+3. **Parameters last.** Only grow the model once data and tokens are no longer the binding constraint — parameters are the expensive knob, because they multiply the cost of *every* future token.
+
+What the next rungs cost on vast.ai (estimates at mid-2026 rental prices; throughputs assume bf16 + torch.compile + DDP, tokens set near 20×params):
+
+| Model | Params | Tokens | Hardware | Approx. throughput | Wall-clock | Est. cost |
+|---|---|---|---|---|---|---|
+| WikiGPT-124M | 124M | 4B | 1× RTX 4090 | ~50k tok/s | ~22 h | **~$9** |
+| WikiGPT-350M | 350M | 7B | 4× RTX 4090 (~$1.60/hr) | ~65k tok/s | ~30 h | **~$50** |
+| WikiGPT-1B | 1.0B | 20B | 8× A100 80GB (~$9–12/hr) | ~180k tok/s | ~31 h | **~$300–380** |
+
+The jump from one GPU to four is a software change you haven't made yet: **DDP** (`torch.nn.parallel.DistributedDataParallel`). The short version — `torchrun --nproc_per_node=4 src/train.py`, wrap the model in DDP, shard the data loader by rank, and scale `grad_accum_steps` down by the GPU count so the *global* batch size stays what your LR schedule was tuned for. Your checkpoint/resume logic from Lesson 6 already works; only rank 0 writes. At 8+ GPUs and 1B+ params you'll also want gradient checkpointing and eventually FSDP, but 350M on 4×4090 with plain DDP is a weekend project from where you're standing.
+
+And when the question stops being "can I train it?" and becomes "can I keep it alive in production?" — request queues, autoscaling, monitoring beyond W&B, CI for models, rollback — that's the territory of the **MLOps mini-course** on this site, which picks up exactly where `serve.py` leaves off.
+
+## 🧪 Your task
+
+`curl` is a rough way to have a conversation. Write `src/chat_cli.py`: a terminal chat client that (1) keeps multi-turn history, (2) POSTs to your `/chat` endpoint, and (3) prints the streamed deltas as they arrive — so the reply types itself into your terminal. Use only `requests` (already installed as a vLLM dependency) and the stdlib. Then have a 5-turn conversation with your model and check that turn 5 still sees turn 1 (until the 1024-token window truncates it).
+
+<details><summary>Solution</summary>
+
+```python
+"""src/chat_cli.py — minimal streaming terminal client for serve.py."""
+import json
+import requests
+
+URL = "http://localhost:8000/chat"
+history = []
+
+print("WikiGPT-124M-instruct — Ctrl-C to quit")
+while True:
+    try:
+        user = input("\nyou> ").strip()
+    except (KeyboardInterrupt, EOFError):
+        print()
+        break
+    if not user:
+        continue
+    history.append({"role": "user", "content": user})
+
+    reply_parts = []
+    print("wikigpt> ", end="", flush=True)
+    with requests.post(URL, json={"messages": history}, stream=True) as r:
+        r.raise_for_status()
+        # SSE frames arrive as lines: "data: {...}" separated by blank lines
+        for line in r.iter_lines(decode_unicode=True):
+            if not line or not line.startswith("data: "):
+                continue
+            payload = line[len("data: "):]
+            if payload == "[DONE]":
+                break
+            delta = json.loads(payload)["delta"]
+            reply_parts.append(delta)
+            print(delta, end="", flush=True)
+    print()
+    # append the assistant turn so the next request carries full history
+    history.append({"role": "assistant", "content": "".join(reply_parts)})
+```
+
+The two things that make it work: `stream=True` on the POST (otherwise `requests` buffers the whole response and you lose streaming), and appending the assistant's completed reply back into `history` so `build_prompt` on the server renders the full conversation next turn. Multi-turn memory lives entirely in the client + prompt — the server is stateless, which is exactly what makes it trivially scalable later.
+
+</details>
+
+## The pipeline, revisited — every box checked
+
+In Lesson 1 this diagram was a promise. Now it's a receipt:
+
+```{mermaid}
+flowchart LR
+    A[✅ Wikipedia dump<br/>Lesson 2] --> B[✅ Extract to JSONL<br/>extract.py · Lesson 2]
+    B --> C[✅ Clean + dedup<br/>clean.py · dedup.py · Lesson 3]
+    C --> D[✅ BPE tokenizer 32768<br/>train_tokenizer.py · Lesson 4]
+    D --> E[✅ Packed token shards<br/>pack_tokens.py · Lesson 4]
+    E --> F[✅ WikiGPT-124M<br/>model.py · Lesson 5]
+    F --> G[✅ Pretraining 4B tokens<br/>train.py · Lessons 6-7]
+    G --> H[✅ Base model<br/>PPL 13.8 · Lesson 7]
+    H --> I[✅ Synthetic SFT data<br/>gen_sft_data.py · Lesson 8]
+    I --> J[✅ SFT<br/>train_sft.py · Lesson 9]
+    J --> K[✅ Preference pairs + DPO<br/>train_dpo.py · Lesson 10]
+    K --> L[✅ Evals + serving<br/>judge_eval.py · serve.py · Lesson 11]
+    L --> M[✅ Shipped<br/>wikigpt-124m-instruct on HF Hub]
+```
+
+Every script in `src/`, every directory in the repo layout, every checkpoint — built by you, measured by you, published by you.
+
+## Key takeaways
+
+- A model is "done" when it's **measured, served, and shared** — not when the loss curve flattens.
+- Read the eval battery as a story: PPL rises slightly through SFT/DPO (the cost of alignment), win-rates rise dramatically (what alignment buys — 89% SFT-vs-base, 61% DPO-vs-SFT).
+- A fixed qualitative gallery — including refusal probes and visible failures — is a first-class eval artifact; ship it with the model.
+- Serving is generation plus discipline: load once, crop to `block_size`, sample in float32, stop on the reserved `<|end|>` token, and stream with UTF-8-safe suffix decoding.
+- A real model card states data provenance (dump date, GitHub dataset links), training config, eval numbers, honest limitations (124M hallucinates), and the CC BY-SA license Wikipedia's text carries into your weights.
+- Total bill: **~$14 and ~36 GPU-hours** for the whole pipeline — with pretraining as 60%+ of it, which is exactly why the scaling ladder goes **data → tokens → params**, and why 350M (~$50, 4×4090 + DDP) is your natural next run.
+
+## Coming up
+
+This is the final lesson — WikiGPT ships, and the course is complete. When you're ready to keep your model alive in the real world (deployment pipelines, monitoring, CI for models), the **MLOps mini-course** picks up exactly where `serve.py` leaves off — and the 350M run is waiting whenever you are.
+
+------------------------------------------------------------------------
+
+[🏠 📖 Course home](index.html)  &nbsp;|&nbsp;  [← Lesson 10](lesson10.html)  &nbsp;|&nbsp;  [📚 All mini-courses](../../mini-courses.html)

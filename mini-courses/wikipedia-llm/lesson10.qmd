@@ -1,0 +1,733 @@
+---
+title: "📖 Build Your Own Wikipedia LLM · Lesson 10 — Preference Data and DPO: From Helpful to Preferred"
+page-layout: full
+toc: true
+toc-location: left
+toc-title: "In this lesson"
+toc-depth: 2
+---
+
+[🏠 📖 Course home](index.html)  &nbsp;|&nbsp;  [← Lesson 09](lesson09.html)  &nbsp;|&nbsp;  [Lesson 11 →](lesson11.html)  &nbsp;|&nbsp;  [📚 All mini-courses](../../mini-courses.html)
+
+------------------------------------------------------------------------
+
+# Lesson 10 — Preference Data and DPO: From Helpful to Preferred
+
+In Lesson 9 you turned WikiGPT-124M from a text-completer into an instruction-follower: SFT taught it the `<|user|>` / `<|assistant|>` dance and how to produce a plausible answer. But SFT has a blind spot. It trains the model to imitate *one* answer per prompt — it never tells the model that of the five answers it *could* produce, some are clearly better than others. Ask your SFT checkpoint the same question four times at temperature 0.9 and you'll see it yourself: one answer is crisp and grounded, one rambles, one hallucinates a date. The model owns all four; it just has no idea which one you'd prefer.
+
+In this lesson we close that gap. We'll mine preference pairs from our own model's samples (judged by the same Qwen2.5-7B teacher from Lesson 8), then train on them with **Direct Preference Optimization (DPO)** — implemented from scratch in pure PyTorch, on the same rented 4090, for about a dollar.
+
+::: {.callout-note appearance="simple"}
+🎯 **In this lesson you will:** sketch the classic RLHF pipeline and understand why DPO replaces it, build `src/gen_pref_data.py` to sample K=4 responses per prompt from your SFT model and judge them into ~10k chosen/rejected pairs published to your GitHub dataset repo, implement the DPO loss from scratch in `src/train_dpo.py` with a frozen reference model and implicit-reward logging to W&B, measure your DPO model's win rate against SFT with position-debiased teacher judging in `src/judge_eval.py`, and see the ten-line TRL equivalent — all for ~2 GPU-hours ≈ $1.
+:::
+
+## Why not RLHF? The four-model tax
+
+The classic recipe — the one behind the original ChatGPT — is Reinforcement Learning from Human Feedback. It's worth seeing at code level exactly once, because then you'll understand precisely what DPO deletes:
+
+```python
+# Classic RLHF, sketched. Count the model copies.
+reward_model = train_reward_model(pref_pairs)     # copy 1: trained on pairs, then frozen
+policy       = load("checkpoints/sft.pt")         # copy 2: the thing we're improving
+ref          = load("checkpoints/sft.pt").freeze()# copy 3: KL anchor
+value_net    = ValueHead(load("checkpoints/sft.pt"))  # copy 4: PPO's critic
+
+for prompts in dataloader:
+    # 1. EXPENSIVE: sample fresh responses from the policy every step
+    responses, old_logprobs = policy.sample(prompts)
+    # 2. score them, and punish drifting away from ref
+    r = reward_model(prompts, responses)
+    r = r - kl_coef * (old_logprobs - ref.logprobs(prompts, responses))
+    # 3. credit assignment via the value net
+    advantages, returns = gae(r, value_net(prompts, responses))
+    # 4. several PPO epochs over the same samples, with ratio clipping
+    for _ in range(ppo_epochs):
+        ratio = exp(policy.logprobs(prompts, responses) - old_logprobs)
+        pg_loss = -min(ratio * advantages,
+                       clip(ratio, 1 - eps, 1 + eps) * advantages)
+        v_loss  = (value_net(prompts, responses) - returns) ** 2
+        update(pg_loss.mean() + vf_coef * v_loss.mean())
+```
+
+Four model copies in GPU memory. Live sampling inside the training loop (slow, and it's the *generation* loop, the slowest thing we do). Three interacting hyperparameter sets (reward model, KL coefficient, PPO clipping/GAE). And instability everywhere: if the reward model has a blind spot, PPO will find it and exploit it — reward hacking — while the KL penalty and clipping fight to hold the policy together. People run this at scale because it works, but it's a distributed-systems project, not a training script.
+
+The DPO paper's observation: for the specific RLHF objective everyone uses, you don't need the reward model or the RL loop *at all*. There is a closed-form connection between the optimal policy and the reward, so you can train the policy **directly on the preference pairs** with a classification-style loss. Two model copies, no sampling during training, one hyperparameter.
+
+```{mermaid}
+flowchart TB
+  subgraph R["Classic RLHF"]
+    P1["Preference pairs"] --> RM["Train reward model<br/>copy 1"]
+    RM --> PPO["PPO loop<br/>policy + ref + reward + value<br/>4 copies, live sampling"]
+    PPO --> O1["Aligned model"]
+  end
+  subgraph D["DPO — this lesson"]
+    P2["Preference pairs"] --> LOSS["One offline loss<br/>policy + frozen ref<br/>2 copies, no sampling"]
+    LOSS --> O2["Aligned model"]
+  end
+```
+
+## The DPO loss, derived just enough
+
+RLHF maximizes reward while staying close to the reference policy:
+
+$$\max_\pi \; \mathbb{E}_{x, y \sim \pi} \big[ r(x, y) \big] \; - \; \beta \, \mathrm{KL}\big(\pi(\cdot|x) \,\|\, \pi_{\text{ref}}(\cdot|x)\big)$$
+
+This objective has a known closed-form optimum: $\pi^*(y|x) = \frac{1}{Z(x)} \pi_{\text{ref}}(y|x) \exp\left(\frac{r(x,y)}{\beta}\right)$. Solve that for the reward:
+
+$$r(x, y) = \beta \log \frac{\pi^*(y|x)}{\pi_{\text{ref}}(y|x)} + \beta \log Z(x)$$
+
+Now plug this into the Bradley–Terry preference model, $p(y_c \succ y_r) = \sigma\big(r(x,y_c) - r(x,y_r)\big)$ — and the intractable $\beta \log Z(x)$ term appears in both rewards and **cancels**. Maximum likelihood on your preference dataset becomes:
+
+$$\mathcal{L}_{\text{DPO}} = -\log \sigma\Big(\beta \Big[\underbrace{\log \frac{\pi_\theta(y_c|x)}{\pi_{\text{ref}}(y_c|x)}}_{\text{implicit reward, chosen}} - \underbrace{\log \frac{\pi_\theta(y_r|x)}{\pi_{\text{ref}}(y_r|x)}}_{\text{implicit reward, rejected}}\Big]\Big)$$
+
+Read it in plain English: *make the policy raise the probability of the chosen answer relative to the reference, more than it raises the rejected one.* The quantity $\hat{r}(y) = \beta \log \frac{\pi_\theta(y|x)}{\pi_{\text{ref}}(y|x)}$ acts as an **implicit reward** — the policy *is* its own reward model. Three things fall out of this that you'll watch on W&B later:
+
+- **Why the reference model matters.** Without it, the loss just says "maximize chosen, minimize rejected" and the model collapses (probability mass piles onto a few tokens, fluency dies). The ratio against $\pi_{\text{ref}}$ is a built-in KL leash.
+- **What β does.** It's the leash strength, inherited from the KL term. β=0.1 is the paper's default and ours. Smaller β lets the policy drift further from the SFT model; larger β pins it down.
+- **The gradient self-schedules.** The gradient of the loss is weighted by $\sigma(-\beta z)$ where $z$ is the bracketed margin: pairs the policy currently ranks *wrong* get a large update, pairs it already gets right contribute almost nothing.
+
+<svg viewBox="0 0 620 320" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="DPO per-pair loss versus margin">
+  <path d="M60,30.6 L88.8,58.4 L117.5,85.9 L146.3,112.7 L175,138.5 L203.8,162.8 L232.5,185 L261.3,204.4 L290,220.4 L318.8,232.9 L347.5,242.1 L376.3,248.5 L405,252.7 L433.8,255.5 L462.5,257.2 L491.3,258.3 L520,259 L520,260 L60,260 Z" fill="rgba(100,140,255,0.16)" stroke="none"/>
+  <polyline points="60,30.6 88.8,58.4 117.5,85.9 146.3,112.7 175,138.5 203.8,162.8 232.5,185 261.3,204.4 290,220.4 318.8,232.9 347.5,242.1 376.3,248.5 405,252.7 433.8,255.5 462.5,257.2 491.3,258.3 520,259" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linejoin="round" stroke-linecap="round"/>
+  <line x1="50" y1="260" x2="535" y2="260" stroke="currentColor" stroke-width="1.2"/>
+  <line x1="60" y1="272" x2="60" y2="14" stroke="currentColor" stroke-width="1.2"/>
+  <line x1="290" y1="260" x2="290" y2="30" stroke="currentColor" stroke-width="1" stroke-dasharray="5 5" opacity="0.5"/>
+  <text x="290" y="276" font-size="13" fill="currentColor" text-anchor="middle">0</text>
+  <text x="535" y="292" font-size="13" fill="currentColor" text-anchor="end">margin z = (logratio chosen) − (logratio rejected), × β</text>
+  <text x="24" y="150" font-size="13" fill="currentColor" transform="rotate(-90 24 150)" text-anchor="middle">loss per pair = −log σ(βz)</text>
+  <text x="150" y="34" font-size="13.5" fill="currentColor">pair mis-ordered →</text>
+  <text x="150" y="52" font-size="13.5" fill="currentColor">steep slope, big update</text>
+  <text x="356" y="196" font-size="13.5" fill="currentColor">pair well-separated →</text>
+  <text x="356" y="214" font-size="13.5" fill="currentColor">loss ≈ 0, pair "retires"</text>
+</svg>
+
+Note the value at $z=0$: $-\log\sigma(0) = \ln 2 \approx 0.693$. That is exactly where your training loss will start (the policy equals the reference at step 0), and it must fall from there.
+
+## The rig: one 4090, two hats
+
+Everything in this lesson runs on the same reference instance as the rest of the course. If your Lesson 9 instance is still alive, reuse it; otherwise:
+
+```bash
+# find a machine: single 4090, reliable, decent network
+vastai search offers 'gpu_name=RTX_4090 num_gpus=1 reliability>0.98 inet_down>500 disk_space>60' -o 'dph+'
+vastai create instance <OFFER_ID> \
+  --image pytorch/pytorch:2.4.0-cuda12.4-cudnn9-devel --disk 60 --ssh
+vastai show instances                       # grab HOST and PORT
+
+ssh -p <PORT> root@<HOST>
+tmux new -s dpo                             # everything long-running lives in tmux
+pip install tokenizers pyyaml wandb openai vllm
+
+# from your laptop: ship code + the artifacts this lesson consumes
+rsync -avz -e "ssh -p <PORT>" src configs root@<HOST>:/root/wikillm/
+rsync -avz -e "ssh -p <PORT>" tokenizer/tokenizer.json root@<HOST>:/root/wikillm/tokenizer/
+rsync -avz -e "ssh -p <PORT>" checkpoints/sft.pt root@<HOST>:/root/wikillm/checkpoints/
+rsync -avz -e "ssh -p <PORT>" data/sft/prompts_heldout.jsonl root@<HOST>:/root/wikillm/data/sft/
+```
+
+The GPU wears two hats at once during data generation: your 124M model samples responses while Qwen2.5-7B-Instruct judges them. That works on 24GB because our model is tiny — give vLLM 75% of the card and WikiGPT lives happily in the rest. Same serving recipe as Lesson 8, in its own tmux session:
+
+```bash
+tmux new -s teacher
+python -m vllm.entrypoints.openai.api_server \
+  --model Qwen/Qwen2.5-7B-Instruct \
+  --dtype bfloat16 \
+  --max-model-len 4096 \
+  --gpu-memory-utilization 0.75 \
+  --port 8000
+```
+
+`--max-model-len 4096` is plenty (judge inputs are a prompt + one short answer) and keeps the KV cache small; `0.75` leaves ~6GB for WikiGPT's batched sampling. **Stop this server before `train_dpo.py`** (`tmux kill-session -t teacher`) — training wants the whole card — and restart it for the final eval.
+
+Budget for the whole lesson, at ~$0.40/hr:
+
+| Phase | Wall time | Cost |
+|---|---|---|
+| Sample 48k responses from WikiGPT (batched) | ~60–75 min | ~$0.45 |
+| Judge 48k responses with Qwen via vLLM | ~30–40 min | ~$0.25 |
+| DPO training, 1 epoch over ~10k pairs | ~25–35 min | ~$0.20 |
+| Win-rate eval (600 pairwise judgments) | ~15 min | ~$0.10 |
+| **Total** | **~2–2.5 h** | **≈ $1** |
+
+## `src/gen_pref_data.py` — mining preferences from your own model
+
+The pipeline: take **held-out prompts** (never seen during SFT — if you didn't keep `data/sft/prompts_heldout.jsonl` in Lesson 8, rerun the prompt-generation stage of `gen_sft_data.py` for ~13k fresh ones), sample **K=4** responses per prompt from your SFT checkpoint across a temperature spread, score each response 1–10 with the teacher judge, and keep the best/worst as chosen/rejected — dropping ties.
+
+Two design decisions matter more than they look:
+
+1. **The responses must come from YOUR model, not the teacher.** DPO is an on-distribution correction: it reweights choices the policy can actually make. Pairs where "chosen" is teacher text the 124M model could never emit teach it almost nothing (that's SFT's job, and Lesson 9 already did it).
+2. **The temperature spread (0.7 / 0.9 / 1.1 / 1.3) manufactures quality variance.** At a single temperature, four samples are often equally mediocre and the judge ties. Spreading temperature gives you a careful sample and a reckless one for the same prompt — exactly the contrast DPO learns from.
+
+```{mermaid}
+flowchart LR
+  A["Held-out prompts<br/>~12k, disjoint from SFT"] --> B["SFT model samples K=4<br/>temps 0.7 / 0.9 / 1.1 / 1.3"]
+  B --> C["Teacher judge scores 1-10<br/>Qwen2.5-7B via vLLM"]
+  C --> D["best vs worst per prompt<br/>keep if gap ≥ 2 and best ≥ 6"]
+  D --> E["~10k pairs<br/>data/pref/pairs.jsonl"]
+  E --> F["GitHub dataset repo"]
+  E --> G["train_dpo.py"]
+```
+
+One implementation subtlety deserves a paragraph, because it's the difference between a 20-hour and a 1-hour sampling run. Our pure-PyTorch model has no attention mask, so we can't left-pad a ragged batch (pad tokens would be attended to and poison the context). The trick: **the K=4 samples for one prompt share the identical prompt**, so a group of K rows needs no padding among themselves — and across groups we right-pad and give each row its own write cursor. With causal attention, a token never attends to anything on its right, so right-padding is invisible to the real tokens. Each step we run one forward over the batch, read each row's logits *at its own last real token*, and append there. Batch = 16 prompts × 4 = 64 rows.
+
+The full file:
+
+```python
+# src/gen_pref_data.py
+"""Build DPO preference pairs from our own SFT model.
+
+Per prompt: sample K=len(TEMPS) responses (one per temperature, all in one
+batch), score each 1-10 with the teacher judge, keep (best, worst) as
+(chosen, rejected). Ties and low-quality bests are dropped.
+"""
+import argparse, json, re
+from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
+
+import torch
+from openai import OpenAI
+from tokenizers import Tokenizer
+
+from model import GPT, GPTConfig
+
+TEMPS = (0.7, 0.9, 1.1, 1.3)   # quality variance on purpose: careful -> reckless
+
+JUDGE_TMPL = """You are a strict grader. Score the answer to the instruction on a 1-10 scale:
+1-3: off-topic, factually wrong, or hallucinated content
+4-5: partially correct, padded, or sloppy
+6-7: correct and useful
+8-10: correct, complete, well-grounded, concise
+Reply with ONLY the integer.
+
+## Instruction
+{instruction}
+
+## Answer
+{response}
+
+Score:"""
+
+
+def render_prompt(instruction: str) -> str:
+    # exact same chat template as SFT (Lesson 9) - drift here silently ruins everything
+    return f"<|user|>\n{instruction}\n<|end|>\n<|assistant|>\n"
+
+
+def full_logits(model, ids):
+    # model.py returns (logits, loss). We pass ids as dummy targets so the
+    # forward computes logits at EVERY position (some GPT forwards shortcut to
+    # the last position when targets is None). The returned loss is ignored.
+    with torch.autocast("cuda", dtype=torch.bfloat16):
+        logits, _ = model(ids, ids)
+    return logits
+
+
+@torch.no_grad()
+def sample_k(model, tok, instructions, temps=TEMPS, max_new=256, top_k=50):
+    """One batched, ragged generation pass: len(instructions) * len(temps) rows.
+
+    Rows are grouped per prompt (identical lengths within a group), the batch
+    is right-padded across groups, and each row advances its own cursor.
+    Right-padding is safe with a causal model: real tokens never attend to
+    padding that sits after them.
+    """
+    device = next(model.parameters()).device
+    end_id = tok.token_to_id("<|end|>")
+    k = len(temps)
+    prompts = [tok.encode(render_prompt(i)).ids for i in instructions]
+    n = len(prompts) * k
+    lens = torch.tensor([len(p) for p in prompts for _ in range(k)], device=device)
+    T = int(lens.max()) + max_new
+    x = torch.zeros(n, T, dtype=torch.long, device=device)
+    for row, ids in enumerate(p for p in prompts for _ in range(k)):
+        x[row, : len(ids)] = torch.tensor(ids, device=device)
+    temp = torch.tensor(list(temps) * len(prompts), device=device).unsqueeze(-1)
+
+    cur, done = lens.clone(), torch.zeros(n, dtype=torch.bool, device=device)
+    rows = torch.arange(n, device=device)
+    for _ in range(max_new):
+        logits = full_logits(model, x[:, : int(cur.max())])
+        last = logits[rows, cur - 1].float() / temp        # each row's OWN last token
+        v, _ = torch.topk(last, top_k)                     # top-k: cut the long tail
+        last[last < v[:, [-1]]] = float("-inf")
+        nxt = torch.multinomial(torch.softmax(last, -1), 1).squeeze(-1)
+        x[rows, cur] = torch.where(done, torch.full_like(nxt, end_id), nxt)
+        cur = torch.where(done, cur, cur + 1)              # finished rows freeze
+        done |= nxt == end_id
+        if done.all():
+            break
+
+    out = []
+    for row in range(n):
+        ids = x[row, lens[row] : cur[row]].tolist()
+        if ids and ids[-1] == end_id:
+            ids = ids[:-1]
+        out.append(tok.decode(ids))
+    return [out[i * k : (i + 1) * k] for i in range(len(instructions))]
+
+
+def judge_score(client, judge_model, instruction, response):
+    msg = JUDGE_TMPL.format(instruction=instruction, response=response[:4000])
+    out = client.chat.completions.create(
+        model=judge_model, temperature=0.0, max_tokens=4,   # deterministic judging
+        messages=[{"role": "user", "content": msg}])
+    m = re.search(r"\d+", out.choices[0].message.content)
+    return min(10, max(1, int(m.group()))) if m else None
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--ckpt", default="checkpoints/sft.pt")
+    ap.add_argument("--prompts", default="data/sft/prompts_heldout.jsonl")
+    ap.add_argument("--out", default="data/pref/pairs.jsonl")
+    ap.add_argument("--n-prompts", type=int, default=12000)
+    ap.add_argument("--batch", type=int, default=16)        # x K=4 -> 64 rows/forward
+    ap.add_argument("--judge-url", default="http://localhost:8000/v1")
+    ap.add_argument("--judge-model", default="Qwen/Qwen2.5-7B-Instruct")
+    args = ap.parse_args()
+    k = len(TEMPS)
+
+    tok = Tokenizer.from_file("tokenizer/tokenizer.json")
+    ckpt = torch.load(args.ckpt, map_location="cpu")
+    model = GPT(GPTConfig(**ckpt["config"])).cuda().eval()
+    model.load_state_dict(ckpt["model"])
+    client = OpenAI(base_url=args.judge_url, api_key="EMPTY")
+
+    prompts = [json.loads(l)["prompt"] for l in open(args.prompts)][: args.n_prompts]
+    # leave room for the answer inside block_size=1024
+    prompts = [p for p in prompts if len(tok.encode(render_prompt(p)).ids) <= 700]
+
+    Path(args.out).parent.mkdir(parents=True, exist_ok=True)
+    kept = 0
+    with open(args.out, "w") as f, ThreadPoolExecutor(max_workers=32) as pool:
+        for i in range(0, len(prompts), args.batch):
+            chunk = prompts[i : i + args.batch]
+            groups = sample_k(model, tok, chunk)
+            flat = [(p, r) for p, g in zip(chunk, groups) for r in g]
+            scores = list(pool.map(
+                lambda pr: judge_score(client, args.judge_model, *pr), flat))
+            for j, (p, g) in enumerate(zip(chunk, groups)):
+                s = scores[j * k : (j + 1) * k]
+                if any(x is None for x in s):
+                    continue
+                hi = max(range(k), key=s.__getitem__)
+                lo = min(range(k), key=s.__getitem__)
+                # gap >= 2 kills ties; best >= 6 keeps "bad vs worse" pairs out
+                if s[hi] - s[lo] >= 2 and s[hi] >= 6:
+                    f.write(json.dumps({"prompt": p, "chosen": g[hi],
+                                        "rejected": g[lo],
+                                        "score_chosen": s[hi],
+                                        "score_rejected": s[lo]}) + "\n")
+                    kept += 1
+            if (i // args.batch) % 20 == 0:
+                print(f"{i + len(chunk)}/{len(prompts)} prompts, {kept} pairs kept",
+                      flush=True)
+    print(f"done: {kept} pairs -> {args.out}")
+
+
+if __name__ == "__main__":
+    main()
+```
+
+Why each filter exists: the **gap ≥ 2** rule removes ties — a pair scored 7/7 or 7/6 is judge noise, and training on noise teaches noise. The **best ≥ 6** floor removes pairs where the "chosen" answer is itself bad (a 4-vs-2 pair teaches the model to prefer one flavor of garbage over another). Expect roughly 60–75% of prompts to survive both filters: from 12k prompts you'll land around **9–11k pairs** — squarely in the target range. Run it:
+
+```bash
+cd /root/wikillm
+python src/gen_pref_data.py     # ~1.5-2h with judging, in your dpo tmux session
+```
+
+Then publish, exactly like the SFT set in Lesson 8 — same dataset repo, new folder. ~10k pairs is only ~15–25 MB of JSONL, so plain git is fine, no LFS needed:
+
+```bash
+cd ~/wikillm-data                          # your public dataset repo from Lesson 8
+mkdir -p pref && cp /root/wikillm/data/pref/pairs.jsonl pref/pairs.jsonl
+git add pref && git commit -m "DPO preference pairs: K=4 self-samples, teacher-judged, ties filtered"
+git push
+```
+
+## `src/train_dpo.py` — DPO from scratch
+
+Now the payoff for the derivation: the whole trainer is one dataset class, one log-prob function, and one loss line. Three mechanics to get right, each a classic source of silent bugs:
+
+- **The frozen reference.** `copy.deepcopy` of the policy at initialization, `eval()` mode, gradients off. Two 124M models in bf16 is ~0.5 GB of weights — trivial on 24GB.
+- **Per-token log-prob gathering.** Logits at position $t$ predict token $t+1$, so we align `logits[:, :-1]` with `labels = ids[:, 1:]`, `log_softmax` (in float32 — bf16 log-softmax is numerically noisy and the DPO margin is a *difference of differences*, so noise compounds), `gather` the label column, then mask.
+- **The mask.** Same rule as SFT in Lesson 9: prompt tokens contribute nothing; only assistant-response tokens (including the closing `<|end|>`) count. Padding is masked too, and because the model is causal and we right-pad, pad positions can't influence real ones.
+
+```python
+# src/train_dpo.py
+"""Direct Preference Optimization, from scratch.
+
+Two copies of WikiGPT-124M: the policy (trainable, initialized from the SFT
+checkpoint) and a frozen reference (identical weights, never updated). The
+loss pushes the policy's log-ratio on chosen responses above its log-ratio on
+rejected ones. No reward model, no PPO, no sampling during training.
+"""
+import argparse, copy, json, math
+
+import torch
+import torch.nn.functional as F
+import yaml
+import wandb
+from tokenizers import Tokenizer
+from torch.utils.data import DataLoader, Dataset
+
+from model import GPT, GPTConfig
+
+
+class PairDataset(Dataset):
+    def __init__(self, path, tok, block_size):
+        self.block_size = block_size
+        end_id = tok.token_to_id("<|end|>")
+        self.rows = []
+        for line in open(path):
+            r = json.loads(line)
+            p = tok.encode(f"<|user|>\n{r['prompt']}\n<|end|>\n<|assistant|>\n").ids
+            self.rows.append((p,
+                              tok.encode(r["chosen"]).ids + [end_id],
+                              tok.encode(r["rejected"]).ids + [end_id]))
+
+    def __len__(self):
+        return len(self.rows)
+
+    def _pack(self, prompt, resp):
+        ids = (prompt + resp)[: self.block_size]
+        # loss mask: 0 on prompt tokens, 1 on response tokens (Lesson 9 rule)
+        mask = ([0] * len(prompt) + [1] * len(resp))[: self.block_size]
+        return ids, mask
+
+    def __getitem__(self, i):
+        p, c, r = self.rows[i]
+        return self._pack(p, c), self._pack(p, r)
+
+
+def collate(batch):
+    """Right-pad chosen AND rejected to one common length so we can cat them
+    into a single forward pass. Pad id is arbitrary (0): pads are mask=0 and,
+    with causal attention, invisible to every real token to their left."""
+    T = max(len(ids) for pair in batch for ids, _ in pair)
+    out = []
+    for slot in (0, 1):                                 # 0 = chosen, 1 = rejected
+        ids = torch.zeros(len(batch), T, dtype=torch.long)
+        mask = torch.zeros(len(batch), T)
+        for b, pair in enumerate(batch):
+            seq, m = pair[slot]
+            ids[b, : len(seq)] = torch.tensor(seq)
+            mask[b, : len(m)] = torch.tensor(m)
+        out += [ids, mask]
+    return out  # chosen_ids, chosen_mask, rejected_ids, rejected_mask
+
+
+def seq_logprob(model, ids, mask):
+    """Sum of per-token log-probs over response tokens only. Returns (B,)."""
+    logits, _ = model(ids, ids)          # dummy targets => logits at every position
+    logits = logits[:, :-1]              # position t predicts token t+1
+    labels = ids[:, 1:]
+    logp = F.log_softmax(logits.float(), dim=-1)   # float32 for numerical stability
+    tok_lp = logp.gather(-1, labels.unsqueeze(-1)).squeeze(-1)  # (B, T-1)
+    return (tok_lp * mask[:, 1:]).sum(-1)          # mask shifts with the labels
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--config", default="configs/dpo.yaml")
+    cfg = yaml.safe_load(open(ap.parse_args().config))
+    torch.manual_seed(cfg["seed"])
+    device = "cuda"
+
+    tok = Tokenizer.from_file(cfg["tokenizer"])
+    ckpt = torch.load(cfg["init_ckpt"], map_location="cpu")
+    policy = GPT(GPTConfig(**ckpt["config"])).to(device)
+    policy.load_state_dict(ckpt["model"])
+
+    ref = copy.deepcopy(policy).eval()             # the frozen reference
+    for p in ref.parameters():
+        p.requires_grad_(False)
+
+    ds = PairDataset(cfg["pairs"], tok, cfg["block_size"])
+    dl = DataLoader(ds, batch_size=cfg["batch_size"], shuffle=True,
+                    collate_fn=collate, drop_last=True)
+    steps = len(dl) // cfg["grad_accum"] * cfg["epochs"]
+
+    opt = torch.optim.AdamW(policy.parameters(), lr=cfg["lr"],
+                            betas=(0.9, 0.95), weight_decay=0.0)
+
+    def lr_lambda(s):                              # linear warmup -> cosine to 0
+        if s < cfg["warmup"]:
+            return s / cfg["warmup"]
+        t = (s - cfg["warmup"]) / max(1, steps - cfg["warmup"])
+        return 0.5 * (1 + math.cos(math.pi * min(t, 1.0)))
+    sched = torch.optim.lr_scheduler.LambdaLR(opt, lr_lambda)
+
+    wandb.init(project="wikillm", name=f"dpo-beta{cfg['beta']}", config=cfg)
+    beta = cfg["beta"]
+    policy.train()
+    step = 0
+    opt.zero_grad(set_to_none=True)
+    for _ in range(cfg["epochs"]):
+        for micro, (c_ids, c_mask, r_ids, r_mask) in enumerate(dl):
+            # one forward per model for BOTH halves: cat along the batch dim
+            ids = torch.cat([c_ids, r_ids]).to(device)
+            mask = torch.cat([c_mask, r_mask]).to(device)
+            with torch.autocast("cuda", dtype=torch.bfloat16):
+                pi = seq_logprob(policy, ids, mask)
+                with torch.no_grad():
+                    rf = seq_logprob(ref, ids, mask)
+            pi_c, pi_r = pi.chunk(2)
+            rf_c, rf_r = rf.chunk(2)
+
+            z = (pi_c - rf_c) - (pi_r - rf_r)      # the margin from the derivation
+            loss = -F.logsigmoid(beta * z).mean() / cfg["grad_accum"]
+            loss.backward()
+
+            if (micro + 1) % cfg["grad_accum"] == 0:
+                gnorm = torch.nn.utils.clip_grad_norm_(policy.parameters(), 1.0)
+                opt.step()
+                sched.step()
+                opt.zero_grad(set_to_none=True)
+                step += 1
+                if step % 10 == 0:
+                    with torch.no_grad():
+                        rc = beta * (pi_c - rf_c)          # implicit rewards
+                        rr = beta * (pi_r - rf_r)
+                    wandb.log({"loss": loss.item() * cfg["grad_accum"],
+                               "reward/chosen": rc.mean().item(),
+                               "reward/rejected": rr.mean().item(),
+                               "reward/margin": (rc - rr).mean().item(),
+                               "reward/accuracy": (rc > rr).float().mean().item(),
+                               "lr": sched.get_last_lr()[0],
+                               "grad_norm": gnorm.item()}, step=step)
+
+    torch.save({"model": policy.state_dict(), "config": ckpt["config"]},
+               cfg["out_ckpt"])
+    print(f"saved {cfg['out_ckpt']} after {step} steps")
+
+
+if __name__ == "__main__":
+    main()
+```
+
+And its config — every number annotated with why:
+
+```yaml
+# configs/dpo.yaml
+seed: 1337
+tokenizer: tokenizer/tokenizer.json
+pairs: data/pref/pairs.jsonl
+init_ckpt: checkpoints/sft.pt
+out_ckpt: checkpoints/dpo.pt
+block_size: 1024
+beta: 0.1        # the KL leash from the derivation; the paper's default, ours too
+lr: 1.0e-6       # ~3 orders of magnitude below pretraining LR (Lesson 6).
+                 # DPO reweights existing behavior; a big LR would just torch the
+                 # SFT model and the margin would "improve" as fluency collapses.
+epochs: 1        # preference data overfits fast; more epochs = reward hacking
+batch_size: 4    # 4 pairs = 8 sequences per forward (chosen+rejected concatenated)
+grad_accum: 8    # effective batch: 32 pairs -> ~300 optimizer steps over 10k pairs
+warmup: 20
+```
+
+Kill the teacher server, then launch:
+
+```bash
+tmux kill-session -t teacher      # training wants the whole card
+python src/train_dpo.py           # ~25-35 min for one epoch over ~10k pairs
+```
+
+At ~300 optimizer steps, `torch.compile` isn't worth its warmup here — that's why the script skips it, unlike `train.py` in Lesson 6 where it paid for itself thousands of times over.
+
+## Reading the run: what W&B should show
+
+Open the `wikillm` project and look for these signatures:
+
+- **`loss`** starts at exactly **0.693** (ln 2 — policy ≡ reference, σ(0) = 0.5) and should glide to ~0.55–0.62. If it starts anywhere else, your reference copy isn't identical to your policy init — bug.
+- **`reward/margin`** grows steadily from 0. This is the headline metric: the policy separating chosen from rejected in implicit-reward space.
+- **`reward/accuracy`** — fraction of pairs ranked correctly — climbs from 0.5 to roughly 0.7–0.85. It will not reach 1.0; some of your pairs are judge noise, and that's fine.
+- **`reward/chosen` drifting slightly negative is NORMAL.** DPO often lowers the absolute probability of *both* responses while separating them — the loss only cares about the gap. Worry only if `reward/chosen` dives steeply (below ~−1.5 to −2 in the first epoch): that means the policy is fleeing the reference wholesale — LR too high or β too low.
+- **`grad_norm`** should sit comfortably; frequent clipping at 1.0 is another too-hot-LR symptom.
+
+## `src/judge_eval.py` — win rate without fooling yourself
+
+Loss curves prove optimization worked, not that the model got *better*. The honest test: generate answers to held-out prompts from both checkpoints and ask the teacher which it prefers. One trap ruins naive versions of this: **position bias** — LLM judges measurably favor whichever answer they read first. The fix is cheap and standard: judge every pair **twice with positions swapped**, and only count a win when the same model wins *both* orders. Everything else is a tie.
+
+Carve out eval prompts that overlap neither SFT training nor the preference set (we used the first 12,000 held-out prompts for pairs, so take from the far end):
+
+```bash
+tail -n 300 data/sft/prompts_heldout.jsonl > data/pref/eval_prompts.jsonl
+tmux new -s teacher    # restart vLLM, same command as before
+```
+
+```python
+# src/judge_eval.py
+"""Head-to-head win rate between two checkpoints, judged twice per prompt with
+positions swapped to cancel the judge's position bias. A model scores a win
+only when it wins BOTH orders; everything else counts as a tie."""
+import argparse, json
+from concurrent.futures import ThreadPoolExecutor
+
+import torch
+from openai import OpenAI
+from tokenizers import Tokenizer
+
+from gen_pref_data import sample_k
+from model import GPT, GPTConfig
+
+PAIR_TMPL = """You compare two answers to the same instruction.
+Judge factual correctness first, then completeness, then concision.
+Do NOT reward length. Reply with exactly one token: A, B, or TIE.
+
+## Instruction
+{instruction}
+
+## Answer A
+{a}
+
+## Answer B
+{b}
+
+Verdict:"""
+
+
+def load(ckpt_path):
+    ckpt = torch.load(ckpt_path, map_location="cpu")
+    m = GPT(GPTConfig(**ckpt["config"])).cuda().eval()
+    m.load_state_dict(ckpt["model"])
+    return m
+
+
+def verdict(client, judge, instruction, a, b):
+    out = client.chat.completions.create(
+        model=judge, temperature=0.0, max_tokens=3,
+        messages=[{"role": "user", "content": PAIR_TMPL.format(
+            instruction=instruction, a=a[:4000], b=b[:4000])}])
+    v = out.choices[0].message.content.strip().upper()
+    return v if v in ("A", "B") else "TIE"
+
+
+def gen_all(model, tok, prompts, bs=32):
+    outs = []
+    for i in range(0, len(prompts), bs):
+        # reuse the batched sampler from gen_pref_data with a single temperature
+        outs += [g[0] for g in sample_k(model, tok, prompts[i:i + bs], temps=(0.7,))]
+    return outs
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--a", default="checkpoints/dpo.pt")   # challenger
+    ap.add_argument("--b", default="checkpoints/sft.pt")   # baseline
+    ap.add_argument("--prompts", default="data/pref/eval_prompts.jsonl")
+    ap.add_argument("--n", type=int, default=300)
+    ap.add_argument("--judge-url", default="http://localhost:8000/v1")
+    ap.add_argument("--judge-model", default="Qwen/Qwen2.5-7B-Instruct")
+    args = ap.parse_args()
+
+    tok = Tokenizer.from_file("tokenizer/tokenizer.json")
+    prompts = [json.loads(l)["prompt"] for l in open(args.prompts)][: args.n]
+    resp_a = gen_all(load(args.a), tok, prompts)
+    resp_b = gen_all(load(args.b), tok, prompts)
+    client = OpenAI(base_url=args.judge_url, api_key="EMPTY")
+
+    def judge_one(i):
+        v1 = verdict(client, args.judge_model, prompts[i], resp_a[i], resp_b[i])
+        v2 = verdict(client, args.judge_model, prompts[i], resp_b[i], resp_a[i])
+        a_votes = (v1 == "A") + (v2 == "B")     # model A's wins across both orders
+        b_votes = (v1 == "B") + (v2 == "A")
+        if a_votes == 2: return "a"
+        if b_votes == 2: return "b"
+        return "tie"                            # disagreement or explicit TIE
+
+    with ThreadPoolExecutor(max_workers=16) as pool:
+        results = list(pool.map(judge_one, range(len(prompts))))
+
+    n, wins, losses = len(results), results.count("a"), results.count("b")
+    avg_len_a = sum(map(len, resp_a)) / n
+    avg_len_b = sum(map(len, resp_b)) / n
+    print(f"{args.a} vs {args.b} on {n} prompts (double-judged):")
+    print(f"  win {wins / n:.1%} | tie {results.count('tie') / n:.1%} | loss {losses / n:.1%}")
+    if wins + losses:
+        print(f"  win rate among decided: {wins / (wins + losses):.1%}")
+    print(f"  avg chars: A={avg_len_a:.0f}  B={avg_len_b:.0f}   # watch for length gaming")
+
+
+if __name__ == "__main__":
+    main()
+```
+
+```bash
+python src/judge_eval.py    # ~15 min: 600 generations + 600 judgments
+```
+
+For a healthy run, expect the DPO checkpoint to win **~55–65% of decided comparisons** against SFT, with a large tie fraction (double-judging is deliberately conservative). Also read the length line: DPO is known to inflate response length because judges subconsciously reward it — if your DPO answers are 2× longer and the win rate is barely above 50%, you've trained a rambler, not a better model. The rubric's "Do NOT reward length" and the concision criterion in *both* judging prompts are your countermeasures.
+
+## TRL's `DPOTrainer`: the production alternative
+
+In any HF-ecosystem project you would not hand-roll this. The library implementation of everything in `train_dpo.py` — reference-model management included — is ten lines:
+
+```python
+from datasets import load_dataset
+from trl import DPOConfig, DPOTrainer
+
+model = ...   # any Hugging Face AutoModelForCausalLM + its tokenizer
+ds = load_dataset("json", data_files="data/pref/pairs.jsonl", split="train")
+cfg = DPOConfig(beta=0.1, learning_rate=1e-6, num_train_epochs=1,
+                per_device_train_batch_size=4, gradient_accumulation_steps=8,
+                bf16=True, output_dir="checkpoints/dpo_trl", report_to="wandb")
+trainer = DPOTrainer(model, ref_model=None, args=cfg,   # None => TRL clones the ref
+                     train_dataset=ds, processing_class=tokenizer)
+trainer.train()
+```
+
+Our JSONL schema (`prompt` / `chosen` / `rejected`) is exactly what `DPOTrainer` expects — that wasn't an accident. The one catch for us: TRL requires an HF `PreTrainedModel`, and WikiGPT is pure PyTorch, which is precisely why this lesson built the loss by hand. You now know both what the ten lines do internally and when to reach for them instead.
+
+## 🧪 Your task
+
+β is the only hyperparameter DPO gives you — so develop a feel for it. Run a **β sweep** on a 2,000-pair subset: β ∈ {0.05, 0.1, 0.5}, one epoch each (~6 min per run), then compare the three runs' `reward/margin` and `reward/chosen` curves on W&B and win-rates vs SFT. Before you run it, write down your prediction: which β produces the largest margin, and which stays closest to the reference?
+
+<details><summary>Solution</summary>
+
+```bash
+head -n 2000 data/pref/pairs.jsonl > data/pref/pairs_2k.jsonl
+
+for b in 0.05 0.1 0.5; do
+  sed -e "s/^beta: .*/beta: $b/" \
+      -e "s#^pairs: .*#pairs: data/pref/pairs_2k.jsonl#" \
+      -e "s#^out_ckpt: .*#out_ckpt: checkpoints/dpo_beta$b.pt#" \
+      configs/dpo.yaml > configs/dpo_$b.yaml
+  python src/train_dpo.py --config configs/dpo_$b.yaml
+done
+
+# restart the teacher, then:
+for b in 0.05 0.1 0.5; do
+  python src/judge_eval.py --a checkpoints/dpo_beta$b.pt --n 150
+done
+```
+
+What you should observe, and why:
+
+| β | reward/margin | reward/chosen | win rate vs SFT | reading |
+|---|---|---|---|---|
+| 0.05 | largest | drifts most negative | sometimes high, sometimes degraded | loose leash: biggest policy movement, and the first place you'll see longer, drift-y answers |
+| 0.1 | healthy | mildly negative | best or near-best | the sweet spot for ~10k noisy synthetic pairs |
+| 0.5 | smallest | hugs 0 | barely above 50% | tight leash: the policy barely moves off the SFT reference |
+
+The mechanism: β multiplies $z$ inside $-\log\sigma(\beta z)$, so a *large* β saturates the loss after a tiny margin (the pair "retires" early — see the loss curve figure), while a *small* β keeps gradients alive as the policy drifts far from the reference. Margin alone is therefore not a quality metric — β=0.05 "wins" on margin by construction. Only the position-debiased win rate (plus the length check) tells you whether the movement was in a useful direction. On 2k pairs, β=0.1 usually wins or ties β=0.05 on win rate with visibly less drift in `reward/chosen`, which is exactly why it's the default for the full run.
+
+</details>
+
+## Key takeaways
+
+- RLHF works but costs four model copies, live sampling in the training loop, and PPO's instability; DPO collapses the reward model and RL loop into one offline classification-style loss on preference pairs, using a frozen reference copy as a built-in KL leash.
+- The DPO loss is $-\log\sigma(\beta[(\log\pi_\theta(y_c)-\log\pi_{\text{ref}}(y_c)) - (\log\pi_\theta(y_r)-\log\pi_{\text{ref}}(y_r))])$; $\beta\log\frac{\pi_\theta}{\pi_{\text{ref}}}$ is an implicit reward, and the loss starts at exactly ln 2 ≈ 0.693.
+- Preference pairs must be sampled from **your own policy** (K=4, temperature spread 0.7–1.3 to manufacture quality variance), judged by the teacher on a 1–10 rubric, with ties (gap < 2) and low-quality bests (< 6) filtered out — ~12k prompts → ~10k pairs, published to your GitHub dataset repo.
+- Implementation is three careful pieces: a deepcopied frozen reference, float32 log-softmax + gather for per-token log-probs, and SFT-style masking so only response tokens count; right-padding is safe because causal attention never looks right.
+- Healthy run signatures: margin grows, reward accuracy reaches ~0.7–0.85, and `reward/chosen` drifting *slightly* negative is normal — a steep dive means LR too high or β too low.
+- Never trust a single-order LLM judgment: position-swapped double judging with agreement-only wins is the minimum honest eval; also watch response length, DPO's favorite way to game a judge.
+- Total damage: ~2–2.5 GPU-hours ≈ $1 on the 4090.
+
+## Coming up
+
+You now have `checkpoints/dpo.pt` — a model you pretrained, instruction-tuned, and preference-tuned yourself. In Lesson 11 we ship it: `src/serve.py` puts an OpenAI-compatible chat API and a small web UI in front of WikiGPT, and you publish the weights, the datasets, and the whole story for others to reproduce.
+
+------------------------------------------------------------------------
+
+[🏠 📖 Course home](index.html)  &nbsp;|&nbsp;  [← Lesson 09](lesson09.html)  &nbsp;|&nbsp;  [Lesson 11 →](lesson11.html)  &nbsp;|&nbsp;  [📚 All mini-courses](../../mini-courses.html)
