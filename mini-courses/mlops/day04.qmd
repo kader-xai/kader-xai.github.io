@@ -1,0 +1,487 @@
+---
+title: "🚢 ML in Production — MLOps · Day 4 — The Model Registry: Versioning and Promotion by Alias"
+page-layout: full
+toc: true
+toc-location: left
+toc-title: "On this day"
+toc-depth: 2
+---
+
+[🏠 🚢 Course home](index.html)  &nbsp;|&nbsp;  [← Day 03](day03.html)  &nbsp;|&nbsp;  [Day 05 →](day05.html)  &nbsp;|&nbsp;  [📚 All mini-courses](../../mini-courses.html)
+
+------------------------------------------------------------------------
+
+# Day 4 — The Model Registry: Versioning and Promotion by Alias
+
+Yesterday you instrumented training with MLflow: every run now logs its parameters, metrics, and a serialized model artifact. That solved *"which experiment produced this number?"* — but it created a new problem. You now have forty runs, and somewhere in that pile is *the* model: the one production should serve. Pointing production at a run ID is fragile (run IDs are opaque hashes nobody remembers) and pointing it at a file path is worse (paths change, files get overwritten). Today we put a **model registry** between training and serving: a named, versioned catalog where `churn` version 7 is a real, addressable thing, `@champion` is a movable pointer to whichever version production trusts, and promotion is a one-line, auditable operation. By the end of the day you'll have a `promote.py` script that gates promotion on metrics — the exact script Day 8's CI/CD pipeline will call.
+
+::: {.callout-note appearance="simple"}
+🎯 **Today you will:** register the churn model from a tracked run, manage versions with champion/challenger aliases instead of deprecated stages, load `models:/churn@champion` in inference code, trace any serving model back to its exact training run, write a metric-gated `promote.py`
+:::
+
+## Why a registry, and where it sits
+
+The tracking server (Day 3) answers *"what happened?"* — it's a lab notebook. The registry answers *"what is official?"* — it's a release catalog. The distinction matters because the two have different lifecycles: runs are cheap and disposable (you'll log hundreds), registered versions are deliberate (you register only models that are candidates for production).
+
+A registry entry has three levels:
+
+| Concept | Example | What it is |
+|---|---|---|
+| Registered model | `churn` | A named "slot" for one problem — created once, lives forever |
+| Model version | `churn` v7 | An immutable snapshot: one specific artifact from one specific run |
+| Alias | `@champion` → v7 | A mutable, named pointer to exactly one version |
+
+The key mental model: **versions are immutable, aliases are movable**. You never edit version 7; you retrain, register version 8, and move the alias. This is exactly how git tags vs. branches work, or how `python3` symlinks to `python3.12`.
+
+```{mermaid}
+flowchart LR
+    subgraph Tracking["Tracking server (Day 3)"]
+        R1[run a1b2\nauc=0.81]
+        R2[run c3d4\nauc=0.84]
+        R3[run e5f6\nauc=0.86]
+    end
+    subgraph Registry["Model registry (today)"]
+        V1[churn v1]
+        V2[churn v2]
+        V3[churn v3]
+    end
+    subgraph Serving["Serving (Day 6)"]
+        S["models:/churn@champion"]
+    end
+    R1 -->|register| V1
+    R2 -->|register| V2
+    R3 -->|register| V3
+    V2 -. "@champion" .-> S
+    V3 -. "@challenger" .- Registry
+```
+
+Notice serving never mentions a run ID or a version number. It asks for `churn@champion`, and the registry resolves the pointer. Promotion becomes a registry operation, not a redeploy.
+
+## Registering a model from a run
+
+Two ways to get a model into the registry. The first is inline at training time — one extra argument to the `log_model` call you wrote yesterday:
+
+```python
+# train.py (Day 2/3 file, one-line change)
+import mlflow
+import mlflow.sklearn
+
+mlflow.set_tracking_uri("http://127.0.0.1:5000")
+mlflow.set_experiment("churn")
+
+with mlflow.start_run() as run:
+    # ... fit pipeline, log params & metrics as in Day 3 ...
+    mlflow.sklearn.log_model(
+        sk_model=pipeline,
+        name="model",
+        registered_model_name="churn",   # <- the new line
+        input_example=X_train.head(3),
+    )
+    print(f"run_id: {run.info.run_id}")
+```
+
+`registered_model_name="churn"` does three things atomically: creates the registered model `churn` if it doesn't exist, creates the next version number, and links that version to this run's artifact. The `input_example` matters more than it looks — MLflow infers a **signature** (input column names and dtypes) from it, and Day 6's serving layer will use that signature to validate incoming requests. Skip it and you'll get a warning now and schema surprises later.
+
+The second way is registering **after the fact** — you already have a good run from yesterday and want to bless it retroactively:
+
+```python
+# register.py — register an existing run's model
+import mlflow
+
+mlflow.set_tracking_uri("http://127.0.0.1:5000")
+
+run_id = "e5f6a7b8c9d0..."          # from the MLflow UI or search_runs
+mv = mlflow.register_model(
+    model_uri=f"runs:/{run_id}/model",   # runs:/<run_id>/<artifact_name>
+    name="churn",
+)
+print(f"registered {mv.name} v{mv.version}, source run {mv.run_id}")
+```
+
+Expected output:
+
+```text
+Registered model 'churn' already exists. Creating a new version...
+registered churn v3, source run e5f6a7b8c9d0...
+```
+
+The `runs:/` URI scheme is the load-bearing detail: it says *"the artifact named `model` inside run `e5f6...`"*. Get the artifact name wrong (you logged it as `name="model"`, so the URI ends in `/model`) and registration fails with a `RESOURCE_DOES_NOT_EXIST`. The returned `ModelVersion` object carries `.version` (auto-incremented integer) and `.run_id` — the registry permanently remembers which run each version came from. That's lineage, and we'll exploit it in a moment.
+
+In practice: use `registered_model_name` in `train.py` when every training run is a candidate (typical for automated retraining, Day 10); use `mlflow.register_model` when a human or a CI job picks winners from many runs (typical for experimentation phases).
+
+## Aliases, not stages: champion and challenger
+
+If you've read older MLflow tutorials, you've seen **stages**: `Staging`, `Production`, `Archived`, moved with `transition_model_version_stage`. Stages are deprecated (since MLflow 2.9), and it's worth understanding why, because the replacement is genuinely better:
+
+- Stages were a **fixed vocabulary**. Real teams need `shadow`, `champion-eu`, `last-known-good` — you couldn't add stages.
+- A stage could hold **multiple versions simultaneously**, so "the Production model" was ambiguous — the exact ambiguity a registry exists to kill.
+- Stage names carried implicit deployment semantics MLflow couldn't enforce, so they drifted into lies ("Production" models that weren't).
+
+**Aliases** fix all three: arbitrary names, each alias points to exactly **one** version, and moving an alias is atomic. The standard pattern is two aliases:
+
+- `@champion` — the version production serves right now.
+- `@challenger` — the newest candidate, being evaluated against the champion.
+
+<svg viewBox="0 0 720 300" xmlns="http://www.w3.org/2000/svg" style="max-width:100%;height:auto">
+  <style>text{font-family:ui-sans-serif,system-ui,sans-serif;fill:currentColor}</style>
+  <text x="20" y="28" font-size="15" font-weight="700">Registered model: churn</text>
+  <!-- version boxes -->
+  <g>
+    <rect x="40" y="60" width="130" height="70" rx="10" fill="#6366f1" fill-opacity="0.18" stroke="currentColor" stroke-opacity="0.5"/>
+    <text x="105" y="88" font-size="14" text-anchor="middle" font-weight="600">v1</text>
+    <text x="105" y="110" font-size="11" text-anchor="middle" opacity="0.75">auc 0.81</text>
+    <rect x="200" y="60" width="130" height="70" rx="10" fill="#6366f1" fill-opacity="0.18" stroke="currentColor" stroke-opacity="0.5"/>
+    <text x="265" y="88" font-size="14" text-anchor="middle" font-weight="600">v2</text>
+    <text x="265" y="110" font-size="11" text-anchor="middle" opacity="0.75">auc 0.84</text>
+    <rect x="360" y="60" width="130" height="70" rx="10" fill="#22c55e" fill-opacity="0.22" stroke="#22c55e" stroke-width="2"/>
+    <text x="425" y="88" font-size="14" text-anchor="middle" font-weight="600">v3</text>
+    <text x="425" y="110" font-size="11" text-anchor="middle" opacity="0.75">auc 0.86</text>
+    <rect x="520" y="60" width="130" height="70" rx="10" fill="#f59e0b" fill-opacity="0.22" stroke="#f59e0b" stroke-width="2"/>
+    <text x="585" y="88" font-size="14" text-anchor="middle" font-weight="600">v4</text>
+    <text x="585" y="110" font-size="11" text-anchor="middle" opacity="0.75">auc 0.88?</text>
+  </g>
+  <!-- alias pointers -->
+  <g>
+    <rect x="355" y="200" width="140" height="34" rx="17" fill="#22c55e" fill-opacity="0.25" stroke="#22c55e"/>
+    <text x="425" y="222" font-size="13" text-anchor="middle" font-weight="600">@champion</text>
+    <line x1="425" y1="200" x2="425" y2="134" stroke="#22c55e" stroke-width="2" marker-end="url(#arr)"/>
+    <rect x="515" y="200" width="140" height="34" rx="17" fill="#f59e0b" fill-opacity="0.25" stroke="#f59e0b"/>
+    <text x="585" y="222" font-size="13" text-anchor="middle" font-weight="600">@challenger</text>
+    <line x1="585" y1="200" x2="585" y2="134" stroke="#f59e0b" stroke-width="2" marker-end="url(#arr)"/>
+  </g>
+  <!-- dashed future move -->
+  <path d="M 495 217 Q 460 260 425 240" fill="none" stroke="currentColor" stroke-opacity="0.4" stroke-dasharray="5 4"/>
+  <text x="360" y="272" font-size="11" opacity="0.65">promote.py moves @champion → v4 if the gate passes</text>
+  <defs>
+    <marker id="arr" markerWidth="8" markerHeight="8" refX="6" refY="4" orient="auto">
+      <path d="M0,0 L8,4 L0,8 z" fill="currentColor" fill-opacity="0.7"/>
+    </marker>
+  </defs>
+</svg>
+
+Setting an alias is a client call:
+
+```python
+from mlflow import MlflowClient
+
+client = MlflowClient(tracking_uri="http://127.0.0.1:5000")
+
+# first ever deployment: v3 becomes champion
+client.set_registered_model_alias(name="churn", alias="champion", version=3)
+
+# newest candidate
+client.set_registered_model_alias(name="churn", alias="challenger", version=4)
+```
+
+`set_registered_model_alias` is idempotent and **reassigning**: calling it with `version=4` when the alias pointed at v3 simply moves the pointer — no delete-then-create dance, no window where the alias dangles. That atomicity is what makes alias-based promotion safe to run while production is live.
+
+Two more calls complete the vocabulary:
+
+```python
+# resolve: which version is champion right now?
+mv = client.get_model_version_by_alias(name="churn", alias="champion")
+print(mv.version, mv.run_id, mv.aliases)
+# -> 3 e5f6a7b8c9d0... ['champion']
+
+# remove (e.g. retire challenger after a failed evaluation)
+client.delete_registered_model_alias(name="churn", alias="challenger")
+```
+
+While you're at it, attach human-readable context with tags — cheap now, priceless during an incident:
+
+```python
+client.set_model_version_tag("churn", "4", "validated_by", "promote.py")
+client.set_model_version_tag("churn", "4", "training_data", "customers_2026-07.parquet")
+```
+
+## Loading by alias — and tracing lineage back
+
+Here is the payoff. Any consumer — a batch scoring job, Day 6's FastAPI service, a notebook — loads the production model with one URI and zero knowledge of versions:
+
+```python
+import mlflow
+
+mlflow.set_tracking_uri("http://127.0.0.1:5000")
+
+model = mlflow.pyfunc.load_model("models:/churn@champion")
+preds = model.predict(X_new)          # X_new: DataFrame matching the signature
+print(preds[:5])
+```
+
+```text
+[0 1 0 0 1]
+```
+
+Anatomy of the URI: `models:/` is the registry scheme (contrast with `runs:/` earlier), `churn` is the registered name, `@champion` selects by alias. Two variants you'll see:
+
+| URI | Resolves to | Use when |
+|---|---|---|
+| `models:/churn@champion` | whatever version the alias points at | production consumers — always |
+| `models:/churn/3` | version 3, pinned forever | debugging, reproducing an incident |
+
+We load with `mlflow.pyfunc.load_model` rather than `mlflow.sklearn.load_model` deliberately: pyfunc is the **flavor-agnostic** interface (`predict(DataFrame) -> array`). If Day 10's retraining swaps sklearn for XGBoost, every consumer keeps working unchanged — the pyfunc wrapper absorbs the difference. Loading with the sklearn flavor couples consumers to the framework; only do it when you need framework-specific methods like `predict_proba`:
+
+```python
+# when you genuinely need probabilities:
+sk_model = mlflow.sklearn.load_model("models:/churn@champion")
+proba = sk_model.predict_proba(X_new)[:, 1]     # shape (n,), P(churn)
+```
+
+Now lineage. It's 3 a.m., the champion is misbehaving, and you need to know *exactly* how it was trained. The registry remembers the run; the run remembers everything else:
+
+```python
+from mlflow import MlflowClient
+
+client = MlflowClient(tracking_uri="http://127.0.0.1:5000")
+
+mv = client.get_model_version_by_alias("churn", "champion")
+run = client.get_run(mv.run_id)
+
+print(f"champion = churn v{mv.version}")
+print(f"trained by run   : {mv.run_id}")
+print(f"params           : {run.data.params}")
+print(f"metrics          : {run.data.metrics}")
+print(f"git commit       : {run.data.tags.get('mlflow.source.git.commit')}")
+```
+
+```text
+champion = churn v3
+trained by run   : e5f6a7b8c9d0...
+params           : {'n_estimators': '300', 'max_depth': '8', 'test_size': '0.2'}
+metrics          : {'auc': 0.86, 'f1': 0.71}
+git commit       : 4f2a9c1...
+```
+
+Chain it together: **serving alias → version → run → params/metrics/artifacts → git commit → code**. Combined with Day 2's reproducible training, that commit plus those params re-creates the model bit-for-bit. This chain is the whole reason we built Days 2–4 in this order.
+
+## `promote.py` — metric-gated promotion
+
+Promotion should never be "someone clicked a button in the UI on a Friday." It should be a script with an explicit gate, runnable by a human today and by CI on Day 8. The gate we'll use: the challenger must beat the champion's AUC by a margin $\epsilon$ on their (identical, Day 2-seeded) held-out split:
+
+$$\text{promote} \iff \text{AUC}_{\text{challenger}} \ge \text{AUC}_{\text{champion}} + \epsilon$$
+
+The margin $\epsilon$ (we'll use 0.002) exists because AUC on a finite test set is a noisy estimate — promoting on a +0.0001 "improvement" is promoting on noise. Stage one, the plumbing:
+
+```python
+# promote.py
+"""Promote churn@challenger to @champion if it beats the metric gate.
+
+Usage:
+    python promote.py                    # compare and promote if better
+    python promote.py --dry-run          # compare, report, change nothing
+    python promote.py --metric auc --epsilon 0.002
+"""
+import argparse
+import sys
+
+import mlflow
+from mlflow import MlflowClient
+from mlflow.exceptions import MlflowException
+
+TRACKING_URI = "http://127.0.0.1:5000"
+MODEL_NAME = "churn"
+
+
+def get_metric(client: MlflowClient, name: str, alias: str, metric: str) -> tuple[int, float]:
+    """Resolve alias -> version, then pull `metric` from its source run."""
+    mv = client.get_model_version_by_alias(name, alias)
+    run = client.get_run(mv.run_id)
+    if metric not in run.data.metrics:
+        sys.exit(f"run {mv.run_id} ({alias}) has no metric '{metric}'")
+    return int(mv.version), run.data.metrics[metric]
+```
+
+Every comparison goes through `get_metric`, which reads the metric **from the source run**, not from anywhere else. This is the lineage chain doing real work: the registry version knows its run, the run knows its metrics, so the script cannot compare stale or hand-entered numbers. The `tuple[int, float]` return keeps the version handy for the promotion call. Note the hard exit if the metric is missing — a challenger whose run didn't log `auc` should fail loudly, not be promoted on a default.
+
+Stage two, the gate and the move:
+
+```python
+def main() -> None:
+    p = argparse.ArgumentParser()
+    p.add_argument("--metric", default="auc")
+    p.add_argument("--epsilon", type=float, default=0.002)
+    p.add_argument("--dry-run", action="store_true")
+    args = p.parse_args()
+
+    mlflow.set_tracking_uri(TRACKING_URI)
+    client = MlflowClient()
+
+    try:
+        chal_v, chal_score = get_metric(client, MODEL_NAME, "challenger", args.metric)
+    except MlflowException:
+        sys.exit("no @challenger alias set — nothing to promote")
+
+    try:
+        champ_v, champ_score = get_metric(client, MODEL_NAME, "champion", args.metric)
+    except MlflowException:
+        # cold start: no champion exists yet, challenger wins by default
+        champ_v, champ_score = None, float("-inf")
+
+    print(f"champion   : v{champ_v}  {args.metric}={champ_score:.4f}")
+    print(f"challenger : v{chal_v}  {args.metric}={chal_score:.4f}")
+
+    if chal_score < champ_score + args.epsilon:
+        print(f"GATE FAILED: needs >= {champ_score + args.epsilon:.4f}. No change.")
+        sys.exit(1)   # nonzero so CI can react
+
+    if args.dry_run:
+        print(f"DRY RUN: would move @champion -> v{chal_v}")
+        return
+
+    if champ_v is not None:
+        # keep an escape hatch before moving the pointer
+        client.set_registered_model_alias(MODEL_NAME, "prev-champion", champ_v)
+
+    client.set_registered_model_alias(MODEL_NAME, "champion", chal_v)
+    client.delete_registered_model_alias(MODEL_NAME, "challenger")
+    client.set_model_version_tag(
+        MODEL_NAME, str(chal_v), "promoted_over",
+        f"v{champ_v} ({args.metric}={champ_score:.4f})" if champ_v else "cold-start",
+    )
+    print(f"PROMOTED: @champion -> v{chal_v}")
+
+
+if __name__ == "__main__":
+    main()
+```
+
+Walk the decision path:
+
+- **Missing challenger** is a clean exit, not an error — running the script when there's nothing to evaluate is normal in automation.
+- **Missing champion** (first deployment ever) is handled with `-inf`, so the cold-start case promotes without a special code path.
+- **The gate exits nonzero on failure.** That's not pedantry: on Day 8 this script runs inside a pipeline, and the exit code *is* the interface. A gate that "fails" with exit 0 silently green-lights bad models.
+- **`prev-champion` is set *before* `champion` moves.** If the new champion misbehaves in production, rollback is one line — no archaeology in the UI to find what used to be live:
+
+```python
+client.set_registered_model_alias("churn", "champion",
+    client.get_model_version_by_alias("churn", "prev-champion").version)
+```
+
+- **The tag writes an audit trail onto the version itself** — six months later, v4's page in the UI says exactly what it beat and by how much.
+
+A dry run against the state in our diagram:
+
+```text
+$ python promote.py --dry-run
+champion   : v3  auc=0.8600
+challenger : v4  auc=0.8800
+DRY RUN: would move @champion -> v4
+
+$ python promote.py
+champion   : v3  auc=0.8600
+challenger : v4  auc=0.8800
+PROMOTED: @champion -> v4
+```
+
+The subtle assumption worth naming: comparing metrics from two different runs is only fair if both runs evaluated on the **same split**. Day 2's fixed seed and pinned data give us that. If your retraining data changes between runs (it will, by Day 10), the honest gate re-evaluates both models on one fresh holdout set — same script shape, just call `predict` on both loaded models instead of reading logged metrics. Keep that upgrade in your pocket for Day 10.
+
+## Data and artifact versioning, briefly
+
+The registry versions **models**. It does not version the **data** they were trained on — `run.data.tags` can record *which file* you used, but nothing stops that file from being silently overwritten, and then your lineage chain has a broken link at its most important joint.
+
+The standard fix is [DVC](https://dvc.org): git-like versioning for large files. It stores a tiny `.dvc` pointer file (hash + size) in git while the actual data lives in remote storage keyed by content hash. The workflow is deliberately git-shaped:
+
+```bash
+pip install dvc
+dvc init
+dvc add data/customers.parquet        # creates data/customers.parquet.dvc
+git add data/customers.parquet.dvc data/.gitignore
+git commit -m "track training data v1"
+```
+
+The pointer file is the whole trick:
+
+```yaml
+# data/customers.parquet.dvc
+outs:
+- md5: 3f8a1c9e2b7d4a6f...
+  size: 18434412
+  path: customers.parquet
+```
+
+Now the git commit that MLflow already records for every run (that `mlflow.source.git.commit` tag from the lineage section) *transitively pins the data*: commit → `.dvc` file → content hash → exact bytes. `git checkout <commit> && dvc checkout` reproduces the training inputs of any registered model version. Close the loop explicitly by logging the hash into the run:
+
+```python
+# in train.py, one line inside the run:
+mlflow.set_tag("data_md5", "3f8a1c9e2b7d4a6f...")  # read it from the .dvc file
+```
+
+That's as deep as we go — DVC has pipelines and remotes worth a course of their own — but the principle is the one that matters for this course: **every axis of variation (code, data, model) gets a content-addressed version, and the run ties them together.** We have all three as of today.
+
+## 🧪 Your task
+
+Write `rollback.py`: a script that swaps `@champion` and `@prev-champion` for the `churn` model — the emergency lever you pull when a freshly promoted champion misbehaves in production. Requirements: it must fail with a clear message (and nonzero exit) if either alias is missing, it must print what moved where, and running it **twice** must land you back where you started (it's a swap, not a one-way move). Tag the demoted version with `rolled_back: true`.
+
+*Hint:* resolve both aliases to version numbers **first**, into local variables, before calling `set_registered_model_alias` for either — if you read one alias after already moving the other, you'll read the pointer you just wrote and "swap" a version with itself.
+
+<details><summary>Solution</summary>
+
+```python
+# rollback.py — swap churn@champion and churn@prev-champion
+import sys
+
+import mlflow
+from mlflow import MlflowClient
+from mlflow.exceptions import MlflowException
+
+TRACKING_URI = "http://127.0.0.1:5000"
+MODEL_NAME = "churn"
+
+
+def resolve(client: MlflowClient, alias: str) -> int:
+    try:
+        return int(client.get_model_version_by_alias(MODEL_NAME, alias).version)
+    except MlflowException:
+        sys.exit(f"alias @{alias} not set on '{MODEL_NAME}' — cannot roll back")
+
+
+def main() -> None:
+    mlflow.set_tracking_uri(TRACKING_URI)
+    client = MlflowClient()
+
+    # read BOTH pointers before writing EITHER (see hint)
+    champ_v = resolve(client, "champion")
+    prev_v = resolve(client, "prev-champion")
+
+    if champ_v == prev_v:
+        sys.exit(f"@champion and @prev-champion both point at v{champ_v} — nothing to do")
+
+    client.set_registered_model_alias(MODEL_NAME, "champion", prev_v)
+    client.set_registered_model_alias(MODEL_NAME, "prev-champion", champ_v)
+    client.set_model_version_tag(MODEL_NAME, str(champ_v), "rolled_back", "true")
+
+    print(f"ROLLBACK: @champion      v{champ_v} -> v{prev_v}")
+    print(f"          @prev-champion v{prev_v} -> v{champ_v}")
+
+
+if __name__ == "__main__":
+    main()
+```
+
+Because the script is a pure swap of two pre-read pointers, running it a second time swaps them back — satisfying the idempotent-pair requirement. Verify:
+
+```text
+$ python rollback.py
+ROLLBACK: @champion      v4 -> v3
+          @prev-champion v3 -> v4
+$ python rollback.py
+ROLLBACK: @champion      v3 -> v4
+          @prev-champion v4 -> v3
+```
+
+</details>
+
+## Key takeaways
+
+- The tracking server records *what happened*; the registry declares *what's official*. Runs are disposable, registered versions are deliberate.
+- Versions are immutable, aliases are movable — promotion means moving `@champion`, never editing or redeploying artifacts.
+- Stages are deprecated for good reasons; aliases are arbitrary, unambiguous (one version each), and atomic to reassign.
+- Consumers load `models:/churn@champion` via `pyfunc` and stay decoupled from version numbers *and* frameworks.
+- Lineage is a chain: alias → version → run → params/metrics → git commit → (with DVC) exact data bytes. Every link exists after today.
+- Promotion is a script with a metric gate and a nonzero exit on failure — that exit code is the contract CI will rely on.
+
+Tomorrow: the model leaves your laptop — we freeze its whole runtime into a Docker image and make "works on my machine" everyone's machine.
+
+------------------------------------------------------------------------
+
+[🏠 🚢 Course home](index.html)  &nbsp;|&nbsp;  [← Day 03](day03.html)  &nbsp;|&nbsp;  [Day 05 →](day05.html)  &nbsp;|&nbsp;  [📚 All mini-courses](../../mini-courses.html)

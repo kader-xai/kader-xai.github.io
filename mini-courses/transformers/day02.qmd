@@ -1,0 +1,479 @@
+---
+title: "⚡ Building Transformers from Scratch with PyTorch · Day 2 — Tokenization & the Data Pipeline"
+page-layout: full
+toc: true
+toc-location: left
+toc-title: "On this day"
+toc-depth: 2
+---
+
+[🏠 ⚡ Course home](index.html)  &nbsp;|&nbsp;  [← Day 01](day01.html)  &nbsp;|&nbsp;  [Day 03 →](day03.html)  &nbsp;|&nbsp;  [📚 All mini-courses](../../mini-courses.html)
+
+------------------------------------------------------------------------
+
+# Day 2 — Tokenization & the Data Pipeline
+
+Yesterday we drew the map: a decoder-only transformer that reads a sequence of tokens and predicts the next one, over and over. Today we build the part of the pipeline that everything else stands on — the machinery that turns raw text into the integer tensors the model will consume. It's tempting to treat this as plumbing, but the tokenizer *defines the universe your model lives in*: it fixes the vocabulary, the meaning of every input ID, and the shape of every batch. Get it wrong and no amount of clever attention will save you. By the end of today you'll have a working character-level tokenizer, a hand-built 5-merge BPE to understand why real models use subwords, a loaded corpus with a clean train/val split, and the `get_batch` function that will feed every training step for the rest of the course.
+
+::: {.callout-note appearance="simple"}
+🎯 **Today you will:** build a character-level tokenizer with `encode`/`decode` from scratch, run 5 BPE merges by hand in code to see why subword tokenization exists, load and split the Tiny Shakespeare corpus, understand `block_size` and what a "context" really is, write the `get_batch` function that produces shifted-by-one `(x, y)` training pairs.
+:::
+
+Here's where today's work sits in the full pipeline:
+
+```{mermaid}
+flowchart LR
+    A["Raw text\n(1.1M characters)"] --> B["Tokenizer\nencode: str → ints"]
+    B --> C["One long tensor\ndata: (1115394,)"]
+    C --> D["Split\ntrain 90% / val 10%"]
+    D --> E["get_batch\nrandom windows"]
+    E --> F["x: (B, T)\ny: (B, T)"]
+    F --> G["Model\n(Days 3–7)"]
+    style B fill:#6366f180
+    style E fill:#22c55e80
+    style F fill:#f59e0b80
+```
+
+Everything left of the model is today. Once `get_batch` works, we never touch this code again — Days 3 through 8 just call it.
+
+## From text to numbers: the character-level tokenizer
+
+Neural networks eat numbers, not strings. A **tokenizer** is a reversible mapping between text and a sequence of integers. The simplest possible design: every distinct *character* gets its own integer ID. That's what we'll use for our tiny GPT, because it keeps the vocabulary small (~65 symbols for Shakespeare) and lets us focus our parameter budget on the transformer itself.
+
+First, grab the corpus we'll use for the whole course — Tiny Shakespeare, about 1MB of concatenated plays:
+
+```python
+import os
+import urllib.request
+
+url = ("https://raw.githubusercontent.com/karpathy/char-rnn/"
+       "master/data/tinyshakespeare/input.txt")
+if not os.path.exists("input.txt"):
+    urllib.request.urlretrieve(url, "input.txt")
+
+with open("input.txt", "r", encoding="utf-8") as f:
+    text = f.read()
+
+print(f"corpus length: {len(text):,} characters")
+print(text[:120])
+```
+
+```
+corpus length: 1,115,394 characters
+First Citizen:
+Before we proceed any further, hear me speak.
+
+All:
+Speak, speak.
+
+First Citizen:
+You are all resolved rather
+```
+
+Note the `encoding="utf-8"` — always be explicit. On some platforms the default is a legacy codec, and a silent mis-decode here would poison every downstream tensor.
+
+Now the tokenizer itself. The vocabulary is simply the *sorted set of unique characters* in the corpus. Sorting matters: it makes the character→ID assignment deterministic, so the same script run twice (or on two machines) produces the same mapping. An unsorted set would give you a vocabulary that shuffles between runs — and a checkpoint trained with one mapping would decode to gibberish under another.
+
+```python
+chars = sorted(set(text))
+vocab_size = len(chars)
+print("".join(chars))
+print(f"vocab_size = {vocab_size}")
+```
+
+```
+ !$&',-.3:;?ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz
+vocab_size = 65
+```
+
+(The first character in that printout is `\n`, which renders as a blank line, followed by space.) Sixty-five symbols: newline, space, punctuation, digits, upper- and lowercase letters. That's our entire universe.
+
+The mapping is two dictionaries — `stoi` (string-to-int) and `itos` (int-to-string) — and two one-line functions built on them:
+
+```python
+stoi = {ch: i for i, ch in enumerate(chars)}   # 'a' -> 39, ...
+itos = {i: ch for ch, i in stoi.items()}       # 39 -> 'a', ...
+
+def encode(s: str) -> list[int]:
+    return [stoi[c] for c in s]
+
+def decode(ids: list[int]) -> str:
+    return "".join(itos[i] for i in ids)
+
+print(encode("hii there"))
+print(decode(encode("hii there")))
+```
+
+```
+[46, 47, 47, 1, 58, 46, 43, 56, 43]
+hii there
+```
+
+The round-trip property `decode(encode(s)) == s` is the tokenizer's contract. It holds here for any string *made of characters seen in the corpus*. Feed `encode` an emoji and you get a `KeyError` — our vocabulary has no entry for it. Character tokenizers built this way are **closed-vocabulary over the training corpus's alphabet**. Production tokenizers solve this by working on UTF-8 *bytes* (all 256 of them, so nothing is ever out of vocabulary) — hold that thought for the next section.
+
+One more design note: we assign IDs by sorted order, so ID 0 happens to be `\n`. There's nothing special about any ID. The model never sees "letters"; it sees integer 46 followed by integer 47. Every shred of meaning those integers will carry gets *learned* — that's what the embedding table does tomorrow.
+
+## Why character-level isn't the real answer: subwords and BPE
+
+Character tokenization has a brutal cost hidden in plain sight: **sequence length**. The word `transformer` is 11 tokens at character level but 1–2 tokens for GPT-4's tokenizer. Attention — the thing we build on Day 4 — costs $O(T^2)$ in sequence length $T$. Make every sequence 5× longer and attention gets 25× more expensive, and your fixed context window holds 5× less actual text. The model also wastes capacity relearning, from scratch, that `t-h-e` is a unit.
+
+The opposite extreme, one token per *word*, fails differently: English has hundreds of thousands of words plus unbounded names, typos, and morphology (`tokenize`, `tokenizer`, `tokenizing`...). The vocabulary explodes and anything unseen at training time becomes an unrepresentable `<UNK>`.
+
+**Subword tokenization** is the compromise every modern LLM uses: common strings become single tokens, rare strings decompose into smaller pieces, and (in the byte-level variant) *anything* is representable as a worst-case fallback to raw bytes. The classic algorithm is **Byte-Pair Encoding (BPE)**, and it's almost embarrassingly simple:
+
+> Start with a vocabulary of individual symbols. Repeatedly find the *most frequent adjacent pair* of symbols in the corpus and merge it into a new single symbol. Each merge adds one vocabulary entry. Stop after $k$ merges.
+
+Let's run it by hand — 5 merges on a toy corpus — so the mechanism is completely demystified. We represent each word as a tuple of symbols, with a `</w>` end-of-word marker so merges can't leak across word boundaries:
+
+```python
+from collections import Counter
+
+toy = ("low low low low low "
+       "lower lower "
+       "newest newest newest newest newest newest "
+       "widest widest widest")
+
+# word -> frequency, each word as a tuple of symbols
+vocab = Counter(tuple(w) + ("</w>",) for w in toy.split())
+for word, freq in vocab.items():
+    print(freq, word)
+```
+
+```
+5 ('l', 'o', 'w', '</w>')
+2 ('l', 'o', 'w', 'e', 'r', '</w>')
+6 ('n', 'e', 'w', 'e', 's', 't', '</w>')
+3 ('w', 'i', 'd', 'e', 's', 't', '</w>')
+```
+
+Two helper functions do all the work. `get_pair_counts` tallies every adjacent symbol pair, weighted by word frequency. `merge_pair` rewrites every word, fusing occurrences of the chosen pair into one symbol:
+
+```python
+def get_pair_counts(vocab):
+    pairs = Counter()
+    for word, freq in vocab.items():
+        for a, b in zip(word, word[1:]):
+            pairs[(a, b)] += freq
+    return pairs
+
+def merge_pair(vocab, pair):
+    a, b = pair
+    new_vocab = {}
+    for word, freq in vocab.items():
+        out, i = [], 0
+        while i < len(word):
+            if i < len(word) - 1 and (word[i], word[i + 1]) == (a, b):
+                out.append(a + b)      # fuse into one new symbol
+                i += 2
+            else:
+                out.append(word[i])
+                i += 1
+        new_vocab[tuple(out)] = freq
+    return new_vocab
+```
+
+The `while` loop with a manual index is deliberate: after fusing at position `i` we must skip *both* constituents (`i += 2`), otherwise `aaa` with merge `('a','a')` would double-count the middle symbol. That's the classic off-by-one in naive BPE implementations.
+
+Now the training loop — five merges, narrated:
+
+```python
+merges = []
+for step in range(5):
+    pairs = get_pair_counts(vocab)
+    best = max(pairs, key=pairs.get)
+    vocab = merge_pair(vocab, best)
+    merges.append(best)
+    print(f"merge {step + 1}: {best!r:20} (count {pairs[best]})")
+
+print("\nfinal words:")
+for word, freq in vocab.items():
+    print(freq, word)
+```
+
+```
+merge 1: ('e', 's')         (count 9)
+merge 2: ('es', 't')        (count 9)
+merge 3: ('est', '</w>')    (count 9)
+merge 4: ('l', 'o')         (count 7)
+merge 5: ('lo', 'w')        (count 7)
+
+final words:
+5 ('low', '</w>')
+2 ('low', 'e', 'r', '</w>')
+6 ('n', 'e', 'w', 'est</w>')
+3 ('w', 'i', 'd', 'est</w>')
+```
+
+Walk through what happened. `('e','s')` appears in `newest` (×6) and `widest` (×3) — 9 occurrences, the winner. Merging it creates the symbol `es`, and immediately the pair `('es','t')` has count 9, so it wins next, giving `est`, then `est</w>`. The algorithm *discovered the suffix "-est"* — a real morpheme — purely from co-occurrence counts. Merges 4 and 5 assemble `low` the same way. After just five merges, `low` is a single token, `lower` is `low + e + r`, and both `newest` and `widest` share the learned suffix token `est</w>`.
+
+That's the whole trick behind GPT's tokenizer, just scaled up: GPT-2 starts from 256 byte symbols and performs ~50,000 merges on a huge corpus, producing a 50,257-entry vocabulary where frequent English words are single tokens and rare strings gracefully decompose. Encoding new text then means replaying the learned merge list, in order, on the input. The encyclopedia's Attention & Transformers chapter covers the design trade-offs (vocab size vs. sequence length vs. embedding-table cost) in more depth.
+
+For *our* model, character-level is the right call — a 65-entry vocabulary means a tiny embedding table and zero tokenizer complexity, and Shakespeare's alphabet is closed anyway. But now you know exactly what you'd swap in, and why.
+
+## From tokenizer to tensor: encoding the corpus and splitting it
+
+Time to encode all 1.1M characters into one long tensor. This is the *entire dataset* as a single 1-D sequence of integers:
+
+```python
+import torch
+
+data = torch.tensor(encode(text), dtype=torch.long)
+print(data.shape, data.dtype)
+print(data[:20])
+```
+
+```
+torch.Size([1115394]) torch.int64
+tensor([18, 47, 56, 57, 58,  1, 15, 47, 58, 47, 64, 43, 52, 10,  0, 14, 43, 44,
+        53, 56])
+```
+
+`dtype=torch.long` is not optional. Token IDs will index into an embedding table (`nn.Embedding`) tomorrow, and PyTorch requires integer index tensors — pass a float tensor and you'll get `Expected tensor for argument #1 'indices' to have scalar type Long`. Encoding once up front, rather than per-batch, also means the string→int work happens exactly one time; training touches only tensors.
+
+Now the train/validation split:
+
+```python
+n = int(0.9 * len(data))
+train_data = data[:n]   # first 90%
+val_data = data[n:]     # last 10%
+print(f"train: {len(train_data):,} tokens, val: {len(val_data):,} tokens")
+```
+
+```
+train: 1,003,854 tokens, val: 111,540 tokens
+```
+
+Two things deserve emphasis:
+
+1. **We split at a single cut point; we do not shuffle.** The data is one continuous stream, and our training examples will be *contiguous windows* sliced from it. Shuffling characters would destroy the very sequential structure we're trying to model. Shuffling *chunks* is defensible, but a clean contiguous split is simpler and keeps validation text genuinely unlike training text (they're different parts of different plays).
+2. **Why a validation set at all?** The model's job is to model *language*, not to memorize *this file*. With ~1M training tokens and (eventually) a few million parameters, memorization is a live risk. Loss on held-out text is our only honest measure of generalization — on Day 8 you'll watch train loss keep falling while val loss flattens, and that gap is overfitting made visible.
+
+## What a "context" is: `block_size` and the shifted-by-one trick
+
+A language model estimates the probability of a sequence via the chain rule:
+
+$$P(x_1, x_2, \dots, x_T) = \prod_{t=1}^{T} P(x_t \mid x_1, \dots, x_{t-1})$$
+
+Every factor is a *next-token prediction given everything before it*. The tokens before position $t$ are the **context** for predicting $x_t$. In practice we can't condition on unbounded history, so we cap the context at `block_size` tokens (also called the *context length* — the "8K context" or "128K context" of production models is exactly this number). We'll use a small one:
+
+```python
+block_size = 8   # ponytail-small for illustration; we'll use 256 on Day 8
+```
+
+Here is the key data-efficiency insight, and it trips up almost everyone the first time: **one window of `block_size + 1` tokens contains `block_size` training examples, all at once.** Slice 9 consecutive tokens, and you get 8 prediction problems — predict token 2 from token 1, predict token 3 from tokens 1–2, and so on:
+
+```python
+chunk = train_data[:block_size + 1]
+x = chunk[:-1]   # inputs:  positions 0..7
+y = chunk[1:]    # targets: positions 1..8  (shifted by one)
+
+for t in range(block_size):
+    context, target = x[:t + 1], y[t]
+    print(f"context {context.tolist()} --> target {target.item()}")
+```
+
+```
+context [18] --> target 47
+context [18, 47] --> target 56
+context [18, 47, 56] --> target 57
+context [18, 47, 56, 57] --> target 58
+context [18, 47, 56, 57, 58] --> target 1
+context [18, 47, 56, 57, 58, 1] --> target 15
+context [18, 47, 56, 57, 58, 1, 15] --> target 47
+context [18, 47, 56, 57, 58, 1, 15, 47] --> target 58
+```
+
+That's `F`→`i`, `Fi`→`r`, `Fir`→`s`, `Firs`→`t`, `First`→`␣` ... eight examples from nine characters. The geometry of the shift:
+
+<svg viewBox="0 0 720 250" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="x and y tensors shifted by one position">
+  <style>
+    .cell { stroke: currentColor; stroke-width: 1.2; }
+    .lbl { font: 600 14px monospace; fill: currentColor; }
+    .tok { font: 13px monospace; fill: currentColor; text-anchor: middle; }
+    .note { font: italic 12px sans-serif; fill: currentColor; opacity: 0.75; }
+    .arrow { stroke: currentColor; stroke-width: 1.4; fill: none; opacity: 0.65; }
+  </style>
+  <text x="20" y="52" class="lbl">data</text>
+  <g>
+    <rect x="80" y="30" width="60" height="34" class="cell" fill="#38bdf855"/>
+    <rect x="140" y="30" width="60" height="34" class="cell" fill="#38bdf855"/>
+    <rect x="200" y="30" width="60" height="34" class="cell" fill="#38bdf855"/>
+    <rect x="260" y="30" width="60" height="34" class="cell" fill="#38bdf855"/>
+    <rect x="320" y="30" width="60" height="34" class="cell" fill="#38bdf855"/>
+    <rect x="380" y="30" width="60" height="34" class="cell" fill="#38bdf855"/>
+    <rect x="440" y="30" width="60" height="34" class="cell" fill="#38bdf855"/>
+    <rect x="500" y="30" width="60" height="34" class="cell" fill="#38bdf855"/>
+    <rect x="560" y="30" width="60" height="34" class="cell" fill="#38bdf855"/>
+    <text x="110" y="52" class="tok">18</text><text x="170" y="52" class="tok">47</text>
+    <text x="230" y="52" class="tok">56</text><text x="290" y="52" class="tok">57</text>
+    <text x="350" y="52" class="tok">58</text><text x="410" y="52" class="tok">1</text>
+    <text x="470" y="52" class="tok">15</text><text x="530" y="52" class="tok">47</text>
+    <text x="590" y="52" class="tok">58</text>
+  </g>
+  <text x="640" y="52" class="note">… 1.1M more</text>
+
+  <text x="20" y="132" class="lbl">x</text>
+  <g>
+    <rect x="80" y="110" width="60" height="34" class="cell" fill="#6366f155"/>
+    <rect x="140" y="110" width="60" height="34" class="cell" fill="#6366f155"/>
+    <rect x="200" y="110" width="60" height="34" class="cell" fill="#6366f155"/>
+    <rect x="260" y="110" width="60" height="34" class="cell" fill="#6366f155"/>
+    <rect x="320" y="110" width="60" height="34" class="cell" fill="#6366f155"/>
+    <rect x="380" y="110" width="60" height="34" class="cell" fill="#6366f155"/>
+    <rect x="440" y="110" width="60" height="34" class="cell" fill="#6366f155"/>
+    <rect x="500" y="110" width="60" height="34" class="cell" fill="#6366f155"/>
+    <text x="110" y="132" class="tok">18</text><text x="170" y="132" class="tok">47</text>
+    <text x="230" y="132" class="tok">56</text><text x="290" y="132" class="tok">57</text>
+    <text x="350" y="132" class="tok">58</text><text x="410" y="132" class="tok">1</text>
+    <text x="470" y="132" class="tok">15</text><text x="530" y="132" class="tok">47</text>
+  </g>
+  <text x="575" y="132" class="note">chunk[:-1]</text>
+
+  <text x="20" y="212" class="lbl">y</text>
+  <g>
+    <rect x="140" y="190" width="60" height="34" class="cell" fill="#22c55e55"/>
+    <rect x="200" y="190" width="60" height="34" class="cell" fill="#22c55e55"/>
+    <rect x="260" y="190" width="60" height="34" class="cell" fill="#22c55e55"/>
+    <rect x="320" y="190" width="60" height="34" class="cell" fill="#22c55e55"/>
+    <rect x="380" y="190" width="60" height="34" class="cell" fill="#22c55e55"/>
+    <rect x="440" y="190" width="60" height="34" class="cell" fill="#22c55e55"/>
+    <rect x="500" y="190" width="60" height="34" class="cell" fill="#22c55e55"/>
+    <rect x="560" y="190" width="60" height="34" class="cell" fill="#22c55e55"/>
+    <text x="170" y="212" class="tok">47</text><text x="230" y="212" class="tok">56</text>
+    <text x="290" y="212" class="tok">57</text><text x="350" y="212" class="tok">58</text>
+    <text x="410" y="212" class="tok">1</text><text x="470" y="212" class="tok">15</text>
+    <text x="530" y="212" class="tok">47</text><text x="590" y="212" class="tok">58</text>
+  </g>
+  <text x="635" y="212" class="note">chunk[1:]</text>
+
+  <path d="M 110 148 L 168 186" class="arrow" marker-end="url(#ah)"/>
+  <path d="M 350 148 L 408 186" class="arrow" marker-end="url(#ah)"/>
+  <path d="M 530 148 L 588 186" class="arrow" marker-end="url(#ah)"/>
+  <defs>
+    <marker id="ah" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto">
+      <path d="M0,0 L6,3 L0,6" fill="none" stroke="currentColor"/>
+    </marker>
+  </defs>
+  <text x="240" y="178" class="note">y[t] is the "correct next token" for x[..t]</text>
+</svg>
+
+`y` is just `x` shifted left by one position. When we build the model on Day 7, it will output a prediction *at every position simultaneously*, and the loss will compare position $t$'s prediction against `y[t]` — all `block_size` examples trained in one forward pass. This is why decoder-only transformers are so training-efficient, and it's also *why we need causal masking on Day 4*: the prediction at position $t$ must not be allowed to peek at `x[t+1:]`, or the task becomes trivial copying and the model learns nothing.
+
+There's a second subtlety worth naming: the model trains on contexts of *every length from 1 to block_size* (see the printout above). That's not an accident — it's what lets generation on Day 9 start from a single character and grow, rather than requiring a full window before it can predict anything. Beyond `block_size` tokens, though, the model is blind: token 300 cannot influence the prediction at token 600 if `block_size` is 256. Context length is a hard horizon.
+
+## `get_batch`: the whole data loader in nine lines
+
+Training on one window at a time would leave the GPU idle. We want a **batch**: `B` independent windows processed in parallel. Rather than pre-chopping the corpus into fixed chunks, we sample random offsets each time — every call sees fresh windows, and over many steps the model effectively sees every position in every alignment. Here's the function, complete and final; it will serve unchanged through Day 8:
+
+```python
+torch.manual_seed(1337)  # reproducible batches while we develop
+batch_size = 4           # B: sequences per batch
+block_size = 8           # T: tokens per sequence
+
+def get_batch(split: str):
+    data = train_data if split == "train" else val_data
+    ix = torch.randint(len(data) - block_size, (batch_size,))
+    x = torch.stack([data[i : i + block_size] for i in ix])
+    y = torch.stack([data[i + 1 : i + block_size + 1] for i in ix])
+    return x, y
+```
+
+Line by line, because every line has a reason:
+
+- **`data = train_data if ...`** — one function serves both splits; on Day 8 we'll call `get_batch("val")` inside the evaluation loop.
+- **`ix = torch.randint(len(data) - block_size, (batch_size,))`** — `B` random starting offsets. The upper bound is `len(data) - block_size`, *not* `len(data)`: the y-slice reaches to `i + block_size + 1`, and `torch.randint`'s high bound is exclusive, so the largest possible `i` is `len(data) - block_size - 1`, making the furthest index touched `len(data) - 1` + 1 = `len(data)` as an exclusive slice end. Exactly in bounds. Use `len(data)` as the bound and you'll get silently *short* sequences near the end of the corpus — slicing past the end doesn't raise in PyTorch, it truncates, and `torch.stack` then crashes with a ragged-shapes error. A confusing failure that fires only occasionally, depending on the random draw.
+- **`torch.stack([...])`** — stacks `B` tensors of shape `(T,)` into one `(B, T)` tensor. `stack` creates the new batch dimension; `cat` (the common mix-up) would concatenate into a single `(B*T,)` vector and everything downstream would break.
+- **the `y` slice** — same offsets, shifted by one. Each row of `y` is that row of `x`'s "answer key".
+
+Sanity-check it — *always* look at real values, not just shapes:
+
+```python
+xb, yb = get_batch("train")
+print("x:", tuple(xb.shape), " y:", tuple(yb.shape))
+print(xb)
+print(yb)
+print(repr(decode(xb[0].tolist())), "->", repr(decode(yb[0].tolist())))
+```
+
+```
+x: (4, 8)  y: (4, 8)
+tensor([[24, 43, 58,  5, 57,  1, 46, 43],
+        [44, 53, 56,  1, 58, 46, 39, 58],
+        [52, 58,  1, 58, 46, 39, 58,  1],
+        [25, 17, 27, 10,  0, 21,  1, 54]])
+tensor([[43, 58,  5, 57,  1, 46, 43, 39],
+        [53, 56,  1, 58, 46, 39, 58,  1],
+        [58,  1, 58, 46, 39, 58,  1, 46],
+        [17, 27, 10,  0, 21,  1, 54, 39]])
+"Let's he" -> "et's hea"
+```
+
+Every row of `yb` is the corresponding row of `xb` shifted left by one, with one new token entering on the right. Decoded, row 0 of `x` is `"Let's he"` and its targets spell `"et's hea"` — the model reading Shakespeare one character ahead of itself. A `(4, 8)` batch packs $4 \times 8 = 32$ next-token prediction problems into a single forward pass; at Day 8's real settings (`B=64, T=256`) that's 16,384 examples per step.
+
+One habit to adopt now: when we move to GPU training, `x` and `y` get sent to the device *inside the training loop*, right after `get_batch` — keeping the full `data` tensor on CPU and shipping only the small batch is the standard pattern for datasets that fit in RAM but not comfortably in VRAM.
+
+The complete file for today, `data.py` — everything above, assembled (~30 lines) — should end with a self-check you can run any time:
+
+```python
+if __name__ == "__main__":
+    assert decode(encode("hii there")) == "hii there"
+    xb, yb = get_batch("train")
+    assert xb.shape == yb.shape == (batch_size, block_size)
+    assert torch.equal(xb[0, 1:], yb[0, :-1])   # the shift, verified
+    print("data pipeline OK")
+```
+
+That third assert is the important one: it verifies the shifted-by-one relationship directly. If a future refactor breaks the offset arithmetic, this line fails immediately instead of the model mysteriously learning nothing on Day 8.
+
+## 🧪 Your task
+
+Extend the toy BPE from today into a usable mini-tokenizer. Using the same `toy` corpus and your learned `merges` list, write an `bpe_encode(word)` function that tokenizes a **new, unseen word** by (1) splitting it into characters plus the `</w>` marker, then (2) replaying the learned merges **in the order they were learned**, applying each one wherever it occurs in the word. Then tokenize `"lowest"` — a word that never appeared in the training corpus — and explain the output to yourself. You should find it decomposes into exactly two learned subwords.
+
+*Hint: replay order matters and is not frequency order at encode time — loop `for pair in merges:` and reuse your `merge_pair` logic on a single word (a list of symbols) instead of the whole vocab dict.*
+
+<details><summary>Solution</summary>
+
+```python
+def apply_merge(symbols: list[str], pair: tuple[str, str]) -> list[str]:
+    a, b = pair
+    out, i = [], 0
+    while i < len(symbols):
+        if i < len(symbols) - 1 and (symbols[i], symbols[i + 1]) == (a, b):
+            out.append(a + b)
+            i += 2
+        else:
+            out.append(symbols[i])
+            i += 1
+    return out
+
+def bpe_encode(word: str) -> list[str]:
+    symbols = list(word) + ["</w>"]
+    for pair in merges:              # replay in learned order
+        symbols = apply_merge(symbols, pair)
+    return symbols
+
+print(bpe_encode("lowest"))
+```
+
+```
+['low', 'est</w>']
+```
+
+Why this works: replaying the merges walks `l,o,w,e,s,t,</w>` through the same history the training corpus went through — `e,s` → `es`, then `es,t` → `est`, then `est,</w>` → `est</w>`, then `l,o` → `lo`, then `lo,w` → `low`. The unseen word `lowest` lands on two subwords the tokenizer *already knows*: the stem `low` (learned from `low`/`lower`) and the suffix `est</w>` (learned from `newest`/`widest`). That's the entire value proposition of BPE in one example — novel words decompose into familiar, meaningful pieces instead of becoming `<UNK>`. Note that learned order, not current pair frequency, drives encoding: real implementations store merges as a ranked list and always apply the earliest-learned applicable merge, which is exactly what the loop does.
+
+</details>
+
+## Key takeaways
+
+- A tokenizer is a reversible text↔integer mapping; `decode(encode(s)) == s` is its contract. Ours is two dicts and two one-liners.
+- Character-level keeps the vocab tiny (65) but makes sequences long; since attention is $O(T^2)$, real models use subword tokenizers.
+- BPE = "repeatedly merge the most frequent adjacent pair." Five merges by hand were enough to discover the morpheme *-est* and tokenize an unseen word.
+- Encode the whole corpus **once** into a single `torch.long` tensor; split train/val at a cut point, never by shuffling characters.
+- A window of `block_size + 1` tokens contains `block_size` training examples; `y` is `x` shifted left by one, and the model trains on all positions in parallel.
+- `get_batch` samples `B` random offsets and stacks windows into `(B, T)` tensors — the bound `len(data) - block_size` and `torch.stack` (not `cat`) are the two places it silently breaks if you get them wrong.
+
+Tomorrow we give those integers meaning: embedding tables turn token IDs into learned vectors, and positional information tells the model *where* in the context each token sits.
+
+------------------------------------------------------------------------
+
+[🏠 ⚡ Course home](index.html)  &nbsp;|&nbsp;  [← Day 01](day01.html)  &nbsp;|&nbsp;  [Day 03 →](day03.html)  &nbsp;|&nbsp;  [📚 All mini-courses](../../mini-courses.html)

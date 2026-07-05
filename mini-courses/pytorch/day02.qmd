@@ -1,0 +1,441 @@
+---
+title: "🔥 Deep Learning with PyTorch · Day 2 — Building Models with nn.Module"
+page-layout: full
+toc: true
+toc-location: left
+toc-title: "On this day"
+toc-depth: 2
+---
+
+[🏠 🔥 Course home](index.html)  &nbsp;|&nbsp;  [← Day 01](day01.html)  &nbsp;|&nbsp;  [Day 03 →](day03.html)  &nbsp;|&nbsp;  [📚 All mini-courses](../../mini-courses.html)
+
+------------------------------------------------------------------------
+
+# Day 2 — Building Models with nn.Module
+
+Yesterday you fit a straight line the hard way: you allocated `w` and `b` yourself, called `.backward()`, and updated tensors inside a `torch.no_grad()` block while manually zeroing gradients. That was the point — you now know exactly what autograd does. But nobody builds a 50-layer network by hand-managing 200 parameter tensors. Today you meet `nn.Module`, the abstraction that every PyTorch model — from a one-neuron regressor to a 70B-parameter transformer — is built on. By the end of the day you'll have rebuilt Day 1's regression in about ten lines, and more importantly, you'll understand what those ten lines are doing underneath: where the parameters live, how they're found, how they move to a GPU, and how `optim.SGD` replaces your manual update rule.
+
+::: {.callout-note appearance="simple"}
+🎯 **Today you will:** build networks with `nn.Linear` and activations, compare `nn.Sequential` against subclassing `nn.Module`, walk the parameter tree with `named_parameters()`, move a model to GPU/MPS correctly, apply explicit weight initialization, and rebuild Day 1's regression with `nn.Module` + `optim.SGD`
+:::
+
+## Why nn.Module exists
+
+Think about what you managed by hand yesterday, per parameter: creating the tensor with `requires_grad=True`, including it in the update loop, zeroing its `.grad`, and (if you had a GPU) putting it on the right device. Four responsibilities × two parameters = manageable. Four responsibilities × two hundred parameters = a bug farm.
+
+`nn.Module` is a container that solves exactly one problem: **parameter bookkeeping**. Anything assigned to a module as an `nn.Parameter` (or as a sub-module containing parameters) is automatically *registered*. Registration is what makes three magic behaviors work:
+
+1. `model.parameters()` finds every parameter recursively — so the optimizer can update all of them.
+2. `model.to(device)` moves every parameter and buffer — so nothing gets left behind on the CPU.
+3. `model.state_dict()` serializes everything — which is how saving/loading works on Day 9.
+
+Here's the smallest useful module, `nn.Linear`, which computes exactly the affine map you wrote manually yesterday:
+
+```python
+import torch
+import torch.nn as nn
+
+torch.manual_seed(0)
+
+layer = nn.Linear(in_features=3, out_features=2)
+print(layer.weight.shape)   # torch.Size([2, 3])
+print(layer.bias.shape)     # torch.Size([2])
+print(type(layer.weight))   # <class 'torch.nn.parameter.Parameter'>
+```
+
+Two things to burn in. First, the weight is stored **transposed**: a layer mapping 3 features to 2 stores a `(2, 3)` weight, because the forward computation is
+
+$$y = x W^\top + b$$
+
+Second, `layer.weight` is not a plain tensor — it's an `nn.Parameter`, which is a tensor subclass that (a) has `requires_grad=True` by default and (b) triggers registration when assigned to a module. That's the whole trick.
+
+```python
+x = torch.randn(5, 3)       # a batch of 5 samples, 3 features each
+y = layer(x)                # calls layer.forward(x) — via __call__
+print(y.shape)              # torch.Size([5, 2])
+```
+
+Note the shape flow: `(5, 3) @ (3, 2) + (2,) → (5, 2)`. The batch dimension passes through untouched; `nn.Linear` only ever acts on the **last** dimension. Feed it `(batch, seq, 3)` and you get `(batch, seq, 2)` — this is why the same layer works in MLPs and transformers alike.
+
+<svg viewBox="0 0 720 240" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Shape flow through nn.Linear">
+  <g font-family="monospace" font-size="14" fill="currentColor">
+    <!-- input matrix -->
+    <rect x="30" y="60" width="90" height="120" rx="6" fill="#38bdf8" fill-opacity="0.25" stroke="currentColor"/>
+    <text x="75" y="125" text-anchor="middle" font-weight="bold">x</text>
+    <text x="75" y="205" text-anchor="middle">(5, 3)</text>
+    <text x="75" y="45" text-anchor="middle" font-size="12">batch of 5</text>
+    <!-- matmul symbol -->
+    <text x="150" y="125" text-anchor="middle" font-size="20">@</text>
+    <!-- weight transposed -->
+    <rect x="180" y="80" width="80" height="80" rx="6" fill="#6366f1" fill-opacity="0.25" stroke="currentColor"/>
+    <text x="220" y="115" text-anchor="middle" font-weight="bold">Wᵀ</text>
+    <text x="220" y="140" text-anchor="middle" font-size="12">(3, 2)</text>
+    <text x="220" y="205" text-anchor="middle" font-size="12">stored as (2, 3)</text>
+    <!-- plus -->
+    <text x="290" y="125" text-anchor="middle" font-size="20">+</text>
+    <!-- bias -->
+    <rect x="320" y="105" width="70" height="30" rx="6" fill="#f59e0b" fill-opacity="0.3" stroke="currentColor"/>
+    <text x="355" y="126" text-anchor="middle" font-weight="bold">b</text>
+    <text x="355" y="160" text-anchor="middle" font-size="12">(2,) broadcast</text>
+    <!-- arrow -->
+    <line x1="410" y1="120" x2="490" y2="120" stroke="currentColor" stroke-width="2"/>
+    <polygon points="490,114 502,120 490,126" fill="currentColor"/>
+    <!-- output -->
+    <rect x="520" y="60" width="70" height="120" rx="6" fill="#22c55e" fill-opacity="0.25" stroke="currentColor"/>
+    <text x="555" y="125" text-anchor="middle" font-weight="bold">y</text>
+    <text x="555" y="205" text-anchor="middle">(5, 2)</text>
+    <text x="555" y="45" text-anchor="middle" font-size="12">batch preserved</text>
+  </g>
+</svg>
+
+One more habit to establish now: **call the module, never `forward()` directly**. `layer(x)` routes through `__call__`, which runs hooks that other machinery (mixed precision, model summaries, `torch.compile` internals) relies on. `layer.forward(x)` skips all of it and will eventually bite you.
+
+## Activations and nn.Sequential — the quick way to stack
+
+A stack of linear layers with nothing between them collapses to a single linear layer — $W_2(W_1 x) = (W_2 W_1)x$ — so any network deeper than one layer needs nonlinearities. PyTorch offers them in two flavors: as **modules** (`nn.ReLU()`, objects you place in a model) and as **functions** (`torch.relu`, called inline in a forward pass). Same math, different packaging; you'll use both today.
+
+The fastest way to build a plain feed-forward stack is `nn.Sequential`, which chains modules and pipes each output into the next input:
+
+```python
+mlp = nn.Sequential(
+    nn.Linear(3, 16),
+    nn.ReLU(),
+    nn.Linear(16, 16),
+    nn.ReLU(),
+    nn.Linear(16, 1),
+)
+
+x = torch.randn(5, 3)
+print(mlp(x).shape)   # torch.Size([5, 1])
+print(mlp)
+```
+
+```text
+Sequential(
+  (0): Linear(in_features=3, out_features=16, bias=True)
+  (1): ReLU()
+  (2): Linear(in_features=16, out_features=16, bias=True)
+  (3): ReLU()
+  (4): Linear(in_features=16, out_features=1, bias=True)
+)
+```
+
+The printout is not decoration — those `(0)`, `(1)` indices are how you address sub-modules (`mlp[0].weight`), and the same names show up in `state_dict()` keys. If you want readable names instead of indices, pass an `OrderedDict` or use `nn.Sequential`'s dict form; but honestly, once you care about names, you're usually better off subclassing (next section).
+
+The classic shape mistake to make once, on purpose:
+
+```python
+bad = nn.Sequential(nn.Linear(3, 16), nn.ReLU(), nn.Linear(8, 1))  # 16 ≠ 8
+try:
+    bad(torch.randn(5, 3))
+except RuntimeError as e:
+    print(e)
+```
+
+```text
+mat1 and mat2 shapes cannot be multiplied (5x16 and 8x1)
+```
+
+Read that error the PyTorch way: `mat1` is your activation `(5, 16)`, `mat2` is the layer's transposed weight `(8, 1)` — the inner dimensions `16` and `8` disagree. Errors like this are *runtime* errors, not construction errors: PyTorch happily builds an inconsistent `Sequential` and only complains when data flows through. That's the price of dynamic graphs, and the reason the shape-inspection habits in the next sections matter.
+
+## Subclassing nn.Module — the real pattern
+
+`nn.Sequential` handles pipelines. It cannot handle a forward pass with branches, skip connections, multiple inputs, or any logic at all. For that — which is to say, for almost every real model — you subclass `nn.Module` and implement exactly two methods:
+
+- `__init__`: create the layers (this is where parameters get **registered**).
+- `forward`: define how data flows through them (this is where the computation graph gets **built**, fresh on every call).
+
+```python
+class MLP(nn.Module):
+    def __init__(self, in_dim: int, hidden: int, out_dim: int):
+        super().__init__()                    # non-negotiable: registers the bookkeeping
+        self.fc1 = nn.Linear(in_dim, hidden)
+        self.fc2 = nn.Linear(hidden, hidden)
+        self.head = nn.Linear(hidden, out_dim)
+        self.act = nn.ReLU()
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        h = self.act(self.fc1(x))
+        h = self.act(self.fc2(h)) + h         # a residual connection — try THAT in Sequential
+        return self.head(h)
+
+model = MLP(in_dim=3, hidden=16, out_dim=1)
+print(model(torch.randn(5, 3)).shape)         # torch.Size([5, 1])
+```
+
+Line-by-line, the parts that matter:
+
+- **`super().__init__()` must come first.** It initializes the internal dictionaries (`_parameters`, `_modules`, `_buffers`) that assignment hooks write into. Forget it and the very first `self.fc1 = ...` raises `AttributeError: cannot assign module before Module.__init__() call` — a confusing message for a simple omission.
+- **Assignment is registration.** `self.fc1 = nn.Linear(...)` doesn't just store an attribute; `nn.Module.__setattr__` notices it's a module and records it in `_modules`. This is why `model.parameters()` later finds `fc1.weight` without you doing anything. Corollary: stash layers in a plain Python list and they become *invisible* — the optimizer never sees them, `.to(device)` never moves them, and your model silently doesn't train. Use `nn.ModuleList` or `nn.ModuleDict` for collections.
+- **`forward` is just Python.** Conditionals, loops, `print()` for debugging — all legal, because the graph is rebuilt dynamically each call. The residual `+ h` above is one line; in a static-graph world it's a plumbing exercise.
+- **One `self.act` reused twice** is fine: `nn.ReLU` has no parameters, so there's nothing to share incorrectly. (For stateful modules like dropout or batchnorm, give each site its own instance — you'll see why on Day 7.)
+
+Here's the structure you just built, as PyTorch sees it:
+
+```{mermaid}
+flowchart LR
+    X[/"x (B, 3)"/] --> FC1["fc1: Linear 3→16"]
+    FC1 --> A1["ReLU"]
+    A1 --> FC2["fc2: Linear 16→16"]
+    FC2 --> A2["ReLU"]
+    A2 --> ADD(("+"))
+    A1 -- "skip connection" --> ADD
+    ADD --> HEAD["head: Linear 16→1"]
+    HEAD --> Y[/"y (B, 1)"/]
+```
+
+**When to use which?** `nn.Sequential` for straight pipelines and for tidy sub-blocks *inside* a subclass (`self.encoder = nn.Sequential(...)` is a very common hybrid). Subclassing for everything else. There is no performance difference — `Sequential` is itself just a subclass whose `forward` is a for-loop.
+
+## Walking the parameter tree
+
+Everything the optimizer will touch is reachable through two iterators. `parameters()` yields raw tensors; `named_parameters()` yields `(name, tensor)` pairs where the name is the dotted attribute path — your primary debugging tool.
+
+```python
+for name, p in model.named_parameters():
+    print(f"{name:12s} {str(tuple(p.shape)):10s} requires_grad={p.requires_grad}")
+
+total = sum(p.numel() for p in model.parameters())
+print(f"total parameters: {total:,}")
+```
+
+```text
+fc1.weight   (16, 3)   requires_grad=True
+fc1.bias     (16,)     requires_grad=True
+fc2.weight   (16, 16)  requires_grad=True
+fc2.bias     (16,)     requires_grad=True
+head.weight  (1, 16)   requires_grad=True
+head.bias    (1,)      requires_grad=True
+total parameters: 353
+```
+
+Check the arithmetic once by hand and you'll trust it forever: $16{\times}3 + 16 + 16{\times}16 + 16 + 1{\times}16 + 1 = 353$. Notice `act` contributes nothing — activations are parameter-free — and notice the names mirror your `self.` attribute names exactly. When a checkpoint fails to load on Day 9 with a "missing keys" error, these names are what it's complaining about.
+
+The one-liner `sum(p.numel() for p in model.parameters())` is worth memorizing; it's the standard way to answer "how big is this model?".
+
+For shape debugging in deeper models where you can't eyeball the flow, a **forward hook** prints every intermediate shape without touching the model code:
+
+```python
+def shape_hook(module, args, output):
+    print(f"{module.__class__.__name__:8s} -> {tuple(output.shape)}")
+
+handles = [m.register_forward_hook(shape_hook)
+           for m in model.modules() if len(list(m.children())) == 0]
+
+model(torch.randn(5, 3))
+for h in handles:
+    h.remove()          # always clean up — hooks persist otherwise
+```
+
+```text
+Linear   -> (5, 16)
+ReLU     -> (5, 16)
+Linear   -> (5, 16)
+ReLU     -> (5, 16)
+Linear   -> (5, 1)
+```
+
+The filter `len(list(m.children())) == 0` selects only *leaf* modules (skipping the `MLP` container itself). Hooks are the mechanism behind most model-inspection tooling; knowing this crude version means you're never stuck when a fancy summary library isn't installed.
+
+## Devices and weight initialization
+
+**Devices.** Two rules cover 95% of device bugs. Rule one: `model.to(device)` moves parameters **in place** for modules (unlike tensors, where `.to()` returns a new tensor and you must reassign) — but write `model = model.to(device)` anyway; it's harmless and consistent. Rule two: the model and its input must be on the same device, or you get the single most-Googled PyTorch error.
+
+```python
+device = (
+    "cuda" if torch.cuda.is_available()
+    else "mps" if torch.backends.mps.is_available()   # Apple Silicon
+    else "cpu"
+)
+model = model.to(device)
+print(next(model.parameters()).device)   # e.g. mps:0 — the idiom for "where is my model?"
+
+x = torch.randn(5, 3)                    # still on CPU!
+try:
+    model(x)
+except RuntimeError as e:
+    print(type(e).__name__, "- input and weights on different devices")
+
+y = model(x.to(device))                  # fixed
+```
+
+A model has no `.device` attribute (its parameters could in principle be spread across devices), hence the `next(model.parameters()).device` idiom.
+
+**Initialization.** You may have noticed we never initialized anything, yet the model worked. `nn.Linear` self-initializes with Kaiming-uniform scaled by fan-in — a sane default for ReLU networks. But you should know how to override it, because (a) some architectures need it, (b) papers specify it, and (c) it's the standard way to make experiments reproducible-by-construction. The idiom is `apply()`, which walks every sub-module recursively:
+
+```python
+def init_weights(m: nn.Module) -> None:
+    if isinstance(m, nn.Linear):
+        nn.init.xavier_uniform_(m.weight)   # trailing underscore = in-place
+        nn.init.zeros_(m.bias)
+
+torch.manual_seed(42)
+model.apply(init_weights)
+print(model.fc1.weight.std())    # tensor(0.2323, grad_fn=<StdBackward0>)
+```
+
+Everything in `nn.init` ends in an underscore because it mutates the tensor in place — under `torch.no_grad()` internally, so autograd doesn't record the initialization as a graph operation. The `isinstance` check matters: `apply` visits *every* module including `ReLU` and the `MLP` container itself, and those have no `.weight` to write.
+
+Rule of thumb you'll refine on Day 7: Xavier/Glorot for tanh/sigmoid-ish networks, Kaiming/He for ReLU networks. Wrong init on a 3-layer MLP: invisible. Wrong init on a 50-layer network: vanished gradients and a flat loss curve.
+
+## Rebuilding Day 1's regression, the grown-up way
+
+Time to close the loop. Yesterday's problem: noisy data from $y = 3x + 2$, fit by manually nudging `w` and `b`. Same problem, new tooling — `nn.Module` owns the parameters, `optim.SGD` owns the update rule.
+
+Stage 1 — data, identical in spirit to Day 1 but shaped for `nn.Linear`:
+
+```python
+import torch
+import torch.nn as nn
+
+torch.manual_seed(0)
+X = torch.rand(100, 1) * 10                    # (100, 1) — note the feature dim!
+y = 3 * X + 2 + torch.randn(100, 1) * 0.5      # (100, 1)
+```
+
+The shape is the one real change from Day 1: `nn.Linear` expects `(batch, features)`, so even a single scalar feature needs that trailing dimension. Passing a flat `(100,)` tensor raises a matmul shape error; passing `(100,)` targets against `(100, 1)` predictions is worse — it silently broadcasts to `(100, 100)` inside the loss and trains on garbage. When a regression "trains" but the loss looks weird, check target shapes first.
+
+Stage 2 — model, loss, optimizer:
+
+```python
+model = nn.Linear(1, 1)                        # w: (1,1), b: (1,) — same 2 params as Day 1
+loss_fn = nn.MSELoss()
+optimizer = torch.optim.SGD(model.parameters(), lr=0.01)
+```
+
+The line to stare at is the last one. `model.parameters()` hands the optimizer references to the exact tensors inside the model — not copies. When the optimizer later does its update, it mutates those tensors in place, and the model sees the change because they are the *same objects*. This is also why you build the optimizer **after** any `model.to(device)`: move the model afterwards and (for some optimizer/device combinations) the optimizer's internal state can end up referencing stale CPU tensors. Model to device first, optimizer second — make it muscle memory.
+
+`nn.MSELoss` is itself a module (parameter-free, like ReLU); calling it computes $\frac{1}{N}\sum_i (\hat{y}_i - y_i)^2$ and returns a scalar tensor attached to the graph.
+
+Stage 3 — the training loop. Compare each line to what you wrote by hand yesterday:
+
+```python
+for epoch in range(200):
+    y_hat = model(X)                  # forward: builds the graph
+    loss = loss_fn(y_hat, y)          # scalar tensor
+
+    optimizer.zero_grad()             # was: w.grad = None; b.grad = None
+    loss.backward()                   # unchanged — autograd is autograd
+    optimizer.step()                  # was: with torch.no_grad(): w -= lr * w.grad; ...
+
+    if epoch % 50 == 0 or epoch == 199:
+        print(f"epoch {epoch:3d}  loss {loss.item():.4f}")
+
+w = model.weight.item()
+b = model.bias.item()
+print(f"learned: y = {w:.3f}x + {b:.3f}   (true: y = 3x + 2)")
+```
+
+```text
+epoch   0  loss 268.9260
+epoch  50  loss 0.3722
+epoch 100  loss 0.3435
+epoch 150  loss 0.3193
+epoch 199  loss 0.2993
+learned: y = 3.043x + 1.727   (true: y = 3x + 2)
+```
+
+The mapping is exact, and it's worth saying out loud: `optimizer.zero_grad()` replaces your manual grad-clearing (still mandatory — gradients still **accumulate** across `backward()` calls, exactly as you proved yesterday; the optimizer doesn't change that, it just gives you a one-call way to clear every registered parameter). `optimizer.step()` replaces your `no_grad` update block — it reads each parameter's `.grad` and applies $\theta \leftarrow \theta - \eta \, \nabla_\theta L$ in place. `loss.backward()` is untouched: modules changed *who owns the parameters*, not *how gradients are computed*.
+
+The order — forward, zero, backward, step — is the skeleton of every training loop you will ever write, including the industrial-strength version we build on Day 4.
+
+And here's the payoff for all that abstraction: upgrading from a line to a neural network is now a **one-line change**.
+
+```python
+torch.manual_seed(0)
+model = nn.Sequential(nn.Linear(1, 32), nn.ReLU(), nn.Linear(32, 1))
+optimizer = torch.optim.SGD(model.parameters(), lr=0.01)
+# ... the training loop above runs unmodified
+```
+
+The loop doesn't know or care whether `model.parameters()` yields 2 tensors or 2 million. That decoupling — model architecture on one side, optimization procedure on the other, joined only by the `parameters()` iterator — is the core design of PyTorch, and you now own both sides of it.
+
+## 🧪 Your task
+
+Yesterday's line can't fit a curve. Generate data from $y = \sin(x) + 0.1\varepsilon$ for $x \in [0, 2\pi]$, then build a subclassed `nn.Module` called `SineNet` — at least two hidden layers with `Tanh` activations (tanh suits smooth targets better than ReLU here) — and train it with `optim.SGD` to fit the sine wave. Requirements: initialize all `Linear` weights with `xavier_uniform_` via `apply()`, print the total parameter count before training, and train until the MSE loss drops below 0.02. Then, for contrast, train a plain `nn.Linear(1, 1)` on the same data and print both final losses — see for yourself what the hidden layers buy you.
+
+*Hint:* if the loss plateaus around 0.5, your network is fine but SGD is slow on this problem — raise the learning rate to ~0.1, widen the hidden layers to 64, or simply train for more epochs (5,000 is not a crime for a model this small). And remember the shapes: `X` must be `(N, 1)`, not `(N,)`.
+
+<details><summary>Solution</summary>
+
+```python
+import math
+import torch
+import torch.nn as nn
+
+torch.manual_seed(0)
+
+# --- data: (N, 1) shapes, always ---
+X = torch.rand(200, 1) * 2 * math.pi
+y = torch.sin(X) + 0.1 * torch.randn(200, 1)
+
+# --- model ---
+class SineNet(nn.Module):
+    def __init__(self, hidden: int = 64):
+        super().__init__()
+        self.net = nn.Sequential(          # Sequential-inside-subclass hybrid
+            nn.Linear(1, hidden),
+            nn.Tanh(),
+            nn.Linear(hidden, hidden),
+            nn.Tanh(),
+            nn.Linear(hidden, 1),
+        )
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return self.net(x)
+
+def init_weights(m: nn.Module) -> None:
+    if isinstance(m, nn.Linear):
+        nn.init.xavier_uniform_(m.weight)
+        nn.init.zeros_(m.bias)
+
+model = SineNet()
+model.apply(init_weights)
+print("params:", sum(p.numel() for p in model.parameters()))   # params: 4353
+
+# --- train ---
+loss_fn = nn.MSELoss()
+optimizer = torch.optim.SGD(model.parameters(), lr=0.1)
+
+for epoch in range(5000):
+    loss = loss_fn(model(X), y)
+    optimizer.zero_grad()
+    loss.backward()
+    optimizer.step()
+    if loss.item() < 0.02:
+        print(f"converged at epoch {epoch}, loss {loss.item():.4f}")
+        break
+else:
+    print(f"final loss {loss.item():.4f}")
+
+# --- baseline: a straight line cannot fit a sine ---
+torch.manual_seed(0)
+linear = nn.Linear(1, 1)
+opt = torch.optim.SGD(linear.parameters(), lr=0.01)
+for _ in range(5000):
+    l = loss_fn(linear(X), y)
+    opt.zero_grad(); l.backward(); opt.step()
+
+print(f"SineNet loss: {loss.item():.4f}   Linear loss: {l.item():.4f}")
+# SineNet loss: ~0.019    Linear loss: ~0.21
+```
+
+The linear model stalls around 0.21 — the best any straight line can do against a sine — while the two-hidden-layer network drives well below it. Parameter count check: $1{\times}64+64$ + $64{\times}64+64$ + $64{\times}1+1 = 4353$. If your SineNet plateaus, it's almost always learning rate (try 0.1–0.5 for tanh nets on this scale) rather than architecture.
+
+</details>
+
+## Key takeaways
+
+- `nn.Module` is a parameter-bookkeeping container: assignment of an `nn.Parameter` or sub-module registers it, which powers `parameters()`, `.to(device)`, and `state_dict()`.
+- `nn.Linear(in, out)` stores weight as `(out, in)` and computes $y = xW^\top + b$ on the **last** dimension; batch dims pass through.
+- `nn.Sequential` for straight pipelines; subclass with `__init__` (create layers) + `forward` (wire them, plain Python) for anything with branches or logic. Call `model(x)`, never `model.forward(x)`.
+- `super().__init__()` first, always; plain Python lists hide parameters — use `nn.ModuleList`.
+- `named_parameters()` and `sum(p.numel() ...)` are your inspection workhorses; forward hooks print shapes in deep models.
+- Init via `model.apply(fn)` with `isinstance` checks and in-place `nn.init.*_` functions; Kaiming for ReLU, Xavier for tanh.
+- Model to device **before** building the optimizer; model and inputs must share a device.
+- The eternal loop: forward → `zero_grad()` → `backward()` → `step()`. The optimizer holds live references to the model's parameters — that's the whole handshake.
+
+Tomorrow: your data outgrows a single in-memory tensor — `Dataset` and `DataLoader` bring batching, shuffling, and parallel loading to the pipeline.
+
+------------------------------------------------------------------------
+
+[🏠 🔥 Course home](index.html)  &nbsp;|&nbsp;  [← Day 01](day01.html)  &nbsp;|&nbsp;  [Day 03 →](day03.html)  &nbsp;|&nbsp;  [📚 All mini-courses](../../mini-courses.html)

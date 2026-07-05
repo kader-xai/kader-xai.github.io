@@ -1,0 +1,554 @@
+---
+title: "⚡ Building Transformers from Scratch with PyTorch · Day 7 — Assembling the Full GPT"
+page-layout: full
+toc: true
+toc-location: left
+toc-title: "On this day"
+toc-depth: 2
+---
+
+[🏠 ⚡ Course home](index.html)  &nbsp;|&nbsp;  [← Day 06](day06.html)  &nbsp;|&nbsp;  [Day 08 →](day08.html)  &nbsp;|&nbsp;  [📚 All mini-courses](../../mini-courses.html)
+
+------------------------------------------------------------------------
+
+# Day 7 — Assembling the Full GPT
+
+Yesterday you built the transformer block — pre-LN, causal self-attention, MLP, two residual connections — and confirmed that stacking it preserves the `(B, T, C)` shape. Today you cash in everything from Days 2–6 and assemble the complete model: a `GPT` class that takes raw token IDs in and produces next-token logits (and a training loss) out. Along the way you'll meet the three pieces that live *outside* the block stack — the final LayerNorm, the language-model head, and the loss — plus two details that separate a toy that trains from a toy that trains *well*: weight tying and the GPT-2 initialization scheme. By the end of the day you'll have a clean, complete `model.py` of roughly 120 lines, verified end-to-end, and know exactly where each of its 10.75 million parameters lives. (For the theory behind the architecture, the encyclopedia's Attention & Transformers chapter is the companion read; here we build.)
+
+::: {.callout-note appearance="simple"}
+🎯 **Today you will:** stack `n_layer` blocks into a full GPT class, implement the causal-LM cross-entropy loss with the shift-and-flatten trick, tie the LM head to the token embedding, apply the GPT-2 init scheme, and count every parameter by hand
+:::
+
+## The final assembly
+
+Everything you've written so far is a stage in one pipeline. The full model is surprisingly thin — the block stack does all the heavy lifting, and the wrapper around it is just embeddings on the way in and a normalize-then-project on the way out:
+
+```{mermaid}
+flowchart TB
+    A["idx : (B, T) token IDs"] --> B["tok_emb — Day 3\n(B, T, C)"]
+    P["pos_emb — Day 3\n(T, C)"] --> C
+    B --> C["add + dropout\n(B, T, C)"]
+    C --> D
+    subgraph S["× n_layer — Day 6"]
+        D["Block 1"] --> E["Block 2"] --> F["…"] --> G["Block n_layer"]
+    end
+    G --> H["ln_f : final LayerNorm\n(B, T, C)"]
+    H --> I["lm_head : Linear C → vocab\n(B, T, V)"]
+    I --> J["logits"]
+    J --> K["cross_entropy vs targets\nscalar loss"]
+    T2["targets : (B, T)"] --> K
+```
+
+Two of these boxes are new today, and both are easy to forget:
+
+**The final LayerNorm (`ln_f`).** In the pre-LN architecture from Day 6, normalization happens at the *entrance* of each sub-layer, which means the residual stream itself is never normalized — activations just keep accumulating through 2 × `n_layer` additions. Without a final LayerNorm, the LM head would receive features whose scale grows with depth, and logits would be miscalibrated from step one. `ln_f` cleans the stream up exactly once, right before the projection to vocabulary space. GPT-2 introduced this and every pre-LN model since has kept it.
+
+**The LM head.** A single `nn.Linear(n_embd, vocab_size, bias=False)`. It converts each position's `C`-dimensional feature vector into `V` raw scores — one per vocabulary entry. No softmax here: `F.cross_entropy` applies log-softmax internally, and doing it twice is a classic silent bug (the loss still goes down, just slower, and you lose numerical stability).
+
+## Config and the skeleton
+
+We collect every hyperparameter into one dataclass so the whole model is describable in six numbers. These defaults define the tiny-GPT we'll train on Day 8 — char-level Shakespeare from Day 2, 6 layers, 6 heads, 384-dim embeddings:
+
+```python
+# model.py — part 1: configuration
+import math
+from dataclasses import dataclass
+
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+
+
+@dataclass
+class GPTConfig:
+    vocab_size: int = 65      # char-level Shakespeare vocab (Day 2)
+    block_size: int = 256     # maximum context length
+    n_layer: int = 6
+    n_head: int = 6
+    n_embd: int = 384
+    dropout: float = 0.1
+```
+
+A dataclass (stdlib, no framework needed) buys you three things: one object to pass around instead of six loose arguments, defaults in one visible place, and `GPTConfig(n_layer=2)` for quick experiments. `n_embd % n_head == 0` must hold (384 / 6 = 64-dim heads) — we assert it inside the attention module, where the violation actually breaks.
+
+Now the skeleton. This is the constructor — read it against the mermaid diagram above; they match box for box:
+
+```python
+# model.py — part 2: the GPT class, constructor
+class GPT(nn.Module):
+    def __init__(self, cfg):
+        super().__init__()
+        self.cfg = cfg
+        self.tok_emb = nn.Embedding(cfg.vocab_size, cfg.n_embd)   # Day 3
+        self.pos_emb = nn.Embedding(cfg.block_size, cfg.n_embd)   # Day 3
+        self.drop = nn.Dropout(cfg.dropout)
+        self.blocks = nn.ModuleList([Block(cfg) for _ in range(cfg.n_layer)])
+        self.ln_f = nn.LayerNorm(cfg.n_embd)                      # new today
+        self.lm_head = nn.Linear(cfg.n_embd, cfg.vocab_size, bias=False)
+        self.lm_head.weight = self.tok_emb.weight                 # weight tying (§ below)
+
+        self.apply(self._init_weights)                            # init scheme (§ below)
+        for name, p in self.named_parameters():
+            if name.endswith("proj.weight"):                      # residual projections
+                nn.init.normal_(p, mean=0.0, std=0.02 / math.sqrt(2 * cfg.n_layer))
+```
+
+Why `nn.ModuleList` and not `nn.Sequential`? Both work for a plain stack. `ModuleList` plus an explicit `for` loop in `forward` keeps the door open for things you'll want later (activation checkpointing, per-layer inspection, early exit) and — more importantly for this course — makes the data flow visible instead of hidden inside `Sequential.__call__`. What you must **not** do is store blocks in a plain Python list: `nn.Module` only registers parameters it can see through `ModuleList`/`ModuleDict`/attribute assignment, so `self.blocks = [Block(cfg) for ...]` would silently train a model with *zero* block parameters. The loss would plateau around 3.3 and you'd stare at it for an hour.
+
+## The forward pass: IDs in, logits out
+
+The forward pass has a dual personality: with `targets` it returns a training loss, without them it returns just logits (which Day 9's generation loop will consume). One method, both modes:
+
+```python
+# model.py — part 3: forward
+    def forward(self, idx, targets=None):
+        B, T = idx.shape
+        assert T <= self.cfg.block_size, f"sequence length {T} > block_size"
+        pos = torch.arange(T, device=idx.device)                  # (T,)
+        x = self.tok_emb(idx) + self.pos_emb(pos)                 # (B,T,C) + (T,C) → (B,T,C)
+        x = self.drop(x)
+        for block in self.blocks:
+            x = block(x)                                          # (B, T, C) throughout
+        x = self.ln_f(x)                                          # normalize the residual stream
+        logits = self.lm_head(x)                                  # (B, T, vocab_size)
+        loss = None
+        if targets is not None:
+            loss = F.cross_entropy(logits.view(-1, logits.size(-1)),
+                                   targets.view(-1))
+        return logits, loss
+```
+
+Walk the shapes:
+
+| line | tensor | shape | notes |
+|---|---|---|---|
+| input | `idx` | `(B, T)` | integer token IDs |
+| `tok_emb(idx)` | | `(B, T, C)` | lookup, Day 3 |
+| `pos_emb(pos)` | | `(T, C)` | broadcasts over the batch dim |
+| after blocks | `x` | `(B, T, C)` | shape-preserving, Day 6 |
+| `lm_head(x)` | `logits` | `(B, T, V)` | one score per vocab entry, per position |
+| `logits.view(-1, V)` | | `(B·T, V)` | flatten for the loss |
+| `targets.view(-1)` | | `(B·T,)` | flatten to match |
+
+Two deliberate details. First, `pos = torch.arange(T, device=idx.device)` — creating the position indices *on the input's device* is what lets the same code run on CPU, CUDA, and MPS without a forest of `.to(device)` calls. Forget it and you get a cross-device error the first time you move the model to GPU on Day 8. Second, the `T <= block_size` assert: `pos_emb` only has `block_size` rows, so a longer sequence would raise an opaque `IndexError` deep inside the embedding lookup. The assert turns it into a readable message at the boundary.
+
+## The causal-LM loss: shift and flatten
+
+Here's the part that confuses everyone the first time, so let's slow down. A causal language model is trained on one objective: **at every position $t$, predict token $t{+}1$.** There is no separate "label" — the text is its own supervision. Day 2's `get_batch` already did the shifting for us: it returns `x = data[i : i+T]` and `y = data[i+1 : i+T+1]`, the same window slid one token to the right.
+
+<svg viewBox="0 0 700 300" xmlns="http://www.w3.org/2000/svg" font-family="monospace" font-size="13">
+  <text x="20" y="28" fill="currentColor" font-weight="bold" font-family="sans-serif">1. The shift: targets are inputs slid one step left</text>
+  <!-- input row -->
+  <text x="20" y="62" fill="currentColor">idx</text>
+  <g stroke="currentColor" stroke-opacity="0.6" fill="#6366f1" fill-opacity="0.25">
+    <rect x="70" y="44" width="70" height="28" rx="4"/><rect x="146" y="44" width="70" height="28" rx="4"/>
+    <rect x="222" y="44" width="70" height="28" rx="4"/><rect x="298" y="44" width="70" height="28" rx="4"/>
+    <rect x="374" y="44" width="70" height="28" rx="4"/>
+  </g>
+  <g fill="currentColor" text-anchor="middle">
+    <text x="105" y="63">To</text><text x="181" y="63">be</text><text x="257" y="63">or</text>
+    <text x="333" y="63">not</text><text x="409" y="63">to</text>
+  </g>
+  <!-- arrows: position t predicts t+1 -->
+  <g stroke="#f59e0b" fill="none" stroke-width="1.6">
+    <path d="M105 76 C 120 96, 166 96, 181 112"/><path d="M181 76 C 196 96, 242 96, 257 112"/>
+    <path d="M257 76 C 272 96, 318 96, 333 112"/><path d="M333 76 C 348 96, 394 96, 409 112"/>
+    <path d="M409 76 C 424 96, 470 96, 485 112"/>
+  </g>
+  <g fill="#f59e0b">
+    <path d="M181 112 l-7 -4 l2 8 z"/><path d="M257 112 l-7 -4 l2 8 z"/><path d="M333 112 l-7 -4 l2 8 z"/>
+    <path d="M409 112 l-7 -4 l2 8 z"/><path d="M485 112 l-7 -4 l2 8 z"/>
+  </g>
+  <!-- target row -->
+  <text x="20" y="136" fill="currentColor">tgt</text>
+  <g stroke="currentColor" stroke-opacity="0.6" fill="#22c55e" fill-opacity="0.25">
+    <rect x="146" y="118" width="70" height="28" rx="4"/><rect x="222" y="118" width="70" height="28" rx="4"/>
+    <rect x="298" y="118" width="70" height="28" rx="4"/><rect x="374" y="118" width="70" height="28" rx="4"/>
+    <rect x="450" y="118" width="70" height="28" rx="4"/>
+  </g>
+  <g fill="currentColor" text-anchor="middle">
+    <text x="181" y="137">be</text><text x="257" y="137">or</text><text x="333" y="137">not</text>
+    <text x="409" y="137">to</text><text x="485" y="137">be</text>
+  </g>
+  <text x="540" y="63" fill="currentColor" opacity="0.7" font-size="11" font-family="sans-serif">T predictions</text>
+  <text x="540" y="137" fill="currentColor" opacity="0.7" font-size="11" font-family="sans-serif">from ONE window</text>
+  <!-- flatten -->
+  <text x="20" y="192" fill="currentColor" font-weight="bold" font-family="sans-serif">2. The flatten: (B, T, V) → (B·T, V) independent classifications</text>
+  <g stroke="currentColor" stroke-opacity="0.6">
+    <rect x="70" y="208" width="90" height="60" rx="4" fill="#38bdf8" fill-opacity="0.25"/>
+    <rect x="80" y="200" width="90" height="60" rx="4" fill="#38bdf8" fill-opacity="0.3"/>
+    <rect x="90" y="192" width="90" height="60" rx="4" fill="#38bdf8" fill-opacity="0.35"/>
+  </g>
+  <text x="125" y="228" fill="currentColor" text-anchor="middle" font-size="12">(B, T, V)</text>
+  <path d="M200 230 h60" stroke="#ec4899" stroke-width="2" fill="none"/>
+  <path d="M260 230 l-8 -5 v10 z" fill="#ec4899"/>
+  <text x="230" y="220" fill="#ec4899" text-anchor="middle" font-size="11">view(-1, V)</text>
+  <rect x="280" y="196" width="130" height="76" rx="4" fill="#ec4899" fill-opacity="0.2" stroke="currentColor" stroke-opacity="0.6"/>
+  <text x="345" y="230" fill="currentColor" text-anchor="middle" font-size="12">(B·T, V)</text>
+  <text x="345" y="248" fill="currentColor" text-anchor="middle" font-size="10" opacity="0.7">rows = examples</text>
+  <text x="430" y="226" fill="currentColor" font-size="11" font-family="sans-serif">every (batch, position)</text>
+  <text x="430" y="242" fill="currentColor" font-size="11" font-family="sans-serif">pair becomes one row of a</text>
+  <text x="430" y="258" fill="currentColor" font-size="11" font-family="sans-serif">giant V-way classification</text>
+</svg>
+
+Why is the flatten legitimate? Because thanks to the causal mask from Day 4, the logits at position $t$ were computed using only tokens $\le t$ — so each of the $B \cdot T$ predictions is an honest, non-cheating classification problem. `F.cross_entropy` expects exactly this format: predictions `(N, num_classes)`, integer labels `(N,)`. The loss it computes is the average negative log-likelihood
+
+$$
+\mathcal{L} = -\frac{1}{B\,T} \sum_{b=1}^{B} \sum_{t=1}^{T} \log p_\theta\!\left(y_{b,t} \mid x_{b,\le t}\right)
+$$
+
+which is why one 256-token window gives you 256 training examples for the price of one forward pass. That efficiency — every position is simultaneously a prediction target — is *the* reason decoder-only transformers train so well.
+
+The classic mistakes, so you recognize them in the wild:
+
+- **Passing `(B, T, V)` logits directly.** `cross_entropy` then interprets dim 1 as classes and dim 2 as an extra spatial dim — with `(B, T, V)` vs `(B, T)` targets it usually throws a shape error, but with unlucky sizes it silently computes garbage. Flatten explicitly.
+- **Using `targets = idx`.** No shift means the model learns the identity function — loss crashes to near zero in 50 steps and generation outputs one repeated character. If your loss looks *too* good, check the shift first.
+- **Applying `softmax` before the loss.** `cross_entropy` = `log_softmax` + `nll_loss`, fused and numerically stable. Softmax-then-cross-entropy double-normalizes.
+
+And a free sanity check you should burn into memory: at initialization, a model that knows nothing should assign roughly uniform probability $1/V$ to every token, so the expected initial loss is $-\log(1/V) = \ln V$. For our vocab of 65: $\ln 65 \approx 4.17$. We'll verify this in a moment — if your Day 8 training run doesn't start near 4.17, something upstream is broken.
+
+## Weight tying: one matrix, two jobs
+
+Look at two matrices in the model:
+
+- `tok_emb.weight`, shape `(vocab_size, n_embd)` — row $i$ is the vector *for* token $i$ (ID → vector).
+- `lm_head.weight`, shape `(vocab_size, n_embd)` — row $i$ is the direction whose dot product with the final hidden state gives the *score* of token $i$ (vector → ID scores).
+
+Same shape, and — squint — the same semantic job: both are a dictionary between token identities and directions in embedding space. If "queen" and "king" have similar embeddings on the way in, positions predicting "queen" should also score "king" highly on the way out. So we make them literally the same tensor:
+
+```python
+self.lm_head.weight = self.tok_emb.weight   # one Parameter, two modules
+```
+
+<svg viewBox="0 0 700 220" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif" font-size="12">
+  <rect x="270" y="60" width="160" height="100" rx="8" fill="#6366f1" fill-opacity="0.3" stroke="currentColor" stroke-opacity="0.7"/>
+  <text x="350" y="102" fill="currentColor" text-anchor="middle" font-weight="bold">ONE tensor</text>
+  <text x="350" y="120" fill="currentColor" text-anchor="middle" font-family="monospace" font-size="11">(V, C) = (65, 384)</text>
+  <text x="350" y="138" fill="currentColor" text-anchor="middle" font-size="10" opacity="0.7">24,960 params</text>
+  <rect x="30" y="80" width="150" height="56" rx="8" fill="#22c55e" fill-opacity="0.25" stroke="currentColor" stroke-opacity="0.7"/>
+  <text x="105" y="104" fill="currentColor" text-anchor="middle">tok_emb</text>
+  <text x="105" y="122" fill="currentColor" text-anchor="middle" font-size="10" opacity="0.8">lookup: ID → vector</text>
+  <rect x="520" y="80" width="150" height="56" rx="8" fill="#f59e0b" fill-opacity="0.25" stroke="currentColor" stroke-opacity="0.7"/>
+  <text x="595" y="104" fill="currentColor" text-anchor="middle">lm_head</text>
+  <text x="595" y="122" fill="currentColor" text-anchor="middle" font-size="10" opacity="0.8">project: vector → scores</text>
+  <g stroke="#ec4899" stroke-width="2" fill="none">
+    <path d="M185 108 h78"/><path d="M437 108 h76"/>
+  </g>
+  <g fill="#ec4899">
+    <path d="M263 108 l-9 -5 v10 z"/><path d="M513 108 l-9 -5 v10 z"/>
+  </g>
+  <text x="350" y="40" fill="currentColor" text-anchor="middle" font-size="11" opacity="0.8">gradients from BOTH uses accumulate into the same weights</text>
+  <text x="350" y="190" fill="currentColor" text-anchor="middle" font-size="11" opacity="0.8">input side sees a token a few times per batch — output side scores it at every position</text>
+</svg>
+
+Three things to know about that one line:
+
+1. **The shapes already agree.** `nn.Linear(in, out)` stores its weight as `(out, in)` — here `(V, C)` — which is exactly `nn.Embedding(V, C).weight`'s shape. No transpose needed; the tie is a pure aliasing assignment. This is not a coincidence: it's why we built `lm_head` with `bias=False` (a bias would have no partner on the embedding side).
+2. **Gradients accumulate from both roles.** Autograd doesn't care that two modules hold the same `Parameter`; during backward, the embedding-lookup gradient and the output-projection gradient both flow into the same `.grad`. The output side touches *every* row at *every* position (each token gets scored everywhere), so tying gives rare tokens' embeddings far more gradient signal than the input side alone would.
+3. **`parameters()` deduplicates for you.** PyTorch's `named_parameters(remove_duplicate=True)` (the default) yields a shared tensor once, so optimizers don't double-step it and `sum(p.numel() ...)` counts it once. This matters for the parameter count below.
+
+For our char-level model tying saves only `65 × 384 ≈ 25K` parameters — pocket change. But for GPT-2 with `V = 50257, C = 768` it saves 38.6M parameters, roughly a third of the whole 124M model. Tying (Press & Wolf, 2016) is standard in GPT-2 and most models since; we do it because the real thing does, and Day 10 will lean on this correspondence when we load real GPT-2 weights.
+
+One ordering subtlety: we tie *before* calling `self.apply(self._init_weights)`. Both the `Embedding` branch and the `Linear` branch of the init then write into the same tensor — harmless here since both use $\mathcal{N}(0, 0.02)$, but if your inits ever differ per module type, remember that with tied weights the *last* writer wins.
+
+## The init scheme and where the variance goes
+
+PyTorch's default `nn.Linear` init (Kaiming-uniform) is fine for shallow networks, but GPT-2 established a simpler convention that trains noticeably better for transformers, and we follow it exactly:
+
+```python
+# model.py — part 4: initialization
+    def _init_weights(self, module):
+        if isinstance(module, nn.Linear):
+            nn.init.normal_(module.weight, mean=0.0, std=0.02)
+            if module.bias is not None:
+                nn.init.zeros_(module.bias)
+        elif isinstance(module, nn.Embedding):
+            nn.init.normal_(module.weight, mean=0.0, std=0.02)
+```
+
+`self.apply(fn)` walks every submodule recursively and calls `fn` on each — that's how one small function initializes the whole tree. `nn.LayerNorm` needs no case: its default (weight = 1, bias = 0) is already what we want, i.e. "start as the identity."
+
+Then comes the one non-obvious line, back in the constructor:
+
+```python
+        for name, p in self.named_parameters():
+            if name.endswith("proj.weight"):      # attn.proj and mlp.proj
+                nn.init.normal_(p, mean=0.0, std=0.02 / math.sqrt(2 * cfg.n_layer))
+```
+
+Here's the intuition. The residual stream is a running sum: every block *adds* two contributions (attention out, MLP out). Sums of independent contributions grow in variance — with $2L$ additions of same-scale noise, the stream's standard deviation grows like $\sqrt{2L}$. GPT-2's fix: shrink the std of exactly the matrices that *write into* the residual stream (the output projections, our two `proj` layers) by $1/\sqrt{2L}$, so the accumulated variance stays $O(1)$ regardless of depth. Deep models start in a well-scaled regime instead of spending their first thousand steps fixing their own activations. This is why Day 6 named both output projections `proj` — the `name.endswith("proj.weight")` filter picks up exactly `attn.proj` and `mlp.proj` in every block, and nothing else. (If you named yours differently, adjust the filter — a silent non-match here doesn't error, it just quietly skips the rescale.)
+
+With `n_layer = 6`: $0.02 / \sqrt{12} \approx 0.0058$. We'll verify that number in the smoke test.
+
+## Counting every parameter
+
+You should be able to predict `sum(p.numel())` before running the code — it's the fastest way to catch a mis-wired model. The bookkeeping, with $C = 384$, $L = 6$, $V = 65$, $T_{\max} = 256$:
+
+| component | formula | count |
+|---|---|---|
+| `tok_emb` | $V \cdot C$ | 24,960 |
+| `pos_emb` | $T_{\max} \cdot C$ | 98,304 |
+| per block: `qkv` | $C \cdot 3C$ | 442,368 |
+| per block: `attn.proj` | $C \cdot C$ | 147,456 |
+| per block: `mlp.fc` | $C \cdot 4C$ | 589,824 |
+| per block: `mlp.proj` | $4C \cdot C$ | 589,824 |
+| per block: `ln1` + `ln2` | $2 \cdot 2C$ | 1,536 |
+| **per block total** | $12C^2 + 4C$ | **1,771,008** |
+| all blocks | $L \cdot (12C^2 + 4C)$ | 10,626,048 |
+| `ln_f` | $2C$ | 768 |
+| `lm_head` | tied → | 0 |
+| **total** | | **10,750,080** |
+
+Three takeaways from the table. First, the rule of thumb: **each transformer block costs $\approx 12C^2$ parameters** (4 for attention: $3C^2$ QKV + $C^2$ proj; 8 for the MLP: $4C^2$ up + $4C^2$ down) — memorize the 12, it lets you size any GPT in your head. Second, the MLP is *two-thirds* of every block; attention gets the fame, the MLP gets the parameters. Third, `lm_head` contributes zero because of tying — `parameters()` yields the shared tensor once.
+
+By convention (following nanoGPT) we also report a "non-embedding" count that excludes `pos_emb` — positions are a lookup table, not learned computation — giving 10,651,776. Papers differ on whether tied `tok_emb` counts; since ours also serves as the output head, we keep it.
+
+```python
+# model.py — part 5: parameter counting
+    def num_params(self, non_embedding=True):
+        n = sum(p.numel() for p in self.parameters())   # tied weight counted once
+        if non_embedding:
+            n -= self.pos_emb.weight.numel()
+        return n
+```
+
+## The complete model.py
+
+Here is the whole file — Days 4–6 consolidated plus everything from today, ~120 lines, no dependencies beyond `torch`. This is the exact file Day 8 will import.
+
+```python
+"""model.py — a complete GPT-style decoder-only transformer, from scratch."""
+import math
+from dataclasses import dataclass
+
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+
+
+@dataclass
+class GPTConfig:
+    vocab_size: int = 65      # char-level Shakespeare (Day 2)
+    block_size: int = 256     # max context length
+    n_layer: int = 6
+    n_head: int = 6
+    n_embd: int = 384
+    dropout: float = 0.1
+
+
+class CausalSelfAttention(nn.Module):            # Days 4 + 5
+    def __init__(self, cfg):
+        super().__init__()
+        assert cfg.n_embd % cfg.n_head == 0
+        self.n_head = cfg.n_head
+        self.qkv = nn.Linear(cfg.n_embd, 3 * cfg.n_embd, bias=False)
+        self.proj = nn.Linear(cfg.n_embd, cfg.n_embd, bias=False)
+        self.attn_drop = nn.Dropout(cfg.dropout)
+        self.resid_drop = nn.Dropout(cfg.dropout)
+        mask = torch.tril(torch.ones(cfg.block_size, cfg.block_size))
+        self.register_buffer("mask", mask.view(1, 1, cfg.block_size, cfg.block_size))
+
+    def forward(self, x):
+        B, T, C = x.shape
+        q, k, v = self.qkv(x).split(C, dim=2)                  # each (B, T, C)
+        hs = C // self.n_head
+        q = q.view(B, T, self.n_head, hs).transpose(1, 2)      # (B, nh, T, hs)
+        k = k.view(B, T, self.n_head, hs).transpose(1, 2)
+        v = v.view(B, T, self.n_head, hs).transpose(1, 2)
+        att = (q @ k.transpose(-2, -1)) / math.sqrt(hs)        # (B, nh, T, T)
+        att = att.masked_fill(self.mask[:, :, :T, :T] == 0, float("-inf"))
+        att = self.attn_drop(F.softmax(att, dim=-1))
+        y = att @ v                                            # (B, nh, T, hs)
+        y = y.transpose(1, 2).contiguous().view(B, T, C)       # re-assemble heads
+        return self.resid_drop(self.proj(y))
+
+
+class MLP(nn.Module):                            # Day 6
+    def __init__(self, cfg):
+        super().__init__()
+        self.fc = nn.Linear(cfg.n_embd, 4 * cfg.n_embd, bias=False)
+        self.proj = nn.Linear(4 * cfg.n_embd, cfg.n_embd, bias=False)
+        self.drop = nn.Dropout(cfg.dropout)
+
+    def forward(self, x):
+        return self.drop(self.proj(F.gelu(self.fc(x))))
+
+
+class Block(nn.Module):                          # Day 6: pre-LN residual block
+    def __init__(self, cfg):
+        super().__init__()
+        self.ln1 = nn.LayerNorm(cfg.n_embd)
+        self.attn = CausalSelfAttention(cfg)
+        self.ln2 = nn.LayerNorm(cfg.n_embd)
+        self.mlp = MLP(cfg)
+
+    def forward(self, x):
+        x = x + self.attn(self.ln1(x))
+        x = x + self.mlp(self.ln2(x))
+        return x
+
+
+class GPT(nn.Module):                            # Day 7: the whole thing
+    def __init__(self, cfg):
+        super().__init__()
+        self.cfg = cfg
+        self.tok_emb = nn.Embedding(cfg.vocab_size, cfg.n_embd)   # Day 3
+        self.pos_emb = nn.Embedding(cfg.block_size, cfg.n_embd)   # Day 3
+        self.drop = nn.Dropout(cfg.dropout)
+        self.blocks = nn.ModuleList([Block(cfg) for _ in range(cfg.n_layer)])
+        self.ln_f = nn.LayerNorm(cfg.n_embd)
+        self.lm_head = nn.Linear(cfg.n_embd, cfg.vocab_size, bias=False)
+        self.lm_head.weight = self.tok_emb.weight                 # weight tying
+
+        self.apply(self._init_weights)                            # base init
+        for name, p in self.named_parameters():                   # residual-proj rescale
+            if name.endswith("proj.weight"):
+                nn.init.normal_(p, mean=0.0, std=0.02 / math.sqrt(2 * cfg.n_layer))
+
+    def _init_weights(self, module):
+        if isinstance(module, nn.Linear):
+            nn.init.normal_(module.weight, mean=0.0, std=0.02)
+            if module.bias is not None:
+                nn.init.zeros_(module.bias)
+        elif isinstance(module, nn.Embedding):
+            nn.init.normal_(module.weight, mean=0.0, std=0.02)
+
+    def num_params(self, non_embedding=True):
+        n = sum(p.numel() for p in self.parameters())             # tied weight counted once
+        if non_embedding:
+            n -= self.pos_emb.weight.numel()
+        return n
+
+    def forward(self, idx, targets=None):
+        B, T = idx.shape
+        assert T <= self.cfg.block_size, f"sequence length {T} > block_size"
+        pos = torch.arange(T, device=idx.device)                  # (T,)
+        x = self.tok_emb(idx) + self.pos_emb(pos)                 # (B, T, C)
+        x = self.drop(x)
+        for block in self.blocks:
+            x = block(x)
+        x = self.ln_f(x)                                          # final LayerNorm
+        logits = self.lm_head(x)                                  # (B, T, vocab_size)
+        loss = None
+        if targets is not None:
+            loss = F.cross_entropy(logits.view(-1, logits.size(-1)),
+                                   targets.view(-1))
+        return logits, loss
+```
+
+And the smoke test — run this before Day 8, every claim from today checked in ten lines:
+
+```python
+import math, torch
+from model import GPT, GPTConfig
+
+cfg = GPTConfig()
+torch.manual_seed(42)
+model = GPT(cfg)
+
+print(f"total params:         {sum(p.numel() for p in model.parameters()):,}")
+print(f"non-embedding params: {model.num_params():,}")
+print(f"tied: {model.lm_head.weight is model.tok_emb.weight}")
+
+idx = torch.randint(0, cfg.vocab_size, (4, 64))
+tgt = torch.randint(0, cfg.vocab_size, (4, 64))
+logits, loss = model(idx, tgt)
+print(f"logits: {tuple(logits.shape)}  loss: {loss.item():.4f}  ln(V)={math.log(cfg.vocab_size):.4f}")
+
+loss.backward()
+print(f"grad flows to tied embedding: {model.tok_emb.weight.grad is not None}")
+print(f"proj std: {model.blocks[0].attn.proj.weight.std():.4f}  "
+      f"expected: {0.02/math.sqrt(2*cfg.n_layer):.4f}")
+```
+
+```
+total params:         10,750,080
+non-embedding params: 10,651,776
+tied: True
+logits: (4, 64, 65)  loss: 4.2226  ln(V)=4.1744
+grad flows to tied embedding: True
+proj std: 0.0058  expected: 0.0058
+```
+
+Read that output like a checklist: the total matches our hand count to the digit; `lm_head` and `tok_emb` are literally the same object (`is`, not `==`); the initial loss on random targets sits within noise of $\ln 65 = 4.17$, exactly what an untrained uniform predictor should score; gradients reach the tied embedding; and the residual projections carry the depth-scaled std. Five independent confirmations that 10.75 million parameters are wired the way the diagram says.
+
+## 🧪 Your task
+
+Prove the parameter table — and the tying claim — *empirically*. Write a function `param_report(model)` that groups every parameter by component (`tok_emb`, `pos_emb`, `blocks`, `ln_f`, `lm_head`) and prints each group's count plus the total. Then build one tied model and one **untied** model (comment out the tying line) and use your report to show (a) where the difference appears, and (b) that it equals exactly $V \cdot C = 24{,}960$.
+
+*Hint:* `model.named_parameters()` gives `("tok_emb.weight", tensor)`-style pairs, so the component is `name.split(".")[0]`. Think about what the tied `lm_head` row will show — remember which module the shared `Parameter` was assigned to *first*, and that `named_parameters()` skips duplicates.
+
+<details><summary>Solution</summary>
+
+```python
+import torch
+from collections import defaultdict
+from model import GPT, GPTConfig
+
+
+def param_report(model):
+    groups = defaultdict(int)
+    for name, p in model.named_parameters():   # dedupes shared params by default
+        groups[name.split(".")[0]] += p.numel()
+    total = sum(groups.values())
+    for comp in ["tok_emb", "pos_emb", "blocks", "ln_f", "lm_head"]:
+        print(f"{comp:>10}: {groups.get(comp, 0):>12,}")
+    print(f"{'total':>10}: {total:>12,}")
+    return total
+
+
+cfg = GPTConfig()
+
+print("--- tied ---")
+tied_total = param_report(GPT(cfg))
+
+print("--- untied ---")
+untied = GPT(cfg)
+untied.lm_head.weight = torch.nn.Parameter(untied.tok_emb.weight.detach().clone())
+untied_total = param_report(untied)
+
+diff = untied_total - tied_total
+print(f"difference: {diff:,}  (V*C = {cfg.vocab_size * cfg.n_embd:,})")
+assert diff == cfg.vocab_size * cfg.n_embd
+assert tied_total == 10_750_080
+```
+
+Expected output:
+
+```
+--- tied ---
+   tok_emb:       24,960
+   pos_emb:       98,304
+    blocks:   10,626,048
+      ln_f:          768
+   lm_head:            0
+     total:   10,750,080
+--- untied ---
+   tok_emb:       24,960
+   pos_emb:       98,304
+    blocks:   10,626,048
+      ln_f:          768
+   lm_head:       24,960
+     total:   10,775,040
+difference: 24,960  (V*C = 24,960)
+```
+
+The subtle bit: in the tied model, `named_parameters()` reports the shared tensor under `tok_emb.weight` (the name it was registered under first) and *skips* the duplicate `lm_head.weight` — so `lm_head` shows 0, not 24,960. That's `remove_duplicate=True` (the default) doing exactly what the optimizer needs: one parameter, one entry, one update. Rather than surgically untying an existing model, the solution replaces `lm_head.weight` with a fresh `Parameter` clone — assigning a clone is the cleanest way to break the alias.
+
+</details>
+
+## Key takeaways
+
+- The full GPT is a thin wrapper: `tok_emb + pos_emb → dropout → n_layer × Block → ln_f → lm_head`. The blocks do the work; the wrapper does the bookkeeping.
+- `ln_f` exists because pre-LN blocks never normalize the residual stream itself — clean it up once before projecting to vocabulary space.
+- The causal-LM loss is `cross_entropy(logits.view(-1, V), targets.view(-1))` on targets shifted one token left; every position is a training example, and the causal mask is what makes the flatten legitimate.
+- Initial loss on random data should be $\approx \ln V$ — the cheapest correctness check in deep learning.
+- Weight tying (`lm_head.weight = tok_emb.weight`) shares one `(V, C)` matrix between input lookup and output projection; gradients accumulate from both roles, and `parameters()` counts it once.
+- GPT-2 init: $\mathcal{N}(0, 0.02)$ everywhere, zero biases, and residual output projections scaled by $1/\sqrt{2 \cdot n_{layer}}$ so the residual stream's variance stays $O(1)$ with depth.
+- Each block costs $\approx 12C^2$ parameters (⅓ attention, ⅔ MLP); our tiny-GPT totals 10,750,080 — and you can now derive that number on paper.
+
+Tomorrow the model meets the data: we write the training loop — AdamW, learning-rate schedule, gradient clipping, loss curves — and watch 10.75M random numbers learn to write Shakespeare.
+
+------------------------------------------------------------------------
+
+[🏠 ⚡ Course home](index.html)  &nbsp;|&nbsp;  [← Day 06](day06.html)  &nbsp;|&nbsp;  [Day 08 →](day08.html)  &nbsp;|&nbsp;  [📚 All mini-courses](../../mini-courses.html)

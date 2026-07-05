@@ -1,0 +1,614 @@
+---
+title: "🚢 ML in Production — MLOps · Day 2 — Reproducible Training: Seeds, Pins, and Config-as-Code"
+page-layout: full
+toc: true
+toc-location: left
+toc-title: "On this day"
+toc-depth: 2
+---
+
+[🏠 🚢 Course home](index.html)  &nbsp;|&nbsp;  [← Day 01](day01.html)  &nbsp;|&nbsp;  [Day 03 →](day03.html)  &nbsp;|&nbsp;  [📚 All mini-courses](../../mini-courses.html)
+
+------------------------------------------------------------------------
+
+# Day 2 — Reproducible Training: Seeds, Pins, and Config-as-Code
+
+Yesterday we stared into the deployment gap: a churn model that lives in a notebook, scores 0.84 AUC on Tuesday and 0.81 on Thursday, and nobody can say why. Today we close the first and most fundamental part of that gap — **reproducibility**. Before a model can be tracked (Day 3), registered (Day 4), or shipped (Days 5–6), the same command on the same commit must produce the same model. That sounds obvious and is violated constantly, usually in four independent places: unseeded randomness, drifting dependency versions, hyperparameters buried in code, and data splits that silently shuffle. We will fix all four, and by the end of the day the messy Day-1 script will have become a clean, parametrized `train.py` you can run with `make train` — twice — and get byte-for-byte identical metrics.
+
+::: {.callout-note appearance="simple"}
+🎯 **Today you will:** seed every RNG in one function, pin your environment with a real lockfile, move hyperparameters into a validated YAML config, split data deterministically with hashing, and wire it all together with a Makefile and a refactored `train.py`
+:::
+
+## The four axes of non-reproducibility
+
+A training run is a function. If you want the same output, you must fix every input — and there are exactly four categories of input that people forget are inputs:
+
+1. **Randomness** — weight init, data shuffling, subsampling inside the algorithm.
+2. **Environment** — `scikit-learn` 1.4 vs 1.5 can change default behaviors and numerics.
+3. **Configuration** — the learning rate you edited inline at 11pm and never wrote down.
+4. **Data selection** — which rows landed in train vs test.
+
+Pin all four and training becomes a pure function of the git commit. That property is what everything else in this course leans on: experiment tracking is only meaningful if runs are comparable, and CI/CD (Day 8) can only gate a retrain if retraining is deterministic.
+
+```{mermaid}
+flowchart LR
+    subgraph pin["The four axes — pin every one"]
+        C["Code<br/>(git commit)"]
+        E["Environment<br/>(uv.lock)"]
+        K["Config + seed<br/>(default.yaml)"]
+        D["Data split<br/>(hash of customer_id)"]
+    end
+    C --> T["python -m src.train"]
+    E --> T
+    K --> T
+    D --> T
+    T --> M[("model.joblib")]
+    T --> J[("metrics.json")]
+    M -.->|"same inputs ⇒ same bytes"| M
+```
+
+Our target layout for the day — this is what the Day-1 notebook becomes:
+
+```text
+churn-mlops/
+├── configs/
+│   └── default.yaml        # config-as-code
+├── data/
+│   └── churn.csv           # generated deterministically
+├── src/
+│   ├── __init__.py
+│   ├── config.py           # pydantic models + load_config
+│   ├── data.py             # dataset + hash split
+│   └── train.py            # the refactored entry point
+├── artifacts/              # models + metrics land here (gitignored)
+├── Makefile
+├── pyproject.toml
+└── uv.lock
+```
+
+## Seeds everywhere — one function, called once
+
+Python programs contain more random number generators than you think: the stdlib `random` module, NumPy's *legacy* global RNG, NumPy's modern `Generator` objects, and — if you use deep learning — PyTorch's CPU and per-GPU generators, plus cuDNN's autotuner picking different convolution kernels run to run. Seeding one of them does nothing for the others.
+
+The standard move is a single `set_seed` that nails down everything present in the process. Put this in `src/train.py` (or a tiny `src/seeding.py` if you prefer):
+
+```python
+# src/train.py (top of file)
+import random
+
+import numpy as np
+
+
+def set_seed(seed: int) -> None:
+    """Seed every RNG we might touch. Call once, first thing."""
+    random.seed(seed)          # stdlib: shuffling, sampling
+    np.random.seed(seed)       # NumPy legacy global RNG (sklearn falls back to it)
+    try:
+        import torch
+        torch.manual_seed(seed)               # CPU + all CUDA devices (>=1.8)
+        torch.backends.cudnn.deterministic = True   # no nondeterministic kernels
+        torch.backends.cudnn.benchmark = False      # no runtime kernel autotuning
+    except ImportError:
+        pass  # sklearn-only project today; torch branch activates on Day 7's box
+```
+
+Line by line, the *why*:
+
+- `random.seed(seed)` — anything using the stdlib (`random.shuffle`, some third-party libs) now follows the seed.
+- `np.random.seed(seed)` seeds the **legacy global** NumPy RNG. Modern NumPy code should create explicit generators (`rng = np.random.default_rng(seed)`) and pass them around — we do exactly that in the data generator below — but seeding the global one still matters because library code you don't control (including scikit-learn, when you forget `random_state`) draws from it.
+- The torch block is wrapped in `try/except ImportError` so the same file runs on today's CPU-only sklearn environment and on Day 7's GPU box. `cudnn.benchmark = False` is the one people miss: with benchmarking on, cuDNN times several kernel implementations at runtime and picks the fastest, and "fastest" can differ between runs, changing floating-point summation order and therefore results.
+
+Two sharp edges worth internalizing:
+
+**scikit-learn: pass `random_state` explicitly anyway.** When an estimator has `random_state=None` it draws from NumPy's global RNG — so `np.random.seed` *does* make it reproducible, but only until someone inserts another draw before `fit()` and silently shifts the stream. Explicit is robust:
+
+```python
+# fragile: depends on global RNG state at call time
+model = HistGradientBoostingClassifier()
+
+# robust: reproducible regardless of what ran before
+model = HistGradientBoostingClassifier(random_state=cfg.seed)
+```
+
+**`PYTHONHASHSEED` cannot be set from inside the program.** Python randomizes `hash()` for strings *at interpreter startup* (a security feature); exporting the env var inside your script is too late. This is exactly why, later today, we split data with `crc32` — a stable, documented hash — and never with Python's builtin `hash()`. If you've ever seen a "hash split" tutorial that uses `hash(customer_id) % 100`, you've seen a split that reshuffles on every fresh interpreter.
+
+## Pinning the environment: from `requirements.txt` to a lockfile
+
+Seeds fix *your* randomness; version pins fix *everyone else's* code. "Works on my machine" is usually "works on my `scikit-learn==1.4.2`". There's a ladder of rigor here:
+
+| Approach | What it pins | Transitive deps? | Cross-platform? | Use when |
+|---|---|---|---|---|
+| `requirements.txt` with `>=` | almost nothing | no | — | never for training code |
+| `requirements.txt` with `==` | top-level packages | **no** — `numpy` pulled in by sklearn still floats | n/a | quick scripts |
+| `pip freeze > requirements.txt` | everything installed | yes, but snapshot includes junk from your env | poorly | legacy projects |
+| **`uv` (pyproject + `uv.lock`)** | full dependency graph **with hashes** | yes | yes — universal lockfile resolves for all platforms | **default choice today** |
+| `conda env export` / `conda-lock` | Python **and** native binaries (CUDA, MKL, BLAS) | yes | per-platform lock | you need system libs pip can't manage |
+
+The failure mode of a hand-written `==` file is subtle: you pin `scikit-learn==1.5.0`, but sklearn depends on `numpy`, `scipy`, `joblib`, `threadpoolctl` — none of which you pinned. Six months later a fresh install resolves a newer `scipy`, a solver tolerance changes, and your "reproducible" run drifts. A **lockfile** records the *entire resolved graph*, down to exact versions and SHA-256 hashes of the wheels.
+
+We'll use [`uv`](https://docs.astral.sh/uv/) — it's fast, it's one binary, and it manages the Python version too. Bootstrap the project:
+
+```bash
+uv init churn-mlops --python 3.12
+cd churn-mlops
+uv add "scikit-learn>=1.5" "pandas>=2.2" "pydantic>=2.7" "pyyaml>=6" "joblib>=1.4"
+```
+
+This writes two files. `pyproject.toml` holds your *intent* (loose, human-edited constraints):
+
+```toml
+[project]
+name = "churn-mlops"
+version = "0.1.0"
+requires-python = ">=3.12"
+dependencies = [
+    "joblib>=1.4",
+    "pandas>=2.2",
+    "pydantic>=2.7",
+    "pyyaml>=6",
+    "scikit-learn>=1.5",
+]
+```
+
+…and `uv.lock` holds the *resolution* (exact, machine-written, hash-verified — **commit it to git**). The division of labor matters: humans edit ranges in `pyproject.toml`; the machine freezes them in `uv.lock`; and every environment anywhere is rebuilt from the freeze:
+
+```bash
+uv sync          # creates .venv exactly matching uv.lock — same versions, verified hashes
+uv run python -m src.train   # run inside that env without activating anything
+```
+
+Expected output of `uv sync` on a clean machine:
+
+```text
+Resolved 12 packages in 0.4ms
+Installed 12 packages in 210ms
+ + joblib==1.4.2
+ + numpy==2.1.3
+ + pandas==2.2.3
+ ...
+```
+
+Note that `numpy` appears with an exact version even though we never mentioned it — that's the transitive graph being pinned. Two final pins people forget: the **Python version** (uv records it via `requires-python` and `.python-version` — a model pickled under 3.12 may not load under 3.10) and, for the conda crowd, prefer `conda-lock` over raw `environment.yml` for the same intent-vs-resolution reason. On Day 5, the Docker image will be built with `uv sync --frozen`, which *fails* if the lockfile is out of date rather than silently re-resolving — the environment axis, closed.
+
+## Config-as-code: YAML in, validated object out
+
+The Day-1 script had `learning_rate = 0.1` on line 47 and `test_size = 0.2` on line 12. Changing an experiment meant editing source, which means the git history of your *code* gets polluted with hyperparameter noodling, and worse — a run's parameters aren't recorded anywhere. The fix is config-as-code: parameters live in a YAML file that is versioned, diffable, and passed to the training script as an argument.
+
+`configs/default.yaml`:
+
+```yaml
+seed: 42
+
+data:
+  path: data/churn.csv
+  id_column: customer_id
+  target: churned
+  test_fraction: 0.2
+
+model:
+  learning_rate: 0.1
+  max_iter: 300
+  max_depth: 6
+  l2_regularization: 0.1
+```
+
+Raw `yaml.safe_load` gives you a dict — and dicts fail late: a typo like `learning_rte` sails through loading and either crashes deep inside sklearn or, nastier, gets silently ignored while the default is used. We put **pydantic** in front so a bad config dies at load time with a readable error. `src/config.py`:
+
+```python
+from pathlib import Path
+
+import yaml
+from pydantic import BaseModel, ConfigDict, Field
+
+
+class StrictModel(BaseModel):
+    model_config = ConfigDict(extra="forbid")  # unknown keys = hard error
+
+
+class DataConfig(StrictModel):
+    path: Path = Path("data/churn.csv")
+    id_column: str = "customer_id"
+    target: str = "churned"
+    test_fraction: float = Field(0.2, gt=0.0, lt=1.0)
+
+
+class ModelConfig(StrictModel):
+    learning_rate: float = Field(0.1, gt=0.0)
+    max_iter: int = Field(300, ge=1)
+    max_depth: int | None = 6
+    l2_regularization: float = Field(0.0, ge=0.0)
+
+
+class TrainConfig(StrictModel):
+    seed: int = 42
+    data: DataConfig = Field(default_factory=DataConfig)
+    model: ModelConfig = Field(default_factory=ModelConfig)
+
+
+def load_config(path: str | Path) -> TrainConfig:
+    raw = yaml.safe_load(Path(path).read_text()) or {}
+    return TrainConfig.model_validate(raw)
+```
+
+Why each piece is there:
+
+- `extra="forbid"` is the typo-catcher. With pydantic's default (`extra="ignore"`), `learning_rte: 0.5` loads fine and your "experiment" trains with `learning_rate=0.1`. With `forbid`, you get `Extra inputs are not permitted [type=extra_forbidden]` pointing at the exact key. This one line has saved more experiment-hours than any optimizer trick.
+- `Field(0.2, gt=0.0, lt=1.0)` — constraints as documentation *and* enforcement. `test_fraction: 1.5` fails at load, not after twenty minutes of training on an empty train set.
+- `Field(default_factory=...)` for nested models, so every config file only needs to state what *differs* from the default. An experiment config can be three lines.
+- Types coerce sensibly: YAML's `0.1` arrives as float, `path` becomes a `Path`, and `max_depth: null` in YAML maps to `None`.
+
+Try breaking it, to see what you bought:
+
+```python
+>>> from src.config import load_config
+>>> load_config("configs/default.yaml").model.learning_rate
+0.1
+>>> # now misspell a key in the YAML and reload:
+1 validation error for TrainConfig
+model.learning_rte
+  Extra inputs are not permitted [type=extra_forbidden, input_value=0.1]
+```
+
+(If you'd rather source config from environment variables — say, per-deployment overrides — `pydantic-settings` gives you the same models with env-var loading layered in. Today, YAML + `model_validate` covers everything we need; we'll revisit env-driven settings when the FastAPI service appears on Day 6.)
+
+## Deterministic splits: hash the ID, not the row number
+
+Here's the sneakiest reproducibility bug of the four. `train_test_split(df, test_size=0.2, random_state=42)` *looks* deterministic — and it is, **for one frozen dataset**. But production data isn't frozen. Next month the churn table has 500 new customers, the export tool orders rows differently, and the same seeded shuffle now sends *different customers* to the test set. Customers your last model trained on are now in this model's test set — your evaluation is contaminated and metrics quietly inflate.
+
+The fix: make the split a **pure function of each row's stable identity**, not of row order or dataset size. Hash the `customer_id` into a number, compare against a threshold:
+
+$$
+\text{test}(x) \;=\; \mathbb{1}\!\left[\, \mathrm{crc32}(x) \;<\; f \cdot 2^{32} \,\right]
+$$
+
+where $f$ is the test fraction. `crc32` maps any byte string to a fixed integer in $[0, 2^{32})$, spread approximately uniformly — so a threshold at $f \cdot 2^{32}$ catches $\approx f$ of all IDs, and a given customer lands on the same side **forever**, on any machine, in any Python process, regardless of how many rows exist around it.
+
+<svg viewBox="0 0 720 250" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Hash-based split: crc32 maps each customer id to a fixed point on the 32-bit line; ids below the threshold are test, the rest train">
+  <text x="360" y="24" text-anchor="middle" fill="currentColor" font-size="15" font-weight="bold">crc32(customer_id) → a fixed point in [0, 2³²)</text>
+  <g font-size="12.5" fill="currentColor" text-anchor="middle" font-family="monospace">
+    <text x="110" y="62">C100007</text>
+    <text x="300" y="62">C100042</text>
+    <text x="470" y="62">C100013</text>
+    <text x="620" y="62">C100256</text>
+  </g>
+  <g stroke="currentColor" stroke-width="1.3" opacity="0.55" fill="none">
+    <path d="M110 70 L96 126"/>
+    <path d="M300 70 L318 126"/>
+    <path d="M470 70 L452 126"/>
+    <path d="M620 70 L608 126"/>
+  </g>
+  <rect x="40" y="130" width="128" height="42" fill="#f59e0b" fill-opacity="0.45"/>
+  <rect x="168" y="130" width="512" height="42" fill="#22c55e" fill-opacity="0.32"/>
+  <rect x="40" y="130" width="640" height="42" fill="none" stroke="currentColor" stroke-width="1.5"/>
+  <line x1="168" y1="118" x2="168" y2="184" stroke="#ec4899" stroke-width="2.5"/>
+  <g fill="currentColor" font-size="12">
+    <text x="40" y="198" text-anchor="start">0</text>
+    <text x="680" y="198" text-anchor="end">2³²</text>
+    <text x="168" y="112" text-anchor="middle" font-size="11.5">threshold = 0.2 · 2³²</text>
+    <text x="104" y="220" text-anchor="middle" font-weight="bold">TEST (~20%)</text>
+    <text x="424" y="220" text-anchor="middle" font-weight="bold">TRAIN (~80%)</text>
+    <text x="360" y="243" text-anchor="middle" font-size="11.5" opacity="0.8">new customers land anywhere on the line — existing ones never move</text>
+  </g>
+</svg>
+
+`src/data.py` — the generator (our stand-in for Day 1's raw export, itself fully seeded) and the split:
+
+```python
+from zlib import crc32
+
+import numpy as np
+import pandas as pd
+
+
+def make_churn_data(n: int = 8000, seed: int = 42) -> pd.DataFrame:
+    """Synthetic churn table. Deterministic: same (n, seed) -> same bytes."""
+    rng = np.random.default_rng(seed)  # explicit generator, not the global RNG
+    df = pd.DataFrame(
+        {
+            "customer_id": [f"C{100000 + i}" for i in range(n)],
+            "tenure_months": rng.integers(1, 72, n),
+            "monthly_charges": rng.uniform(20, 120, n).round(2),
+            "support_tickets": rng.poisson(1.5, n),
+            "contract": pd.Categorical(
+                rng.choice(["monthly", "annual", "biennial"], n, p=[0.6, 0.3, 0.1])
+            ),
+        }
+    )
+    logits = (
+        -1.6
+        + 0.030 * (df["monthly_charges"] - 70)
+        - 0.045 * (df["tenure_months"] - 24)
+        + 0.90 * (df["contract"] == "monthly").astype(float)
+        + 0.25 * df["support_tickets"]
+    )
+    df["churned"] = (rng.random(n) < 1 / (1 + np.exp(-logits))).astype(int)
+    return df
+```
+
+Note `np.random.default_rng(seed)`: the modern NumPy idiom. The generator is a local object with its own state — no other code can perturb its stream, unlike the global RNG that `np.random.seed` controls.
+
+```python
+def _in_test(identifier: str, test_fraction: float, salt: str = "") -> bool:
+    """Stable membership test: same id + salt -> same answer, forever."""
+    return crc32(f"{identifier}{salt}".encode("utf-8")) < test_fraction * 2**32
+
+
+def split_by_hash(
+    df: pd.DataFrame, id_column: str, test_fraction: float, salt: str = ""
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    ids = df[id_column].astype(str)
+    test_mask = np.array([_in_test(i, test_fraction, salt) for i in ids])
+    return df[~test_mask].copy(), df[test_mask].copy()
+```
+
+Methodology notes:
+
+- **`crc32`, never `hash()`** — as covered above, Python's builtin string hash changes per interpreter run. `zlib.crc32` is in the stdlib, stable across processes, platforms, and Python versions, and returns a non-negative 32-bit int on Python 3. (`hashlib.md5` works too and mixes better; crc32 is plenty for splitting and faster.)
+- **The `salt` parameter** is your "re-roll" knob: the split is deterministic per `(id, salt)`, so if you ever legitimately need a *different* deterministic split — cross-validation folds, an uncontaminated holdout for a new model generation — change the salt, not the method. Today's exercise builds on this.
+- **What you give up:** exact split sizes (you get $\approx f$, not exactly $f$ — with 8,000 rows expect the test set within a percent or so of 1,600) and stratification (no guarantee on class balance per side; with a hash this uniform and datasets this size it evens out, but *check* it, which `train.py` does by logging churn rate per split).
+- **What you gain:** append 500 customers next month and every existing customer stays exactly where it was. That invariance is what makes month-over-month metrics comparable — and it's the property your task at the end of today will prove with an assertion.
+
+## The refactor: a parametrized `train.py`
+
+Now we assemble the pieces. Everything Day 1's notebook did — load, split, fit, evaluate, save — but as a pure function of `(config file, code commit)`, writing artifacts that record their own provenance:
+
+```python
+# src/train.py
+import argparse
+import json
+import platform
+import random
+import subprocess
+from datetime import datetime, timezone
+from pathlib import Path
+
+import joblib
+import numpy as np
+import sklearn
+from sklearn.ensemble import HistGradientBoostingClassifier
+from sklearn.metrics import log_loss, roc_auc_score
+
+from src.config import TrainConfig, load_config
+from src.data import split_by_hash
+```
+
+```python
+def git_sha() -> str:
+    try:
+        return subprocess.check_output(
+            ["git", "rev-parse", "--short", "HEAD"], text=True
+        ).strip()
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        return "unknown"
+```
+
+A tiny helper with a big payoff: every artifact we write will carry the commit that produced it. On Day 3, MLflow takes over this bookkeeping — but the habit of *"no artifact without provenance"* starts now, and the fallback to `"unknown"` keeps the script runnable outside a repo (e.g., inside Day 5's Docker build).
+
+```python
+def train(cfg: TrainConfig, out_dir: Path) -> dict:
+    set_seed(cfg.seed)   # defined at the top of this file
+
+    df = pd.read_csv(cfg.data.path, dtype={"contract": "category"})
+    train_df, test_df = split_by_hash(df, cfg.data.id_column, cfg.data.test_fraction)
+
+    feature_cols = [c for c in df.columns if c not in (cfg.data.id_column, cfg.data.target)]
+    X_train, y_train = train_df[feature_cols], train_df[cfg.data.target]
+    X_test, y_test = test_df[feature_cols], test_df[cfg.data.target]
+
+    model = HistGradientBoostingClassifier(
+        learning_rate=cfg.model.learning_rate,
+        max_iter=cfg.model.max_iter,
+        max_depth=cfg.model.max_depth,
+        l2_regularization=cfg.model.l2_regularization,
+        categorical_features="from_dtype",   # sklearn >= 1.4: category dtypes handled natively
+        random_state=cfg.seed,               # explicit, not via the global RNG
+    )
+    model.fit(X_train, y_train)
+```
+
+Walkthrough of the decisions:
+
+- `dtype={"contract": "category"}` at read time plus `categorical_features="from_dtype"` on the estimator means categorical handling is *declared once, in the data*, and the model picks it up natively — no `OneHotEncoder`/`ColumnTransformer` scaffolding to keep in sync between training and (later) serving. Shapes: `X_train` is `(≈6400, 4)`, `X_test` `(≈1600, 4)`; the ID column is *excluded* from features — leaking an identifier into a tree model is a classic way to memorize the training set.
+- `random_state=cfg.seed` on the estimator — the explicit-beats-global rule from section two, applied.
+- Get the categorical declaration wrong (leave `contract` as `object`) and `HistGradientBoostingClassifier` raises a `ValueError` about non-numeric data — a loud failure, which is the good kind. The bad kind would be silently ordinal-encoding it.
+
+```python
+    proba = model.predict_proba(X_test)[:, 1]   # (n_test,) — P(churn), column 1 = positive class
+    metrics = {
+        "roc_auc": float(roc_auc_score(y_test, proba)),
+        "log_loss": float(log_loss(y_test, proba)),
+        "n_train": len(train_df),
+        "n_test": len(test_df),
+        "churn_rate_train": float(y_train.mean()),
+        "churn_rate_test": float(y_test.mean()),
+    }
+    run_record = {
+        "metrics": metrics,
+        "config": cfg.model_dump(mode="json"),
+        "git_sha": git_sha(),
+        "sklearn_version": sklearn.__version__,
+        "python_version": platform.python_version(),
+        "trained_at": datetime.now(timezone.utc).isoformat(),
+    }
+
+    out_dir.mkdir(parents=True, exist_ok=True)
+    joblib.dump(model, out_dir / "model.joblib")
+    (out_dir / "metrics.json").write_text(json.dumps(run_record, indent=2))
+    return run_record
+```
+
+The `run_record` is a manifesto in dict form: metrics never travel without the config that produced them (`cfg.model_dump(mode="json")` serializes the *validated* config — including defaults the YAML didn't state, so the record is complete even when the YAML is minimal), the commit, and the library versions. We log churn rate per split precisely because hash splits don't stratify — if `churn_rate_test` ever drifts far from `churn_rate_train`, you'll see it in the artifact, not in a production incident.
+
+```python
+def main() -> None:
+    parser = argparse.ArgumentParser(description="Train the churn model.")
+    parser.add_argument("--config", type=Path, default=Path("configs/default.yaml"))
+    parser.add_argument("--out-dir", type=Path, default=Path("artifacts"))
+    args = parser.parse_args()
+
+    record = train(load_config(args.config), args.out_dir)
+    print(json.dumps(record["metrics"], indent=2))
+
+
+if __name__ == "__main__":
+    main()
+```
+
+`main()` is deliberately thin: parse two paths, delegate. The separation between `train(cfg, out_dir)` (pure-ish, testable, importable) and `main()` (CLI glue) is what lets Day 3 call `train()` from an MLflow-wrapped runner and Day 8 call it from a CI job without subprocess gymnastics. Run it:
+
+```bash
+uv run python -m src.train --config configs/default.yaml
+```
+
+```json
+{
+  "roc_auc": 0.8412,
+  "log_loss": 0.3271,
+  "n_train": 6392,
+  "n_test": 1608,
+  "churn_rate_train": 0.2065,
+  "churn_rate_test": 0.2101
+}
+```
+
+Run it again. Same JSON, to the last digit. That's the whole point of today — and notice `n_test = 1608`, not exactly 1600: the hash threshold gives $\approx 20\%$, as promised.
+
+## The Makefile: one verb per outcome
+
+Last piece. Every command we've typed today is a small liturgy (`uv run python -m src.train --config ...`) that teammates will mistype and CI will duplicate. A Makefile turns each *outcome* into one memorable verb — and on Day 8 the CI pipeline will simply call these same targets, so local and CI behavior can't drift apart.
+
+```{mermaid}
+flowchart TD
+    A["make setup<br/><i>uv sync — env from lockfile</i>"] --> B["make data<br/><i>generate data/churn.csv</i>"]
+    B --> C["make train<br/><i>python -m src.train</i>"]
+    C --> D["make reproduce<br/><i>train twice, diff the metrics</i>"]
+    C -.->|"Day 8: CI runs the same targets"| E(("✔"))
+```
+
+```makefile
+CONFIG ?= configs/default.yaml
+
+.PHONY: setup data train reproduce clean
+
+setup:
+	uv sync
+
+data:
+	uv run python -c "from src.data import make_churn_data; \
+	make_churn_data().to_csv('data/churn.csv', index=False)"
+
+train:
+	uv run python -m src.train --config $(CONFIG)
+
+reproduce:
+	uv run python -m src.train --config $(CONFIG) --out-dir artifacts/run_a
+	uv run python -m src.train --config $(CONFIG) --out-dir artifacts/run_b
+	uv run python -c "import json; \
+	a = json.load(open('artifacts/run_a/metrics.json'))['metrics']; \
+	b = json.load(open('artifacts/run_b/metrics.json'))['metrics']; \
+	assert a == b, f'NOT reproducible:\n{a}\n{b}'; \
+	print('reproducible ✔')"
+
+clean:
+	rm -rf artifacts
+```
+
+Three things to know before this bites you:
+
+- **Recipe lines must start with a TAB**, not spaces — the single most common Makefile error, and the message (`*** missing separator`) doesn't say "you used spaces".
+- `CONFIG ?= ...` gives a default that the command line overrides: `make train CONFIG=configs/fast.yaml`. Config-as-code plus parametrized entry point plus Makefile variable — a new experiment is now one flag, zero code edits.
+- `make reproduce` is today's acceptance test made executable: two full training runs, hard `assert` that every metric matches exactly. If anyone ever un-seeds something, adds a stray global RNG draw, or reorders the data, this target starts failing — put it in CI on Day 8 and reproducibility becomes a *regression-tested property* rather than a hope.
+
+```text
+$ make reproduce
+...
+reproducible ✔
+```
+
+## 🧪 Your task
+
+Prove the headline claim of the hash split: **growing the dataset never moves an existing customer between train and test** — the exact failure that `train_test_split(random_state=42)` suffers.
+
+Write `check_split.py` that:
+
+1. Builds the churn data with `n=5000`, splits it with `split_by_hash(..., test_fraction=0.2)`, and records the set of test-set `customer_id`s.
+2. Builds it again with `n=8000` (the first 5,000 IDs are identical — our generator is deterministic), splits with the same parameters, and **asserts** that every original customer is on the same side as before.
+3. Does the same comparison with `sklearn.model_selection.train_test_split(random_state=42)` on both sizes and prints how many of the original 5,000 customers switched sides.
+4. Bonus: verify the `salt` knob — same IDs with `salt="v2"` should produce a *different* (but internally consistent) split, with test fraction still ≈ 0.2.
+
+*Hint:* for step 2, restrict both splits to the first 5,000 IDs and compare **sets** of test IDs: `test_ids_small == test_ids_big & original_ids`. For step 3, `train_test_split` returns dataframes, so collect `set(test_df.customer_id)` the same way — the count that moved is `len(old_test ^ (new_test & original_ids)) // 2` or simply the symmetric-difference size.
+
+<details><summary>Solution</summary>
+
+```python
+# check_split.py
+from sklearn.model_selection import train_test_split
+
+from src.data import make_churn_data, split_by_hash
+
+F = 0.2
+
+# --- 1. small dataset, hash split ---
+small = make_churn_data(n=5000, seed=42)
+_, test_small = split_by_hash(small, "customer_id", F)
+test_ids_small = set(test_small["customer_id"])
+original_ids = set(small["customer_id"])
+
+# --- 2. grown dataset, same split parameters ---
+big = make_churn_data(n=8000, seed=42)  # first 5000 ids identical by construction
+_, test_big = split_by_hash(big, "customer_id", F)
+test_ids_big = set(test_big["customer_id"])
+
+assert test_ids_big & original_ids == test_ids_small, "hash split moved a customer!"
+print(f"hash split: 0 of {len(original_ids)} original customers moved ✔")
+print(f"  test fraction small: {len(test_ids_small) / len(small):.3f}")
+print(f"  test fraction big:   {len(test_ids_big) / len(big):.3f}")
+
+# --- 3. seeded random split: watch it shuffle ---
+_, rs_test_small = train_test_split(small, test_size=F, random_state=42)
+_, rs_test_big = train_test_split(big, test_size=F, random_state=42)
+old = set(rs_test_small["customer_id"])
+new = set(rs_test_big["customer_id"]) & original_ids
+moved = len(old ^ new)
+print(f"train_test_split(random_state=42): {moved} of {len(original_ids)} "
+      f"original customers changed sides after growth")
+
+# --- 4. salt gives a different, equally stable split ---
+_, test_v2 = split_by_hash(small, "customer_id", F, salt="v2")
+test_ids_v2 = set(test_v2["customer_id"])
+assert test_ids_v2 != test_ids_small, "salt should change the split"
+assert 0.17 < len(test_ids_v2) / len(small) < 0.23, "salted split fraction off"
+_, test_v2_again = split_by_hash(small, "customer_id", F, salt="v2")
+assert set(test_v2_again["customer_id"]) == test_ids_v2, "salted split not stable"
+print(f"salt='v2': different split, fraction {len(test_ids_v2)/len(small):.3f}, stable ✔")
+```
+
+Expected output (your exact `moved` count may differ slightly — that's the point, it's an artifact of the shuffle):
+
+```text
+hash split: 0 of 5000 original customers moved ✔
+  test fraction small: 0.196
+  test fraction big:   0.201
+train_test_split(random_state=42): ~1900 of 5000 original customers changed sides after growth
+salt='v2': different split, fraction 0.204, stable ✔
+```
+
+Roughly a third of the "held-out" customers from the small dataset end up in the *training* side after growth under the seeded random split — every one of them a potential leak into next month's evaluation. The hash split moves exactly zero.
+
+</details>
+
+## Key takeaways
+
+- Reproducibility has four independent axes — randomness, environment, config, data selection — and each needs its own pin; fixing three of four still gives you non-reproducible runs.
+- One `set_seed()` at process start covers stdlib/NumPy/torch, but pass `random_state` to sklearn estimators explicitly anyway — global RNG state is fragile.
+- `requirements.txt` pins your intent, not your environment; a lockfile (`uv.lock`, committed to git) pins the full transitive graph with hashes, and `uv sync --frozen` rebuilds it exactly anywhere.
+- Config-as-code with pydantic (`extra="forbid"`, constrained `Field`s) turns hyperparameter typos into load-time errors and makes every run's parameters a diffable file.
+- Split by hashing a stable ID (`crc32`, never Python's builtin `hash()`), so growing or reordering the dataset never moves an existing row across the train/test boundary; use a `salt` when you deliberately want a fresh split.
+- Encode the workflow as Makefile targets — `make reproduce` turns "training is deterministic" from a hope into an executable, CI-able assertion.
+- No artifact without provenance: every `metrics.json` carries its config, git SHA, and library versions.
+
+Tomorrow we stop stuffing provenance into hand-rolled JSON files: Day 3 puts MLflow in front of `train()` so every run's params, metrics, and artifacts are tracked, compared, and queryable.
+
+------------------------------------------------------------------------
+
+[🏠 🚢 Course home](index.html)  &nbsp;|&nbsp;  [← Day 01](day01.html)  &nbsp;|&nbsp;  [Day 03 →](day03.html)  &nbsp;|&nbsp;  [📚 All mini-courses](../../mini-courses.html)
