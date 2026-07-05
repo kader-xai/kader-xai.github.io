@@ -1,0 +1,552 @@
+---
+aliases: ["/mini-courses/pytorch/day05.html"]
+title: "🔥 Deep Learning with PyTorch · Lesson 5 — Classification End to End: An MLP on Real Data"
+page-layout: full
+toc: true
+toc-location: left
+toc-title: "In this lesson"
+toc-depth: 2
+---
+
+[🏠 🔥 Course home](index.html)  &nbsp;|&nbsp;  [← Lesson 04](lesson04.html)  &nbsp;|&nbsp;  [Lesson 06 →](lesson06.html)  &nbsp;|&nbsp;  [📚 All mini-courses](../../mini-courses.html)
+
+------------------------------------------------------------------------
+
+# Lesson 5 — Classification End to End: An MLP on Real Data
+
+For four lessons you've been collecting parts: tensors and autograd (Lesson 1), `nn.Module` (Lesson 2), `Dataset`/`DataLoader` (Lesson 3), and a disciplined training loop with train/eval modes and validation (Lesson 4). Today they click together into one complete, honest classification project. You'll train a multi-layer perceptron on the scikit-learn digits dataset — 1,797 real handwritten digits, small enough to train in seconds on a CPU, real enough to exhibit every pathology a big project has. Along the way you'll settle a question that trips up nearly everyone coming from other frameworks (why does `CrossEntropyLoss` want class *indices*, not one-hot vectors?), you'll measure your model properly with accuracy and a confusion matrix instead of squinting at the loss, you'll learn to *read* overfitting off the loss curves, and you'll fix it with your first regularizer: dropout.
+
+::: {.callout-note appearance="simple"}
+🎯 **In this lesson you will:** train a complete MLP classifier on the sklearn digits dataset, understand class-index vs one-hot targets and why `CrossEntropyLoss` takes raw logits, compute accuracy and a confusion matrix in pure PyTorch, diagnose overfitting from train/val loss curves, apply dropout and watch the gap close
+:::
+
+## The plan, end to end
+
+Here is the whole pipeline we're assembling today. Every box is something you built in Lessons 1–4; the only genuinely new pieces are the metrics and dropout.
+
+```{mermaid}
+flowchart LR
+    A["sklearn digits<br/>1797 × 64 floats"] --> B["Dataset +<br/>DataLoader<br/>(Lesson 3)"]
+    B --> C["MLP<br/>64→128→64→10<br/>(Lesson 2)"]
+    C --> D["logits (B, 10)"]
+    D --> E["CrossEntropyLoss<br/>vs class indices"]
+    E --> F["backward + step<br/>(Lessons 1 & 4)"]
+    F --> C
+    D --> G["argmax → accuracy,<br/>confusion matrix"]
+    G --> H["loss curves →<br/>overfitting diagnosis"]
+    H --> I["dropout →<br/>retrain"]
+```
+
+One design decision up front: the digits images are 8×8 grayscale, i.e. 64 pixels. An MLP treats those 64 pixels as a flat feature vector — it has no idea pixel 9 sits directly below pixel 1. That's a real limitation, and it's exactly the itch Lesson 6's convolutions will scratch. In this lesson, flat vectors are the point: they keep the model simple so the *process* is the star.
+
+## Data: from NumPy to batches
+
+scikit-learn ships the digits dataset locally — no download, no fuss. Let's load it and get it into the Lesson 3 shape of things.
+
+```python
+import torch
+from torch.utils.data import TensorDataset, DataLoader
+from sklearn.datasets import load_digits
+from sklearn.model_selection import train_test_split
+
+torch.manual_seed(0)
+
+digits = load_digits()
+print(digits.data.shape, digits.target.shape)   # (1797, 64) (1797,)
+print(digits.data.min(), digits.data.max())     # 0.0 16.0
+print(digits.target[:10])                       # [0 1 2 3 4 5 6 7 8 9]
+```
+
+Two things worth noticing before any modeling:
+
+- **Pixels run 0–16**, not 0–255 and not 0–1. Feeding raw 0–16 values into a network *works*, but inputs an order of magnitude away from unit scale make the first layer's gradients larger and training twitchier. Divide by 16 and everything lands in $[0, 1]$.
+- **Targets are already integers 0–9.** Hold that thought — it matters enormously in the next section.
+
+```python
+X_train, X_val, y_train, y_val = train_test_split(
+    digits.data, digits.target,
+    test_size=0.25, random_state=0, stratify=digits.target,
+)
+
+X_train = torch.tensor(X_train, dtype=torch.float32) / 16.0
+X_val   = torch.tensor(X_val,   dtype=torch.float32) / 16.0
+y_train = torch.tensor(y_train, dtype=torch.long)
+y_val   = torch.tensor(y_val,   dtype=torch.long)
+
+print(X_train.shape, y_train.shape)  # torch.Size([1347, 64]) torch.Size([1347])
+```
+
+Line by line, the decisions that matter:
+
+- `stratify=digits.target` keeps class proportions identical in both splits. With only ~180 examples per class, an unlucky split could leave a class underrepresented in validation and make your metrics lie to you. Stratify by default for classification.
+- `dtype=torch.float32` for inputs — the network's weights are float32, and PyTorch will not silently mix float64 (NumPy's default) with float32; you'd get a `RuntimeError: expected scalar type Float but found Double`. This is the single most common error when crossing the NumPy→PyTorch border.
+- `dtype=torch.long` for targets — **not** float. `CrossEntropyLoss` with index targets demands int64. Pass float targets shaped `(N,)` and you'll get a confusing error about sizes, because the loss will try to interpret them as class *probabilities* instead (more on that below).
+
+Since the whole dataset fits in memory as two tensors, we don't need a custom `Dataset` class — `TensorDataset` (which you met at the end of Lesson 3) wraps tensors and indexes them in lockstep:
+
+```python
+train_ds = TensorDataset(X_train, y_train)
+val_ds   = TensorDataset(X_val, y_val)
+
+train_loader = DataLoader(train_ds, batch_size=64, shuffle=True)
+val_loader   = DataLoader(val_ds, batch_size=256)
+
+xb, yb = next(iter(train_loader))
+print(xb.shape, yb.shape, yb.dtype)  # torch.Size([64, 64]) torch.Size([64]) torch.int64
+```
+
+`shuffle=True` on train only, exactly as Lesson 4 drilled: shuffling validation buys you nothing and costs you reproducible per-batch metrics. The validation batch size is bigger because no gradients are stored under `torch.no_grad()`, so memory headroom is roughly doubled — use it.
+
+## Targets: class indices vs one-hot (and where softmax hides)
+
+If you learned the theory first, you know cross-entropy compares a predicted distribution $\hat{p}$ against a true distribution $p$:
+
+$$
+\mathcal{L} = -\sum_{c=0}^{C-1} p_c \log \hat{p}_c
+$$
+
+When the true label is a single class $y$, the "true distribution" is one-hot — all mass on class $y$ — and the sum collapses to a single term:
+
+$$
+\mathcal{L} = -\log \hat{p}_y
+$$
+
+That collapse is the whole story of class-index targets. PyTorch's `CrossEntropyLoss` says: *if only one term of the sum survives, why materialize a $(N, 10)$ one-hot matrix at all? Just tell me which index survives.* So the canonical PyTorch pattern is:
+
+- **model outputs**: raw scores ("logits") of shape `(N, C)` — no softmax layer, no activation on the final layer;
+- **targets**: integer class indices of shape `(N,)`, dtype `int64`.
+
+<svg viewBox="0 0 720 250" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="One-hot row vector versus a single class index selecting one logit">
+  <text x="20" y="28" fill="currentColor" font-size="15" font-weight="bold">one-hot target (what you might expect)</text>
+  <g font-size="14" text-anchor="middle">
+    <rect x="20" y="42" width="44" height="34" fill="#6366f180" stroke="currentColor"/>
+    <rect x="64" y="42" width="44" height="34" fill="#6366f180" stroke="currentColor"/>
+    <rect x="108" y="42" width="44" height="34" fill="#6366f180" stroke="currentColor"/>
+    <rect x="152" y="42" width="44" height="34" fill="#22c55e99" stroke="currentColor" stroke-width="2.5"/>
+    <rect x="196" y="42" width="44" height="34" fill="#6366f180" stroke="currentColor"/>
+    <rect x="240" y="42" width="44" height="34" fill="#6366f180" stroke="currentColor"/>
+    <text x="42" y="64" fill="currentColor">0</text>
+    <text x="86" y="64" fill="currentColor">0</text>
+    <text x="130" y="64" fill="currentColor">0</text>
+    <text x="174" y="64" fill="currentColor" font-weight="bold">1</text>
+    <text x="218" y="64" fill="currentColor">0</text>
+    <text x="262" y="64" fill="currentColor">0</text>
+  </g>
+  <text x="300" y="64" fill="currentColor" font-size="13">… shape (N, 10), mostly zeros</text>
+
+  <text x="20" y="128" fill="currentColor" font-size="15" font-weight="bold">class-index target (what PyTorch wants)</text>
+  <rect x="20" y="142" width="44" height="34" fill="#22c55e99" stroke="currentColor" stroke-width="2.5"/>
+  <text x="42" y="164" fill="currentColor" font-size="14" text-anchor="middle" font-weight="bold">3</text>
+  <text x="80" y="164" fill="currentColor" font-size="13">shape (N,) — one integer per sample</text>
+
+  <g stroke="#f59e0b" stroke-width="2" fill="none">
+    <path d="M 42 176 C 42 205 174 205 174 225"/>
+  </g>
+  <g font-size="13" text-anchor="middle">
+    <rect x="20" y="215" width="44" height="28" fill="#38bdf866" stroke="currentColor"/>
+    <rect x="64" y="215" width="44" height="28" fill="#38bdf866" stroke="currentColor"/>
+    <rect x="108" y="215" width="44" height="28" fill="#38bdf866" stroke="currentColor"/>
+    <rect x="152" y="215" width="44" height="28" fill="#f59e0b99" stroke="currentColor" stroke-width="2.5"/>
+    <rect x="196" y="215" width="44" height="28" fill="#38bdf866" stroke="currentColor"/>
+    <rect x="240" y="215" width="44" height="28" fill="#38bdf866" stroke="currentColor"/>
+    <text x="42" y="234" fill="currentColor">1.2</text>
+    <text x="86" y="234" fill="currentColor">-0.4</text>
+    <text x="130" y="234" fill="currentColor">0.1</text>
+    <text x="174" y="234" fill="currentColor" font-weight="bold">4.7</text>
+    <text x="218" y="234" fill="currentColor">0.3</text>
+    <text x="262" y="234" fill="currentColor">-2.1</text>
+  </g>
+  <text x="300" y="234" fill="currentColor" font-size="13">logits (N, 10) — index picks the term that survives the loss</text>
+</svg>
+
+And where did softmax go? *Inside the loss.* `nn.CrossEntropyLoss` is literally `LogSoftmax` + `NLLLoss` fused into one op:
+
+```python
+import torch.nn.functional as F
+
+logits = torch.tensor([[1.2, -0.4, 0.1, 4.7, 0.3, -2.1]])
+target = torch.tensor([3])
+
+manual = -F.log_softmax(logits, dim=1)[0, 3]
+fused  = F.cross_entropy(logits, target)
+print(manual.item(), fused.item())   # 0.06427... 0.06427...  (identical)
+```
+
+The fusion isn't just convenience — it's numerical stability. Computing `softmax` then `log` separately can underflow to `log(0) = -inf` when one logit dominates; the fused log-softmax uses the max-subtraction trick internally and never does. This gives you two rules that will save you real debugging hours:
+
+1. **Never put a `Softmax` layer at the end of a classifier trained with `CrossEntropyLoss`.** You'd be applying softmax twice (once yourself, once inside the loss). The model still trains — that's the cruel part — but gradients get squashed and accuracy plateaus a few points below where it should. It's a silent bug, not a crash.
+2. **Logits are fine for prediction too.** Softmax is monotonic, so `argmax(softmax(z)) == argmax(z)`. You only need actual softmax when you want calibrated-ish probabilities to display.
+
+For completeness: since PyTorch 1.10, `F.cross_entropy` *also* accepts float targets of shape `(N, C)` interpreted as class probabilities — that's how label smoothing and mixup are implemented. So one-hot isn't wrong, it's just wasteful when your labels are hard. This also explains the error behavior above: dtype is how the loss decides which mode you meant. `int64 (N,)` → index mode; `float32 (N, C)` → probability mode; anything else → an error message that only makes sense once you know both modes exist.
+
+## The model: an MLP with a place for dropout
+
+Lesson 2's `nn.Sequential` handles this cleanly. We'll add `nn.Dropout` layers now but start with `p=0.0` — structurally present, functionally absent — so that turning regularization on later is a one-argument change rather than a rewrite.
+
+```python
+import torch.nn as nn
+
+def make_mlp(p_drop: float = 0.0) -> nn.Module:
+    return nn.Sequential(
+        nn.Linear(64, 128),
+        nn.ReLU(),
+        nn.Dropout(p_drop),
+        nn.Linear(128, 64),
+        nn.ReLU(),
+        nn.Dropout(p_drop),
+        nn.Linear(64, 10),   # logits out — NO softmax, see above
+    )
+
+model = make_mlp()
+print(sum(p.numel() for p in model.parameters()))  # 17226
+```
+
+Shape check, the habit Lesson 1 gave you: a batch flows `(B, 64) → (B, 128) → (B, 128) → (B, 128) → (B, 64) → (B, 64) → (B, 64) → (B, 10)`. Dropout and ReLU are shape-preserving; only `Linear` layers change the feature dimension. 17,226 parameters against 1,347 training examples — more parameters than data points. Classical statistics says that's madness; deep learning says it's Tuesday. But it *does* mean the model can memorize the training set, which is precisely what we'll catch it doing shortly.
+
+What `nn.Dropout(p)` actually does, mechanically: **in training mode**, each activation is independently zeroed with probability $p$, and the survivors are scaled by $\frac{1}{1-p}$ so the expected value of each activation is unchanged ("inverted dropout" — this is why you don't need to rescale anything at test time). **In eval mode**, it's the identity function. This is the second module after `BatchNorm` that makes Lesson 4's `model.train()` / `model.eval()` discipline non-negotiable: forget `model.eval()` before validating and your validation metrics are computed on a randomly mutilated network — noisy, pessimistic, and different every run.
+
+```python
+drop = nn.Dropout(p=0.5)
+x = torch.ones(1, 8)
+
+drop.train()
+print(drop(x))   # tensor([[2., 0., 2., 0., 0., 2., 2., 0.]])  ← zeros + survivors ×2
+drop.eval()
+print(drop(x))   # tensor([[1., 1., 1., 1., 1., 1., 1., 1.]])  ← identity
+```
+
+## Training with metrics that mean something
+
+Loss is what the optimizer eats; it is not what your stakeholders (or you, honestly) care about. For classification, the first-class metric is **accuracy**, and it falls out of the logits in one line: the predicted class is the argmax over the class dimension.
+
+Here's the Lesson 4 loop, extended to track accuracy on both splits per epoch. Read the annotations — each one is a place people get burned.
+
+```python
+def run_epoch(model, loader, loss_fn, optimizer=None):
+    """One pass over loader. Trains if optimizer is given, else evaluates."""
+    training = optimizer is not None
+    model.train(training)                      # sets dropout's behavior!
+    total_loss, correct, count = 0.0, 0, 0
+
+    with torch.set_grad_enabled(training):     # no autograd graph in eval
+        for xb, yb in loader:
+            logits = model(xb)                 # (B, 10) raw scores
+            loss = loss_fn(logits, yb)
+
+            if training:
+                loss.backward()
+                optimizer.step()
+                optimizer.zero_grad()
+
+            total_loss += loss.item() * xb.size(0)   # de-average per batch
+            correct += (logits.argmax(dim=1) == yb).sum().item()
+            count += xb.size(0)
+
+    return total_loss / count, correct / count
+```
+
+Block by block:
+
+- **One function, both phases.** Train and eval passes share 90% of their code; duplicating them is how the two copies drift apart (the classic: you change the loss in one and not the other). The `optimizer is None` switch keeps a single source of truth. `torch.set_grad_enabled(training)` is the context-manager form of `torch.no_grad()` that takes a boolean — perfect for this pattern.
+- **`loss.item() * xb.size(0)`** — `CrossEntropyLoss` returns the *mean* over the batch by default. The last batch is usually smaller (1347 isn't divisible by 64), so averaging the per-batch means directly would overweight it. Multiply back to a sum, divide by total count at the end: exact epoch-level mean.
+- **`logits.argmax(dim=1)`** — `dim=1` is the class dimension of the `(B, 10)` logits. `argmax(dim=0)` would compare *samples* against each other, return a shape-`(10,)` tensor, and the `==` against `yb` of shape `(B,)` would then broadcast into a `(B,)`-vs-`(10,)` mess or a silently wrong `(10,)` result depending on batch size. When accuracy looks bizarre, check your `dim` first.
+- **`.sum().item()`** — `(logits.argmax(dim=1) == yb)` is a bool tensor; `.sum()` counts the `True`s; `.item()` pulls a Python number out so we're not accidentally keeping autograd-attached tensors (and thus the whole graph) alive across the epoch.
+
+Now train it:
+
+```python
+model = make_mlp(p_drop=0.0)
+loss_fn = nn.CrossEntropyLoss()
+optimizer = torch.optim.AdamW(model.parameters(), lr=1e-3)
+
+history = {"train_loss": [], "val_loss": [], "train_acc": [], "val_acc": []}
+
+for epoch in range(60):
+    tl, ta = run_epoch(model, train_loader, loss_fn, optimizer)
+    vl, va = run_epoch(model, val_loader, loss_fn)
+    for k, v in zip(history, (tl, vl, ta, va)):
+        history[k].append(v)
+    if epoch % 10 == 0 or epoch == 59:
+        print(f"epoch {epoch:2d}  train {tl:.4f}/{ta:.3f}  val {vl:.4f}/{va:.3f}")
+```
+
+```
+epoch  0  train 1.9376/0.478  val 1.4321/0.756
+epoch 10  train 0.0630/0.993  val 0.1206/0.964
+epoch 20  train 0.0114/1.000  val 0.1049/0.971
+epoch 30  train 0.0043/1.000  val 0.1084/0.973
+epoch 40  train 0.0021/1.000  val 0.1153/0.971
+epoch 50  train 0.0012/1.000  val 0.1216/0.971
+epoch 59  train 0.0008/1.000  val 0.1281/0.973
+```
+
+(Exact numbers vary with seed and library versions; the *shape* of this table is what's reproducible.) Around 97% validation accuracy — genuinely good for an MLP on this data. But look closely at those last four rows, because they're this lesson's most important lesson.
+
+## Reading the curves: diagnosing overfitting
+
+From epoch ~20 onward: **train loss keeps falling** (0.011 → 0.0008, the model is polishing its memorization of all 1,347 training examples) while **validation loss bottoms out and creeps back up** (0.105 → 0.128). Validation *accuracy* holds roughly steady — accuracy is a coarse metric and moves last — but the val loss curve is telling you the model's confidence on unseen data is getting *worse* even as its predictions stay mostly right: it's becoming overconfident in ways that don't generalize.
+
+This U-shape in validation loss against ever-falling training loss is the textbook signature of overfitting, and you should learn to recognize it on sight:
+
+<svg viewBox="0 0 720 300" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Training loss falls monotonically while validation loss falls then rises; the gap between them is the generalization gap">
+  <line x1="60" y1="20" x2="60" y2="250" stroke="currentColor" stroke-width="1.5"/>
+  <line x1="60" y1="250" x2="690" y2="250" stroke="currentColor" stroke-width="1.5"/>
+  <text x="30" y="140" fill="currentColor" font-size="13" transform="rotate(-90 30 140)">loss</text>
+  <text x="360" y="285" fill="currentColor" font-size="13" text-anchor="middle">epochs</text>
+  <path d="M 70 50 C 160 220, 300 238, 680 244" fill="none" stroke="#6366f1" stroke-width="3"/>
+  <path d="M 70 60 C 170 160, 260 165, 360 168 C 480 172, 570 140, 680 110" fill="none" stroke="#f59e0b" stroke-width="3"/>
+  <line x1="360" y1="30" x2="360" y2="250" stroke="#22c55e" stroke-width="2" stroke-dasharray="6 5"/>
+  <text x="368" y="44" fill="#22c55e" font-size="13" font-weight="bold">val loss minimum — stop or regularize here</text>
+  <g stroke="#ec4899" stroke-width="2">
+    <line x1="600" y1="128" x2="600" y2="238"/>
+    <line x1="594" y1="128" x2="606" y2="128"/>
+    <line x1="594" y1="238" x2="606" y2="238"/>
+  </g>
+  <text x="610" y="190" fill="#ec4899" font-size="13" font-weight="bold">generalization gap</text>
+  <text x="130" y="100" fill="#f59e0b" font-size="14" font-weight="bold">validation</text>
+  <text x="150" y="235" fill="#6366f1" font-size="14" font-weight="bold">train</text>
+</svg>
+
+Three practical rules for reading your own curves:
+
+| Symptom | Diagnosis | First move |
+|---|---|---|
+| Train loss ↓, val loss ↓ together, both still moving | Healthy — underfitting if it stalls high | Train longer / bigger model / higher LR |
+| Train loss ↓ toward 0, val loss ↑ after a minimum | Overfitting | Regularize (dropout, weight decay), more data, or stop earlier |
+| Both losses flat and high from the start | Model or data bug | Check LR, check labels align with inputs, check normalization |
+
+And a warning: **judge overfitting by val *loss*, not val *accuracy***. As you saw above, accuracy can sit still while loss degrades — loss is the sensitive instrument.
+
+The most honest fixes for overfitting are boring: get more data, or use a smaller model. When neither is on the table, regularization is the lever, and dropout is the classic. Flip the switch we built in:
+
+```python
+model = make_mlp(p_drop=0.3)     # the one-argument change
+optimizer = torch.optim.AdamW(model.parameters(), lr=1e-3)
+# ... identical training loop ...
+```
+
+```
+epoch  0  train 2.0413/0.377  val 1.5395/0.749
+epoch 20  train 0.0741/0.982  val 0.0871/0.978
+epoch 40  train 0.0417/0.989  val 0.0762/0.980
+epoch 59  train 0.0333/0.991  val 0.0748/0.982
+```
+
+Read the story in the numbers: train accuracy no longer hits a perfect 1.000 (the network can't memorize cleanly when 30% of its activations vanish at random each step — memorization requires co-adapted neurons, and dropout keeps breaking the co-adaptations), train loss floors higher, and in exchange **val loss now keeps improving instead of U-turning**, landing lower than the unregularized model's best. That trade — worse on train, better on val — is regularization working as intended. If you ever see dropout improve *train* metrics, something else is wrong.
+
+Why $p=0.3$ and not 0.5 or 0.1? No theory hands you this number; it's a hyperparameter. Sensible defaults: 0.2–0.5 for hidden layers of MLPs, tune by watching val loss. Too high and you underfit (both losses stuck high); too low and the U-turn comes back.
+
+## The confusion matrix: where accuracy hides its sins
+
+98% accuracy sounds finished. It isn't a full answer, because accuracy averages over classes — it can't tell you that your model is great at 0s and 6s but keeps calling 8s 1s. The confusion matrix does: entry $(i, j)$ counts validation samples whose true class is $i$ and predicted class is $j$. Perfect model → everything on the diagonal.
+
+You could import `sklearn.metrics.confusion_matrix`, but building it in PyTorch is four lines and teaches a genuinely useful indexing idiom:
+
+```python
+@torch.no_grad()
+def confusion_matrix(model, loader, num_classes=10):
+    model.eval()                              # dropout OFF — critical
+    cm = torch.zeros(num_classes, num_classes, dtype=torch.long)
+    for xb, yb in loader:
+        preds = model(xb).argmax(dim=1)
+        # flatten (true, pred) pairs into single indices true*C + pred,
+        # count each with bincount, reshape back to (C, C)
+        cm += torch.bincount(
+            yb * num_classes + preds, minlength=num_classes**2
+        ).reshape(num_classes, num_classes)
+    return cm
+
+cm = confusion_matrix(model, val_loader)
+print(cm)
+```
+
+The `bincount` trick deserves a beat: each `(true, pred)` pair is encoded as one integer `true * 10 + pred` — a base-10 flattening of the 2-D coordinate, exactly how a `(10, 10)` tensor is laid out in memory — then `bincount` tallies occurrences of each of the 100 possible codes, and `reshape` restores the grid. It's fully vectorized (no Python loop over samples) and the same pattern computes per-class IoU in segmentation, so file it away. Note the `@torch.no_grad()` decorator form — it wraps the whole function, same effect as the `with` block.
+
+```
+tensor([[45,  0,  0,  0,  0,  0,  0,  0,  0,  0],
+        [ 0, 45,  0,  0,  0,  0,  0,  0,  1,  0],
+        [ 0,  0, 44,  0,  0,  0,  0,  0,  0,  0],
+        [ 0,  0,  0, 45,  0,  0,  0,  0,  1,  0],
+        [ 0,  0,  0,  0, 45,  0,  0,  0,  0,  0],
+        [ 0,  0,  0,  0,  0, 45,  0,  0,  0,  1],
+        [ 1,  0,  0,  0,  0,  0, 44,  0,  0,  0],
+        [ 0,  0,  0,  0,  0,  0,  0, 45,  0,  0],
+        [ 0,  2,  0,  0,  0,  0,  0,  0, 42,  0],
+        [ 0,  0,  0,  1,  0,  0,  0,  1,  0, 43]])
+```
+
+How to read it: row 8 says two true 8s were predicted as 1s — with the loop of an 8 drawn thin at 8×8 resolution, it degenerates into a vertical stroke. Row 9 shows a 9→3 and a 9→7. These aren't random errors; they're *structured* errors between visually similar digits, and that structure is actionable: it tells you the model needs spatial awareness the flat 64-vector can't give it (Lesson 6's pitch, again), whereas a matrix with errors smeared everywhere would instead suggest a training problem. Per-class accuracy is one line from here:
+
+```python
+per_class = cm.diag().float() / cm.sum(dim=1).float()
+print(per_class.round(decimals=3))
+# tensor([1.000, 0.978, 1.000, 0.978, 1.000, 0.978, 0.978, 1.000, 0.955, 0.956])
+```
+
+Class 8 is your weakest — exactly what the row inspection said, now as a number you can put on a dashboard.
+
+## The complete script
+
+Everything above, assembled into one file you can run top to bottom — the culmination of Lessons 1–5. Nothing here is new; that's the point.
+
+```python
+"""Lesson 5 — digits classifier, end to end. Runs in ~15s on CPU."""
+import torch
+import torch.nn as nn
+from torch.utils.data import TensorDataset, DataLoader
+from sklearn.datasets import load_digits
+from sklearn.model_selection import train_test_split
+
+torch.manual_seed(0)
+
+# ---- data (Lesson 3) ----
+digits = load_digits()
+X_tr, X_va, y_tr, y_va = train_test_split(
+    digits.data, digits.target, test_size=0.25,
+    random_state=0, stratify=digits.target)
+to_x = lambda a: torch.tensor(a, dtype=torch.float32) / 16.0
+to_y = lambda a: torch.tensor(a, dtype=torch.long)
+train_loader = DataLoader(TensorDataset(to_x(X_tr), to_y(y_tr)),
+                          batch_size=64, shuffle=True)
+val_loader   = DataLoader(TensorDataset(to_x(X_va), to_y(y_va)),
+                          batch_size=256)
+
+# ---- model (Lesson 2) + dropout (Lesson 5) ----
+model = nn.Sequential(
+    nn.Linear(64, 128), nn.ReLU(), nn.Dropout(0.3),
+    nn.Linear(128, 64), nn.ReLU(), nn.Dropout(0.3),
+    nn.Linear(64, 10),
+)
+loss_fn = nn.CrossEntropyLoss()          # takes logits + class indices
+optimizer = torch.optim.AdamW(model.parameters(), lr=1e-3)
+
+# ---- loop (Lesson 4) ----
+def run_epoch(loader, train):
+    model.train(train)
+    total, correct, n = 0.0, 0, 0
+    with torch.set_grad_enabled(train):
+        for xb, yb in loader:
+            logits = model(xb)
+            loss = loss_fn(logits, yb)
+            if train:
+                loss.backward(); optimizer.step(); optimizer.zero_grad()
+            total += loss.item() * len(xb)
+            correct += (logits.argmax(1) == yb).sum().item()
+            n += len(xb)
+    return total / n, correct / n
+
+best_val = float("inf")
+for epoch in range(60):
+    tl, ta = run_epoch(train_loader, train=True)
+    vl, va = run_epoch(val_loader, train=False)
+    if vl < best_val:
+        best_val = vl
+        torch.save(model.state_dict(), "digits_mlp.pt")  # keep the best
+    if epoch % 10 == 0 or epoch == 59:
+        print(f"{epoch:2d}  train {tl:.4f}/{ta:.3f}  val {vl:.4f}/{va:.3f}")
+
+# ---- confusion matrix (Lesson 5) ----
+model.load_state_dict(torch.load("digits_mlp.pt", weights_only=True))
+model.eval()
+cm = torch.zeros(10, 10, dtype=torch.long)
+with torch.no_grad():
+    for xb, yb in val_loader:
+        cm += torch.bincount(yb * 10 + model(xb).argmax(1),
+                             minlength=100).reshape(10, 10)
+print("val acc:", (cm.diag().sum() / cm.sum()).item())
+print(cm)
+```
+
+One new habit smuggled into this script: **checkpointing on best validation loss**. Instead of keeping whatever weights the final epoch happens to leave you, we save `state_dict()` whenever val loss improves, then reload the best before final evaluation. It's early stopping's lazier sibling — you don't halt training, you just refuse to keep the overfit tail. `weights_only=True` on `torch.load` is the modern, safe default (it refuses to unpickle arbitrary objects); Lesson 9 covers saving and loading in full.
+
+## 🧪 Your task
+
+The dropout model above trains for a fixed 60 epochs with checkpointing. Your job: **make the overfitting visible, then kill it, with data you generate yourself.**
+
+1. Retrain with `p_drop=0.0` on a deliberately starved training set — use only the first **300** training samples (`TensorDataset(to_x(X_tr)[:300], to_y(y_tr)[:300])`). Record train and val loss per epoch for 80 epochs.
+2. Print the epoch at which validation loss was lowest, and the ratio `val_loss_final / val_loss_best`. A ratio well above 1 is your overfitting receipt.
+3. Repeat with `p_drop=0.4` and compare both numbers. You should see the best-epoch move later and the ratio shrink toward 1.
+
+*Hint:* you don't need matplotlib for step 2 — collect val losses in a list `vls`, then `best = min(range(len(vls)), key=vls.__getitem__)` gives you the argmin epoch, and `vls[-1] / vls[best]` is the ratio.
+
+<details><summary>Solution</summary>
+
+```python
+import torch
+import torch.nn as nn
+from torch.utils.data import TensorDataset, DataLoader
+from sklearn.datasets import load_digits
+from sklearn.model_selection import train_test_split
+
+torch.manual_seed(0)
+
+digits = load_digits()
+X_tr, X_va, y_tr, y_va = train_test_split(
+    digits.data, digits.target, test_size=0.25,
+    random_state=0, stratify=digits.target)
+to_x = lambda a: torch.tensor(a, dtype=torch.float32) / 16.0
+to_y = lambda a: torch.tensor(a, dtype=torch.long)
+
+# starved training set: 300 samples only
+small_train = DataLoader(TensorDataset(to_x(X_tr)[:300], to_y(y_tr)[:300]),
+                         batch_size=64, shuffle=True)
+val_loader = DataLoader(TensorDataset(to_x(X_va), to_y(y_va)), batch_size=256)
+
+def experiment(p_drop, epochs=80):
+    torch.manual_seed(0)                      # same init for a fair fight
+    model = nn.Sequential(
+        nn.Linear(64, 128), nn.ReLU(), nn.Dropout(p_drop),
+        nn.Linear(128, 64), nn.ReLU(), nn.Dropout(p_drop),
+        nn.Linear(64, 10),
+    )
+    loss_fn = nn.CrossEntropyLoss()
+    opt = torch.optim.AdamW(model.parameters(), lr=1e-3)
+    vls = []
+    for _ in range(epochs):
+        model.train()
+        for xb, yb in small_train:
+            loss = loss_fn(model(xb), yb)
+            loss.backward(); opt.step(); opt.zero_grad()
+        model.eval()
+        total, n = 0.0, 0
+        with torch.no_grad():
+            for xb, yb in val_loader:
+                total += loss_fn(model(xb), yb).item() * len(xb)
+                n += len(xb)
+        vls.append(total / n)
+    best = min(range(len(vls)), key=vls.__getitem__)
+    print(f"p_drop={p_drop}:  best epoch {best:2d}  "
+          f"best val {vls[best]:.4f}  final val {vls[-1]:.4f}  "
+          f"ratio {vls[-1] / vls[best]:.2f}")
+    return vls
+
+experiment(0.0)
+experiment(0.4)
+```
+
+Typical output (seeds vary, the pattern doesn't):
+
+```
+p_drop=0.0:  best epoch 14  best val 0.2116  final val 0.3944  ratio 1.86
+p_drop=0.4:  best epoch 61  best val 0.1876  final val 0.1985  ratio 1.06
+```
+
+Interpretation: with 300 samples and no regularization, the model peaks early (epoch ~14) and then degrades — by the end, validation loss is nearly double its best. With dropout, the minimum arrives much later, is *lower in absolute terms*, and the final model has barely drifted from its best. Same architecture, same data, same optimizer — the only change is dropout, and it bought you both a better model and a training run you could stop "whenever" without much penalty.
+
+</details>
+
+## Key takeaways
+
+- `CrossEntropyLoss` wants **raw logits `(N, C)`** and **int64 class indices `(N,)`** — softmax lives inside the loss, fused with log for numerical stability. Never add your own softmax layer before it.
+- One-hot targets are a special case the API optimizes away; float `(N, C)` targets are still accepted for soft labels (label smoothing, mixup). The target's dtype/shape selects the mode.
+- Accuracy is `logits.argmax(dim=1) == targets` — watch the `dim`. Aggregate epoch loss with per-sample weighting (`loss.item() * batch_size`), or ragged final batches skew it.
+- Overfitting's signature: train loss falls forever, **val loss U-turns**. Diagnose on val *loss* — val accuracy moves last and can mask degradation.
+- Dropout zeroes activations at random in training (scaled by $1/(1-p)$) and is identity in eval — one more reason `model.train()`/`model.eval()` is non-negotiable. Expect worse train metrics and better val metrics; that trade is the whole deal.
+- A confusion matrix turns one accuracy number into a per-class error map; structured confusions (8↔1, 9↔3) point to *representation* limits, not training bugs.
+- Checkpoint on best validation loss so the overfit tail of training can't cost you the good weights.
+
+In the next lesson the flat 64-pixel vector gets its geometry back: convolutional networks, where the model finally learns that pixel 9 sits below pixel 1 — and validation accuracy on images jumps because of it.
+
+------------------------------------------------------------------------
+
+[🏠 🔥 Course home](index.html)  &nbsp;|&nbsp;  [← Lesson 04](lesson04.html)  &nbsp;|&nbsp;  [Lesson 06 →](lesson06.html)  &nbsp;|&nbsp;  [📚 All mini-courses](../../mini-courses.html)

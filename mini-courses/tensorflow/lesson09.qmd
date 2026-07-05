@@ -1,0 +1,421 @@
+---
+aliases: ["/mini-courses/tensorflow/day09.html"]
+title: "📊 Deep Learning with TensorFlow & Keras · Lesson 9 — Saving & Deployment: From `.keras` to the Edge"
+page-layout: full
+toc: true
+toc-location: left
+toc-title: "In this lesson"
+toc-depth: 2
+---
+
+[🏠 📊 Course home](index.html)  &nbsp;|&nbsp;  [← Lesson 08](lesson08.html)  &nbsp;|&nbsp;  [📚 All mini-courses](../../mini-courses.html)
+
+------------------------------------------------------------------------
+
+# Lesson 9 — Saving & Deployment: From `.keras` to the Edge
+
+You've spent eight lessons building models — from raw tensors and `GradientTape` all the way to a fine-tuned transfer-learning classifier. Every one of those models died when the Python process exited. In this lesson we fix that. A trained model is worth nothing until it answers requests from something that isn't your notebook: a web backend, a Docker container fielding REST calls, a phone, a browser. TensorFlow's deployment story is arguably its strongest card versus PyTorch, and in this lesson you'll play the whole hand: the `.keras` format for checkpointing, `model.export()` for serving, TensorFlow Serving in Docker, and TFLite quantization to shrink your model 4× for edge devices. We'll close with the question people ask most — *"so… PyTorch or TensorFlow?"* — answered honestly.
+
+::: {.callout-note appearance="simple"}
+🎯 **In this lesson you will:** save and reload a model with the `.keras` format, export a SavedModel with a custom serving endpoint, serve it via TensorFlow Serving in Docker and call it over REST, convert and int8-quantize it with TFLite, and learn a decision framework for choosing between TensorFlow and PyTorch
+:::
+
+## A model to deploy
+
+We need something trained to work with. To keep today self-contained, here's a small Fashion-MNIST classifier — three epochs, under a minute on CPU. (If your Lesson 8 fine-tuned model is still around, everything below works on it identically; the artifacts are just bigger.)
+
+```python
+import numpy as np
+import tensorflow as tf
+import keras
+from keras import layers
+
+(x_train, y_train), (x_test, y_test) = keras.datasets.fashion_mnist.load_data()
+x_train = x_train.astype("float32") / 255.0
+x_test = x_test.astype("float32") / 255.0
+
+model = keras.Sequential([
+    layers.Input(shape=(28, 28)),
+    layers.Flatten(),
+    layers.Dense(256, activation="relu"),
+    layers.Dropout(0.2),
+    layers.Dense(10, activation="softmax"),
+], name="fashion")
+
+model.compile(optimizer="adam",
+              loss="sparse_categorical_crossentropy",
+              metrics=["accuracy"])
+model.fit(x_train, y_train, epochs=3, batch_size=128,
+          validation_split=0.1, verbose=2)
+print(model.evaluate(x_test, y_test, verbose=0))
+```
+
+```
+Epoch 3/3
+422/422 - 2s - loss: 0.3164 - accuracy: 0.8843 - val_loss: 0.3374 - val_accuracy: 0.8797
+[0.3648, 0.8703]
+```
+
+Two deliberate choices here. First, the model ends in `softmax`, not logits — a served model should emit probabilities, because the client on the other end of an HTTP call shouldn't need to know what a logit is. Second, `layers.Input(shape=(28, 28))` pins the input spec explicitly. When you export for serving, TensorFlow must write a *static signature* — the contract "I accept float32 tensors of shape `[None, 28, 28]`" — and an explicit `Input` makes that contract unambiguous.
+
+## Two artifacts, two jobs: `.keras` vs the exported SavedModel
+
+This is the single most confused topic in TensorFlow deployment, so let's be precise. Keras 3 gives you two different save operations because there are two different jobs:
+
+| | `model.save("m.keras")` | `model.export("m/1")` |
+|---|---|---|
+| Purpose | **Checkpointing**: resume work in Python | **Serving**: inference outside Python |
+| Contains | Architecture config + weights + optimizer state | A frozen TF graph + weights (SavedModel) |
+| Round-trips to Keras? | Yes — `load_model` gives you the same trainable object | No — it's an inference-only artifact |
+| Needs your code? | Only for custom layers (`custom_objects`) | Never — the graph is self-describing |
+| Consumed by | You, in the next lesson | TF Serving, TFLite, TF.js, C++/Java/Go runtimes |
+
+The `.keras` file is your working checkpoint — think of it as PyTorch's `torch.save(model.state_dict())` plus the architecture, in one file:
+
+```python
+model.save("fashion.keras")
+
+restored = keras.models.load_model("fashion.keras")
+np.testing.assert_allclose(
+    model.predict(x_test[:5], verbose=0),
+    restored.predict(x_test[:5], verbose=0),
+    atol=1e-6,
+)
+print("round-trip OK")
+```
+
+A `.keras` file is literally a zip archive: unzip it and you find `config.json` (the architecture, as the same config dicts you'd get from `model.get_config()`), `model.weights.h5` (the parameters), and `metadata.json`. Because the architecture is stored as *config*, not code, reloading a model with custom layers requires the class to be importable and registered (`@keras.saving.register_keras_serializable()`) — the file stores `"class_name": "MyAttentionBlock"`, and Keras must be able to look that name up. Forget this and `load_model` throws `TypeError: Could not locate class 'MyAttentionBlock'`. That's the PyTorch-pickle problem wearing a different hat: both frameworks store weights fine; both need your code to rebuild custom architecture.
+
+The export is a different beast entirely:
+
+```python
+model.export("serving/fashion/1")
+```
+
+```
+Saved artifact at 'serving/fashion/1'. The following endpoints are available:
+
+* Endpoint 'serve'
+  args_0 (POSITIONAL_ONLY): TensorSpec(shape=(None, 28, 28), dtype=tf.float32, name='keras_tensor')
+Output Type:
+  TensorSpec(shape=(None, 10), dtype=tf.float32, name=None)
+```
+
+Note the path: `serving/fashion/1`. That trailing `1` is not decoration — **TensorFlow Serving requires the model directory to contain numbered version subdirectories**, and it automatically serves the highest number. Later you export `serving/fashion/2` and Serving hot-swaps to it with zero downtime. Forget the version directory and Serving fails at startup with `No versions of servable fashion found` — the number-one rookie error.
+
+On disk, the export is a **SavedModel**: `saved_model.pb` (the computation graph as a protocol buffer — every op, traced through `tf.function` the way you saw graphs built on Lesson 4), a `variables/` directory (the weights), and `fingerprint.pb`. The crucial property: *the graph contains the math itself*, so a C++ server, a Java service, or the TFLite converter can execute your model with no Python and none of your source code. This is what PyTorch spent years chasing with TorchScript and now approaches differently via `torch.export` and ONNX — in TensorFlow it has been the native path since 2016, and it shows in the tooling maturity.
+
+If you ever need to pull an exported artifact *back* into a Keras pipeline (say, to stack a new head on a frozen exported backbone), you can't `load_model` it — you wrap it as an inference-only layer: `keras.layers.TFSMLayer("serving/fashion/1", call_endpoint="serve")`.
+
+## Custom endpoints: put preprocessing inside the graph
+
+Our exported signature accepts `float32` images already scaled to `[0, 1]`. That means every client — the web backend, the mobile app, the batch job — must remember to divide by 255. One of them will forget, predictions will be garbage, and you'll burn an afternoon discovering why. The fix is a deployment golden rule: **preprocessing belongs inside the exported graph**. Keras 3's `ExportArchive` lets you define exactly the endpoints you want:
+
+```python
+export_archive = keras.export.ExportArchive()
+export_archive.track(model)  # register the model's variables with the archive
+
+@tf.function()
+def serve_raw(images):
+    # accept raw uint8 pixels, exactly as a camera or PNG decoder produces them
+    x = tf.cast(images, tf.float32) / 255.0
+    return {"probabilities": model(x, training=False)}
+
+export_archive.add_endpoint(
+    name="serve_raw",
+    fn=serve_raw,
+    input_signature=[tf.TensorSpec(shape=(None, 28, 28), dtype=tf.uint8)],
+)
+export_archive.write_out("serving/fashion_raw/1")
+```
+
+Walk through what each piece does. `track(model)` tells the archive which variables to serialize — without it, `write_out` has weights it can't account for and raises. The `input_signature` is the contract: `shape=(None, 28, 28)` (the `None` keeps the batch dimension flexible — hardcode a batch size here and your server can only ever answer batches of exactly that size) and `dtype=tf.uint8`, raw bytes. The division by 255 is now *frozen into the graph*: clients send pixels as-is and can't get scaling wrong. Returning a dict instead of a bare tensor names the output — the REST response will say `"probabilities"` instead of the anonymous `output_0`, which your future self will thank you for. And `training=False` matters: it's what disables the `Dropout` layer at inference. Keras handles this automatically inside `predict()`, but in a hand-written `tf.function` *you* are responsible, and forgetting it means every served prediction is randomly perturbed — the kind of bug that shaves two silent points off production accuracy while all your offline evaluations look perfect.
+
+You can inspect any SavedModel's contract without loading it, using the CLI that ships with TensorFlow:
+
+```bash
+saved_model_cli show --dir serving/fashion_raw/1 --tag_set serve \
+    --signature_def serve_raw
+```
+
+```
+The given SavedModel SignatureDef contains the following input(s):
+  inputs['images'] tensor_info:
+      dtype: DT_UINT8
+      shape: (-1, 28, 28)
+The given SavedModel SignatureDef contains the following output(s):
+  outputs['probabilities'] tensor_info:
+      dtype: DT_FLOAT
+      shape: (-1, 10)
+```
+
+That printout *is* your API documentation — generated from the artifact itself, so it can never drift out of date.
+
+Here's the full deployment map we're building today — one trained model, four artifacts, four runtimes:
+
+```{mermaid}
+flowchart LR
+    M["Trained Keras model<br/>(in Python memory)"]
+    M -- "model.save()" --> K[".keras file<br/>checkpoint / resume"]
+    M -- "model.export()" --> S["SavedModel<br/>serving/fashion/1"]
+    K -- "load_model()" --> M
+    S --> TFS["TF Serving (Docker)<br/>REST :8501 / gRPC :8500"]
+    S -- "TFLiteConverter" --> TFL[".tflite<br/>int8, 4x smaller"]
+    S -- "tensorflowjs_converter" --> TJS["TF.js<br/>browser / Node"]
+    TFS --> C1["backend services"]
+    TFL --> C2["phones & microcontrollers"]
+    TJS --> C3["web pages"]
+```
+
+## TensorFlow Serving in Docker: a real model server
+
+You *could* serve predictions from a Flask route that calls `model.predict()`. For a demo, fine. For production it's the wrong tool: no request batching, no zero-downtime model reloads, Python's GIL throttling throughput. **TensorFlow Serving** is a C++ server purpose-built for SavedModels — it watches your model directory, batches concurrent requests together for GPU efficiency, and hot-swaps versions. The standard way to run it is Docker:
+
+```bash
+docker run -t --rm -p 8501:8501 \
+    -v "$PWD/serving/fashion:/models/fashion" \
+    -e MODEL_NAME=fashion \
+    tensorflow/serving
+```
+
+Dissect the flags. `-v` bind-mounts your export directory into the container at `/models/fashion` — Serving finds the version subdirectory `1/` inside it (this is where the numbered-directory rule pays off). `-e MODEL_NAME=fashion` names the model, which becomes part of the URL. Port `8501` is REST; add `-p 8500:8500` if you want gRPC (roughly 2–5× faster for large tensors thanks to binary encoding, but REST is friendlier to start with). On startup you'll see:
+
+```
+Successfully loaded servable version {name: fashion version: 1}
+Exporting HTTP/REST API at:localhost:8501 ...
+```
+
+Now call it from any HTTP client. The REST API's JSON schema is fixed: a top-level `"instances"` key holding a list, one entry per example:
+
+```python
+import json
+import requests
+
+payload = {"instances": x_test[:3].tolist()}  # 3 images, each 28x28 nested lists
+resp = requests.post(
+    "http://localhost:8501/v1/models/fashion:predict",
+    json=payload,
+    timeout=10,
+)
+resp.raise_for_status()
+preds = np.array(resp.json()["predictions"])   # shape (3, 10)
+
+class_names = ["T-shirt/top", "Trouser", "Pullover", "Dress", "Coat",
+               "Sandal", "Shirt", "Sneaker", "Bag", "Ankle boot"]
+for i, p in enumerate(preds):
+    print(f"predicted: {class_names[p.argmax()]:<12}  true: {class_names[y_test[i]]}")
+```
+
+```
+predicted: Ankle boot    true: Ankle boot
+predicted: Pullover      true: Pullover
+predicted: Trouser       true: Trouser
+```
+
+The URL anatomy is worth memorizing: `/v1/models/<MODEL_NAME>:predict`. Two classic failure modes. Send a shape the signature doesn't accept — say a flat 784-list instead of 28×28 nested lists — and you get an HTTP 400 whose error message quotes the expected `TensorSpec`; the signature you inspected with `saved_model_cli` is enforced at the door. And if you exported multiple endpoints (like our `serve_raw`), pick one per request with `"signature_name": "serve_raw"` alongside `"instances"` — otherwise Serving uses `serving_default`.
+
+The same `curl` one-liner, because sooner or later you'll debug from a shell:
+
+```bash
+curl -s -X POST http://localhost:8501/v1/models/fashion:predict \
+  -H "Content-Type: application/json" \
+  -d "$(python -c 'import json,keras;(_,_),(x,_)=keras.datasets.fashion_mnist.load_data();print(json.dumps({"instances": (x[:1]/255.0).tolist()}))')" \
+  | python -m json.tool | head -n 5
+```
+
+This container is the atom of real ML infrastructure: put it behind a load balancer, scale replicas horizontally, roll out `serving/fashion/2` by dropping a directory. The CI/CD, monitoring, and rollout strategy around that atom is a course of its own — the site's **MLOps mini-course** picks up exactly here, so treat today as the hand-off point.
+
+## TFLite: shrinking the model for the edge
+
+A phone app can't run a Docker container, and it can't ship a 500 MB runtime. **TFLite** (recently rebranded **LiteRT** — same technology, you'll see both names in docs) is a small interpreter plus a compact model format called a *flatbuffer*, designed for phones, Raspberry Pis, and microcontrollers. Conversion starts from the SavedModel you already exported:
+
+```python
+converter = tf.lite.TFLiteConverter.from_saved_model("serving/fashion/1")
+tflite_float = converter.convert()
+
+with open("fashion_float.tflite", "wb") as f:
+    f.write(tflite_float)
+print(f"float32 model: {len(tflite_float) / 1024:.0f} KB")
+```
+
+```
+float32 model: 800 KB
+```
+
+Roughly what you'd predict from first principles: ~203k parameters × 4 bytes ≈ 800 KB. Now the interesting part — **quantization**. The idea: your weights are float32, but the information they carry doesn't need 32 bits. Map each float tensor onto 8-bit integers with a linear transform:
+
+$$q = \operatorname{round}\!\left(\frac{x}{s}\right) + z, \qquad x \approx s\,(q - z)$$
+
+where the *scale* $s$ and *zero-point* $z$ are chosen per tensor so the observed range of real values $[x_{\min}, x_{\max}]$ spreads across the 256 available integer levels:
+
+<svg viewBox="0 0 700 210" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Quantization maps a float range onto 256 int8 levels">
+  <text x="350" y="22" text-anchor="middle" font-size="14" fill="currentColor" font-weight="bold">Linear quantization: float32 range → 256 int8 buckets</text>
+  <!-- float axis -->
+  <line x1="80" y1="60" x2="620" y2="60" stroke="currentColor" stroke-width="1.5"/>
+  <rect x="80" y="48" width="540" height="24" fill="#6366f1" opacity="0.25"/>
+  <text x="80" y="42" text-anchor="middle" font-size="12" fill="currentColor">x_min = −0.84</text>
+  <text x="620" y="42" text-anchor="middle" font-size="12" fill="currentColor">x_max = +1.12</text>
+  <text x="640" y="64" font-size="12" fill="currentColor">float32</text>
+  <!-- mapping lines -->
+  <line x1="80" y1="72" x2="80" y2="138" stroke="#f59e0b" stroke-width="1.5" stroke-dasharray="4 3"/>
+  <line x1="620" y1="72" x2="620" y2="138" stroke="#f59e0b" stroke-width="1.5" stroke-dasharray="4 3"/>
+  <line x1="312" y1="72" x2="312" y2="138" stroke="#22c55e" stroke-width="1.5" stroke-dasharray="4 3"/>
+  <text x="350" y="105" font-size="12" fill="currentColor">q = round(x / s) + z</text>
+  <!-- int8 axis with buckets -->
+  <line x1="80" y1="150" x2="620" y2="150" stroke="currentColor" stroke-width="1.5"/>
+  <g stroke="currentColor" opacity="0.5">
+    <line x1="140" y1="144" x2="140" y2="156"/><line x1="200" y1="144" x2="200" y2="156"/>
+    <line x1="260" y1="144" x2="260" y2="156"/><line x1="320" y1="144" x2="320" y2="156"/>
+    <line x1="380" y1="144" x2="380" y2="156"/><line x1="440" y1="144" x2="440" y2="156"/>
+    <line x1="500" y1="144" x2="500" y2="156"/><line x1="560" y1="144" x2="560" y2="156"/>
+  </g>
+  <rect x="80" y="138" width="540" height="24" fill="#22c55e" opacity="0.2"/>
+  <text x="80" y="180" text-anchor="middle" font-size="12" fill="currentColor">−128</text>
+  <text x="312" y="180" text-anchor="middle" font-size="12" fill="currentColor">z (zero-point, x = 0)</text>
+  <text x="620" y="180" text-anchor="middle" font-size="12" fill="currentColor">+127</text>
+  <text x="640" y="154" font-size="12" fill="currentColor">int8</text>
+  <text x="350" y="202" text-anchor="middle" font-size="12" fill="currentColor" opacity="0.8">4× smaller, faster integer math — at the cost of rounding error per bucket</text>
+</svg>
+
+The cheapest form is **dynamic-range quantization** — weights stored as int8, activations computed in float. One line:
+
+```python
+converter = tf.lite.TFLiteConverter.from_saved_model("serving/fashion/1")
+converter.optimizations = [tf.lite.Optimize.DEFAULT]
+tflite_dynamic = converter.convert()
+print(f"dynamic-range model: {len(tflite_dynamic) / 1024:.0f} KB")
+```
+
+```
+dynamic-range model: 204 KB
+```
+
+4× smaller, typically well under 1% accuracy loss, zero extra effort. For maximum speed on integer-only hardware (many phone NPUs, the Coral Edge TPU, microcontrollers) you want **full integer quantization** — activations quantized too. But activation ranges aren't known from the weights alone: the converter must *watch data flow through the model* to measure them. You supply a **representative dataset**, a generator yielding a few hundred typical inputs:
+
+```python
+def representative_data():
+    for i in range(200):
+        # one sample per yield, with batch dim, matching the signature dtype
+        yield [x_test[i : i + 1].astype("float32")]
+
+converter = tf.lite.TFLiteConverter.from_saved_model("serving/fashion/1")
+converter.optimizations = [tf.lite.Optimize.DEFAULT]
+converter.representative_dataset = representative_data
+converter.target_spec.supported_ops = [tf.lite.OpsSet.TFLITE_BUILTINS_INT8]
+converter.inference_input_type = tf.uint8   # in/out tensors as raw bytes
+converter.inference_output_type = tf.uint8
+tflite_int8 = converter.convert()
+
+with open("fashion_int8.tflite", "wb") as f:
+    f.write(tflite_int8)
+print(f"full-int8 model: {len(tflite_int8) / 1024:.0f} KB")
+```
+
+Each converter knob has a job. `representative_dataset` feeds calibration — if your generator yields data that doesn't resemble production inputs (wrong scaling is the classic: yielding raw 0–255 values when the model expects 0–1), the calibrated ranges are wrong and accuracy craters, sometimes to random-guessing levels. `supported_ops = [TFLITE_BUILTINS_INT8]` makes conversion *fail loudly* if any op can't be expressed in int8, instead of silently leaving float ops that would crash an integer-only accelerator at runtime. The `inference_input_type/output_type` lines make even the model's boundary tensors uint8, so a camera buffer can be fed in directly.
+
+Running a `.tflite` model uses the interpreter API — lower-level than Keras, closer to how the C++ API feels on-device:
+
+```python
+interpreter = tf.lite.Interpreter(model_content=tflite_dynamic)
+interpreter.allocate_tensors()                     # reserve buffers; mandatory
+inp = interpreter.get_input_details()[0]
+out = interpreter.get_output_details()[0]
+
+interpreter.set_tensor(inp["index"], x_test[:1].astype("float32"))
+interpreter.invoke()
+probs = interpreter.get_tensor(out["index"])       # shape (1, 10)
+print(class_names[int(probs.argmax())])            # -> Ankle boot
+```
+
+Note the workflow: `allocate_tensors()` once, then `set_tensor → invoke → get_tensor` per call. The interpreter allocates fixed buffers up front — that's *why* it's fast and tiny on-device, and why you can't just throw variable batch sizes at it without calling `resize_tensor_input` first. One gotcha: the default `Interpreter` here processes one input at a time, so evaluating a whole test set means a Python loop — slow in your notebook, but irrelevant on-device where requests arrive one at a time anyway.
+
+Two siblings deserve a mention so you know they exist. **TensorFlow.js** converts the same SavedModel (`tensorflowjs_converter`) into shards a browser can fetch, running inference client-side via WebGL/WebGPU — nice for privacy (data never leaves the device) and for zero-server demos. And for models too large or dynamic for TFLite, **ONNX** export gives you a framework-neutral escape hatch. Neither needs new concepts: they're the same pattern — freeze the graph, hand it to a specialized runtime.
+
+## PyTorch or TensorFlow? The honest answer
+
+You've now been through both of this site's mini-courses, so you've earned a straight answer instead of tribal cheerleading.
+
+| Dimension | Reality in 2026 |
+|---|---|
+| Research & new architectures | PyTorch dominates. New papers ship PyTorch code first; ecosystem gravity (Hugging Face et al.) follows. |
+| Serving & edge deployment | TensorFlow's stack (Serving, TFLite/LiteRT, TF.js) is older and more turnkey. PyTorch has closed much of the gap (`torch.export`, ExecuTorch, ONNX Runtime) but with more assembly required. |
+| High-level training API | Keras is genuinely pleasant: `compile/fit`, callbacks, built-in best practices. PyTorch answers with Lightning — excellent, but a third-party layer. |
+| Debugging & flexibility | Both eager-first now; a near tie. PyTorch's error messages and idioms are, on average, kinder. |
+| Multi-backend hedge | Keras 3 runs on TensorFlow, **JAX, or PyTorch** backends — Keras skills survive a framework switch. |
+| Existing codebase | Beats every other consideration. You deploy with the framework your team already runs. |
+
+The honest synthesis: **the concepts are the asset, not the framework**. Tensors, autodiff, `Dataset` pipelines, training loops, regularization, transfer learning, export formats — every one of these has a near-isomorphic twin across the fence (`GradientTape` ↔ `backward()`, `tf.data` ↔ `DataLoader`, SavedModel ↔ `torch.export`). If you're starting fresh in research or following the open-source model ecosystem, pick PyTorch. If your path is mobile/edge/embedded or you want the shortest line from `fit()` to a production endpoint, TensorFlow still earns its keep. If you're hedging, Keras 3 on the JAX backend is the quietly excellent third option. And whichever you choose, everything downstream of today — containers, CI/CD for models, monitoring, drift detection, rollbacks — is framework-agnostic: that's the territory of the site's **MLOps mini-course**, which is the natural next stop after this one.
+
+## 🧪 Your task
+
+Quantization is only free until it isn't — so *measure* it. Evaluate the accuracy of your **full-int8** `fashion_int8.tflite` model on the entire Fashion-MNIST test set and compare it to the original Keras model's test accuracy. Report both accuracies and the size ratio between `fashion_float.tflite` and `fashion_int8.tflite`.
+
+*Hint:* the int8 model's input is `uint8`, so feed it raw `x_test` pixels (0–255) **without** dividing by 255 — check `interpreter.get_input_details()[0]["dtype"]` to confirm. Loop one image at a time, adding a batch dimension with `x_test[i:i+1]`; `argmax` on the output works whether it's uint8 or float.
+
+<details><summary>Solution</summary>
+
+```python
+import numpy as np
+import tensorflow as tf
+import keras
+
+(_, _), (x_test, y_test) = keras.datasets.fashion_mnist.load_data()
+
+# --- Keras baseline (expects scaled float input) ---
+model = keras.models.load_model("fashion.keras")
+_, keras_acc = model.evaluate(x_test.astype("float32") / 255.0, y_test, verbose=0)
+
+# --- int8 TFLite model (expects raw uint8 input) ---
+interpreter = tf.lite.Interpreter(model_path="fashion_int8.tflite")
+interpreter.allocate_tensors()
+inp = interpreter.get_input_details()[0]
+out = interpreter.get_output_details()[0]
+assert inp["dtype"] == np.uint8, f"expected uint8 input, got {inp['dtype']}"
+
+correct = 0
+for i in range(len(x_test)):
+    interpreter.set_tensor(inp["index"], x_test[i : i + 1])  # raw pixels, no /255
+    interpreter.invoke()
+    pred = int(interpreter.get_tensor(out["index"]).argmax())
+    correct += pred == int(y_test[i])
+tflite_acc = correct / len(x_test)
+
+import os
+size_f = os.path.getsize("fashion_float.tflite")
+size_q = os.path.getsize("fashion_int8.tflite")
+
+print(f"Keras float32 accuracy : {keras_acc:.4f}")
+print(f"TFLite int8 accuracy   : {tflite_acc:.4f}")
+print(f"accuracy delta         : {keras_acc - tflite_acc:+.4f}")
+print(f"size: {size_f/1024:.0f} KB -> {size_q/1024:.0f} KB "
+      f"({size_f/size_q:.1f}x smaller)")
+```
+
+Typical output:
+
+```
+Keras float32 accuracy : 0.8703
+TFLite int8 accuracy   : 0.8691
+accuracy delta         : +0.0012
+size: 800 KB -> 205 KB (3.9x smaller)
+```
+
+A ~0.1-point accuracy drop for a 4× smaller, integer-only model — the usual trade for a well-calibrated quantization. If your delta is large (multiple points), the first suspect is always the representative dataset: make sure it yields inputs with exactly the scaling and dtype the SavedModel signature expects.
+
+</details>
+
+## Key takeaways
+
+- `model.save("m.keras")` is for **checkpointing** (round-trips to a trainable Keras object); `model.export("m/1")` writes a **SavedModel** for serving — a frozen graph that runs without your Python code.
+- TF Serving requires **numbered version subdirectories** (`fashion/1/`, `fashion/2/`) and hot-swaps to the highest one.
+- Bake preprocessing **into the exported graph** with `keras.export.ExportArchive` — clients that can't get scaling wrong don't get scaling wrong. Remember `training=False` in custom endpoints.
+- TF Serving in Docker gives you batching, versioning, and a REST endpoint at `/v1/models/<name>:predict` in one `docker run`.
+- TFLite dynamic-range quantization is one line for 4× smaller; **full-int8** needs a representative dataset for calibration — and the calibration data must match production scaling.
+- Inspect any SavedModel's contract with `saved_model_cli show` — the artifact is its own documentation.
+- Framework choice is a deployment-context decision, not an identity; the concepts transfer, and everything past the container is MLOps.
+
+That's the course: nine lessons from a bare tensor to a quantized model answering HTTP requests — from here, the MLOps mini-course takes your container the rest of the way to production.
+
+------------------------------------------------------------------------
+
+[🏠 📊 Course home](index.html)  &nbsp;|&nbsp;  [← Lesson 08](lesson08.html)  &nbsp;|&nbsp;  [📚 All mini-courses](../../mini-courses.html)

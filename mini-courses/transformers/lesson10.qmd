@@ -1,0 +1,459 @@
+---
+aliases: ["/mini-courses/transformers/day10.html"]
+title: "⚡ Building Transformers from Scratch with PyTorch · Lesson 10 — From Tiny-GPT to the Real Thing"
+page-layout: full
+toc: true
+toc-location: left
+toc-title: "In this lesson"
+toc-depth: 2
+---
+
+[🏠 ⚡ Course home](index.html)  &nbsp;|&nbsp;  [← Lesson 09](lesson09.html)  &nbsp;|&nbsp;  [📚 All mini-courses](../../mini-courses.html)
+
+------------------------------------------------------------------------
+
+# Lesson 10 — From Tiny-GPT to the Real Thing
+
+Over the past nine lessons you built a complete GPT — tokenizer, embeddings, attention, blocks, training loop, sampler — in pure PyTorch. In this lesson we close the loop with a satisfying reveal: **your architecture is not a toy**. It is, modulo a handful of component swaps, the same architecture running inside GPT-2, Llama 3, Mistral, and Qwen. We'll prove it two ways. First, we'll walk through each modern upgrade — BPE tokenizers, RMSNorm, RoPE, SwiGLU, grouped-query attention — as a short, runnable code contrast against the version *you* wrote. Each one is 5–15 lines. Second, we'll do something better than argument: we'll download OpenAI's actual GPT-2 weights and load them into **your** Lesson 7 model, then watch your Lesson 9 `generate()` produce fluent English from parameters trained on 40GB of internet text. If the weights fit, the architecture is real.
+
+::: {.callout-note appearance="simple"}
+🎯 **In this lesson you will:** swap character tokenization for GPT-2's BPE via tiktoken, implement RMSNorm/RoPE/SwiGLU/GQA in a few lines each and understand why labs made each swap, load pretrained GPT-2 weights into your hand-written model and generate real text with it, and map the road from here to fine-tuning and serving.
+:::
+
+## How far is our model from GPT-2? One table
+
+Here is the honest accounting. Column one is what you built; column two is GPT-2 (2019); column three is a Llama-3-style model (2024).
+
+| Component | Our tiny-GPT (Lessons 2–9) | GPT-2 | Llama-3-style |
+|---|---|---|---|
+| Tokenizer | character-level | byte-level BPE (50,257) | BPE, ~128K vocab |
+| Positions | learned embedding table | learned embedding table | RoPE (rotary) |
+| Normalization | LayerNorm, pre-norm | LayerNorm, pre-norm | RMSNorm, pre-norm |
+| Attention | multi-head, causal | multi-head, causal | grouped-query (GQA) |
+| FFN | Linear→GELU→Linear | Linear→GELU→Linear | SwiGLU |
+| Weight tying | lm_head ↔ tok_emb | yes | usually yes |
+| Params | ~1–10M | 124M–1.5B | 8B–405B |
+
+Read the GPT-2 column carefully: **it is your model**. Same learned positional embeddings, same pre-norm LayerNorm, same GELU MLP, same causal multi-head attention, same tied output head. The only differences are the tokenizer and the size knobs (`n_layer=12, n_head=12, n_embd=768` for the 124M model). That's why the weight-loading experiment later today works with zero architectural surgery.
+
+The Llama column is where the last five years of "what actually helped" landed:
+
+```{mermaid}
+flowchart LR
+    subgraph OURS["Our block / GPT-2 block"]
+        direction TB
+        A1[LayerNorm] --> A2[Multi-Head Attention]
+        A2 --> A3[+ residual]
+        A3 --> A4[LayerNorm]
+        A4 --> A5["MLP: Linear → GELU → Linear"]
+        A5 --> A6[+ residual]
+    end
+    subgraph MODERN["Llama-style block"]
+        direction TB
+        B1[RMSNorm] --> B2["GQA attention + RoPE on q,k"]
+        B2 --> B3[+ residual]
+        B3 --> B4[RMSNorm]
+        B4 --> B5["SwiGLU MLP"]
+        B5 --> B6[+ residual]
+    end
+    OURS -. "same skeleton,<br/>four part swaps" .-> MODERN
+```
+
+Same skeleton, four part swaps. Let's do each swap in code.
+
+## Swap 1 — Real tokenization: byte-level BPE
+
+Our Lesson 2 character tokenizer had a vocabulary of ~65 symbols. That means the model spends capacity learning to *spell*, and every token carries almost no meaning. Byte-Pair Encoding (BPE) starts from raw bytes and greedily merges the most frequent pairs into a learned vocabulary of subwords — common words become one token, rare words split into pieces, and **any** byte sequence (emoji, Arabic, code) is representable with zero out-of-vocabulary failures. The theory is in the encyclopedia's Attention & Transformers chapter; here we just use the production implementation, `tiktoken`:
+
+```python
+# pip install tiktoken
+import tiktoken
+
+enc = tiktoken.get_encoding("gpt2")   # the exact tokenizer GPT-2 was trained with
+print(enc.n_vocab)                    # 50257
+
+ids = enc.encode("Hello, world!")
+print(ids)                            # [15496, 11, 995, 0]
+print([enc.decode([i]) for i in ids]) # ['Hello', ',', ' world', '!']
+```
+
+Notice `' world'` — the leading space is *part of the token*. Byte-level BPE folds whitespace into tokens so that decode is a lossless inverse of encode: `enc.decode(enc.encode(s)) == s` for any string `s`, always.
+
+Dropping this into your Lesson 2 pipeline is a three-line change, because your `Dataset` only ever saw a 1-D tensor of integer ids:
+
+```python
+import torch
+
+text = open("input.txt").read()
+data = torch.tensor(enc.encode(text), dtype=torch.long)   # replaces the char lookup
+vocab_size = enc.n_vocab                                  # 50257 replaces ~65
+```
+
+Everything downstream — batching, embedding lookup, the loss — is unchanged. The one thing that *does* change materially is the embedding table: `50257 × 768` is ~38.6M parameters, which is why in small models the embeddings dominate the parameter count and why tying `lm_head` to `tok_emb` (which you did on Lesson 7) matters so much.
+
+The Hugging Face equivalent, if you want special-token handling and hundreds of tokenizers behind one API:
+
+```python
+from transformers import AutoTokenizer
+tok = AutoTokenizer.from_pretrained("gpt2")
+tok("Hello, world!")["input_ids"]     # [15496, 11, 995, 0] — same ids, same tokenizer
+```
+
+Same ids — `tiktoken` and HF both implement the published GPT-2 merges. `tiktoken` is faster (Rust core); HF is more general.
+
+## Swap 2 — RMSNorm: LayerNorm minus the parts that didn't matter
+
+Your Lesson 6 block uses `nn.LayerNorm`, which normalizes to zero mean and unit variance, then applies a learned scale *and* shift:
+
+$$\text{LN}(x) = \gamma \odot \frac{x - \mu}{\sqrt{\sigma^2 + \epsilon}} + \beta$$
+
+RMSNorm (Zhang & Sennrich, 2019) asks: what if we skip the mean subtraction and the bias entirely, and only rescale by the root-mean-square?
+
+$$\text{RMSNorm}(x) = \gamma \odot \frac{x}{\sqrt{\frac{1}{d}\sum_i x_i^2 + \epsilon}}$$
+
+It turns out re-centering contributes almost nothing at scale — the rescaling is what stabilizes training. Fewer ops, one fewer reduction over the hidden dimension, no bias parameter. Here it is, complete:
+
+```python
+import torch
+import torch.nn as nn
+
+class RMSNorm(nn.Module):
+    def __init__(self, dim: int, eps: float = 1e-6):
+        super().__init__()
+        self.eps = eps
+        self.weight = nn.Parameter(torch.ones(dim))    # gamma only — no beta
+
+    def forward(self, x):                              # x: (B, T, dim)
+        rms = x.pow(2).mean(dim=-1, keepdim=True).add(self.eps).rsqrt()
+        return self.weight * (x * rms)
+```
+
+Shape check: `x.pow(2).mean(-1, keepdim=True)` is `(B, T, 1)`, broadcasting cleanly against `(B, T, dim)`. The classic mistake is forgetting `keepdim=True` — then the `(B, T)` tensor broadcasts against the *wrong* trailing dimension and you get either a shape error or, worse (when `T == dim`), silently wrong math. In your block, the swap is literal: `self.ln1 = RMSNorm(n_embd)` instead of `nn.LayerNorm(n_embd)`. One practical note: real implementations compute the reduction in float32 even under mixed precision (`x.float()` in, `.type_as(x)` out), because a bf16 sum of squares loses precision exactly where you need it.
+
+## Swap 3 — RoPE: positions as rotations, not additions
+
+Your Lesson 3 model *adds* a learned position vector to each token embedding. Two limitations: the table has a hard length limit (`block_size` rows — position 1025 simply doesn't exist), and attention scores end up depending on *absolute* positions, when what language mostly needs is *relative* offsets ("the adjective 3 tokens back").
+
+Rotary Position Embedding (RoPE) takes a different route entirely: it injects position **inside attention**, by rotating each (query, key) vector pair by an angle proportional to its position. Split a head's dimensions into $d/2$ pairs; treat each pair $(x_{2i}, x_{2i+1})$ as a 2-D point; rotate pair $i$ at sequence position $m$ by angle $m\theta_i$, where
+
+$$\theta_i = 10000^{-2i/d}$$
+
+so early pairs spin fast (fine-grained, nearby positions) and late pairs spin slowly (coarse, long-range). The magic is in the dot product: a rotation by $m\theta$ against a rotation by $n\theta$ leaves only the *difference* $(m-n)\theta$ in the score — attention becomes a function of relative offset, for free.
+
+<svg viewBox="0 0 700 260" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="RoPE rotates query and key pairs by position-dependent angles; the attention score depends only on the angle difference">
+  <g stroke="currentColor" stroke-opacity="0.35" fill="none">
+    <circle cx="130" cy="130" r="80"/>
+    <circle cx="360" cy="130" r="80"/>
+    <line x1="50" y1="130" x2="210" y2="130"/><line x1="130" y1="50" x2="130" y2="210"/>
+    <line x1="280" y1="130" x2="440" y2="130"/><line x1="360" y1="50" x2="360" y2="210"/>
+  </g>
+  <g stroke-width="3" fill="none">
+    <line x1="130" y1="130" x2="205" y2="103" stroke="#6366f1"/>
+    <line x1="130" y1="130" x2="170" y2="62" stroke="#6366f1" stroke-opacity="0.55" stroke-dasharray="5 4"/>
+    <path d="M 190 108 A 65 65 0 0 1 163 73" stroke="#f59e0b"/>
+    <line x1="360" y1="130" x2="435" y2="103" stroke="#22c55e"/>
+    <line x1="360" y1="130" x2="428" y2="90" stroke="#22c55e" stroke-opacity="0.55" stroke-dasharray="5 4"/>
+    <path d="M 428 106 A 72 72 0 0 1 421 96" stroke="#f59e0b"/>
+  </g>
+  <g fill="currentColor" font-family="sans-serif" font-size="13">
+    <text x="90" y="235">query pair, position m</text>
+    <text x="322" y="235">key pair, position n</text>
+    <text x="205" y="95" fill="#6366f1">rotate by mθᵢ</text>
+    <text x="442" y="88" fill="#22c55e">rotate by nθᵢ</text>
+    <text x="470" y="120" font-size="14">q·k depends only on</text>
+    <text x="470" y="140" font-size="14" fill="#f59e0b">(m − n)θᵢ  — relative offset</text>
+    <text x="470" y="170" font-size="12" fill="currentColor" fill-opacity="0.7">pair i rotates at speed θᵢ = 10000^(−2i/d):</text>
+    <text x="470" y="188" font-size="12" fill="currentColor" fill-opacity="0.7">early pairs fast, late pairs slow</text>
+  </g>
+</svg>
+
+Implementation in two small functions. First, precompute the angle tables once:
+
+```python
+def rope_tables(head_dim: int, max_seq_len: int, base: float = 10000.0):
+    # one frequency per dimension PAIR: (head_dim/2,)
+    inv_freq = 1.0 / (base ** (torch.arange(0, head_dim, 2).float() / head_dim))
+    pos = torch.arange(max_seq_len).float()          # (T_max,)
+    angles = torch.outer(pos, inv_freq)              # (T_max, head_dim/2)
+    return angles.cos(), angles.sin()                # register as buffers, not Parameters
+```
+
+Then apply the rotation to `q` and `k` (never `v` — values carry content, not position):
+
+```python
+def apply_rope(x, cos, sin):
+    # x: (B, n_head, T, head_dim); cos/sin: (T_max, head_dim/2)
+    T = x.size(2)
+    cos, sin = cos[:T], sin[:T]                      # crop to current length
+    x1, x2 = x[..., 0::2], x[..., 1::2]              # the two halves of each pair
+    out = torch.empty_like(x)
+    out[..., 0::2] = x1 * cos - x2 * sin             # standard 2-D rotation
+    out[..., 1::2] = x1 * sin + x2 * cos
+    return out
+```
+
+Inside your Lesson 5 attention, the hook point is right after the reshape to heads:
+
+```python
+q = apply_rope(q, self.cos, self.sin)
+k = apply_rope(k, self.cos, self.sin)
+# ... scores = q @ k.transpose(-2, -1) * scale, exactly as before
+```
+
+And you delete `self.pos_emb` from the model — RoPE *replaces* additive positions. Two gotchas worth knowing. First, there are two pairing conventions: interleaved `(x0,x1),(x2,x3)` as above (the original paper), and "rotate-half" which pairs `x[:d/2]` with `x[d/2:]` (what Llama/HF use). Both are valid; a checkpoint trained with one cannot be loaded into code using the other — this is a classic silent-garbage bug when porting weights. Second, because positions are computed, not looked up, RoPE has no hard length wall, which is what makes context-extension tricks (scaling `base` up, e.g. to 500000 in Llama 3) possible without retraining from scratch.
+
+## Swap 4 — SwiGLU: a gated MLP
+
+Your Lesson 6 feed-forward is the GPT-2 classic — expand 4×, nonlinearity, project back:
+
+```python
+# ours (Lesson 6): 2 matrices
+self.net = nn.Sequential(
+    nn.Linear(n_embd, 4 * n_embd),
+    nn.GELU(),
+    nn.Linear(4 * n_embd, n_embd),
+)
+```
+
+SwiGLU (Shazeer, 2020 — from a paper whose abstract honestly says "we offer no explanation... other than divine benevolence") replaces the single expansion with **two** parallel projections, one of which *gates* the other elementwise:
+
+$$\text{SwiGLU}(x) = W_{\text{down}}\big(\text{SiLU}(W_{\text{gate}}\,x) \odot W_{\text{up}}\,x\big), \qquad \text{SiLU}(z) = z \cdot \sigma(z)$$
+
+```python
+import torch.nn.functional as F
+
+class SwiGLU(nn.Module):
+    def __init__(self, n_embd: int, hidden: int):
+        super().__init__()
+        self.w_gate = nn.Linear(n_embd, hidden, bias=False)
+        self.w_up   = nn.Linear(n_embd, hidden, bias=False)
+        self.w_down = nn.Linear(hidden, n_embd, bias=False)
+
+    def forward(self, x):                                  # (B, T, n_embd)
+        return self.w_down(F.silu(self.w_gate(x)) * self.w_up(x))
+```
+
+The gate lets the network *multiply* two learned projections of the input — a data-dependent filter on every hidden channel — which empirically beats plain GELU MLPs at equal compute. Note the accounting: three matrices instead of two, so to keep parameter count comparable, `hidden` shrinks from `4*n_embd` to roughly `8/3 * n_embd` (Llama rounds it to a multiple of 256 for hardware efficiency). Also note `bias=False` everywhere — modern models dropped nearly all biases; RMSNorm's scale is enough.
+
+## Swap 5 — GQA: many query heads, few KV heads
+
+This one is about **inference memory**, not modeling power. On Lesson 9 you saw that generation caches K and V for every past token. For a 70B model serving a 8K-token context, that KV-cache is gigabytes *per request* — and its size is proportional to the number of KV heads. Grouped-Query Attention keeps many query heads (attention patterns stay rich) but shares each K/V head across a *group* of query heads:
+
+<svg viewBox="0 0 700 250" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="GQA: 8 query heads share 2 KV heads in groups of 4">
+  <g font-family="sans-serif" font-size="13" fill="currentColor">
+    <text x="20" y="30">8 query heads</text>
+    <text x="20" y="215">2 KV heads (cached during generation)</text>
+    <text x="470" y="30" fill-opacity="0.7">MHA: 8 KV heads → cache ×8</text>
+    <text x="470" y="48" fill-opacity="0.7">GQA: 2 KV heads → cache ×2</text>
+    <text x="470" y="66" fill-opacity="0.7">MQA: 1 KV head → cache ×1</text>
+  </g>
+  <g>
+    <rect x="30"  y="50" width="40" height="34" rx="6" fill="#6366f1" fill-opacity="0.55"/>
+    <rect x="80"  y="50" width="40" height="34" rx="6" fill="#6366f1" fill-opacity="0.55"/>
+    <rect x="130" y="50" width="40" height="34" rx="6" fill="#6366f1" fill-opacity="0.55"/>
+    <rect x="180" y="50" width="40" height="34" rx="6" fill="#6366f1" fill-opacity="0.55"/>
+    <rect x="240" y="50" width="40" height="34" rx="6" fill="#ec4899" fill-opacity="0.55"/>
+    <rect x="290" y="50" width="40" height="34" rx="6" fill="#ec4899" fill-opacity="0.55"/>
+    <rect x="340" y="50" width="40" height="34" rx="6" fill="#ec4899" fill-opacity="0.55"/>
+    <rect x="390" y="50" width="40" height="34" rx="6" fill="#ec4899" fill-opacity="0.55"/>
+    <g font-family="sans-serif" font-size="12" fill="currentColor" text-anchor="middle">
+      <text x="50" y="72">q0</text><text x="100" y="72">q1</text><text x="150" y="72">q2</text><text x="200" y="72">q3</text>
+      <text x="260" y="72">q4</text><text x="310" y="72">q5</text><text x="360" y="72">q6</text><text x="410" y="72">q7</text>
+    </g>
+  </g>
+  <g stroke="currentColor" stroke-opacity="0.5" fill="none">
+    <path d="M 50 84 L 115 160"/><path d="M 100 84 L 120 160"/><path d="M 150 84 L 130 160"/><path d="M 200 84 L 140 160"/>
+    <path d="M 260 84 L 320 160"/><path d="M 310 84 L 328 160"/><path d="M 360 84 L 336 160"/><path d="M 410 84 L 345 160"/>
+  </g>
+  <g>
+    <rect x="95"  y="160" width="60" height="34" rx="6" fill="#22c55e" fill-opacity="0.55"/>
+    <rect x="305" y="160" width="60" height="34" rx="6" fill="#22c55e" fill-opacity="0.55"/>
+    <g font-family="sans-serif" font-size="12" fill="currentColor" text-anchor="middle">
+      <text x="125" y="182">kv0</text><text x="335" y="182">kv1</text>
+    </g>
+  </g>
+</svg>
+
+The change to your Lesson 5 code is confined to the projection sizes and one `repeat_interleave`:
+
+```python
+class GroupedQueryAttention(nn.Module):
+    def __init__(self, n_embd: int, n_head: int, n_kv_head: int):
+        super().__init__()
+        assert n_head % n_kv_head == 0
+        self.n_head, self.n_kv_head = n_head, n_kv_head
+        self.hd = n_embd // n_head
+        self.wq = nn.Linear(n_embd, n_head    * self.hd, bias=False)
+        self.wk = nn.Linear(n_embd, n_kv_head * self.hd, bias=False)   # smaller!
+        self.wv = nn.Linear(n_embd, n_kv_head * self.hd, bias=False)   # smaller!
+        self.proj = nn.Linear(n_embd, n_embd, bias=False)
+
+    def forward(self, x):
+        B, T, _ = x.shape
+        q = self.wq(x).view(B, T, self.n_head,    self.hd).transpose(1, 2)
+        k = self.wk(x).view(B, T, self.n_kv_head, self.hd).transpose(1, 2)
+        v = self.wv(x).view(B, T, self.n_kv_head, self.hd).transpose(1, 2)
+        # broadcast each kv head to its group of query heads
+        k = k.repeat_interleave(self.n_head // self.n_kv_head, dim=1)   # (B, n_head, T, hd)
+        v = v.repeat_interleave(self.n_head // self.n_kv_head, dim=1)
+        y = F.scaled_dot_product_attention(q, k, v, is_causal=True)
+        return self.proj(y.transpose(1, 2).reshape(B, T, -1))
+```
+
+With `n_head=8, n_kv_head=2` you cache 4× less K/V. `n_kv_head=1` is Multi-Query Attention (MQA); `n_kv_head=n_head` recovers your Lesson 5 model exactly — GQA is a dial, and Llama 3 8B sits at `32 query / 8 kv`. (On PyTorch ≥ 2.5, SDPA accepts un-expanded KV directly via `enable_gqa=True`, skipping the `repeat_interleave` copy — same math, less memory traffic.) Note we also switched to `F.scaled_dot_product_attention`: it's your Lesson 4 math behind a fused kernel (FlashAttention) that never materializes the `(T, T)` score matrix.
+
+## The payoff: loading real GPT-2 weights into *your* model
+
+Time to prove the table from section one. GPT-2 124M is architecturally your Lesson 7 model at `n_layer=12, n_head=12, n_embd=768, block_size=1024, vocab_size=50257` — so OpenAI's trained parameters should drop straight into your `state_dict`. Three genuine gotchas stand between you and that:
+
+1. **Conv1D transposition.** The original TensorFlow code (and HF's port) stores linear layers as `Conv1D` with weights shaped `(in, out)`; `nn.Linear` stores `(out, in)`. Four weight matrices per block need a `.t()`.
+2. **GELU flavor.** GPT-2 used the tanh approximation. Your MLP must use `nn.GELU(approximate="tanh")` or logits will differ in the third decimal — close enough to fool a glance, wrong enough to fail a test.
+3. **Buffers that aren't parameters.** HF's checkpoint carries the causal-mask buffer under `attn.bias` and a `masked_bias` scalar. They're not weights; skip them.
+
+```python
+from transformers import GPT2LMHeadModel
+from day7 import GPT, GPTConfig   # your model from Lesson 7
+
+def load_gpt2(model_type: str = "gpt2"):
+    cfg = GPTConfig(vocab_size=50257, block_size=1024,
+                    n_layer=12, n_head=12, n_embd=768)   # 124M
+    model = GPT(cfg)
+    sd = model.state_dict()
+
+    hf = GPT2LMHeadModel.from_pretrained(model_type)
+    sd_hf = hf.state_dict()
+```
+
+Now the key mapping. HF names look like `transformer.h.3.attn.c_attn.weight`; assuming your Lesson 7 attributes are `tok_emb / pos_emb / blocks / ln1 / attn.qkv / attn.proj / ln2 / mlp.fc / mlp.proj / ln_f / lm_head` (rename the pairs below if yours differ — this is the *only* project-specific part):
+
+```python
+    def rename(k: str) -> str:
+        for old, new in [("transformer.", ""), ("wte.", "tok_emb."),
+                         ("wpe.", "pos_emb."), ("h.", "blocks."),
+                         ("ln_1.", "ln1."), ("ln_2.", "ln2."),
+                         ("attn.c_attn.", "attn.qkv."), ("attn.c_proj.", "attn.proj."),
+                         ("mlp.c_fc.", "mlp.fc."), ("mlp.c_proj.", "mlp.proj.")]:
+            k = k.replace(old, new)
+        return k
+
+    transposed = ("attn.qkv.weight", "attn.proj.weight",
+                  "mlp.fc.weight", "mlp.proj.weight")     # the Conv1D four
+
+    for k_hf, w in sd_hf.items():
+        if k_hf.endswith(("attn.masked_bias", "attn.bias")):
+            continue                                      # mask buffers, not weights
+        k = rename(k_hf)
+        w = w.t() if k.endswith(transposed) else w        # gotcha #1
+        assert sd[k].shape == w.shape, f"{k}: {sd[k].shape} vs {w.shape}"
+        with torch.no_grad():
+            sd[k].copy_(w)
+    return model
+```
+
+The `assert` is your friend: if any rename is wrong or a transpose is missed, it fails loudly at the exact key instead of producing a model that generates confident gibberish. Also note that because your Lesson 7 model ties `lm_head.weight` to `tok_emb.weight`, copying into `lm_head.weight` (which HF also ships tied) is a harmless double-write of the same storage.
+
+Now the moment of truth — your architecture, your sampler, OpenAI's brain:
+
+```python
+import tiktoken
+
+model = load_gpt2().eval()
+enc = tiktoken.get_encoding("gpt2")
+
+idx = torch.tensor([enc.encode("The transformer architecture is")])
+with torch.no_grad():
+    out = model.generate(idx, max_new_tokens=40, temperature=0.8, top_k=50)  # Lesson 9
+print(enc.decode(out[0].tolist()))
+```
+
+```text
+The transformer architecture is a very powerful tool for building
+neural networks that can learn from data. It is used in many
+applications, including machine translation, speech recognition, ...
+```
+
+Your exact output will vary with the seed, but it will be *English* — coherent, grammatical, on-topic. Every line of code that produced it, except the numbers in the tensors, is code you wrote this week. Sit with that for a second.
+
+`"gpt2-medium"` (355M, `24/16/1024`), `"gpt2-large"` (774M, `36/20/1280`) and `"gpt2-xl"` (1.5B, `48/25/1600`) load with the same function — only the config numbers change. Scale, as promised on Lesson 1, is a config dict.
+
+## The bridge: fine-tuning, serving, and where this course hands off
+
+You now own the full mental model, which changes how you read the rest of the ecosystem:
+
+- **Fine-tuning is Lesson 8 with a different dataset.** Instruction tuning is your training loop over (prompt, response) pairs with the loss masked to response tokens. LoRA — the workhorse of cheap fine-tuning — is nothing exotic: freeze every matrix you loaded above and learn a low-rank correction $W + \frac{\alpha}{r} BA$ where $B \in \mathbb{R}^{d \times r}, A \in \mathbb{R}^{r \times d}, r \ll d$. You could implement it as a 15-line wrapper around your `nn.Linear`s — and now you know exactly which matrices (`wq`, `wv`, usually) it targets and why. The encyclopedia's LLM chapters cover the full landscape: SFT, RLHF/DPO, quantization.
+- **Serving is Lesson 9 industrialized.** vLLM, TGI, and llama.cpp are your `generate()` loop plus: paged KV-cache memory management, continuous batching of many users' loops, quantized weights (int8/int4), and speculative decoding. Each optimization targets a bottleneck you can now name — most of them the KV-cache you met on Lesson 9 and GQA shrank today. The MLOps course picks up this thread: packaging, GPUs, autoscaling, monitoring.
+- **Reading model cards is now transparent.** "Llama 3 8B: 32 layers, 4096 hidden, 32 heads, 8 KV heads, SwiGLU, RMSNorm, RoPE θ=500000, 128K vocab" — every term in that sentence is something you implemented, today or earlier this week.
+
+## 🧪 Your task
+
+Prove your weight-loading is *exactly* right, not just plausible-looking. Sampled text can hide subtle bugs (a missed transpose in one layer still yields English-ish output). The unforgiving test is numerical: run the same token ids through your loaded model and through HF's `GPT2LMHeadModel`, and check the logits agree to `atol=1e-4`. Then break it on purpose: switch your MLP's GELU from `approximate="tanh"` to the default exact GELU and measure how far the logits drift.
+
+**Hint:** put both models in `.eval()` mode (dropout!), use `torch.no_grad()`, and remember HF returns an object — the tensor you want is `out.logits`.
+
+<details><summary>Solution</summary>
+
+```python
+import torch
+import tiktoken
+from transformers import GPT2LMHeadModel
+from day10 import load_gpt2          # this lesson's loader
+
+enc = tiktoken.get_encoding("gpt2")
+ids = torch.tensor([enc.encode("The quick brown fox jumps over the lazy dog")])
+
+# --- our model ---
+ours = load_gpt2().eval()
+with torch.no_grad():
+    logits_ours = ours(ids)                       # (1, T, 50257)
+    if isinstance(logits_ours, tuple):            # if your Lesson 7 forward returns (logits, loss)
+        logits_ours = logits_ours[0]
+
+# --- reference ---
+hf = GPT2LMHeadModel.from_pretrained("gpt2").eval()
+with torch.no_grad():
+    logits_hf = hf(ids).logits                    # (1, T, 50257)
+
+assert logits_ours.shape == logits_hf.shape
+max_diff = (logits_ours - logits_hf).abs().max().item()
+print(f"max |diff| = {max_diff:.2e}")
+assert torch.allclose(logits_ours, logits_hf, atol=1e-4), "weights not loaded correctly"
+print("exact match — your GPT is GPT-2")
+
+# --- now break it on purpose: exact GELU instead of tanh approximation ---
+import torch.nn as nn
+for block in ours.blocks:
+    for name, m in block.mlp.named_modules():
+        if isinstance(m, nn.GELU):
+            m.approximate = "none"
+with torch.no_grad():
+    logits_broken = ours(ids)
+    if isinstance(logits_broken, tuple):
+        logits_broken = logits_broken[0]
+print(f"gelu drift: max |diff| = {(logits_broken - logits_hf).abs().max().item():.2e}")
+```
+
+Expected output shape:
+
+```text
+max |diff| = ~1e-05        # float noise: exact architectural match
+exact match — your GPT is GPT-2
+gelu drift: max |diff| = ~1e-01 or larger   # a "tiny" activation detail, 4 orders worse
+```
+
+The lesson in the second number: at 12 layers deep, a per-neuron discrepancy of ~1e-3 compounds into logit differences big enough to change which token gets sampled. Faithful reimplementation means matching *every* detail, not just the block diagram.
+
+</details>
+
+## Key takeaways
+
+- Your tiny-GPT and GPT-2 are the **same architecture** — the proof is that OpenAI's weights load into your Lesson 7 `state_dict` and your Lesson 9 sampler speaks fluent English with them.
+- BPE tokenizers (`tiktoken`, HF) replace character vocab with ~50K learned subwords; the rest of your pipeline doesn't change because it only ever saw integer ids.
+- The modern block is four surgical swaps: **RMSNorm** (drop mean-centering, keep rescaling), **RoPE** (rotate q/k pairs so attention sees relative offsets, no length wall), **SwiGLU** (gated 3-matrix MLP), **GQA** (share KV heads to shrink the inference cache) — each 5–15 lines against your version.
+- Porting weights fails on details, not diagrams: Conv1D transposes, GELU flavor, RoPE pairing convention. `assert` shapes on every copy, and validate with logit-matching, never with "the text looks fine."
+- Fine-tuning is your training loop with a new dataset (and maybe low-rank adapters); serving is your generate loop with cache paging and batching. The encyclopedia's LLM chapters and the MLOps course carry on from here.
+
+Next: that's the course — you came in ten lessons ago with `import torch`, and you leave with a GPT you can build, train, sample, and now load real weights into, understanding every line on the way down.
+
+------------------------------------------------------------------------
+
+[🏠 ⚡ Course home](index.html)  &nbsp;|&nbsp;  [← Lesson 09](lesson09.html)  &nbsp;|&nbsp;  [📚 All mini-courses](../../mini-courses.html)

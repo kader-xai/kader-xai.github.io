@@ -1,0 +1,533 @@
+---
+aliases: ["/mini-courses/pytorch/day01.html"]
+title: "🔥 Deep Learning with PyTorch · Lesson 1 — Tensors & Autograd: The Foundation"
+page-layout: full
+toc: true
+toc-location: left
+toc-title: "In this lesson"
+toc-depth: 2
+---
+
+[🏠 🔥 Course home](index.html)  &nbsp;|&nbsp;  [Lesson 02 →](lesson02.html)  &nbsp;|&nbsp;  [📚 All mini-courses](../../mini-courses.html)
+
+------------------------------------------------------------------------
+
+# Lesson 1 — Tensors & Autograd: The Foundation
+
+Everything in PyTorch — every transformer, every diffusion model, every ResNet — reduces to two ideas: **tensors** (n-dimensional arrays that know which device they live on) and **autograd** (a system that records every operation you perform so it can compute gradients automatically). Master these two and the rest of the course is just organization on top. In this lesson we build from `torch.tensor([1, 2, 3])` all the way to fitting a line to noisy data using nothing but raw tensors and `.backward()` — no `nn.Module`, no optimizer, no magic. When you see `loss.backward()` inside a training loop on Lesson 4, you'll know exactly what it does, because in this lesson you'll have used it with your bare hands.
+
+::: {.callout-note appearance="simple"}
+🎯 **In this lesson you will:** create and manipulate tensors with the right dtypes and devices, use broadcasting to write loop-free math, understand how autograd builds a computation graph and what `.backward()` actually computes, control gradient tracking with `requires_grad` and `torch.no_grad()`, and fit $y = wx + b$ by hand with gradient descent using only tensors and autograd.
+:::
+
+## Tensors: creation, dtypes, and where they live
+
+A `torch.Tensor` is a typed, multi-dimensional block of numbers. If you know NumPy, a tensor is an `ndarray` with two superpowers: it can live on a GPU, and it can remember its own history for gradient computation. Start a fresh script or notebook:
+
+```python
+import torch
+
+print(torch.__version__)   # e.g. 2.7.0 — anything 2.x is fine for this course
+```
+
+There are three families of creation functions you'll use constantly. First, **from data**:
+
+```python
+a = torch.tensor([1.0, 2.0, 3.0])          # from a Python list
+b = torch.tensor([[1, 2], [3, 4]])          # nested lists -> 2D tensor
+
+print(a.dtype)   # torch.float32
+print(b.dtype)   # torch.int64
+print(b.shape)   # torch.Size([2, 2])
+```
+
+Note what happened silently: `torch.tensor` *infers* the dtype from the input. Floats become `float32` (not `float64` like NumPy!), integers become `int64`. This matters because **almost all deep learning happens in `float32`** — it's the default dtype of model weights, and mixing dtypes is the single most common source of cryptic beginner errors. If you feed an `int64` tensor into a layer expecting `float32`, PyTorch raises `RuntimeError: expected scalar type Float but found Long`. When you see that error, the fix is almost always a `.float()` or `dtype=torch.float32` somewhere upstream.
+
+Second, **from shapes** — allocate a tensor of a given size without specifying every element:
+
+```python
+zeros = torch.zeros(2, 3)              # 2x3 of 0.0
+ones  = torch.ones(2, 3)               # 2x3 of 1.0
+randn = torch.randn(2, 3)              # 2x3, sampled from N(0, 1)
+randu = torch.rand(2, 3)               # 2x3, sampled from U[0, 1)
+seq   = torch.arange(0, 10, 2)         # tensor([0, 2, 4, 6, 8])
+lin   = torch.linspace(0, 1, steps=5)  # tensor([0.00, 0.25, 0.50, 0.75, 1.00])
+```
+
+`torch.randn` will follow you through this whole course — weight initialization, noise injection, sanity-check inputs. `arange` gives integers by default; `linspace` gives floats. When results must be reproducible, seed the generator first with `torch.manual_seed(42)`.
+
+Third, **like another tensor** — same shape, dtype, and device as an existing one:
+
+```python
+template = torch.randn(4, 5)
+z = torch.zeros_like(template)   # 4x5 float32 zeros, same device as template
+r = torch.randn_like(template)
+```
+
+The `*_like` functions are the idiomatic way to allocate scratch space that's guaranteed compatible with what you already have — no shape or device mismatches possible.
+
+### Dtypes you actually need
+
+| dtype | What for | Notes |
+|---|---|---|
+| `torch.float32` | Weights, activations, losses | The workhorse. Default for floats. |
+| `torch.float16` / `torch.bfloat16` | Mixed-precision training | Lesson 7 territory; halves memory. |
+| `torch.int64` (`long`) | Class labels, indices | `CrossEntropyLoss` demands it. |
+| `torch.bool` | Masks | Indexing and attention masks. |
+
+Convert with `.to(dtype)` or the shorthand methods:
+
+```python
+x = torch.tensor([1, 2, 3])          # int64
+xf = x.float()                        # float32 copy
+xl = xf.to(torch.int64)               # back to int64
+print(x.dtype, xf.dtype, xl.dtype)    # torch.int64 torch.float32 torch.int64
+```
+
+Conversions return **new tensors**; the original is untouched.
+
+### Devices: CPU, CUDA, MPS
+
+Every tensor lives on exactly one device. Operations require all operands on the *same* device — PyTorch never silently copies data across the CPU/GPU boundary, because that copy is expensive and it wants you to feel it. The portable way to pick the best available device:
+
+```python
+device = (
+    "cuda" if torch.cuda.is_available()          # NVIDIA GPU
+    else "mps" if torch.backends.mps.is_available()  # Apple Silicon
+    else "cpu"
+)
+print(f"Using {device}")
+
+x = torch.randn(3, 3)            # born on CPU
+x = x.to(device)                  # moved (copied) to the accelerator
+y = torch.randn(3, 3, device=device)  # born directly on the device — cheaper
+```
+
+Two things to internalize. One: `x.to(device)` returns a **new** tensor; forgetting to rebind (`x.to(device)` instead of `x = x.to(device)`) is a classic bug that leaves your tensor on the CPU. Two: mixing devices fails loudly —
+
+```python
+cpu_t = torch.randn(3)
+if device != "cpu":
+    gpu_t = torch.randn(3, device=device)
+    # cpu_t + gpu_t  ->  RuntimeError: Expected all tensors to be on the same device
+```
+
+This `device` variable pattern — compute once at the top, pass everywhere — is exactly how we'll write every script for the rest of the course.
+
+## Tensor operations and broadcasting
+
+Elementwise math works the way you'd hope, and it's vectorized — no Python loops, ever:
+
+```python
+a = torch.tensor([1.0, 2.0, 3.0])
+b = torch.tensor([10.0, 20.0, 30.0])
+
+print(a + b)        # tensor([11., 22., 33.])
+print(a * b)        # tensor([10., 40., 90.])  — elementwise, NOT matrix multiply
+print(a ** 2)       # tensor([1., 4., 9.])
+print(a.sum())      # tensor(6.)  — a 0-dim tensor (a scalar tensor)
+print(a.mean())     # tensor(2.)
+```
+
+Notice `a.sum()` returns a **0-dimensional tensor**, not a Python float. To get the raw number out — for logging, printing, comparisons — call `.item()`:
+
+```python
+total = a.sum().item()   # 6.0, an actual Python float
+```
+
+`.item()` only works on single-element tensors, and it forces a device-to-host sync if the tensor is on GPU — fine for logging a loss once per epoch, ruinous inside a hot inner loop.
+
+Matrix multiplication is `@` (or `torch.matmul`), and it's shape-strict:
+
+```python
+M = torch.randn(2, 3)
+N = torch.randn(3, 4)
+P = M @ N
+print(P.shape)      # torch.Size([2, 4]) — (2,3) @ (3,4) -> (2,4)
+```
+
+Inner dimensions must match: $(2,3) @ (3,4)$ works because $3 = 3$. Get it wrong and you'll see `RuntimeError: mat1 and mat2 shapes cannot be multiplied (2x3 and 4x3)` — read those numbers, they tell you exactly which tensor to transpose. Speaking of which: `.T` transposes, and `.reshape` / `.view` reorganize:
+
+```python
+v = torch.arange(6, dtype=torch.float32)   # shape (6,)
+m = v.reshape(2, 3)                         # shape (2, 3)
+m2 = v.reshape(-1, 2)                       # -1 means "infer": shape (3, 2)
+print(m.T.shape)                            # torch.Size([3, 2])
+```
+
+### Broadcasting: the rules
+
+Broadcasting lets tensors of *different* shapes combine, by conceptually stretching the smaller one. The rules, applied right-to-left over the shapes:
+
+1. If one tensor has fewer dimensions, pad its shape with 1s **on the left**.
+2. Two dimensions are compatible if they're **equal**, or one of them is **1**.
+3. Dimensions of size 1 are stretched (without copying memory) to match.
+
+<svg viewBox="0 0 720 300" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Broadcasting a (3,1) column against a (1,4) row to produce a (3,4) grid">
+  <style>text{font-family:monospace;font-size:14px;fill:currentColor}.lbl{font-size:13px;font-style:italic}</style>
+  <!-- column (3,1) -->
+  <text x="40" y="30">A: shape (3,1)</text>
+  <rect x="60" y="50" width="46" height="46" fill="#6366f1" fill-opacity="0.35" stroke="currentColor"/>
+  <rect x="60" y="96" width="46" height="46" fill="#6366f1" fill-opacity="0.35" stroke="currentColor"/>
+  <rect x="60" y="142" width="46" height="46" fill="#6366f1" fill-opacity="0.35" stroke="currentColor"/>
+  <text x="75" y="79">0</text><text x="72" y="125">10</text><text x="72" y="171">20</text>
+  <!-- stretched copies (ghost) -->
+  <rect x="110" y="50" width="140" height="138" fill="#6366f1" fill-opacity="0.12" stroke="currentColor" stroke-dasharray="4 3"/>
+  <text x="120" y="215" class="lbl">stretched → (3,4)</text>
+  <!-- plus -->
+  <text x="280" y="125" font-size="26">+</text>
+  <!-- row (1,4) -->
+  <text x="320" y="30">B: shape (1,4)</text>
+  <rect x="320" y="50" width="46" height="46" fill="#22c55e" fill-opacity="0.35" stroke="currentColor"/>
+  <rect x="366" y="50" width="46" height="46" fill="#22c55e" fill-opacity="0.35" stroke="currentColor"/>
+  <rect x="412" y="50" width="46" height="46" fill="#22c55e" fill-opacity="0.35" stroke="currentColor"/>
+  <rect x="458" y="50" width="46" height="46" fill="#22c55e" fill-opacity="0.35" stroke="currentColor"/>
+  <text x="338" y="79">1</text><text x="384" y="79">2</text><text x="430" y="79">3</text><text x="476" y="79">4</text>
+  <rect x="320" y="100" width="184" height="88" fill="#22c55e" fill-opacity="0.12" stroke="currentColor" stroke-dasharray="4 3"/>
+  <text x="330" y="215" class="lbl">stretched → (3,4)</text>
+  <!-- equals -->
+  <text x="530" y="125" font-size="26">=</text>
+  <!-- result -->
+  <text x="565" y="30">result: (3,4)</text>
+  <g>
+    <rect x="565" y="50" width="150" height="138" fill="#f59e0b" fill-opacity="0.25" stroke="currentColor"/>
+    <text x="572" y="79" font-size="12">1  2  3  4</text>
+    <text x="572" y="125" font-size="12">11 12 13 14</text>
+    <text x="572" y="171" font-size="12">21 22 23 24</text>
+  </g>
+</svg>
+
+In code:
+
+```python
+col = torch.tensor([[0.0], [10.0], [20.0]])   # shape (3, 1)
+row = torch.tensor([1.0, 2.0, 3.0, 4.0])       # shape (4,) -> padded to (1, 4)
+
+grid = col + row
+print(grid.shape)
+print(grid)
+```
+
+```
+torch.Size([3, 4])
+tensor([[ 1.,  2.,  3.,  4.],
+        [11., 12., 13., 14.],
+        [21., 22., 23., 24.]])
+```
+
+Walk the rules: `(3,1)` vs `(4,)` → pad to `(3,1)` vs `(1,4)` → rightmost dims `1` vs `4`: stretch to 4 → next dims `3` vs `1`: stretch to 4... no wait, stretch the `1` to 3 → result `(3,4)`. No memory was copied; PyTorch uses stride tricks under the hood.
+
+The failure mode you must learn to recognize: shapes like `(3,)` vs `(4,)` are **incompatible** (neither is 1) and raise `RuntimeError: The size of tensor a (3) must match the size of tensor b (4)`. But the *dangerous* case is when broadcasting **succeeds when you didn't want it to**:
+
+```python
+pred   = torch.randn(5)        # shape (5,)   — predictions
+target = torch.randn(5, 1)     # shape (5, 1) — oops, a stray dimension
+
+diff = pred - target
+print(diff.shape)              # torch.Size([5, 5])  <- silent disaster!
+```
+
+You wanted 5 differences; you got a 5×5 grid of every-prediction-minus-every-target, and your loss is garbage while the code runs without a single error. This exact bug — `(N,)` vs `(N,1)` — has burned everyone. Defense: assert shapes, or `squeeze()`/`reshape` early. We'll dodge it deliberately in the capstone.
+
+## Autograd: the computation graph
+
+Here is the core idea of the entire deep learning stack. When you create a tensor with `requires_grad=True`, PyTorch starts **recording**: every operation involving that tensor is added to a graph — nodes are operations, edges carry tensors — built dynamically as your Python executes. Then, calling `.backward()` on a scalar result walks that graph *in reverse*, applying the chain rule at each node, and deposits $\frac{\partial \,\text{result}}{\partial \,\text{leaf}}$ into each leaf tensor's `.grad` attribute.
+
+Smallest possible example — let's compute $y = x^2 + 3x$ at $x = 2$ and ask autograd for $\frac{dy}{dx}$:
+
+```python
+x = torch.tensor(2.0, requires_grad=True)
+
+y = x**2 + 3*x        # y = 10.0, and PyTorch recorded how it was made
+print(y)              # tensor(10., grad_fn=<AddBackward0>)
+
+y.backward()          # run the chain rule backward through the graph
+print(x.grad)         # tensor(7.)
+```
+
+Check by hand: $\frac{dy}{dx} = 2x + 3 = 2(2) + 3 = 7$. ✓
+
+Look at that printout: `grad_fn=<AddBackward0>`. Every tensor produced by an operation on a `requires_grad` tensor carries a `grad_fn` — a pointer to the node that created it. That pointer chain *is* the computation graph. Leaf tensors you created yourself (`x` here) have `grad_fn=None` but get a populated `.grad` after backward. Here's the graph for a slightly bigger expression, the one at the heart of this lesson's capstone:
+
+```{mermaid}
+flowchart LR
+    x["x (data)"] --> mul["mul"]
+    w["w<br/>requires_grad=True"] --> mul
+    mul --> add["add"]
+    b["b<br/>requires_grad=True"] --> add
+    add --> yhat["ŷ = w·x + b"]
+    yhat --> sub["sub"]
+    ytrue["y (data)"] --> sub
+    sub --> sq["pow(2)"]
+    sq --> mean["mean"]
+    mean --> loss["loss (scalar)"]
+    loss -. "loss.backward()<br/>chain rule, right to left" .-> w
+    loss -.-> b
+```
+
+Forward pass: data flows left to right, and each op node remembers what it needs for its local derivative. Backward pass: `loss.backward()` starts at the right with $\frac{\partial L}{\partial L} = 1$ and multiplies local derivatives leftward until it reaches `w` and `b`, accumulating results into `w.grad` and `b.grad`. The graph is then **freed** — it's rebuilt fresh on the next forward pass, which is why PyTorch handles loops, conditionals, and variable-length inputs so naturally ("define-by-run").
+
+Three rules that will save you hours of debugging:
+
+**1. `.backward()` needs a scalar.** Gradients are defined for a scalar output (like a loss). Calling `.backward()` on a non-scalar raises `RuntimeError: grad can be implicitly created only for scalar outputs`. Reduce first — `.sum()` or `.mean()`.
+
+**2. Gradients accumulate.** `.backward()` *adds* to `.grad`, it doesn't overwrite. Watch:
+
+```python
+x = torch.tensor(2.0, requires_grad=True)
+
+y = x**2 + 3*x
+y.backward()
+print(x.grad)         # tensor(7.)   — correct
+
+y = x**2 + 3*x        # forward again
+y.backward()
+print(x.grad)         # tensor(14.)  — 7 + 7. NOT the gradient. Accumulated!
+```
+
+This is deliberate (it enables gradient accumulation across micro-batches), but it means every training iteration must **zero the gradients** before or after each step. Forgetting this is the #1 beginner training bug: the loss "sort of" goes down, then explodes or plateaus, because every step is applying the sum of all past gradients. The fix in raw autograd is `x.grad = None` (or `x.grad.zero_()`).
+
+**3. Only float tensors can require grad.** `torch.tensor([1, 2], requires_grad=True)` raises an error — calculus needs continuity. Another reason labels stay `int64` and everything differentiable stays `float32`.
+
+## Turning autograd off: `no_grad` and friends
+
+Recording the graph costs memory and time. Whenever you're *not* going to call `.backward()` — evaluation, inference, or the parameter update itself — turn recording off:
+
+```python
+x = torch.tensor(2.0, requires_grad=True)
+
+with torch.no_grad():
+    y = x**2 + 3*x
+print(y.requires_grad)   # False — nothing was recorded
+print(y.grad_fn)         # None
+```
+
+Inside `torch.no_grad()`, operations produce ordinary tensors with no history. This is *required* — not just an optimization — when you update parameters manually. Consider the update step $w \leftarrow w - \eta \cdot \nabla_w L$. If you write it outside `no_grad`, the subtraction itself becomes part of a graph, `w` stops being a leaf, and autograd raises `RuntimeError: a leaf Variable that requires grad is being used in an in-place operation`. The correct pattern:
+
+```python
+lr = 0.1
+with torch.no_grad():
+    x -= lr * x.grad     # in-place update, invisible to autograd
+x.grad = None            # reset for the next iteration
+```
+
+Two relatives worth knowing:
+
+```python
+d = y.detach()           # a view of y's data, severed from the graph
+                          # — use before .numpy() or plotting
+x.requires_grad_(False)  # in-place: permanently stop tracking this tensor
+```
+
+`.detach()` is what you'll use constantly for logging: `losses.append(loss.detach().item())` — actually, `.item()` alone already detaches, but `.detach()` matters when you keep whole tensors around, because a stored tensor with a live `grad_fn` keeps its **entire graph** alive and quietly eats your memory across iterations.
+
+## Capstone: fitting y = wx + b with raw autograd
+
+Now we assemble everything into a real (tiny) machine learning program. The task: given noisy points generated from a hidden line, recover the line's slope and intercept. The model is
+
+$$\hat{y} = w x + b$$
+
+and we'll minimize mean squared error:
+
+$$L(w, b) = \frac{1}{N}\sum_{i=1}^{N}\left(\hat{y}_i - y_i\right)^2$$
+
+by gradient descent: repeatedly compute $L$, ask autograd for $\frac{\partial L}{\partial w}$ and $\frac{\partial L}{\partial b}$, and step downhill.
+
+**Stage 1 — synthetic data.** We pick the "true" parameters ourselves so we can grade the result:
+
+```python
+import torch
+
+torch.manual_seed(0)
+
+TRUE_W, TRUE_B = 2.5, -0.9
+N = 100
+
+x = torch.linspace(-1, 1, N)                    # shape (100,)
+y = TRUE_W * x + TRUE_B + 0.1 * torch.randn(N)  # shape (100,) — line + noise
+
+print(x.shape, y.shape)   # torch.Size([100]) torch.Size([100])
+```
+
+Both `x` and `y` are flat `(100,)` vectors — deliberately the *same* shape, so the subtraction in the loss is elementwise with no accidental broadcasting (remember the `(N,)` vs `(N,1)` trap from earlier). Neither requires grad: data is data; we don't differentiate with respect to it.
+
+**Stage 2 — parameters.** The two numbers we're learning, initialized randomly, with tracking on:
+
+```python
+w = torch.randn(1, requires_grad=True)   # e.g. tensor([1.5410], requires_grad=True)
+b = torch.zeros(1, requires_grad=True)
+
+print(w.item(), b.item())   # 1.5410... 0.0 — far from (2.5, -0.9)
+```
+
+These are **leaf tensors**: created by us, `requires_grad=True`, so `.backward()` will fill their `.grad`.
+
+**Stage 3 — one forward/backward pass, dissected.** Before looping, run a single iteration and inspect every piece:
+
+```python
+y_hat = w * x + b                 # broadcasting: (1,)*(100,) + (1,) -> (100,)
+loss = ((y_hat - y) ** 2).mean()  # (100,) -> scalar
+
+print(y_hat.shape)    # torch.Size([100])
+print(loss)           # tensor(2.0198, grad_fn=<MeanBackward0>)
+
+loss.backward()
+print(w.grad)         # tensor([-0.6224])
+print(b.grad)         # tensor([1.7999])
+```
+
+Read the shapes: `w` is `(1,)`, `x` is `(100,)` — broadcasting stretches `w` across all 100 points in one multiply. The loss is a 0-dim scalar (rule 1 satisfied). After `backward()`, `w.grad` and `b.grad` hold exactly the analytic gradients
+
+$$\frac{\partial L}{\partial w} = \frac{2}{N}\sum_i (\hat{y}_i - y_i)\,x_i, \qquad \frac{\partial L}{\partial b} = \frac{2}{N}\sum_i (\hat{y}_i - y_i)$$
+
+— you can verify: `(2 * (y_hat - y) * x).mean()` matches `w.grad` to the last digit. Autograd did the calculus; we never wrote a derivative.
+
+The sign of `b.grad` is positive (`+1.80`), meaning increasing `b` increases the loss — so gradient *descent* will push `b` down, toward the true `-0.9`. The gradient always points uphill; we walk the other way.
+
+**Stage 4 — the training loop.** All four rituals in their canonical order: forward, backward, update (inside `no_grad`), zero:
+
+```python
+# fresh start
+torch.manual_seed(0)
+w = torch.randn(1, requires_grad=True)
+b = torch.zeros(1, requires_grad=True)
+
+lr = 0.5
+for step in range(101):
+    # 1. forward: compute predictions and loss (graph gets built)
+    y_hat = w * x + b
+    loss = ((y_hat - y) ** 2).mean()
+
+    # 2. backward: populate w.grad and b.grad (graph gets consumed)
+    loss.backward()
+
+    # 3. update: step downhill — MUST be invisible to autograd
+    with torch.no_grad():
+        w -= lr * w.grad
+        b -= lr * b.grad
+
+    # 4. zero: gradients accumulate, so reset for the next pass
+    w.grad = None
+    b.grad = None
+
+    if step % 20 == 0:
+        print(f"step {step:3d}  loss {loss.item():.4f}  "
+              f"w {w.item():+.3f}  b {b.item():+.3f}")
+```
+
+Expected output (yours will match, thanks to the seed):
+
+```
+step   0  loss 2.0198  w +1.852  b -0.900
+step  20  loss 0.0154  w +2.421  b -0.902
+step  40  loss 0.0092  w +2.494  b -0.902
+step  60  loss 0.0091  w +2.503  b -0.902
+step  80  loss 0.0091  w +2.504  b -0.902
+step 100  loss 0.0091  w +2.504  b -0.902
+```
+
+We recovered $w \approx 2.50$, $b \approx -0.90$ from `(2.5, -0.9)`. The loss floors at ~0.0091 — not zero, and it *shouldn't* be zero: we added noise with variance $0.1^2 = 0.01$, and MSE can't go below the noise floor. A model that drove the loss to zero here would be memorizing noise — your first concrete glimpse of overfitting, which we'll fight properly on Lesson 7.
+
+Delete step 4 and rerun — the loss dives, then diverges to `inf` within a few dozen steps as stale gradients pile up. Move step 3 outside the `no_grad` block — immediate `RuntimeError`. This loop is small enough that every failure mode is visible; that's the point.
+
+**Stage 5 — device-portable version.** The same loop, written the way every later script in this course will be:
+
+```python
+device = (
+    "cuda" if torch.cuda.is_available()
+    else "mps" if torch.backends.mps.is_available()
+    else "cpu"
+)
+
+x, y = x.to(device), y.to(device)
+w = torch.randn(1, requires_grad=True, device=device)
+b = torch.zeros(1, requires_grad=True, device=device)
+# ... loop is byte-for-byte identical ...
+```
+
+One subtlety: create parameters *with* `device=...` rather than creating then moving. `torch.randn(1, requires_grad=True).to(device)` produces a **non-leaf** tensor (the `.to` is a recorded op!) whose `.grad` stays `None` — a genuinely evil bug. Born on the device, or use `.to(device).requires_grad_()`; never `requires_grad=True` followed by `.to`.
+
+That's a complete machine learning system: model, loss, optimization — in ~20 lines of tensor code. Lessons 2–4 replace each piece with its industrial-strength counterpart (`nn.Linear`, `nn.MSELoss`, `torch.optim.SGD`), but the *mechanics* never change from what you just ran.
+
+## 🧪 Your task
+
+Fit a **quadratic**: generate 200 points from $y = 1.5x^2 - 2x + 0.5$ (plus noise `0.05 * torch.randn(...)`) for $x \in [-2, 2]$, and recover the three coefficients $a, b, c$ of $\hat{y} = ax^2 + bx + c$ using the same raw-autograd loop. Use `lr=0.05` and around 2000 steps. Print the recovered coefficients and confirm they land near `(1.5, -2.0, 0.5)`.
+
+*Hint:* nothing structural changes — you just have three leaf parameters instead of two, and the forward pass becomes `a * x**2 + b * x + c`. Keep `x` and `y` as flat `(200,)` tensors, and don't forget to zero all **three** grads each step. If the loss oscillates or blows up, your learning rate is too high for the wider $x$ range (note $x^2$ reaches 4 — gradients w.r.t. $a$ are ~4× larger than before).
+
+<details><summary>Solution</summary>
+
+```python
+import torch
+
+torch.manual_seed(1)
+device = (
+    "cuda" if torch.cuda.is_available()
+    else "mps" if torch.backends.mps.is_available()
+    else "cpu"
+)
+
+# data: y = 1.5 x^2 - 2 x + 0.5 + noise
+N = 200
+x = torch.linspace(-2, 2, N, device=device)
+y = 1.5 * x**2 - 2.0 * x + 0.5 + 0.05 * torch.randn(N, device=device)
+
+# three leaf parameters, born on the device
+a = torch.randn(1, requires_grad=True, device=device)
+b = torch.randn(1, requires_grad=True, device=device)
+c = torch.zeros(1, requires_grad=True, device=device)
+
+lr = 0.05
+for step in range(2001):
+    y_hat = a * x**2 + b * x + c          # (1,)*(200,) broadcasts -> (200,)
+    loss = ((y_hat - y) ** 2).mean()       # scalar
+
+    loss.backward()
+
+    with torch.no_grad():
+        a -= lr * a.grad
+        b -= lr * b.grad
+        c -= lr * c.grad
+    a.grad = b.grad = c.grad = None        # zero ALL of them
+
+    if step % 400 == 0:
+        print(f"step {step:4d}  loss {loss.item():.5f}  "
+              f"a {a.item():+.3f}  b {b.item():+.3f}  c {c.item():+.3f}")
+
+print(f"\nrecovered: a={a.item():.3f}  b={b.item():.3f}  c={c.item():.3f}")
+print("target:    a=1.500  b=-2.000  c=0.500")
+```
+
+Typical output:
+
+```
+step    0  loss 8.53716  a -0.276  b +0.163  c +0.322
+step  400  loss 0.00437  a +1.482  b -2.000  c +0.531
+step  800  loss 0.00256  a +1.497  b -2.000  c +0.505
+step 1200  loss 0.00255  a +1.498  b -2.000  c +0.503
+step 1600  loss 0.00255  a +1.498  b -2.000  c +0.503
+step 2000  loss 0.00255  a +1.498  b -2.000  c +0.503
+
+recovered: a=1.498  b=-2.000  c=0.503
+target:    a=1.500  b=-2.000  c=0.500
+```
+
+The loss floors near $0.05^2 = 0.0025$ — the noise variance — exactly as it should. Note how `b` converges fastest and `a`/`c` fight each other briefly: $ax^2$ and $c$ are correlated over a symmetric interval (both shift the curve up on average), a tiny preview of why optimization gets harder as parameters interact.
+
+</details>
+
+## Key takeaways
+
+- Tensors carry a **dtype** and a **device**; deep learning runs on `float32`, labels on `int64`, and all operands of an op must share a device. `x = x.to(device)` — remember the rebind.
+- **Broadcasting** aligns shapes right-to-left, stretching size-1 dims. It writes loop-free math for you — and silently produces `(N,N)` garbage from `(N,)` vs `(N,1)` if you're careless. Check shapes.
+- `requires_grad=True` makes PyTorch record a **computation graph**; `loss.backward()` runs the chain rule through it and fills each leaf's `.grad` with $\partial L / \partial \text{leaf}$.
+- Gradients **accumulate** — zero them every iteration (`p.grad = None`).
+- Parameter updates and inference go inside **`torch.no_grad()`**; use `.detach()`/`.item()` to pull values out of the graph.
+- The eternal loop: **forward → backward → update (no_grad) → zero**. Everything you train from here to Lesson 9 is this loop wearing better clothes.
+- Create parameters *on* their device (`device=...` at construction), not via `.to()` after `requires_grad=True` — otherwise `.grad` lands on a tensor you no longer hold.
+
+In the next lesson: we stop hand-rolling `w * x + b` and let `nn.Module` and `nn.Linear` manage parameters for us — same math, real architecture.
+
+------------------------------------------------------------------------
+
+[🏠 🔥 Course home](index.html)  &nbsp;|&nbsp;  [Lesson 02 →](lesson02.html)  &nbsp;|&nbsp;  [📚 All mini-courses](../../mini-courses.html)
