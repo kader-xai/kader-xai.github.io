@@ -25,14 +25,14 @@ Before code, fix the mental model. An inference service is a pipeline with a har
 
 ```{mermaid}
 flowchart LR
-    C[Client] -->|"POST /predict\nJSON bytes"| U[Uvicorn worker]
-    U --> V{pydantic\nvalidation}
-    V -->|invalid| E422["422 Unprocessable Entity\n(field-level errors)"]
-    V -->|valid| D[DataFrame with\nfixed column order]
-    D --> M["model.predict_proba\n(champion from registry)"]
+    C[Client] -->|"POST /predict<br/>JSON bytes"| U[Uvicorn worker]
+    U --> V{pydantic<br/>validation}
+    V -->|invalid| E422["422 Unprocessable Entity<br/>(field-level errors)"]
+    V -->|valid| D[DataFrame with<br/>fixed column order]
+    D --> M["model.predict_proba<br/>(champion from registry)"]
     M --> R[Prediction schema]
     R -->|"JSON"| C
-    S[(MLflow Registry\nchurn-classifier@champion)] -.->|loaded once\nat startup| M
+    S[(MLflow Registry<br/>churn-classifier@champion)] -.->|loaded once<br/>at startup| M
 ```
 
 Three design decisions up front, all of which we'll justify as we build:
