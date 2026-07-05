@@ -1,0 +1,518 @@
+---
+title: "📖 Build Your Own Wikipedia LLM · Lesson 7 — The Big Run: Launch, Babysit, Evaluate the Base Model"
+page-layout: full
+toc: true
+toc-location: left
+toc-title: "In this lesson"
+toc-depth: 2
+---
+
+[🏠 📖 Course home](index.html)  &nbsp;|&nbsp;  [← Lesson 06](lesson06.html)  &nbsp;|&nbsp;  [Lesson 08 →](lesson08.html)  &nbsp;|&nbsp;  [📚 All mini-courses](../../mini-courses.html)
+
+------------------------------------------------------------------------
+
+# Lesson 7 — The Big Run: Launch, Babysit, Evaluate the Base Model
+
+In Lesson 6 you built `src/train.py`: a compiled, bf16, checkpoint-everything training loop that can be killed at any moment and pick up where it left off. In Lessons 2–4 you built the fuel for it — a deduplicated, cleaned Wikipedia corpus packed into token shards under `data/tokens/`. Everything so far has been preparation. This lesson is the payoff: you rent the GPU, press the button, and spend the next ~22 hours turning ~$10 of electricity into a 124M-parameter language model that knows what Wikipedia sounds like.
+
+Pretraining runs are not "launch and forget" — they are "launch, then check in like you would on a slow-cooking brisket." Most of this lesson is about *reading the instruments*: what a healthy run looks like in Weights & Biases, the four classic pathologies and their fixes, and how to resume after vast.ai pulls the rug out from under you. At the end you'll measure the model properly with `src/eval_ppl.py`, pull the checkpoint down, and publish it to the Hugging Face Hub.
+
+::: {.callout-note appearance="simple"}
+🎯 **In this lesson you will:** run the full pre-flight checklist, launch the 4B-token pretraining run on a vast.ai RTX 4090 inside tmux, learn to diagnose loss spikes / plateaus / NaNs / throughput drops from the W&B dashboard, resume cleanly after preemption, watch generations evolve at 0.5B/2B/4B tokens, evaluate held-out perplexity with `src/eval_ppl.py`, and export + publish the base checkpoint to the Hugging Face Hub — for a total run cost of roughly $8–12.
+:::
+
+## Pre-flight checklist
+
+A 22-hour run that dies at hour 19 because the disk filled up is the most expensive kind of bug. Run through this list *before* you launch. Every item has burned someone.
+
+**1. The instance.** You want a single RTX 4090 with fast disk and a decent internet pipe. From your laptop:
+
+```bash
+# Find candidate machines: 1x 4090, >= 80 GB disk, good reliability, sane price
+vastai search offers 'gpu_name=RTX_4090 num_gpus=1 disk_space>80 reliability>0.98 inet_down>200' \
+  --order 'dph_total' | head -20
+
+# Create the instance (substitute the OFFER_ID you picked)
+vastai create instance OFFER_ID \
+  --image pytorch/pytorch:2.4.0-cuda12.4-cudnn9-devel \
+  --disk 80 \
+  --ssh
+```
+
+Why these constraints:
+
+- `disk_space>80` — the token shards are ~9 GB (4.5B tokens × 2 bytes as `uint16`), the docker image plus PyTorch caches eat ~20 GB, and each full checkpoint is ~1.5 GB (fp32 master weights ≈ 0.5 GB + AdamW `exp_avg` and `exp_avg_sq` ≈ 1 GB). With rotating checkpoints plus a couple of permanent milestone snapshots you'll peak around 40 GB; 80 gives headroom.
+- `reliability>0.98` — this field is vast.ai's uptime score for the host. For a 22-hour run, a flaky host is worse than a slightly pricier one. Expect to pay ~$0.35–0.45/hr.
+- `inet_down>200` — you're uploading ~9 GB of shards; on a 200 Mbit link that's ~6 minutes instead of an hour.
+- Rent **on-demand**, not interruptible, for the big run. Interruptible is ~30% cheaper but you *will* get outbid mid-run. Your `--resume` path works (we'll prove it below), but on a $10 run the savings aren't worth the babysitting. Interruptible is the right call for the short SFT/DPO runs later.
+
+**2. Code and data uploaded.** Get the SSH details (`vastai show instances` or the web console), then rsync the repo and the token shards:
+
+```bash
+# From your laptop, inside the wikillm/ repo
+rsync -avz -e "ssh -p PORT" \
+  --exclude data/raw --exclude data/extracted --exclude data/clean \
+  --exclude checkpoints \
+  ./ root@HOST:/workspace/wikillm/
+```
+
+We exclude `data/raw`, `data/extracted`, and `data/clean` — the GPU box only ever needs `data/tokens/` (the packed `train.bin` / `val.bin` from Lesson 4's `pack_tokens.py`) and `tokenizer/tokenizer.json`. Shipping the 20+ GB of intermediate pipeline outputs would waste an hour of upload and $0.50 of idle GPU. Verify on the instance:
+
+```bash
+ssh -p PORT root@HOST
+cd /workspace/wikillm
+ls -lh data/tokens/          # expect train.bin ~9G, val.bin ~90M
+python -c "import numpy as np; a=np.memmap('data/tokens/train.bin',dtype=np.uint16); print(f'{len(a)/1e9:.2f}B tokens, max id {a[:10_000_000].max()}')"
+```
+
+The max-id spot check should print something below 32768. If it prints garbage like 65000+, your shards were written with the wrong dtype and the run would train on noise — a bug you want to catch *now*, not at hour 20.
+
+**3. Dependencies and W&B key.**
+
+```bash
+pip install -r requirements.txt
+export WANDB_API_KEY=your_key_here      # from wandb.ai/authorize
+wandb login --verify                     # fails loudly now, not silently at launch
+```
+
+Put the `export` in `~/.bashrc` too, so a new tmux window after a reconnect still has it.
+
+**4. Disk and GPU sanity.**
+
+```bash
+df -h /workspace                # >40 GB free after upload?
+nvidia-smi                      # 4090 visible, 0 MiB used, temp sane?
+python -c "import torch; print(torch.cuda.get_device_name(), torch.cuda.is_bf16_supported())"
+```
+
+`is_bf16_supported()` must print `True` — the whole run is bf16.
+
+**5. The ten-minute smoke test.** Never launch a 22-hour run cold. Run 100 steps first:
+
+```bash
+python src/train.py --config configs/pretrain.yaml --max-steps 100
+```
+
+You are checking three things: loss starts near **10.4** (that's $\ln(32768) = 10.397$ — the loss of a model that knows nothing and spreads probability uniformly over the vocab; if it starts anywhere else, your data or labels are wrong), throughput settles at **45–55k tokens/s** after `torch.compile` finishes its first-step compilation stall (the first step taking 2–3 minutes is normal), and a checkpoint appears in `checkpoints/`. Then delete the smoke-test checkpoint and W&B run so they don't confuse you later.
+
+## Launch
+
+Everything runs inside tmux, so the training process survives your SSH connection dropping — and it *will* drop at some point over 22 hours.
+
+```bash
+tmux new -s train
+cd /workspace/wikillm
+python src/train.py --config configs/pretrain.yaml
+```
+
+Detach with `Ctrl-b d`; reattach any time with `tmux attach -t train`. That's the entire launch. The config from Lesson 6 already pins the run: 4B tokens at 1024-token context, ~0.5M tokens per optimizer step (batch × grad-accum), cosine schedule with warmup, checkpoint every 30 minutes with `checkpoints/latest.pt` always pointing at the newest one, W&B logging to project `wikillm`.
+
+The numbers to have in your head: at ~50k tok/s, 4B tokens is $4\times10^9 / 5\times10^4 = 8\times10^4$ seconds ≈ **22 hours**, so **~$9 at $0.40/hr**. Open a second tmux window (`Ctrl-b c`) and keep `watch -n 60 nvidia-smi` running in it — you'll want it for the throughput pathology below.
+
+From here on, your job is monitoring. The whole babysitting protocol fits in one loop:
+
+```{mermaid}
+flowchart TD
+  A[Launch in tmux<br/>detach, close laptop] --> B{Check W&B<br/>every 2-4 hours}
+  B -->|loss falling on schedule<br/>tok/s steady ~50k| C[Do nothing<br/>let it cook]
+  B -->|sudden loss spike| D[Pathology 1<br/>lr too high or bad shard]
+  B -->|loss flat too early| E[Pathology 2<br/>plateau / lr floor]
+  B -->|loss = NaN| F[Pathology 3<br/>bf16 overflow, clip]
+  B -->|tok/s sagging| G[Pathology 4<br/>thermal or noisy host]
+  B -->|instance preempted<br/>or host died| H[Recreate instance<br/>rsync + --resume]
+  C --> B
+  D --> B
+  E --> B
+  F --> B
+  G --> B
+  H --> B
+```
+
+## What healthy looks like in W&B
+
+Open `wandb.ai`, project **wikillm**. The panel you'll stare at most is `train/loss` vs tokens. A healthy run has a very specific shape — memorize it:
+
+<svg viewBox="0 0 700 340" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Sketch of a healthy pretraining loss curve">
+  <!-- axes -->
+  <line x1="60" y1="20" x2="60" y2="280" stroke="currentColor" stroke-width="1.5"/>
+  <line x1="60" y1="280" x2="670" y2="280" stroke="currentColor" stroke-width="1.5"/>
+  <text x="20" y="30" font-size="12" fill="currentColor">loss</text>
+  <text x="630" y="305" font-size="12" fill="currentColor">tokens</text>
+  <!-- y ticks -->
+  <text x="30" y="46" font-size="11" fill="currentColor">10.4</text>
+  <line x1="55" y1="42" x2="65" y2="42" stroke="currentColor"/>
+  <text x="38" y="150" font-size="11" fill="currentColor">4.5</text>
+  <line x1="55" y1="146" x2="65" y2="146" stroke="currentColor"/>
+  <text x="38" y="238" font-size="11" fill="currentColor">3.4</text>
+  <line x1="55" y1="234" x2="65" y2="234" stroke="currentColor"/>
+  <!-- x ticks -->
+  <text x="150" y="298" font-size="11" fill="currentColor">0.5B</text>
+  <text x="340" y="298" font-size="11" fill="currentColor">2B</text>
+  <text x="620" y="298" font-size="11" fill="currentColor">4B</text>
+  <!-- healthy curve: cliff, grind, cosine tail -->
+  <path d="M 62 42 C 75 60, 85 120, 110 150 C 160 195, 250 210, 360 220 C 480 228, 580 231, 665 236"
+        fill="none" stroke="currentColor" stroke-width="2.5"/>
+  <path d="M 62 42 C 75 60, 85 120, 110 150 C 160 195, 250 210, 360 220 C 480 228, 580 231, 665 236 L 665 280 L 62 280 Z"
+        fill="rgba(110,150,235,0.15)" stroke="none"/>
+  <!-- pathology: spike, dashed -->
+  <path d="M 300 214 L 315 130 L 335 200 L 360 220" fill="none" stroke="rgba(220,120,90,0.85)"
+        stroke-width="2" stroke-dasharray="5 4"/>
+  <text x="250" y="115" font-size="11" fill="rgba(220,120,90,0.95)">spike (bad — see pathology 1)</text>
+  <!-- annotations -->
+  <text x="95" y="80" font-size="11" fill="currentColor">the cliff: 10.4 → ~5</text>
+  <text x="95" y="94" font-size="11" fill="currentColor">in first ~100M tokens</text>
+  <text x="330" y="185" font-size="11" fill="currentColor">the grind: slow power-law decay</text>
+  <text x="480" y="260" font-size="11" fill="currentColor">cosine tail: small late dip</text>
+</svg>
+
+Three phases, always in this order. **The cliff:** loss collapses from 10.4 to ~5 in the first 100M tokens — the model is learning token frequencies, then bigrams, then basic syntax; this is the cheapest learning it will ever do. **The grind:** from there it's a power law — every halving of loss-above-floor costs roughly 10× the tokens. It *looks* flat on a linear plot; switch the W&B x-axis to log scale and it becomes a satisfying straight-ish line. **The cosine tail:** in the last ~15% of the run the decaying learning rate lets the weights settle into a sharper minimum, buying you a final 0.05–0.1 of loss.
+
+Checkpoints along the way, at ~50k tok/s:
+
+| Tokens seen | Wall clock | Expected train loss | State of the model |
+|---|---|---|---|
+| 0 | 0 | 10.4 | uniform-random tokens |
+| 100M | ~35 min | ~4.6 | words, no meaning |
+| 0.5B | ~3 h | ~3.9 | grammatical drift |
+| 1B | ~6 h | ~3.7 | Wikipedia-shaped text |
+| 2B | ~11 h | ~3.5 | coherent paragraphs |
+| 4B | ~22 h | **3.3–3.6** | confident encyclopedist |
+
+Being ±0.1 off this table is normal (it depends on your exact corpus mix and batch size). Being 0.5 off means something is wrong — go to the pathology gallery.
+
+The other panels, and what "healthy" means for each:
+
+- **`train/grad_norm`** — spiky during warmup (fine), then settles into a band around 0.2–0.6 and stays there. A *rising trend* late in the run is an early warning of instability, hours before the loss shows it.
+- **`perf/tokens_per_sec`** — a flat line at 45–55k after step 1. This is your run's heartbeat; any sustained sag is pathology 4.
+- **`train/lr`** — should trace exactly the schedule you configured: linear ramp, long cosine. If it doesn't match the config, you launched with the wrong yaml.
+- **`eval/ppl`** — from the periodic `val.bin` evals in `train.py`. It should track train loss from above with a small, roughly constant gap. Thanks to Lesson 3's deduplication the gap stays small; a *widening* gap would mean memorization, which at 124M params on 4B deduped tokens essentially cannot happen (you're training ~32 tokens per parameter — firmly in the underfit regime).
+- **sample generations** — `train.py` logs a few fixed-prompt completions to a W&B Table at every eval. This is the panel that makes the run *fun*; more below.
+
+W&B is what we use throughout the course; if you'd rather self-host, MLflow or TensorBoard both handle these scalars fine — this is the one place we'll mention them, everything else assumes W&B.
+
+## Pathology gallery
+
+Four failure modes cover ~95% of what goes wrong in a run this size. For each: how it looks, why it happens, the fix.
+
+**Pathology 1 — the loss spike.** Loss jumps from 3.6 to 5+ in a few steps, sometimes recovering, sometimes not (the dashed orange path in the sketch). Two usual causes. *(a) Learning rate too high for the current loss landscape* — the classic signature is a spike that follows a period of creeping grad-norm. Fix: kill the run, edit `configs/pretrain.yaml` to drop `max_lr` by ~30%, and resume from the last checkpoint *before* the spike (this is why `train.py` keeps milestone checkpoints, not just `latest.pt` — a `latest.pt` written mid-spike is poisoned). *(b) A bad data shard* — a pathological stretch of corpus (a table dump, a repeated string that survived dedup) that produces one enormous gradient. The signature: grad-norm shows a single monster step with no preceding trend. Your Lesson 6 loop already clips gradients (`clip_grad_norm_` at 1.0), which turns most would-be catastrophes into a single ugly step the run walks off within an hour. If loss recovers on its own within ~200 steps: do nothing. If it doesn't: resume from before the spike — the data loader's shuffling means you won't hit the same batch sequence at the same weights again.
+
+**Pathology 2 — the plateau.** Loss goes flat at, say, 4.1 by 1B tokens and stays there — far above the table. Causes, in order of likelihood: your `min_lr` floor is set too high (a floor of 10% of max is right; a floor equal to max means no cosine decay ever happens — check the `train/lr` panel, this misconfiguration is instantly visible there); your effective batch size is wrong (a grad-accum typo making steps 8× smaller than intended — check `perf/tokens_per_sec` × time against tokens-seen); or your data is the problem (a cleaning bug from Lesson 3 that left the corpus full of near-duplicates gives fast early loss then an early floor, because there's less information in the data than the token count suggests). The lr floor is a 1-line yaml fix + resume. The data one, painfully, means going back to Lesson 3 — which is why we spot-checked the corpus so hard back then.
+
+**Pathology 3 — NaN.** Loss prints `nan` and never recovers (NaN is absorbing: one NaN gradient poisons every weight). bf16 has fp32's dynamic range so *overflow* is rare — the usual culprits are a division somewhere hitting a zero (an RMSNorm over an all-zero activation edge case), or an attention row of all `-inf` producing `0/0` in softmax. Your defenses, all already in place from Lessons 5–6: RMSNorm's `eps=1e-6` inside the `rsqrt`, gradient clipping, and computing the loss in fp32 (the `F.cross_entropy` on fp32 logits). If you still hit a NaN: resume from the last checkpoint — do *not* try to "step past it," the checkpoint before the NaN is the only clean state — and if it recurs at the same data position, you've found a bad shard: note the step, and add a `torch.isnan(loss)` guard in `train.py` that skips the optimizer step and logs the batch offset instead of dying.
+
+**Pathology 4 — the throughput sag.** Loss is fine but `perf/tokens_per_sec` drifts from 50k down to 35k. This is never your code — your code doesn't change at hour 14. It's the machine. Check in this order: **thermals** — in your `nvidia-smi` tmux window, look at temp and clocks; a 4090 throttling at 83°C+ on a poorly-cooled host will silently drop clocks 20% (fix: none, really — cap power with `nvidia-smi -pl 350`, which costs ~5% throughput but stabilizes it, and remember this host next time); **host contention** — vast.ai machines are shared; another tenant hammering the same CPU/disk starves your data loader (signature: GPU utilization in `nvidia-smi` oscillating instead of pinned at ~99%; fix: raise the loader's prefetch/worker count, or if it persists, checkpoint, kill the instance, and move — with `--resume` a host migration costs you 20 minutes). The economics: a 30% throughput sag on a 22-hour run is ~$3 and 7 hours of your life; migrating costs $0.20. Migrate.
+
+## Resuming after preemption
+
+Even on-demand instances die: hosts reboot, power fails, vast.ai has a bad afternoon. The Lesson 6 design makes this a non-event, and you should *practice* the recovery once so it's boring when it's real.
+
+The moving parts: `train.py` writes `checkpoints/latest.pt` every 30 minutes containing model weights, optimizer state, LR-scheduler step, data-loader position (which shard offsets it has consumed), RNG states, and the W&B run id. Resuming restores all of it, so the resumed run is statistically identical to one that never died — same data order, same schedule position, same run in the same W&B chart.
+
+If the instance still exists (host rebooted):
+
+```bash
+ssh -p PORT root@HOST
+tmux new -s train
+cd /workspace/wikillm
+python src/train.py --config configs/pretrain.yaml --resume checkpoints/latest.pt
+```
+
+If the instance is *gone*, you also need the checkpoint to survive. Two lines of insurance you should run from your laptop every few hours during the run (or drop into a `while true; do ...; sleep 7200; done` loop):
+
+```bash
+rsync -avz -e "ssh -p PORT" root@HOST:/workspace/wikillm/checkpoints/latest.pt ./checkpoints/
+```
+
+Then recovery is: create a new instance (same search command as pre-flight), rsync the repo + `data/tokens/` + your rescued `latest.pt` up, and launch with `--resume`. Total loss: at most 30 minutes of compute (~$0.20) plus upload time. In W&B, the resumed process reattaches to the same run id (saved inside the checkpoint), so your loss curve continues as one unbroken line with a small gap in wall-clock time — check the `perf/tokens_per_sec` panel and you'll see the scar; check `train/loss` and you can't tell it happened.
+
+One trap: after resuming, the first step re-triggers `torch.compile` compilation (2–3 minutes of apparent hang). Don't panic-kill it.
+
+## Watching it learn: generations at 0.5B, 2B, 4B tokens
+
+Loss curves tell you the run is healthy; generations tell you what the number *means*. `train.py` logs samples to W&B, but you can also probe any checkpoint interactively from a second tmux window without touching the training process (it costs a negligible slice of GPU):
+
+```bash
+python src/sample.py --ckpt checkpoints/latest.pt \
+  --prompt "The Battle of Hastings was" --max-new-tokens 80 --temperature 0.8
+```
+
+Here is the same prompt at three points in a real run of this recipe. **At 0.5B tokens** (loss ≈ 3.9) — locally grammatical, globally lost:
+
+> The Battle of Hastings was a village in the north of the country of the United States. It was founded in the 19th century by the British Army, who was a member of the family of the church. The village was the first of the war in the early…
+
+Every 4-gram is plausible English; the sentence forgets its subject within a clause. This is what loss 3.9 *is*. **At 2B tokens** (loss ≈ 3.5) — the Wikipedia register locks in:
+
+> The Battle of Hastings was a military engagement fought in 1072 between the English army and the forces of the Kingdom of France. The battle took place near the town of Hastings in East Sussex, and ended in a decisive victory for the English…
+
+Note what happened: encyclopedic sentence templates, a date, a place, a "decisive victory" — the *form* of a Wikipedia battle article is nailed, while the *facts* are confidently wrong (1072, France, English victory). **At 4B tokens** (loss ≈ 3.4):
+
+> The Battle of Hastings was fought on 14 October 1066 between the Norman-French army of William, Duke of Normandy, and an English army under King Harold. It marked the beginning of the Norman conquest of England. The battle was fought approximately northwest of Hastings…
+
+For extremely famous facts, 124M parameters is actually enough — Hastings/1066/William appears so often in the corpus that the model memorizes it. Ask about anything mid-tail and it will fabricate with the same confident register. Keep this asymmetry in mind: it's exactly why Lessons 8–9 build *grounded* QA data (passage + question → answer) rather than trusting the model's parametric memory.
+
+The qualitative arc — noise → syntax → register → (famous) facts — always happens in that order. Cheap structure is learned before expensive knowledge.
+
+## Final eval: `src/eval_ppl.py`
+
+Training-time eval used a quick subsample of `val.bin`. For the number you'll put in the model card, do it properly: full held-out set, non-overlapping windows, exact token-weighted average. The metric is perplexity,
+
+$$
+\mathrm{ppl} = \exp\!\Big(\tfrac{1}{N}\sum_{i=1}^{N} -\log p(x_i \mid x_{<i})\Big),
+$$
+
+i.e. $e^{\text{mean NLL}}$ — "the model is, on average, as uncertain as if it were choosing uniformly among *ppl* tokens." A uniform model over our vocab scores 32768; your target after this run is **~25–30**.
+
+Here is the full file for the repo:
+
+```python
+"""src/eval_ppl.py — exact held-out perplexity for WikiGPT-124M.
+
+Usage:
+    python src/eval_ppl.py --ckpt checkpoints/latest.pt --data data/tokens/val.bin
+"""
+import argparse
+import math
+import time
+
+import numpy as np
+import torch
+import torch.nn.functional as F
+
+from model import GPT, GPTConfig
+
+
+def load_model(ckpt_path: str, device: str) -> tuple[GPT, dict]:
+    ckpt = torch.load(ckpt_path, map_location="cpu")
+    cfg = GPTConfig(**ckpt["model_args"])          # exact arch the run used
+    model = GPT(cfg)
+    state = ckpt["model"]
+    # torch.compile saves weights under an "_orig_mod." prefix; strip it so the
+    # uncompiled eval model can load them.
+    state = {k.removeprefix("_orig_mod."): v for k, v in state.items()}
+    model.load_state_dict(state)
+    model.to(device).eval()
+    return model, ckpt
+
+
+@torch.no_grad()
+def evaluate(model: GPT, tokens: np.memmap, device: str,
+             block_size: int = 1024, batch_size: int = 32) -> float:
+    """Token-weighted mean NLL over non-overlapping windows of val data."""
+    n_windows = (len(tokens) - 1) // block_size     # -1: need a target for the last input
+    total_nll, total_tok = 0.0, 0
+
+    for start in range(0, n_windows, batch_size):
+        idxs = range(start, min(start + batch_size, n_windows))
+        # Build inputs x and next-token targets y from the memmap. int64 because
+        # cross_entropy wants long targets; the memmap itself stays uint16 on disk.
+        buf = np.stack([tokens[i * block_size : i * block_size + block_size + 1]
+                        for i in idxs]).astype(np.int64)
+        x = torch.from_numpy(buf[:, :-1]).to(device, non_blocking=True)
+        y = torch.from_numpy(buf[:, 1:]).to(device, non_blocking=True)
+
+        with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
+            logits, _ = model(x)                    # (B, T, vocab)
+
+        # Loss in fp32, summed (not averaged) so we can weight exactly by token
+        # count even when the final batch is ragged.
+        nll = F.cross_entropy(
+            logits.float().view(-1, logits.size(-1)), y.reshape(-1),
+            reduction="sum",
+        )
+        total_nll += nll.item()
+        total_tok += y.numel()
+
+    return total_nll / total_tok
+
+
+def main() -> None:
+    p = argparse.ArgumentParser()
+    p.add_argument("--ckpt", default="checkpoints/latest.pt")
+    p.add_argument("--data", default="data/tokens/val.bin")
+    p.add_argument("--batch-size", type=int, default=32)
+    args = p.parse_args()
+
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    model, ckpt = load_model(args.ckpt, device)
+    tokens = np.memmap(args.data, dtype=np.uint16, mode="r")
+    print(f"checkpoint step {ckpt.get('step', '?')} | "
+          f"{len(tokens)/1e6:.1f}M eval tokens | device {device}")
+
+    t0 = time.time()
+    nll = evaluate(model, tokens, device, batch_size=args.batch_size)
+    print(f"val NLL  : {nll:.4f}")
+    print(f"val ppl  : {math.exp(nll):.2f}   ({time.time()-t0:.0f}s)")
+
+
+if __name__ == "__main__":
+    main()
+```
+
+The details that matter, line by line: **non-overlapping windows** slightly *understate* the model's best-case quality (tokens early in each window have little context) but they're the standard, cheap, reproducible convention — a sliding-window eval would take `block_size`× longer for a number ~1 lower. **`reduction="sum"` + manual division** gives an exact token-weighted mean; the default `"mean"` per batch, averaged across batches, silently mis-weights the final ragged batch. **`logits.float()`** before the loss: perplexity is an `exp` of the answer, so you don't want bf16 rounding inside it. **No `torch.compile`** here — compilation costs 2–3 minutes and this whole eval takes ~1 minute; compiling an eval is negative-sum.
+
+Run it on the instance:
+
+```bash
+python src/eval_ppl.py --ckpt checkpoints/latest.pt
+# checkpoint step 7629 | 91.2M eval tokens | device cuda
+# val NLL  : 3.3116
+# val ppl  : 27.43   (58s)
+```
+
+Anywhere in **25–30** and your run matched the recipe. For calibration: GPT-2 124M, trained on the broader (harder) WebText distribution, sits around ~30 on comparable setups — your model beats it on Wikipedia because Wikipedia is *all* it does. Finish the eval with ten minutes of qualitative probing via `sample.py` — try a lead-paragraph prompt ("**Photosynthesis is**"), a mid-article prompt ("**== Early life ==**" — it should produce biography-section prose, headers and all), and a non-Wikipedia prompt ("**lol what's up**" — it will awkwardly steer back into encyclopedia register, a limitation SFT in Lesson 9 exists to fix).
+
+## Export, upload to the Hub, and the bill
+
+The checkpoint on the instance is ~1.5 GB, two-thirds of which is AdamW optimizer state you only need if you'll continue *pre*training (SFT in Lesson 9 starts a fresh optimizer). Strip it on the instance before downloading:
+
+```bash
+python - <<'EOF'
+import torch
+ck = torch.load("checkpoints/latest.pt", map_location="cpu")
+torch.save(
+    {"model": ck["model"], "model_args": ck["model_args"], "step": ck["step"]},
+    "checkpoints/wikigpt-124m-base.pt",
+)
+EOF
+ls -lh checkpoints/wikigpt-124m-base.pt    # ~500 MB (124M fp32 params + buffers)
+```
+
+Pull it down, then **destroy the instance** — this is the single most important command in the lesson, because a forgotten instance bills forever:
+
+```bash
+# From your laptop
+rsync -avz -e "ssh -p PORT" root@HOST:/workspace/wikillm/checkpoints/wikigpt-124m-base.pt ./checkpoints/
+vastai destroy instance INSTANCE_ID
+vastai show instances        # verify: empty
+```
+
+Now publish. Create the model card first — `checkpoints/README.md` on your laptop:
+
+```markdown
+---
+license: apache-2.0
+language: en
+datasets:
+  - wikimedia/wikipedia
+tags: [gpt, pytorch, pretrained, wikipedia]
+---
+
+# WikiGPT-124M (base)
+
+A 124M-parameter decoder-only transformer pretrained from scratch on a cleaned,
+deduplicated English Wikipedia dump (~4B tokens) for the "Build Your Own
+Wikipedia LLM" course.
+
+**Architecture:** 12 layers, 12 heads, d_model 768, context 1024, RMSNorm
+(pre-norm), RoPE, SwiGLU FFN, no biases, weight-tied embeddings, custom
+32768-token BPE (special tokens <|user|>, <|assistant|>, <|end|> reserved).
+
+**Training:** 1x RTX 4090, bf16 + torch.compile, ~22 h, ~$9 on vast.ai.
+**Held-out perplexity:** 27.4 on a Wikipedia validation split.
+
+**This is a BASE model** — it continues text in Wikipedia register and does not
+follow instructions (see the -sft and -dpo variants). Facts in generations are
+frequently fabricated. Not aligned; use accordingly.
+
+Loading requires `model.py` from the course repo:
+checkpoint keys are `model` (state_dict) and `model_args` (GPTConfig kwargs).
+```
+
+The `license`/`datasets`/`tags` front-matter isn't decoration — the Hub indexes it, and it's how anyone else finds and legally reuses your model. Then upload with `huggingface_hub` (one-off script, run from the `wikillm/` root; `pip install huggingface_hub` and `huggingface-cli login` first):
+
+```python
+"""upload_hf.py — publish the base checkpoint to the Hugging Face Hub."""
+from huggingface_hub import HfApi, create_repo
+
+REPO = "YOUR_HF_USERNAME/wikigpt-124m-base"
+
+create_repo(REPO, repo_type="model", exist_ok=True)   # idempotent: safe to re-run
+
+api = HfApi()
+for local, remote in [
+    ("checkpoints/wikigpt-124m-base.pt", "wikigpt-124m-base.pt"),
+    ("tokenizer/tokenizer.json",         "tokenizer.json"),
+    ("src/model.py",                     "model.py"),
+    ("checkpoints/README.md",            "README.md"),
+]:
+    api.upload_file(path_or_fileobj=local, path_in_repo=remote, repo_id=REPO)
+    print("uploaded", remote)
+```
+
+Ship the tokenizer and `model.py` alongside the weights — a checkpoint nobody can load is a paperweight. (Files >500 MB-ish upload fine; `upload_file` handles the LFS mechanics for you.)
+
+Finally, the bill for the whole lesson:
+
+| Item | Time | Cost @ ~$0.40/hr |
+|---|---|---|
+| Setup, upload, smoke test | ~1 h | $0.40 |
+| Pretraining, 4B tokens | ~22 h | $8.80 |
+| One resume + eval + export | ~1 h | $0.40 |
+| Disk (80 GB, bundled in `dph_total`) | — | ~$0.50 |
+| **Total** | **~24 h** | **≈ $10** |
+
+Right in the middle of the $8–12 the course promised, and comfortably inside the $15–30 total budget with SFT and DPO still to come (both are <2 h runs).
+
+## 🧪 Your task
+
+`eval_ppl.py` only evaluates pre-packed `val.bin`. Extend it with a `--text-file` option that takes any raw `.txt` file, tokenizes it on the fly with your `tokenizer/tokenizer.json`, and reports its perplexity. Then use it to quantify domain specialization: measure ppl on (a) a Wikipedia article saved as text (pick one from your *validation* era, not training data) and (b) a page of casual text — a Reddit thread, a chat log, your own writing. Predict the gap before you run it.
+
+<details><summary>Solution</summary>
+
+Add to `src/eval_ppl.py`:
+
+```python
+from tokenizers import Tokenizer
+
+def load_text_as_tokens(path: str, tokenizer_path: str = "tokenizer/tokenizer.json") -> np.ndarray:
+    tok = Tokenizer.from_file(tokenizer_path)
+    text = open(path, encoding="utf-8").read()
+    ids = tok.encode(text).ids
+    return np.asarray(ids, dtype=np.uint16)
+```
+
+In `main()`, add the flag and the branch:
+
+```python
+p.add_argument("--text-file", default=None,
+               help="raw .txt to evaluate instead of --data")
+...
+if args.text_file:
+    tokens = load_text_as_tokens(args.text_file)
+    if len(tokens) < 1025:
+        raise SystemExit(f"need >=1025 tokens for one eval window, got {len(tokens)}")
+else:
+    tokens = np.memmap(args.data, dtype=np.uint16, mode="r")
+```
+
+`evaluate()` needs no changes — it already works on any array of token ids, and the ragged-final-batch weighting handles short files correctly (any tail shorter than one full window is dropped, same convention as `val.bin`).
+
+Typical results with the final checkpoint:
+
+```bash
+python src/eval_ppl.py --ckpt checkpoints/wikigpt-124m-base.pt --text-file wiki_article.txt
+# val ppl  : 24.8
+python src/eval_ppl.py --ckpt checkpoints/wikigpt-124m-base.pt --text-file reddit_thread.txt
+# val ppl  : 96.3
+```
+
+A 3–5× gap is expected. The model isn't "worse at English" on Reddit — it has simply never seen informal register, first-person voice, or dialogue structure, so every token in that style is a surprise. This is the concrete, measured version of the limitation Lesson 9's SFT starts to address: the base model is a Wikipedia specialist, and specialists pay for their focus everywhere else.
+
+</details>
+
+## Key takeaways
+
+- Pre-flight beats post-mortem: verify shards (dtype + max token id), W&B auth, disk headroom, and a 100-step smoke test *before* committing 22 hours. Loss must start at $\ln(32768) \approx 10.4$.
+- A healthy run is a cliff (10.4→~5 in 100M tokens), a power-law grind, and a cosine tail, landing at train loss ~3.3–3.6 over 4B tokens at a steady 45–55k tok/s.
+- The four pathologies each have a signature and a fix: spike → lower lr / resume before it; plateau → check the lr floor and effective batch, then suspect data; NaN → resume from the last clean checkpoint, never step past it; throughput sag → the host, not your code — cap power or migrate.
+- Preemption is a non-event by design: `--resume checkpoints/latest.pt` restores weights, optimizer, scheduler, data position, RNG, and the W&B run id; rsync `latest.pt` to your laptop periodically as insurance.
+- Capability arrives in a fixed order — noise → syntax → Wikipedia register → famous facts — and mid-tail facts stay unreliable at 124M params, which is exactly why the SFT data in Lesson 8 will be *grounded* in passages.
+- Final held-out perplexity ~25–30 (`src/eval_ppl.py`, exact token-weighted NLL, fp32 loss). Strip optimizer state before export (1.5 GB → ~500 MB), publish weights + tokenizer + `model.py` + model card to the HF Hub, and **destroy the instance**. Total: ≈ $10.
+
+## Coming up
+
+You have a base model that can write like Wikipedia but can't hold a conversation — in Lesson 8 you'll stand up Qwen2.5-7B-Instruct with vLLM on the same rented GPU and use it as a teacher to generate the grounded instruction dataset (published to GitHub) that will teach WikiGPT to actually answer you.
+
+------------------------------------------------------------------------
+
+[🏠 📖 Course home](index.html)  &nbsp;|&nbsp;  [← Lesson 06](lesson06.html)  &nbsp;|&nbsp;  [Lesson 08 →](lesson08.html)  &nbsp;|&nbsp;  [📚 All mini-courses](../../mini-courses.html)

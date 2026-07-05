@@ -1,0 +1,645 @@
+---
+title: "📖 Build Your Own Wikipedia LLM · Lesson 3 — The Cleaning Pipeline: From Raw Extract to Training Corpus"
+page-layout: full
+toc: true
+toc-location: left
+toc-title: "In this lesson"
+toc-depth: 2
+---
+
+[🏠 📖 Course home](index.html)  &nbsp;|&nbsp;  [← Lesson 02](lesson02.html)  &nbsp;|&nbsp;  [Lesson 04 →](lesson04.html)  &nbsp;|&nbsp;  [📚 All mini-courses](../../mini-courses.html)
+
+------------------------------------------------------------------------
+
+# Lesson 3 — The Cleaning Pipeline: From Raw Extract to Training Corpus
+
+In Lesson 2 you turned a 20+ GB `pages-articles-multistream` dump into `data/extracted/` — millions of JSON lines, one article per line, courtesy of wikiextractor. It *looks* like text. It is not yet training data. Buried in those files are redirect stubs, disambiguation pages that are nothing but link lists, articles that are 90% leftover `{{template}}` sludge, HTML entities like `&nbsp;`, non-English passages, and — worst of all — near-duplicate articles that will teach your model to memorize instead of generalize.
+
+This lesson is the quality gate. Every downstream artifact — the tokenizer in Lesson 4, the loss curve in Lesson 7, the chat model in Lesson 11 — inherits whatever passes through here. A model trained on 4B clean tokens beats a model trained on 5B dirty ones; that's the single most consistent finding in the data-curation literature. We'll build two scripts: `src/clean.py`, a streaming pipeline of composable filters, and `src/dedup.py`, a two-stage deduplicator (exact SHA-1, then MinHash-LSH). Both stream line by line so they run in the RAM of a cheap instance — no step ever loads the corpus into memory.
+
+::: {.callout-note appearance="simple"}
+🎯 **In this lesson you will:** build `src/clean.py` (a streaming chain of pure-function quality filters with per-filter counters), build `src/dedup.py` (exact SHA-1 + MinHash-LSH near-dedup with `datasketch`), understand the banding math that makes LSH work, produce the final `data/clean/corpus_*.jsonl` shards, and verify the result with a sampling script and a before/after stats table.
+:::
+
+## Why cleaning decides everything downstream
+
+Pretraining loss is an average over your corpus. If 8% of your tokens are `| colspan="2" | &nbsp;` table debris, the model spends capacity modeling table debris — capacity you paid for in GPU-hours. Worse than noise is *duplication*: if the same paragraph appears 40 times (and on Wikipedia, boilerplate paragraphs do), gradient descent sees it 40× more often than it deserves. Duplicated text is the number-one cause of verbatim memorization in small models, and it silently corrupts your evaluation too — your held-out perplexity looks great because the "held-out" text has twins in the training set.
+
+The filters we'll write are a distilled version of the quality heuristics popularized by DeepMind's Gopher project: reject documents whose *statistical shape* doesn't look like prose. Mean word length outside 3–12 characters? Probably a symbol dump or a genome sequence. Fewer than 80% of words containing an alphabetic character? Probably a table. No common English stopwords at all? Probably not English prose. Each rule is dumb alone; chained together they are a remarkably sharp classifier that costs microseconds per document.
+
+Two design principles govern everything in this lesson:
+
+1. **Every filter is a pure function with a counter.** A filter takes a document and returns either "keep" or a rejection *reason*. The pipeline tallies reasons. When you finish a run, you get a table telling you exactly where your data went — and when a filter eats 40% of your corpus, you'll know to go look before you shrug and train on the remainder.
+2. **Everything streams.** One document in memory at a time. The corpus is ~16 GB; your instance might have 32 GB of RAM, and dedup needs a big chunk of it for the LSH index. Never call `json.load()` on the whole thing, never build a list of all documents.
+
+## The shape of the pipeline
+
+```{mermaid}
+flowchart LR
+    A[data/extracted/<br/>*.jsonl from Lesson 2<br/>~6.9M articles] --> B[src/clean.py<br/>markup strip +<br/>quality filters]
+    B --> C[data/clean/<br/>pre_dedup_*.jsonl<br/>~5.1M articles]
+    C --> D[src/dedup.py<br/>stage 1: exact SHA-1<br/>stage 2: MinHash-LSH]
+    D --> E[data/clean/<br/>corpus_*.jsonl<br/>~4.9M articles]
+    E --> F[Lesson 4:<br/>train tokenizer]
+    B -.-> G[counter report:<br/>reason -> drop count]
+    D -.-> H[counter report:<br/>exact vs near dups]
+```
+
+Two scripts, two passes over the data, one intermediate directory. We keep the intermediate `pre_dedup_*.jsonl` shards on disk deliberately: dedup is the step you're most likely to re-run with different thresholds, and you don't want to re-pay the cleaning pass every time. Disk is cheap; your time is not.
+
+First, add the new dependencies to the repo:
+
+```bash
+cd wikillm
+cat >> requirements.txt <<'EOF'
+langdetect==1.0.9
+datasketch==1.6.5
+EOF
+pip install -r requirements.txt
+```
+
+`langdetect` is a tiny, pure-Python port of Google's language detector — slow-ish, which is why we'll call it *last* in the chain, only on documents that survived every cheap filter, and only on a 400-character prefix. `datasketch` provides the MinHash and LSH implementations for stage-2 dedup.
+
+## src/clean.py — filters as pure functions with counters
+
+The file has three layers: **normalizers** (text → text transforms that strip residual markup), **filters** (document → rejection-reason-or-None), and a **streaming driver** that chains them, rotates output shards, and prints the counter report. Here is the complete file:
+
+```python
+#!/usr/bin/env python3
+"""
+clean.py — streaming quality gate for the extracted Wikipedia corpus.
+
+Reads   data/extracted/**/*.jsonl        (one {"id","title","text"} per line)
+Writes  data/clean/pre_dedup_NNNN.jsonl  shards (~500 MB each)
+Prints  a per-filter rejection report.
+
+Design: every filter is a pure function doc -> Optional[reason]. The driver
+chains them in order (cheapest first) and counts every rejection reason.
+Nothing holds more than one document in memory.
+"""
+import argparse
+import glob
+import gzip
+import html
+import json
+import os
+import re
+import sys
+from collections import Counter
+
+from langdetect import DetectorFactory, LangDetectException, detect
+
+DetectorFactory.seed = 0  # langdetect is stochastic; pin it for reproducible runs
+
+# ---------------------------------------------------------------------------
+# 1. Normalizers: strip residual markup wikiextractor left behind
+# ---------------------------------------------------------------------------
+RE_TEMPLATE   = re.compile(r"\{\{[^{}]*\}\}")            # leftover {{templates}}
+RE_TABLE      = re.compile(r"\{\|.*?\|\}", re.DOTALL)    # leftover {| wikitables |}
+RE_HTML_TAG   = re.compile(r"</?[a-zA-Z][^>]{0,200}>")   # <ref>, <br/>, <div ...>
+RE_WIKILINK   = re.compile(r"\[\[(?:[^|\]]*\|)?([^\]]*)\]\]")   # [[target|shown]] -> shown
+RE_EXTLINK    = re.compile(r"\[https?://[^\s\]]+\s*([^\]]*)\]") # [url label] -> label
+RE_FILELINK   = re.compile(r"\[\[(?:File|Image):[^\]]*\]\]", re.IGNORECASE)
+RE_HEADING    = re.compile(r"^=+\s*(.*?)\s*=+\s*$", re.MULTILINE)  # == Heading ==
+RE_MULTISPACE = re.compile(r"[ \t]{2,}")
+RE_MULTINL    = re.compile(r"\n{3,}")
+
+def strip_markup(text: str) -> str:
+    """Remove residual wiki/HTML markup. Idempotent; safe to run twice."""
+    text = html.unescape(text)            # &amp; &nbsp; &#8211; -> real characters
+    text = RE_FILELINK.sub("", text)      # before generic wikilinks: these have no prose
+    for _ in range(3):                    # templates nest; 3 passes flatten ~all of them
+        text = RE_TEMPLATE.sub("", text)
+    text = RE_TABLE.sub("", text)
+    text = RE_HTML_TAG.sub(" ", text)
+    text = RE_WIKILINK.sub(r"\1", text)
+    text = RE_EXTLINK.sub(r"\1", text)
+    text = RE_HEADING.sub(r"\1", text)
+    text = RE_MULTISPACE.sub(" ", text)
+    text = RE_MULTINL.sub("\n\n", text)
+    return text.strip()
+
+# ---------------------------------------------------------------------------
+# 2. Filters: doc -> None (keep) or str (rejection reason)
+#    Ordered cheapest-first in FILTERS below.
+# ---------------------------------------------------------------------------
+MIN_CHARS      = 400      # shorter than this is a stub; not worth a training doc
+MIN_WORDS      = 50
+BULLETS        = ("*", "-", "#", "•", "–")
+STOPWORDS      = {"the", "be", "to", "of", "and", "a", "in", "that", "have",
+                  "it", "is", "was", "for", "on", "are", "with", "as", "at", "by"}
+RE_HAS_ALPHA   = re.compile(r"[a-zA-Z]")
+
+def f_redirect(doc):
+    if doc["text"].lstrip()[:9].lower() == "#redirect":
+        return "redirect"
+
+def f_disambiguation(doc):
+    t = doc["title"].lower()
+    head = doc["text"][:300].lower()
+    if "(disambiguation)" in t or " may refer to:" in head or " may also refer to:" in head:
+        return "disambiguation"
+
+def f_min_length(doc):
+    if len(doc["text"]) < MIN_CHARS or len(doc["text"].split()) < MIN_WORDS:
+        return "too_short"
+
+def f_list_page(doc):
+    """Drop pages that are mostly bullet lines — 'List of ...' pages, outlines."""
+    lines = [l for l in doc["text"].split("\n") if l.strip()]
+    if not lines:
+        return "empty"
+    bullet_frac = sum(l.lstrip().startswith(BULLETS) for l in lines) / len(lines)
+    if bullet_frac > 0.5:
+        return "list_page"
+
+def f_alpha_ratio(doc):
+    """Gopher-style: >= 80% of words must contain an alphabetic character."""
+    words = doc["text"].split()
+    alpha = sum(1 for w in words if RE_HAS_ALPHA.search(w))
+    if alpha / len(words) < 0.80:
+        return "low_alpha_ratio"
+
+def f_mean_word_len(doc):
+    """Gopher-style: prose has mean word length ~3-12 chars. Outside that
+    range you're looking at symbol soup or concatenated garbage."""
+    words = doc["text"].split()
+    mean = sum(len(w) for w in words) / len(words)
+    if not (3.0 <= mean <= 12.0):
+        return "bad_mean_word_len"
+
+def f_symbol_ratio(doc):
+    """Gopher-style: hash marks and ellipses are markup smells, not prose."""
+    words = doc["text"].split()
+    symbols = doc["text"].count("#") + doc["text"].count("…") + doc["text"].count("...")
+    if symbols / len(words) > 0.10:
+        return "high_symbol_ratio"
+
+def f_stopwords(doc):
+    """Real English prose contains common stopwords. A doc with fewer than 2
+    distinct ones is a name list, a table, or another language."""
+    found, need = set(), 2
+    for w in doc["text"].lower().split():
+        if w in STOPWORDS:
+            found.add(w)
+            if len(found) >= need:
+                return None
+    return "no_stopwords"
+
+def f_language(doc):
+    """Most expensive filter -> runs last, on a short prefix only."""
+    try:
+        if detect(doc["text"][:400]) != "en":
+            return "not_english"
+    except LangDetectException:
+        return "langdetect_error"
+
+FILTERS = [f_redirect, f_disambiguation, f_min_length, f_list_page,
+           f_alpha_ratio, f_mean_word_len, f_symbol_ratio, f_stopwords,
+           f_language]
+
+# ---------------------------------------------------------------------------
+# 3. Streaming driver
+# ---------------------------------------------------------------------------
+def iter_docs(paths):
+    for path in paths:
+        opener = gzip.open if path.endswith(".gz") else open
+        with opener(path, "rt", encoding="utf-8", errors="replace") as f:
+            for line in f:
+                if line.strip():
+                    yield json.loads(line)
+
+class ShardWriter:
+    """Rotates output files at ~shard_mb megabytes. One open file at a time."""
+    def __init__(self, out_dir, prefix, shard_mb=500):
+        self.out_dir, self.prefix = out_dir, prefix
+        self.max_bytes = shard_mb * 1024 * 1024
+        self.idx, self.written, self.f = -1, 0, None
+        self._rotate()
+
+    def _rotate(self):
+        if self.f:
+            self.f.close()
+        self.idx += 1
+        self.written = 0
+        path = os.path.join(self.out_dir, f"{self.prefix}_{self.idx:04d}.jsonl")
+        self.f = open(path, "w", encoding="utf-8")
+
+    def write(self, doc):
+        line = json.dumps(doc, ensure_ascii=False) + "\n"
+        b = len(line.encode("utf-8"))
+        if self.written + b > self.max_bytes:
+            self._rotate()
+        self.f.write(line)
+        self.written += b
+
+    def close(self):
+        self.f.close()
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--in_glob",  default="data/extracted/**/*.jsonl")
+    ap.add_argument("--out_dir",  default="data/clean")
+    ap.add_argument("--shard_mb", type=int, default=500)
+    args = ap.parse_args()
+
+    paths = sorted(glob.glob(args.in_glob, recursive=True))
+    assert paths, f"no input files match {args.in_glob}"
+    os.makedirs(args.out_dir, exist_ok=True)
+
+    stats = Counter()
+    writer = ShardWriter(args.out_dir, "pre_dedup", args.shard_mb)
+
+    for doc in iter_docs(paths):
+        stats["total"] += 1
+        doc["text"] = strip_markup(doc.get("text", ""))
+        reason = next((r for f in FILTERS if (r := f(doc))), None)
+        if reason:
+            stats[reason] += 1
+        else:
+            stats["kept"] += 1
+            writer.write({"id": doc.get("id", ""), "title": doc.get("title", ""),
+                          "text": doc["text"]})
+        if stats["total"] % 100_000 == 0:
+            print(f"  {stats['total']:>10,} seen | {stats['kept']:>10,} kept",
+                  file=sys.stderr)
+
+    writer.close()
+    print("\n=== clean.py report ===")
+    for k, v in stats.most_common():
+        print(f"  {k:<22} {v:>12,}  ({100*v/stats['total']:5.2f}%)")
+
+if __name__ == "__main__":
+    main()
+```
+
+Why the details matter:
+
+- **Filter order is a performance decision.** `f_redirect` is a 9-character prefix check; `f_language` costs ~1–2 ms per call. Because the chain short-circuits on the first rejection, ordering cheapest-first means langdetect only ever runs on documents that already look like decent English prose — cutting its call count by roughly a third and its total runtime by hours.
+- **`DetectorFactory.seed = 0`** — langdetect samples internally and gives *different answers on different runs* without this line. A non-deterministic cleaning pipeline means a non-reproducible corpus, which means a non-reproducible model. Pin it.
+- **The 3-pass template loop.** `{{cite {{nested}} }}` — the regex can't match nested braces in one pass, so we run it three times. After three passes, remaining nesting is vanishingly rare and gets caught by the alpha-ratio filter anyway.
+- **Counters as reasons, not booleans.** When the report says `list_page 412,338 (5.9%)`, you can sample rejected titles and eyeball whether the rule is behaving. A pipeline that just says "kept 74%" gives you nothing to debug.
+- **`ensure_ascii=False`** keeps UTF-8 as UTF-8. Without it, every "é" becomes `\u00e9` — 6 bytes instead of 2, bloating shards ~10% and giving your Lesson-4 tokenizer a distorted view of the byte distribution.
+
+## Running the quality gate
+
+Cleaning is pure CPU — no GPU needed. You have two equally good options: run it free on your own machine if you have the disk, or run it on the same vast.ai box you'll use for pretraining (rent it a few hours early; the GPU idles while the CPU works). For the rented route, pick an instance with plenty of CPU RAM now, because dedup (next section) wants ~20 GB of it:
+
+```bash
+# Find a 4090 box with >= 64 GB RAM and >= 200 GB disk, cheapest first
+vastai search offers 'gpu_name=RTX_4090 cpu_ram>=64 disk_space>=200 rentable=true' -o 'dph'
+
+vastai create instance <OFFER_ID> \
+  --image pytorch/pytorch:2.4.0-cuda12.4-cudnn9-runtime \
+  --disk 200 --ssh
+
+vastai show instances            # grab HOST and PORT
+ssh -p <PORT> root@<HOST>
+
+# Push the repo and the extracted data up
+rsync -avz -e "ssh -p <PORT>" --exclude data/raw wikillm/ root@<HOST>:/workspace/wikillm/
+
+# Long-running job => tmux, always. SSH drops; tmux survives.
+tmux new -s clean
+cd /workspace/wikillm && pip install -r requirements.txt
+python src/clean.py 2> clean.log
+# Ctrl-b d to detach; `tmux attach -t clean` to come back
+```
+
+Expect **2–3 hours** for ~6.9M articles single-process (langdetect dominates). A typical report looks like this:
+
+```
+=== clean.py report ===
+  total                     6,912,441  (100.00%)
+  kept                      5,081,207  ( 73.51%)
+  too_short                 1,204,882  ( 17.43%)
+  list_page                   347,516  (  5.03%)
+  disambiguation              191,304  (  2.77%)
+  low_alpha_ratio              41,207  (  0.60%)
+  not_english                  24,118  (  0.35%)
+  no_stopwords                 12,433  (  0.18%)
+  bad_mean_word_len             5,912  (  0.09%)
+  high_symbol_ratio             2,801  (  0.04%)
+  redirect                      1,061  (  0.02%)
+```
+
+Read this table like an instrument panel. `too_short` dominating is expected — Wikipedia is full of two-sentence stubs. `redirect` near zero is expected too (wikiextractor drops most of them; our filter is a backstop). If `not_english` were 15% instead of 0.35%, you'd know you downloaded the wrong dump. **Cost so far: ~3 CPU-hours × $0.40/hr ≈ $1.20** (or $0 locally).
+
+## Deduplication, stage 1 and stage 2: the theory
+
+**Stage 1 — exact.** Normalize the text (lowercase, strip punctuation, collapse whitespace) and take a SHA-1 hash. Two documents with the same hash are byte-identical after normalization — drop the second. This catches true copies but misses the sneakier and far more common case: two documents that are 95% identical (same article scraped into two pages, boilerplate paragraphs with one name swapped).
+
+**Stage 2 — near-duplicate.** The measure of "how similar" is **Jaccard similarity** on word 5-gram shingles: chop each document into overlapping 5-word windows, treat the document as the *set* of its windows, and compute
+
+$$J(A, B) = \frac{|A \cap B|}{|A \cup B|}$$
+
+Comparing all pairs is $O(n^2)$ — 5 million docs means 12.5 trillion comparisons. Dead on arrival. **MinHash** fixes the per-pair cost: hash every shingle with $k = 128$ different hash functions and keep only the minimum value under each. The magic property: for one hash function, $P(\min_h(A) = \min_h(B)) = J(A, B)$ exactly. So the fraction of matching positions across the 128-slot signature is an unbiased estimate of Jaccard similarity — and each document is now a fixed 128-integer fingerprint regardless of length.
+
+But we still can't compare all signature *pairs*. **Locality-Sensitive Hashing (LSH)** removes the pairwise step entirely: split the 128-slot signature into $b$ bands of $r$ rows each ($b \times r = 128$), hash each band into its own hash table, and call two documents *candidates* if **any single band matches exactly**.
+
+<svg viewBox="0 0 700 210" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="MinHash signature split into bands">
+  <text x="10" y="24" fill="currentColor" font-size="15" font-weight="bold">MinHash signature: 128 slots → b = 8 bands × r = 16 rows</text>
+  <g>
+    <rect x="10"  y="45" width="80" height="42" fill="#7c8cff" opacity="0.25" stroke="currentColor"/>
+    <rect x="94"  y="45" width="80" height="42" fill="#7c8cff" opacity="0.25" stroke="currentColor"/>
+    <rect x="178" y="45" width="80" height="42" fill="#ff8c7c" opacity="0.35" stroke="currentColor" stroke-width="2"/>
+    <rect x="262" y="45" width="80" height="42" fill="#7c8cff" opacity="0.25" stroke="currentColor"/>
+    <rect x="346" y="45" width="80" height="42" fill="#7c8cff" opacity="0.25" stroke="currentColor"/>
+    <rect x="430" y="45" width="80" height="42" fill="#7c8cff" opacity="0.25" stroke="currentColor"/>
+    <rect x="514" y="45" width="80" height="42" fill="#7c8cff" opacity="0.25" stroke="currentColor"/>
+    <rect x="598" y="45" width="80" height="42" fill="#7c8cff" opacity="0.25" stroke="currentColor"/>
+    <text x="14" y="71" fill="currentColor" font-size="12">band 1</text>
+    <text x="182" y="71" fill="currentColor" font-size="12">band 3</text>
+    <text x="602" y="71" fill="currentColor" font-size="12">band 8</text>
+  </g>
+  <g>
+    <rect x="10"  y="100" width="80" height="42" fill="#7cc98f" opacity="0.25" stroke="currentColor"/>
+    <rect x="94"  y="100" width="80" height="42" fill="#7cc98f" opacity="0.25" stroke="currentColor"/>
+    <rect x="178" y="100" width="80" height="42" fill="#ff8c7c" opacity="0.35" stroke="currentColor" stroke-width="2"/>
+    <rect x="262" y="100" width="80" height="42" fill="#7cc98f" opacity="0.25" stroke="currentColor"/>
+    <rect x="346" y="100" width="80" height="42" fill="#7cc98f" opacity="0.25" stroke="currentColor"/>
+    <rect x="430" y="100" width="80" height="42" fill="#7cc98f" opacity="0.25" stroke="currentColor"/>
+    <rect x="514" y="100" width="80" height="42" fill="#7cc98f" opacity="0.25" stroke="currentColor"/>
+    <rect x="598" y="100" width="80" height="42" fill="#7cc98f" opacity="0.25" stroke="currentColor"/>
+    <text x="14" y="126" fill="currentColor" font-size="12">doc B</text>
+  </g>
+  <line x1="218" y1="87" x2="218" y2="100" stroke="currentColor" stroke-dasharray="3,3"/>
+  <text x="10" y="172" fill="currentColor" font-size="14">Band 3 identical in both docs → hash to the same LSH bucket → candidate duplicate pair.</text>
+  <text x="10" y="194" fill="currentColor" font-size="14">One matching band out of 8 is enough — no pairwise comparison ever happens.</text>
+</svg>
+
+Here is the banding intuition. If two documents have Jaccard similarity $s$, each signature slot matches with probability $s$, so one whole band of $r$ rows matches with probability $s^r$, and *at least one* of the $b$ bands matches with probability
+
+$$P(\text{candidate}) = 1 - (1 - s^r)^b$$
+
+That function is an S-curve with a sharp knee near $(1/b)^{1/r}$. For $b = 8, r = 16$: a pair at $s = 0.5$ becomes a candidate with probability ≈ 0.0001 (effectively never), at $s = 0.85$ with probability ≈ 0.46, and at $s = 0.95$ with probability ≈ 0.99. Raising $r$ pushes the knee right (stricter); raising $b$ pushes it left (more permissive). You never tune $b$ and $r$ by hand — `datasketch` picks the split that best approximates your requested `threshold=0.85`, weighting false positives and false negatives — but now you know what the knob is actually turning.
+
+```{mermaid}
+flowchart TD
+    A[pre_dedup shards<br/>5.1M docs] --> B[normalize text<br/>lowercase, strip punct,<br/>collapse whitespace]
+    B --> C{SHA-1 of<br/>normalized text<br/>seen before?}
+    C -- yes --> X1[drop:<br/>exact_dup]
+    C -- no --> D[word 5-gram shingles<br/>MinHash num_perm=128]
+    D --> E{LSH query<br/>threshold 0.85:<br/>any band bucket hit?}
+    E -- yes --> X2[drop:<br/>near_dup]
+    E -- no --> F[insert signature<br/>into LSH index]
+    F --> G[write to<br/>corpus_*.jsonl]
+```
+
+Note the greedy, order-dependent policy: **first occurrence wins**. We stream once; each surviving document is inserted into the index and becomes the "canonical" copy that future near-twins get compared against. This is the standard approach for corpus dedup — simple, single-pass, and the arbitrariness of "which twin survives" doesn't matter when the twins are 85%+ identical.
+
+## src/dedup.py — the complete file
+
+```python
+#!/usr/bin/env python3
+"""
+dedup.py — two-stage streaming deduplication.
+
+Stage 1: exact  — SHA-1 over normalized text (lowercase, no punct, single spaces).
+Stage 2: near   — MinHash-LSH (datasketch), num_perm=128, threshold=0.85,
+                  word 5-gram shingles. First occurrence wins.
+
+Reads   data/clean/pre_dedup_*.jsonl
+Writes  data/clean/corpus_NNNN.jsonl
+
+RAM: the LSH index holds one 128-slot signature per KEPT doc across b hash
+tables — budget ~3-4 KB/doc, i.e. ~20 GB for 5M docs. Use a >=64 GB box.
+"""
+import argparse
+import glob
+import hashlib
+import json
+import re
+import sys
+from collections import Counter
+
+from datasketch import MinHash, MinHashLSH
+
+# clean.py already lives next door; reuse its streaming reader and shard writer
+from clean import ShardWriter, iter_docs
+
+NUM_PERM  = 128
+THRESHOLD = 0.85
+SHINGLE_N = 5
+
+RE_NONWORD = re.compile(r"[^\w\s]")
+RE_WS      = re.compile(r"\s+")
+
+def normalize(text: str) -> str:
+    """Canonical form for hashing: case, punctuation and whitespace are
+    presentation details — two docs differing only in those ARE duplicates."""
+    return RE_WS.sub(" ", RE_NONWORD.sub("", text.lower())).strip()
+
+def make_minhash(norm_text: str) -> MinHash:
+    words = norm_text.split()
+    mh = MinHash(num_perm=NUM_PERM)
+    if len(words) < SHINGLE_N:
+        shingle_bytes = [" ".join(words).encode("utf-8")]
+    else:
+        shingle_bytes = [" ".join(words[i:i + SHINGLE_N]).encode("utf-8")
+                         for i in range(len(words) - SHINGLE_N + 1)]
+    mh.update_batch(shingle_bytes)   # vectorized: ~10x faster than update() per shingle
+    return mh
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--in_glob",  default="data/clean/pre_dedup_*.jsonl")
+    ap.add_argument("--out_dir",  default="data/clean")
+    ap.add_argument("--shard_mb", type=int, default=500)
+    args = ap.parse_args()
+
+    paths = sorted(glob.glob(args.in_glob))
+    assert paths, f"no input files match {args.in_glob}"
+
+    lsh    = MinHashLSH(threshold=THRESHOLD, num_perm=NUM_PERM)
+    seen   = set()          # 12-byte SHA-1 prefixes; 5M docs ~= a few hundred MB
+    stats  = Counter()
+    writer = ShardWriter(args.out_dir, "corpus", args.shard_mb)
+    key    = 0
+
+    for doc in iter_docs(paths):
+        stats["total"] += 1
+        norm = normalize(doc["text"])
+
+        # ---- stage 1: exact -------------------------------------------------
+        digest = hashlib.sha1(norm.encode("utf-8")).digest()[:12]
+        if digest in seen:
+            stats["exact_dup"] += 1
+            continue
+        seen.add(digest)
+
+        # ---- stage 2: near --------------------------------------------------
+        mh = make_minhash(norm)
+        if lsh.query(mh):               # any band-bucket collision => near-dup
+            stats["near_dup"] += 1
+            continue
+        lsh.insert(str(key), mh)        # this doc is now the canonical copy
+        key += 1
+
+        stats["kept"] += 1
+        writer.write(doc)
+        if stats["total"] % 100_000 == 0:
+            print(f"  {stats['total']:>10,} seen | {stats['kept']:>10,} kept | "
+                  f"{stats['exact_dup']:,} exact | {stats['near_dup']:,} near",
+                  file=sys.stderr)
+
+    writer.close()
+    print("\n=== dedup.py report ===")
+    for k, v in stats.most_common():
+        print(f"  {k:<12} {v:>12,}  ({100*v/stats['total']:5.2f}%)")
+
+if __name__ == "__main__":
+    main()
+```
+
+Line-by-line rationale for the load-bearing choices:
+
+- **`update_batch` instead of per-shingle `update`.** A 3,000-word article has ~3,000 shingles; batching the permutation math in NumPy is roughly an order of magnitude faster. This single call is the difference between an overnight job and an afternoon one.
+- **`digest()[:12]`** — 12 bytes of SHA-1 instead of 20. The birthday-collision probability for 5M items in a 96-bit space is ~$10^{-15}$; truncating saves ~40% of the exact-dedup set's memory for free.
+- **`lsh.query(mh)` before `lsh.insert(...)`** — query returns the keys of every already-inserted signature that shares at least one band bucket. Non-empty result means an earlier, kept document is ≳0.85 similar; we drop the newcomer without ever computing a full pairwise Jaccard.
+- **Why word shingles, not character shingles?** Character 5-grams make almost all English text look similar (everything shares "tion ", " the "). Word 5-grams are sparse enough that sharing many of them genuinely means shared passages.
+- **Memory ceiling, stated honestly:** ~20 GB for 5M kept docs. If you're on a 32 GB machine and it's tight, split the corpus into two halves, dedup each, then dedup the concatenation of the two outputs — the greedy policy composes correctly.
+
+Run it (in the same tmux session):
+
+```bash
+tmux attach -t clean
+cd /workspace/wikillm
+python src/dedup.py 2> dedup.log
+```
+
+Expect **4–6 hours single-process** — MinHash computation dominates. If you're impatient, precomputing signatures in a `multiprocessing.Pool` while keeping LSH insertion in the main process is a clean 6–8× speedup, but the vanilla version above is correct and fits the budget. **Cost: ~5 CPU-hours × $0.40/hr ≈ $2** while the GPU idles (or $0 locally).
+
+## Before/after: the numbers, and trusting them
+
+After both passes, here is what the funnel looks like on the reference dump (your exact numbers will differ with dump date — what matters is the *shape*):
+
+| Stage | Articles | Bytes (text) | Est. tokens* |
+|---|---:|---:|---:|
+| Extracted (Lesson 2 output) | 6,912,441 | 15.9 GB | ~5.6B |
+| After `clean.py` filters | 5,081,207 | 13.4 GB | ~4.8B |
+| After exact SHA-1 dedup | 5,046,633 | 13.3 GB | ~4.75B |
+| After MinHash-LSH dedup | 4,878,190 | 12.9 GB | ~4.6B |
+
+*Token estimates use bytes ÷ 2.8, a decent rule of thumb for English under a 32k BPE vocabulary; Lesson 4 will give you the exact count. Note the shape: filters remove many *documents* (26%) but fewer *bytes* (16%) because they kill mostly short stubs; dedup removes few documents but each removal is a full-length article. Landing at ~4.6B tokens is exactly the 4–5B target the course budget was planned around.
+
+Never trust a pipeline you haven't eyeballed. Add a small notebook-style validation script — this prints corpus stats plus random full documents so you can read what your model will read:
+
+```python
+#!/usr/bin/env python3
+"""inspect_corpus.py — sanity-check data/clean/corpus_*.jsonl by sampling.
+
+Usage: python src/inspect_corpus.py [--n 5]
+Streaming reservoir sample: uniform over all docs, one doc in memory at a time.
+"""
+import argparse, glob, json, random
+
+from clean import iter_docs
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--in_glob", default="data/clean/corpus_*.jsonl")
+    ap.add_argument("--n", type=int, default=5)
+    ap.add_argument("--seed", type=int, default=0)
+    args = ap.parse_args()
+    random.seed(args.seed)
+
+    paths = sorted(glob.glob(args.in_glob))
+    reservoir, docs, chars = [], 0, 0
+    for doc in iter_docs(paths):
+        docs += 1
+        chars += len(doc["text"])
+        if len(reservoir) < args.n:
+            reservoir.append(doc)
+        else:                                # classic reservoir sampling:
+            j = random.randrange(docs)       # keep each doc with prob n/docs
+            if j < args.n:
+                reservoir[j] = doc
+
+    print(f"shards: {len(paths)}   docs: {docs:,}   chars: {chars:,}")
+    print(f"mean doc length: {chars // max(docs,1):,} chars   "
+          f"~{chars // 2.8 / 1e9:.2f}B tokens (est.)\n")
+    for i, doc in enumerate(reservoir, 1):
+        print(f"--- sample {i}: {doc['title']} " + "-" * 40)
+        print(doc["text"][:1200])
+        print("...\n" if len(doc["text"]) > 1200 else "\n")
+
+if __name__ == "__main__":
+    main()
+```
+
+```bash
+python src/inspect_corpus.py --n 5
+```
+
+Read the five samples slowly. You're looking for: leftover `{{` braces (template regex missed a pattern), runs of `| |` pipes (table regex missed a variant), non-English paragraphs mid-article, truncated sentences. If a sample looks wrong, grep the corpus for the pattern, count occurrences, and decide whether it's worth a new filter. Ten minutes of reading here is worth more than any metric.
+
+Finally, pull the artifacts back to your machine — the clean corpus is the crown jewel of the data phase:
+
+```bash
+rsync -avz -e "ssh -p <PORT>" root@<HOST>:/workspace/wikillm/data/clean/ wikillm/data/clean/
+```
+
+**Total lesson cost: ≈ $3–4 of CPU time on the rented box, or $0 run locally.**
+
+## 🧪 Your task
+
+The Gopher rules include one heuristic we skipped: **within-document repetition**. Pages that repeat the same phrase over and over (auto-generated sports tables, botched merges) slip past every filter above because their word statistics look fine. Write a filter `f_repetition(doc)` that rejects a document when its most frequent word 2-gram accounts for **more than 5%** of all its 2-grams, wire it into `FILTERS` (think about where in the chain it belongs), and re-run `clean.py` on a single extracted shard. Report how many extra documents it rejects, and print the titles of three rejected documents to confirm they deserve it.
+
+<details><summary>Solution</summary>
+
+```python
+def f_repetition(doc):
+    """Gopher-style: if one 2-gram is >5% of all 2-grams, the page is
+    repetitive boilerplate (auto-generated tables, merge accidents)."""
+    words = doc["text"].lower().split()
+    if len(words) < 2:
+        return "too_short"
+    counts = Counter(zip(words, words[1:]))     # 2-grams as word-pair tuples
+    total = len(words) - 1
+    if counts.most_common(1)[0][1] / total > 0.05:
+        return "repetitive"
+```
+
+Placement: it costs one pass over the words plus a `Counter` — cheaper than langdetect, more expensive than the ratio checks. Put it right before `f_language`:
+
+```python
+FILTERS = [f_redirect, f_disambiguation, f_min_length, f_list_page,
+           f_alpha_ratio, f_mean_word_len, f_symbol_ratio, f_stopwords,
+           f_repetition, f_language]
+```
+
+Test on one shard, and log rejected titles for inspection:
+
+```bash
+python src/clean.py --in_glob 'data/extracted/AA/wiki_00.jsonl' --out_dir /tmp/clean_test
+```
+
+To see who it catches, add a temporary two-liner in the driver's rejection branch:
+
+```python
+if reason == "repetitive" and stats["repetitive"] <= 3:
+    print("REJECTED:", doc["title"], file=sys.stderr)
+```
+
+On a typical shard it fires on ~0.2–0.5% of documents — season-by-season sports statistics pages, election result tables, and station listings dominate, all of which you're happy to lose. If you see it firing above ~2%, your threshold is too aggressive for encyclopedic prose (legitimate articles repeat their subject's name a lot); Gopher's own rule set uses a family of thresholds from 2-grams up to 4-grams, which is the natural extension if you want to keep tuning.
+
+</details>
+
+## Key takeaways
+
+- Data quality is decided *here*, once — every later lesson (tokenizer, pretraining, eval) inherits this corpus unchanged. Clean tokens beat more tokens.
+- Filters are pure functions returning rejection *reasons*, chained cheapest-first with a `Counter` — the report table is your debugging instrument, and a filter you can't audit is a filter you can't trust.
+- Determinism is part of correctness: pin `DetectorFactory.seed`, keep the pipeline single-order, and the same input always yields the same corpus.
+- Dedup is two stages: SHA-1 on normalized text catches exact copies for pennies; MinHash-LSH (`num_perm=128`, `threshold=0.85`) catches near-duplicates without $O(n^2)$ comparisons.
+- The banding trick is the whole magic of LSH: split the signature into $b$ bands of $r$ rows and $P(\text{candidate}) = 1 - (1-s^r)^b$ becomes a sharp S-curve — pairs below the threshold almost never collide, pairs above it almost always do.
+- Everything streams: one document in memory at a time, sharded output, explicit RAM budget (~20 GB for the LSH index) — the whole pipeline runs on a cheap box for ~$3, or free on your laptop.
+- Always eyeball samples (`inspect_corpus.py`) before declaring victory; metrics don't catch the markup pattern your regex missed.
+
+## Coming up
+
+In Lesson 4 we take this clean corpus and train a 32,768-symbol BPE tokenizer on it — including the `<|user|>`, `<|assistant|>`, and `<|end|>` special tokens we reserve now so the chat model in Lessons 9–11 doesn't need a vocabulary transplant later.
+
+------------------------------------------------------------------------
+
+[🏠 📖 Course home](index.html)  &nbsp;|&nbsp;  [← Lesson 02](lesson02.html)  &nbsp;|&nbsp;  [Lesson 04 →](lesson04.html)  &nbsp;|&nbsp;  [📚 All mini-courses](../../mini-courses.html)
