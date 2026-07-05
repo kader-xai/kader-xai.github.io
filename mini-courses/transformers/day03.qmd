@@ -1,0 +1,444 @@
+---
+title: "⚡ Building Transformers from Scratch with PyTorch · Day 3 — Embeddings & Positional Information"
+page-layout: full
+toc: true
+toc-location: left
+toc-title: "On this day"
+toc-depth: 2
+---
+
+[🏠 ⚡ Course home](index.html)  &nbsp;|&nbsp;  [← Day 02](day02.html)  &nbsp;|&nbsp;  [Day 04 →](day04.html)  &nbsp;|&nbsp;  [📚 All mini-courses](../../mini-courses.html)
+
+------------------------------------------------------------------------
+
+# Day 3 — Embeddings & Positional Information
+
+Yesterday you built the data pipeline: raw text goes in, batches of integer token IDs come out — an `(B, T)` tensor of indices like `[[17, 4, 92, ...]]`. But a transformer can't do math on the number 92. It needs each token to be a *vector* — a point in a continuous space where "similar tokens end up near each other" and gradients can flow. Today you build the layer that does that conversion, and then you fix a problem most people don't see coming: the attention mechanism you'll build tomorrow is *completely blind to word order*. Without intervention, "dog bites man" and "man bites dog" produce literally interchangeable representations. You'll prove that with five lines of code, then fix it three different ways — learned positions (what GPT-2 uses and what our tiny-GPT will use), sinusoidal encodings (the original *Attention Is All You Need* recipe, implemented from scratch), and RoPE (what every modern LLM uses, covered as a preview). By the end of the day you'll have the `tok_emb + pos_emb → x` assembly that feeds everything we build for the rest of the course.
+
+::: {.callout-note appearance="simple"}
+🎯 **Today you will:** understand `nn.Embedding` as a lookup table (not a linear layer), prove attention is permutation-blind with a toy experiment, implement learned positional embeddings, build sinusoidal encodings from scratch and see why the frequencies are chosen that way, assemble the `tok_emb + pos_emb` input stage our GPT will use
+:::
+
+## `nn.Embedding` is a lookup, not a linear layer
+
+An embedding layer is the simplest trainable thing in the whole transformer, and also the most commonly misexplained. It is a matrix of shape `(vocab_size, n_embd)` — one row per token in your vocabulary — and calling it with token IDs just *selects rows*. No matrix multiply happens at runtime. Let's see it.
+
+```python
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+
+torch.manual_seed(42)
+
+vocab_size = 50   # tiny vocab for demonstration
+n_embd     = 8    # embedding dimension (GPT-2 small uses 768)
+
+tok_emb = nn.Embedding(vocab_size, n_embd)
+print(tok_emb.weight.shape)   # the whole layer IS this matrix
+```
+
+```
+torch.Size([50, 8])
+```
+
+The layer holds a `(50, 8)` weight matrix, initialized from $\mathcal{N}(0, 1)$ by default. Row 17 of this matrix *is* the vector for token 17. Now feed it a batch of token IDs — exactly what your Day 2 `get_batch` produces:
+
+```python
+ids = torch.tensor([[ 3,  7,  7,  1],
+                    [12,  0, 49,  7]])      # (B=2, T=4), dtype=torch.long
+
+x = tok_emb(ids)
+print(x.shape)                              # (B, T, n_embd)
+print(torch.allclose(x[0, 1], x[0, 2]))     # token 7 appears twice → same row
+print(torch.allclose(x[0, 1], x[1, 3]))     # token 7 in another sequence → still same row
+```
+
+```
+torch.Size([2, 4, 8])
+True
+True
+```
+
+Three things worth pausing on:
+
+1. **The shape transformation is the defining event of the day.** `(B, T)` integers in, `(B, T, C)` floats out, where `C = n_embd`. Every layer from here to the final projection on Day 7 operates on `(B, T, C)` tensors. This is the moment the model leaves discrete-symbol land.
+2. **Same ID → same vector, everywhere.** Token 7 gets identical vectors at position 1, position 2, and in a different batch element. The embedding knows *what* a token is, and nothing else. Remember this; it's the root of the position problem below.
+3. **Input must be `torch.long`.** Pass floats and you get `RuntimeError: Expected tensor for argument #1 'indices' to have scalar type Long`. This is the most common Day 3 crash — usually caused by an accidental `.float()` somewhere in the data pipeline.
+
+Now, the "lookup, not linear" claim. Mathematically, embedding lookup is *equivalent* to one-hot encoding followed by a matrix multiply — and proving that to yourself is worth thirty seconds:
+
+```python
+onehot = F.one_hot(ids, num_classes=vocab_size).float()   # (B, T, vocab_size)
+via_matmul = onehot @ tok_emb.weight                       # (B, T, n_embd)
+
+print(torch.allclose(via_matmul, tok_emb(ids)))
+```
+
+```
+True
+```
+
+So why does PyTorch give us a dedicated layer instead of telling us to use `nn.Linear(vocab_size, n_embd, bias=False)` on one-hot vectors? Cost. The one-hot route materializes a `(B, T, vocab_size)` tensor — for GPT-2's 50,257-token vocabulary and a `(32, 1024)` batch that's a **6.5 GB** intermediate tensor, multiplied against the weight matrix, of which all but one column per position is multiplied by zero. `nn.Embedding` skips the charade: it's fancy indexing (`weight[ids]`), it's $O(1)$ per token, and in the backward pass gradients flow *only into the rows that were actually looked up*. A token that never appears in a batch gets zero gradient that step. Same math, radically different cost profile.
+
+One more practical note: `nn.Embedding` will happily crash on out-of-range IDs (`IndexError`-style device assert on GPU, which manifests as the infamously unhelpful `CUDA error: device-side assert triggered`). If you ever see that error after changing tokenizers, your first check should be `ids.max() < vocab_size`.
+
+## Attention is permutation-blind — proof by shuffling
+
+Here is the uncomfortable truth that motivates the rest of the day. Tomorrow you'll build scaled dot-product attention. Its core computation — compare every token vector against every other token vector, take a weighted average — contains *no reference to position whatsoever*. It treats the sequence as a **set**.
+
+Let's demonstrate this concretely with a stripped-down preview of tomorrow's attention (no projections, no masking — just the similarity-then-average skeleton):
+
+```python
+def toy_attention(x):
+    """Bare-bones self-attention: similarity scores → softmax → weighted average.
+    x: (B, T, C) → returns (B, T, C)"""
+    scores = x @ x.transpose(-2, -1) / x.shape[-1] ** 0.5   # (B, T, T)
+    weights = scores.softmax(dim=-1)                        # each row sums to 1
+    return weights @ x                                      # (B, T, C)
+```
+
+Now the experiment. Take a sequence, run attention. Then *shuffle the tokens*, run attention again, and un-shuffle the result:
+
+```python
+B, T, C = 1, 6, 8
+x = torch.randn(B, T, C)
+
+perm = torch.randperm(T)                 # e.g. tensor([3, 5, 0, 2, 4, 1])
+
+out_original = toy_attention(x)
+out_shuffled = toy_attention(x[:, perm]) # attend over the SHUFFLED sequence
+
+# does shuffling the input just shuffle the output the same way?
+print(torch.allclose(out_original[:, perm], out_shuffled, atol=1e-6))
+```
+
+```
+True
+```
+
+Read that result carefully, because it's subtle. Attention is **permutation-equivariant**: shuffle the input, and the output is the *same vectors, shuffled the same way*. Token 3's output vector is bit-for-bit identical whether token 3 sits at position 0 or position 5. No token's representation carries any trace of *where it was*.
+
+Why does this happen? Look at the score computation: the score between token $i$ and token $j$ is $x_i \cdot x_j / \sqrt{C}$ — a function of the two *vectors only*. Since the embedding layer gives the same vector to the same token ID regardless of position (as we verified above), and the scores depend only on vectors, position never enters the computation. The information was never there to begin with.
+
+For language, this is fatal. "The dog bit the man" and "the man bit the dog" contain the same multiset of tokens; a permutation-equivariant model computes the same per-token representations for both and can't distinguish who bit whom. (Contrast this with the RNNs in the encyclopedia's sequence-models chapter, which get order *for free* by processing tokens one at a time — and pay for it with serial computation. The transformer's whole bet, per the Attention & Transformers chapter, is: process everything in parallel, and *inject* order as data.)
+
+So that's the fix: since the architecture won't encode position, we add position to the *input vectors themselves*. Every recipe today is a variation on that one idea.
+
+```{mermaid}
+flowchart LR
+    subgraph inputs["From Day 2"]
+        IDS["token IDs<br/>(B, T) long"]
+        POS["positions 0..T-1<br/>(T,) long"]
+    end
+    IDS --> TE["nn.Embedding<br/>(vocab_size, n_embd)<br/><i>WHAT each token is</i>"]
+    POS --> PE["nn.Embedding<br/>(block_size, n_embd)<br/><i>WHERE each token is</i>"]
+    TE -- "(B, T, C)" --> ADD(("+"))
+    PE -- "(T, C) broadcasts" --> ADD
+    ADD -- "x : (B, T, C)" --> ATTN["Day 4:<br/>scaled dot-product<br/>attention"]
+```
+
+## Fix #1 — learned positional embeddings (the GPT way)
+
+GPT-2's answer is almost anticlimactic: if `nn.Embedding` can learn a vector for each *token ID*, it can learn a vector for each *position index* too. Make a second embedding table with one row per position — `block_size` rows, since Day 2 fixed our maximum context length — and add it in.
+
+```python
+class GPTEmbedding(nn.Module):
+    """Token + learned positional embeddings. The input stage of our GPT."""
+
+    def __init__(self, vocab_size, block_size, n_embd):
+        super().__init__()
+        self.tok_emb = nn.Embedding(vocab_size, n_embd)   # rows indexed by token ID
+        self.pos_emb = nn.Embedding(block_size, n_embd)   # rows indexed by position
+
+    def forward(self, idx):                                # idx: (B, T)
+        B, T = idx.shape
+        pos = torch.arange(T, device=idx.device)           # (T,) = [0, 1, ..., T-1]
+        return self.tok_emb(idx) + self.pos_emb(pos)       # (B,T,C) + (T,C) → (B,T,C)
+```
+
+Every line here earns its place:
+
+- **`pos = torch.arange(T, device=idx.device)`** — we build the position indices on the fly, on the *same device as the input*. Forget `device=idx.device` and everything works on CPU, then dies with a device-mismatch `RuntimeError` the moment you move to GPU on Day 8. Building `pos` from the actual `T` (not `block_size`) also means the module handles shorter-than-maximum sequences for free — which generation on Day 9 will rely on, since prompts start short and grow.
+- **The addition broadcasts.** `self.tok_emb(idx)` is `(B, T, C)`; `self.pos_emb(pos)` is `(T, C)`. PyTorch's broadcasting rules align trailing dimensions, so the position vectors are added to *every sequence in the batch* identically. This is exactly right semantically: position 3 is position 3 no matter which batch element you're in.
+- **Why add instead of concatenate?** Concatenation would work but doubles the width entering the model (or forces you to split the budget, e.g. 384 dims for content + 384 for position, wasting capacity on a signal that needs far less). Addition keeps the width at `n_embd` and lets the *model* learn how to partition the space — in practice the learned token and position vectors occupy nearly orthogonal subspaces, so addition loses almost nothing. It also composes: the residual connections you'll build on Day 6 carry this sum untouched through every block, so even layer 12 can still "see" position.
+
+Sanity-check the module with realistic Day 2 numbers:
+
+```python
+vocab_size, block_size, n_embd = 65, 256, 384   # our tiny-GPT config (char-level Shakespeare)
+
+emb = GPTEmbedding(vocab_size, block_size, n_embd)
+idx = torch.randint(0, vocab_size, (4, 256))    # a fake get_batch() output, (B=4, T=256)
+
+x = emb(idx)
+print(x.shape)
+
+n_params = sum(p.numel() for p in emb.parameters())
+print(f"{n_params:,} parameters "
+      f"(tok: {vocab_size*n_embd:,}, pos: {block_size*n_embd:,})")
+```
+
+```
+torch.Size([4, 256, 384])
+123,264 parameters (tok: 24,960, pos: 98,304)
+```
+
+And the payoff — position now breaks the permutation blindness. Same shuffle experiment, but through the embedding stage first:
+
+```python
+ids = torch.randint(0, vocab_size, (1, 6))
+perm = torch.randperm(6)
+
+out_a = toy_attention(emb(ids))          # original order
+out_b = toy_attention(emb(ids[:, perm])) # shuffled order
+
+print(torch.allclose(out_a[:, perm], out_b, atol=1e-6))
+```
+
+```
+False
+```
+
+`False` is the victory condition here. The same token at a different position now produces a genuinely different vector (`tok_emb[id] + pos_emb[3]` ≠ `tok_emb[id] + pos_emb[5]`), so attention scores — and therefore the outputs — depend on order. "Dog bites man" and "man bites dog" are finally different tensors.
+
+The costs of this approach are worth naming, because they motivate everything in the next two sections. **Hard length ceiling:** `pos_emb` has exactly `block_size` rows; feed a longer sequence and you index out of bounds — the model *cannot* represent position 257, trained or not. **No built-in geometry:** row 5 and row 6 of the table start as unrelated random vectors; the model must burn training data learning that positions 5 and 6 are "adjacent." With enough data it does (GPT-2's learned position vectors end up remarkably smooth), but nothing in the design gives it that structure for free.
+
+## Fix #2 — sinusoidal encodings from scratch
+
+The original transformer paper took the opposite bet: don't *learn* positions, *compute* them from a fixed formula with built-in geometric structure. For position $pos$ and embedding-dimension pair index $i$:
+
+$$
+PE(pos, 2i) = \sin\!\left(\frac{pos}{10000^{2i/d}}\right), \qquad
+PE(pos, 2i+1) = \cos\!\left(\frac{pos}{10000^{2i/d}}\right)
+$$
+
+Before the code, the intuition — because the formula looks arbitrary and absolutely isn't. Each *pair* of dimensions $(2i, 2i{+}1)$ is a sine/cosine pair at one frequency, and the frequencies form a geometric progression from $1$ (dimension pair 0, wavelength $2\pi$ positions) down to $1/10000$ (last pair, wavelength $\approx 63{,}000$ positions). Think of it as a **multi-hand clock**: the first dimension pair is a second hand spinning fast, the last pair is an hour hand barely moving. Any single hand is ambiguous — a fast hand revisits the same angle every few positions — but the *combination* of all hands pins down the position uniquely, exactly like reading 3:47:12 off a clock face. Fast hands give fine-grained local resolution; slow hands disambiguate globally.
+
+<svg viewBox="0 0 720 300" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Sinusoidal position encodings at three frequencies">
+  <style>text{font-family:sans-serif;fill:currentColor}</style>
+  <!-- axes -->
+  <line x1="60" y1="150" x2="690" y2="150" stroke="currentColor" stroke-width="1" opacity="0.5"/>
+  <line x1="60" y1="30" x2="60" y2="270" stroke="currentColor" stroke-width="1" opacity="0.5"/>
+  <text x="375" y="292" font-size="13" text-anchor="middle">position (pos) →</text>
+  <text x="30" y="45" font-size="12" text-anchor="middle">+1</text>
+  <text x="30" y="155" font-size="12" text-anchor="middle">0</text>
+  <text x="30" y="265" font-size="12" text-anchor="middle">−1</text>
+  <!-- position ticks -->
+  <g font-size="11" opacity="0.7">
+    <text x="60" y="168">0</text><text x="217" y="168">16</text><text x="375" y="168">32</text><text x="532" y="168">48</text><text x="672" y="168">63</text>
+  </g>
+  <!-- dim pair 0: high frequency, wavelength ~6.28 positions: sin(pos) -->
+  <path d="M 60 150 L 65 92 L 70 51 L 75 36 L 80 51 L 85 92 L 90 149 L 95 207 L 100 248 L 105 264 L 110 250 L 115 210 L 120 152 L 125 94 L 130 53 L 135 36 L 140 49 L 145 89 L 150 146 L 155 204 L 160 246 L 165 264 L 170 251 L 175 213 L 180 155 L 185 97 L 190 55 L 195 37 L 200 48 L 205 87 L 210 143 L 215 202 L 220 244 L 225 263 L 230 253 L 235 215 L 240 158 L 245 99 L 250 56 L 255 37 L 260 46 L 265 84 L 270 140 L 275 199 L 280 243 L 285 263 L 290 254 L 295 218 L 300 161" fill="none" stroke="#6366f1" stroke-width="2.5" opacity="0.9"/>
+  <!-- dim pair mid: medium frequency, wavelength ~40 positions -->
+  <path d="M 60 150 L 100 82 L 140 41 L 180 39 L 220 76 L 260 141 L 300 208 L 340 253 L 380 262 L 420 232 L 460 173 L 500 105 L 540 54 L 580 37 L 620 62 L 660 122 L 690 172" fill="none" stroke="#22c55e" stroke-width="2.5" opacity="0.9"/>
+  <!-- dim pair high: low frequency, wavelength ~250 positions -->
+  <path d="M 60 150 L 130 118 L 200 88 L 270 64 L 340 46 L 410 37 L 480 37 L 550 46 L 620 63 L 690 87" fill="none" stroke="#f59e0b" stroke-width="2.5" opacity="0.9"/>
+  <!-- one position highlighted: reading the clock -->
+  <line x1="375" y1="30" x2="375" y2="270" stroke="#ec4899" stroke-width="1.5" stroke-dasharray="5 4" opacity="0.8"/>
+  <circle cx="375" cy="140" r="5" fill="#6366f1" fill-opacity="0.55" stroke="#6366f1"/>
+  <circle cx="375" cy="205" r="5" fill="#22c55e" fill-opacity="0.55" stroke="#22c55e"/>
+  <circle cx="375" cy="47" r="5" fill="#f59e0b" fill-opacity="0.55" stroke="#f59e0b"/>
+  <text x="383" y="35" font-size="12" fill="#ec4899">pos = 32: the set of readings is unique</text>
+  <!-- legend -->
+  <g font-size="12">
+    <rect x="470" y="215" width="215" height="66" rx="6" fill="#38bdf8" fill-opacity="0.10" stroke="currentColor" stroke-opacity="0.3"/>
+    <line x1="480" y1="230" x2="504" y2="230" stroke="#6366f1" stroke-width="2.5"/><text x="510" y="234">dim pair 0 — "second hand"</text>
+    <line x1="480" y1="250" x2="504" y2="250" stroke="#22c55e" stroke-width="2.5"/><text x="510" y="254">middle pair — "minute hand"</text>
+    <line x1="480" y1="270" x2="504" y2="270" stroke="#f59e0b" stroke-width="2.5"/><text x="510" y="274">high pair — "hour hand"</text>
+  </g>
+</svg>
+
+Each column of the encoding matrix is one of these waves; each *row* (one position) is a vertical slice through all of them — the dashed line in the figure. Now the implementation:
+
+```python
+import math
+
+def sinusoidal_encoding(block_size, n_embd):
+    """Fixed positional encoding table, shape (block_size, n_embd)."""
+    pos = torch.arange(block_size, dtype=torch.float32).unsqueeze(1)   # (T, 1)
+    i   = torch.arange(0, n_embd, 2, dtype=torch.float32)              # (C/2,)
+    inv_freq = torch.exp(-math.log(10000.0) * i / n_embd)              # (C/2,)
+
+    angles = pos * inv_freq              # (T, 1) * (C/2,) broadcasts → (T, C/2)
+    pe = torch.zeros(block_size, n_embd)
+    pe[:, 0::2] = torch.sin(angles)      # even dims get sin
+    pe[:, 1::2] = torch.cos(angles)      # odd dims get cos
+    return pe
+```
+
+Block by block:
+
+- **`inv_freq`** computes $10000^{-2i/d}$ for each dimension pair, but as `exp(-log(10000) · i / d)` rather than a direct power. Both are correct; the exp-of-log form is the numerically conventional way to build a geometric progression and is what you'll find in every serious implementation (including the original tensor2tensor code).
+- **The broadcast `pos * inv_freq`** is the entire table in one line: a `(T, 1)` column of positions times a `(C/2,)` row of frequencies gives the full `(T, C/2)` grid of angles. No loops. If you ever catch yourself writing `for pos in range(block_size): for i in range(n_embd):` — that's the classic non-idiomatic version; it produces the same numbers a few hundred times slower and is a good sign to reach for broadcasting.
+- **Interleaved `sin`/`cos` via strided slicing.** `pe[:, 0::2]` writes every even column, `pe[:, 1::2]` every odd one. The pairing matters for the property below — sin and cos of the *same* angle must live in adjacent dimensions to form a 2D "clock hand."
+
+Verify it behaves:
+
+```python
+pe = sinusoidal_encoding(256, 384)
+print(pe.shape)                          # (block_size, n_embd)
+print(pe[0, :6])                         # position 0: sin(0)=0, cos(0)=1 interleaved
+print(pe.min().item(), pe.max().item())  # bounded in [-1, 1] — no scale drift
+```
+
+```
+torch.Size([256, 384])
+tensor([0., 1., 0., 1., 0., 1.])
+-1.0 1.0
+```
+
+Row 0 alternating `0, 1, 0, 1, ...` is the fingerprint of a correct implementation — all angles are zero at position 0, and $\sin 0 = 0$, $\cos 0 = 1$. If you see all zeros, you overwrote the cosines; if the pattern is `0,0,0,...,1,1,1` you concatenated instead of interleaving.
+
+Now the property that justifies all this trigonometry. Using the angle-addition identities, for any fixed offset $k$:
+
+$$
+\begin{pmatrix} \sin(\omega(pos+k)) \\ \cos(\omega(pos+k)) \end{pmatrix}
+=
+\begin{pmatrix} \cos(\omega k) & \sin(\omega k) \\ -\sin(\omega k) & \cos(\omega k) \end{pmatrix}
+\begin{pmatrix} \sin(\omega \cdot pos) \\ \cos(\omega \cdot pos) \end{pmatrix}
+$$
+
+The encoding of position $pos+k$ is a **rotation** of the encoding of position $pos$ — and the rotation matrix depends only on the offset $k$, not on $pos$ itself. "Three tokens back" is the same geometric operation whether you're at position 10 or position 200. That gives the model a uniform, learnable handle on *relative* position — the thing that actually matters for language — instead of memorizing absolute slots. Two immediate consequences: the dot product $PE(pos) \cdot PE(pos+k)$ depends only on $k$ (you'll verify this yourself in today's task), and the encoding extrapolates: `sinusoidal_encoding(10_000, 384)` is perfectly well-defined even if you trained at length 256 — the formula doesn't run out of rows like a learned table does. (How *well* attention copes with unseen lengths is another story, but at least the representation exists.)
+
+Since these values are computed, not learned, they belong in a **buffer**, not a `Parameter` — saved with the model and moved by `.to(device)`, but invisible to the optimizer:
+
+```python
+class SinusoidalEmbedding(nn.Module):
+    def __init__(self, vocab_size, block_size, n_embd):
+        super().__init__()
+        self.tok_emb = nn.Embedding(vocab_size, n_embd)
+        self.register_buffer("pe", sinusoidal_encoding(block_size, n_embd))
+
+    def forward(self, idx):
+        B, T = idx.shape
+        return self.tok_emb(idx) + self.pe[:T]     # slice to actual length, broadcast add
+```
+
+If you store `pe` as a plain attribute instead, it silently stays on CPU when the model moves to GPU — another Day 8 crash prewarned. `register_buffer` is the correct idiom for any fixed tensor a module owns; you'll use it again on Day 4 for the causal mask.
+
+Learned vs. sinusoidal, honestly: at trained-length scale they perform near-identically (the original paper reports "nearly identical results"), which is *why* GPT-2 could get away with the simpler learned table. Learned wins on flexibility (no assumed structure), sinusoidal wins on parameters (zero) and on having relative-position geometry built in. Our tiny-GPT follows GPT-2 and uses learned — but you now own both.
+
+## Fix #3 — a note on RoPE, the modern choice
+
+Every model you're likely to run locally in 2026 — the Llama family, Mistral, Qwen, Gemma, DeepSeek — uses neither of the above. They use **RoPE** (Rotary Position Embedding, Su et al. 2021), and having built sinusoidal encodings you're one idea away from understanding it.
+
+Both fixes so far *add* position to the token vector before the model starts. RoPE instead injects position **inside attention itself**: no position term is added to `x` at all. Instead, when Day 4's query and key vectors are computed, each is *rotated* by an angle proportional to its position — the same sin/cos frequency ladder you just implemented, but applied as a rotation of the q/k vectors rather than an additive signal. The payoff drops straight out of dot-product geometry: rotate $q$ by angle $\theta_m$ (position $m$) and $k$ by $\theta_n$ (position $n$), and their dot product depends only on the *difference* $\theta_m - \theta_n$. Attention scores become a function of **relative offset by construction** — the property sinusoidal encodings only encouraged, RoPE *guarantees*:
+
+$$
+q_m \cdot k_n = f(x_m, x_n, \, m - n)
+$$
+
+Three practical consequences explain its dominance: relative-position awareness without any extra parameters; no additive position signal diluting the residual stream; and much friendlier long-context behavior — the frequency base (that `10000`) can be rescaled after training to stretch the context window, which is exactly how most "context-extended" model variants are made.
+
+We *won't* use RoPE in our tiny-GPT — it's woven into the attention internals, and on Days 4–5 we want attention in its cleanest form. But keep the mental map: **where** position enters (input embeddings vs. inside attention) and **how** (added vs. rotated) is the axis along which the three schemes differ. Day 10 returns to this when we diff our model against Llama.
+
+| Scheme | Where | Learned? | Extra params | Relative positions | Extrapolates past `block_size` | Used by |
+|---|---|---|---|---|---|---|
+| Learned table | added at input | yes | `block_size × n_embd` | no — must be learned | no (hard ceiling) | GPT-2, GPT-3, **our tiny-GPT** |
+| Sinusoidal | added at input | no | 0 | encouraged (rotation structure) | representation exists | original Transformer |
+| RoPE | rotates q, k in attention | no | 0 | guaranteed by construction | yes, with rescaling tricks | Llama, Mistral, Qwen, Gemma |
+
+## Assembling the input stage: `tok_emb + pos_emb → x`
+
+Time to lock in the version our GPT will actually use, wired to Day 2's pipeline. This module will be pasted into the full model on Day 7 essentially unchanged:
+
+```python
+# --- from Day 2: tokenizer, encode/decode, train/val splits, get_batch ---
+# vocab_size = 65, block_size = 256 (char-level Shakespeare)
+
+n_embd = 384   # our tiny-GPT width, fixed for the rest of the course
+
+emb = GPTEmbedding(vocab_size, block_size, n_embd)
+
+xb, yb = get_batch("train")     # Day 2: xb (B, T) inputs, yb (B, T) targets
+x = emb(xb)                     # THE tensor. (B, T, C) floats, position-aware.
+
+print(f"in : {xb.shape}  {xb.dtype}")
+print(f"out: {x.shape}  {x.dtype}")
+print(f"x[0, 0, :4] = {x[0, 0, :4].detach()}")
+```
+
+```
+in : torch.Size([64, 256])  torch.int64
+out: torch.Size([64, 256, 384])  torch.float32
+x[0, 0, :4] = tensor([ 1.9269,  1.4873,  0.9007, -2.1055])
+```
+
+That `x` is the tensor the entire rest of the course operates on. Tomorrow it flows into attention; Day 6 wraps that in a block; Day 7 stacks the blocks. The `(B, T, C)` contract established here never changes — only the *contents* get progressively more contextualized.
+
+Two forward-looking notes so nothing on Day 7 surprises you. First, the real GPT-2 applies **dropout** to this sum (`self.drop = nn.Dropout(0.1)` right after the addition) as its first regularizer; we'll add that when we assemble the full model and care about overfitting on Day 8. Second, there's a beautiful symmetry waiting at the far end of the model: the final layer that maps `(B, T, C)` back to vocabulary logits is a `(n_embd, vocab_size)` matrix — the *transpose shape* of our token embedding. GPT-2 ties the two, using the same weight matrix for both lookup-in and project-out (**weight tying**), saving `vocab_size × n_embd` parameters. We'll implement that on Day 7; today, just notice that the embedding you built is half of that pair.
+
+## 🧪 Your task
+
+Verify the **relative-position property** of your sinusoidal encoding numerically. Compute the dot product $PE(p) \cdot PE(p+k)$ for a fixed offset (say $k=5$) at several different base positions $p$ — if the geometry claim from the lesson is true, all those dot products should be (almost exactly) equal, because similarity depends only on the offset. Then show the property *fails* for a learned `nn.Embedding(block_size, n_embd)` position table: same experiment, wildly different values per $p$. Print both sets of numbers side by side.
+
+*Hint:* build `pe = sinusoidal_encoding(256, 384)` once; the dot product for base position `p` and offset `k` is just `pe[p] @ pe[p + k]`. Loop `p` over something like `[0, 10, 50, 100, 200]`. For the learned table, use `nn.Embedding(256, 384).weight` (freshly initialized is fine — the point is that *nothing* in its construction enforces the property) and remember `.detach()` before printing.
+
+<details><summary>Solution</summary>
+
+```python
+import torch
+import torch.nn as nn
+import math
+
+def sinusoidal_encoding(block_size, n_embd):
+    pos = torch.arange(block_size, dtype=torch.float32).unsqueeze(1)
+    i   = torch.arange(0, n_embd, 2, dtype=torch.float32)
+    inv_freq = torch.exp(-math.log(10000.0) * i / n_embd)
+    angles = pos * inv_freq
+    pe = torch.zeros(block_size, n_embd)
+    pe[:, 0::2] = torch.sin(angles)
+    pe[:, 1::2] = torch.cos(angles)
+    return pe
+
+torch.manual_seed(0)
+block_size, n_embd, k = 256, 384, 5
+
+pe      = sinusoidal_encoding(block_size, n_embd)
+learned = nn.Embedding(block_size, n_embd).weight.detach()
+
+print(f"{'base p':>7} | {'sinusoidal PE(p)·PE(p+5)':>25} | {'learned PE(p)·PE(p+5)':>22}")
+print("-" * 62)
+for p in [0, 10, 50, 100, 200]:
+    d_sin = (pe[p] @ pe[p + k]).item()
+    d_lrn = (learned[p] @ learned[p + k]).item()
+    print(f"{p:>7} | {d_sin:>25.4f} | {d_lrn:>22.4f}")
+
+# the sinusoidal column should be constant; assert it programmatically
+sims = torch.stack([pe[p] @ pe[p + k] for p in range(0, block_size - k)])
+assert sims.std() < 1e-4 * sims.mean().abs(), "relative-position property violated!"
+print(f"\nsinusoidal: std/mean over ALL base positions = {(sims.std()/sims.mean()).item():.2e}")
+```
+
+Expected output (learned column varies with your seed):
+
+```
+ base p |  sinusoidal PE(p)·PE(p+5) | learned PE(p)·PE(p+5)
+--------------------------------------------------------------
+      0 |                  177.2287 |               -13.2764
+     10 |                  177.2287 |                27.8659
+     50 |                  177.2287 |                 5.5352
+    100 |                  177.2287 |               -19.4671
+    200 |                  177.2287 |                12.7907
+sinusoidal: std/mean over ALL base positions = 1.31e-07
+```
+
+The sinusoidal column is constant to seven decimal places at *every* base position — the dot product genuinely depends only on the offset $k$, which is the rotation property from the lesson made concrete. The learned table shows no such structure: whatever position geometry it ends up with must be paid for with training data. (If you rerun with different offsets $k$, you'll also see the sinusoidal dot product shrink as $k$ grows — nearby positions look more similar than distant ones, a useful inductive bias the model gets for free.)
+
+</details>
+
+## Key takeaways
+
+- `nn.Embedding` is a trainable lookup table: `(B, T)` integer IDs in, `(B, T, C)` vectors out, by row indexing — mathematically a one-hot matmul, computationally nothing like one. Inputs must be `torch.long` and in range.
+- Attention is permutation-equivariant: shuffle the tokens and the outputs shuffle identically. Word order does not exist for the architecture — it must be injected into the data.
+- Learned positional embeddings (GPT-2, and our tiny-GPT) are just a second embedding table indexed by `torch.arange(T)`, added to token embeddings via broadcasting. Simple, effective, hard-capped at `block_size`.
+- Sinusoidal encodings compute position from a geometric ladder of sin/cos frequencies — a multi-hand clock. Zero parameters, and $PE(pos+k)$ is a fixed rotation of $PE(pos)$, so similarity depends only on relative offset.
+- RoPE moves position inside attention by rotating queries and keys, making scores relative by construction — the modern default (Llama, Mistral, Qwen), previewed today, contrasted properly on Day 10.
+- Fixed tensors a module owns (like a sinusoidal table) go in `register_buffer`, so they follow `.to(device)` and checkpointing without being trained.
+- The day's contract: `x = tok_emb(idx) + pos_emb(pos)`, shape `(B, T, C)` — the tensor every remaining day of this course transforms.
+
+Tomorrow we give those position-aware vectors something to do: scaled dot-product attention from scratch — queries, keys, values, the $\sqrt{d_k}$ that keeps softmax alive, and the causal mask that stops the model from reading the future.
+
+------------------------------------------------------------------------
+
+[🏠 ⚡ Course home](index.html)  &nbsp;|&nbsp;  [← Day 02](day02.html)  &nbsp;|&nbsp;  [Day 04 →](day04.html)  &nbsp;|&nbsp;  [📚 All mini-courses](../../mini-courses.html)

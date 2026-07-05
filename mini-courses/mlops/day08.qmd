@@ -1,0 +1,627 @@
+---
+title: "🚢 ML in Production — MLOps · Day 8 — CI/CD for ML: Gates Before Glory"
+page-layout: full
+toc: true
+toc-location: left
+toc-title: "On this day"
+toc-depth: 2
+---
+
+[🏠 🚢 Course home](index.html)  &nbsp;|&nbsp;  [← Day 07](day07.html)  &nbsp;|&nbsp;  [Day 09 →](day09.html)  &nbsp;|&nbsp;  [📚 All mini-courses](../../mini-courses.html)
+
+------------------------------------------------------------------------
+
+# Day 8 — CI/CD for ML: Gates Before Glory
+
+Yesterday you stood up a vLLM server and learned that serving LLMs is its own discipline. Today we return to our churn classifier and answer the question that separates a demo from a production system: *how does a change get from a laptop to production without a human copy-pasting Docker commands at 6pm on a Friday?* The answer is a pipeline — but an ML pipeline is not a normal software pipeline. Software CI asks "does the code work?" ML CI must also ask "is the data sane?" and "is the model actually good?" A green unit-test suite says nothing about a model whose AUC quietly dropped from 0.84 to 0.61 because someone changed a feature default. Today we build a GitHub Actions workflow that refuses to ship exactly that model, and then we design the rollout on the other side of the pipeline: shadow, canary, promote.
+
+::: {.callout-note appearance="simple"}
+🎯 **Today you will:** write a GitHub Actions workflow that lints, unit-tests, data-tests, and quality-gates the model before any image is built, implement a min-AUC holdout gate as a pytest, build and push a versioned Docker image only when every gate passes, and design a shadow → canary → promote rollout strategy.
+:::
+
+## Why ML pipelines have three test surfaces, not one
+
+In classical software, the artifact under test is code, and tests are deterministic: the same code produces the same behavior. In ML, the deployable artifact is a *function of three inputs* — code, data, and configuration — and a regression can enter through any of them while the other two stay green.
+
+| Surface | What breaks | Classical CI catches it? | Our gate |
+|---|---|---|---|
+| Code | Bug in feature pipeline, API contract change | ✅ Yes | `ruff` + `pytest tests/unit` |
+| Data | Schema drift, nulls, label leakage, distribution shift | ❌ No | `pytest tests/data` |
+| Model | AUC below floor, calibration broken, worse than prod | ❌ No | `pytest tests/model` quality gate |
+
+The core principle: **the Docker image is built last, and only after all three surfaces pass.** Building the image first and testing later is the most common CI mistake in ML repos — you end up with registries full of images nobody knows whether to trust. The image is a *reward*, not a starting point.
+
+Here is the pipeline we are building today, end to end:
+
+```{mermaid}
+flowchart LR
+    subgraph gates["CI — every push / PR"]
+        A[Lint<br/>ruff] --> B[Unit tests<br/>pytest tests/unit]
+        B --> C[Data tests<br/>schema + integrity]
+        C --> D[Train on CI<br/>reproducible seed]
+        D --> E{Quality gate<br/>AUC ≥ 0.80?}
+    end
+    E -- fail --> X[❌ Pipeline stops<br/>no image built]
+    E -- pass --> F[Build Docker image]
+    F --> G[Push to registry<br/>tagged with SHA]
+    G --> H[Deploy: shadow]
+    H --> I[Canary 5%]
+    I --> J[Promote 100%]
+    style E fill:#f59e0b55,stroke:#f59e0b
+    style X fill:#ec489955,stroke:#ec4899
+    style G fill:#22c55e55,stroke:#22c55e
+```
+
+Note where the gate sits: *after* training in CI, *before* the build. That means CI retrains the model on every run. For our churn model this takes under a minute; Day 2's reproducibility work (pinned seeds, pinned dependencies, deterministic splits) is what makes this possible at all. If your training takes hours, you gate on a model pulled from the MLflow registry (Day 4) instead of retraining — same gate, different provenance. We'll show both.
+
+## The repo layout and the fast gates: lint and unit tests
+
+By Day 8 the project looks like this — the only new pieces today are the `tests/` split and the workflow file:
+
+```
+churn-service/
+├── src/
+│   ├── train.py          # Day 2: reproducible training
+│   └── features.py       # feature engineering
+├── app/
+│   └── main.py           # Day 6: FastAPI service
+├── tests/
+│   ├── unit/
+│   │   └── test_features.py
+│   ├── data/
+│   │   └── test_data_quality.py
+│   └── model/
+│       └── test_quality_gate.py
+├── data/
+│   └── churn.csv         # versioned snapshot (or DVC pointer)
+├── Dockerfile            # Day 5
+├── requirements.txt      # pinned, Day 2
+└── .github/workflows/ci.yml   # today
+```
+
+The unit tests cover pure code — the feature pipeline, not the model. This is the cheapest, fastest layer, so it runs first: fail here in 20 seconds rather than after a 5-minute training run.
+
+```python
+# tests/unit/test_features.py
+import pandas as pd
+import pytest
+
+from src.features import build_features, FEATURE_COLUMNS
+
+
+def _toy_frame() -> pd.DataFrame:
+    return pd.DataFrame({
+        "customer_id": ["a1", "b2"],
+        "tenure_months": [1, 48],
+        "monthly_charges": [29.9, 105.5],
+        "total_charges": [29.9, 5064.0],
+        "contract": ["month-to-month", "two-year"],
+        "churned": [1, 0],
+    })
+
+
+def test_build_features_returns_expected_columns():
+    X, y = build_features(_toy_frame())
+    assert list(X.columns) == FEATURE_COLUMNS   # order matters for the model!
+    assert len(X) == len(y) == 2
+
+
+def test_build_features_handles_missing_total_charges():
+    df = _toy_frame()
+    df.loc[0, "total_charges"] = None
+    X, _ = build_features(df)
+    assert X["total_charges"].notna().all(), "imputation must fill NaNs"
+
+
+def test_build_features_rejects_unknown_contract():
+    df = _toy_frame()
+    df.loc[0, "contract"] = "seventeen-year"
+    with pytest.raises(ValueError, match="unknown contract"):
+        build_features(df)
+```
+
+Three tests, three distinct failure modes worth catching in CI:
+
+- **Column order.** Most sklearn pipelines are positional under the hood. If a refactor reorders `FEATURE_COLUMNS`, the model silently receives `monthly_charges` where it expects `tenure_months` — predictions become garbage with no error raised. Asserting the exact list turns a silent catastrophe into a red X on the PR.
+- **Imputation contract.** The serving path (Day 6) will receive requests with missing fields. If the feature code stops imputing, the model throws at inference time — in production, not in CI. Test the contract where it's cheap.
+- **Fail loudly on unknown categories.** The alternative — silently one-hot-encoding an unseen category to all-zeros — is exactly the kind of "works but wrong" behavior that only shows up as a metric drift weeks later (Day 9's problem; prevent it today).
+
+Lint is one line in CI and needs no ceremony. `ruff` covers both linting and formatting checks and runs in milliseconds:
+
+```bash
+ruff check src/ app/ tests/
+ruff format --check src/ app/ tests/
+```
+
+## The data test: trust the data before you train on it
+
+The data test is the layer most repos skip, and it is the layer that would have saved most of the real-world incidents you'll ever hear about. The idea is simple: before CI trains anything, assert that the training data still looks like the data the model was designed for. Schema, ranges, nulls, label balance, leakage.
+
+You can reach for Great Expectations or pandera here; both are good. But the honest minimum is a plain pytest file, and plain pytest has one killer advantage: the failure output lands in the same CI log as everything else, with zero extra infrastructure.
+
+```python
+# tests/data/test_data_quality.py
+import pandas as pd
+import pytest
+
+DATA_PATH = "data/churn.csv"
+
+EXPECTED_SCHEMA = {
+    "customer_id": "object",
+    "tenure_months": "int64",
+    "monthly_charges": "float64",
+    "total_charges": "float64",
+    "contract": "object",
+    "churned": "int64",
+}
+
+
+@pytest.fixture(scope="module")
+def df() -> pd.DataFrame:
+    return pd.read_csv(DATA_PATH)
+
+
+def test_schema_exact(df):
+    assert dict(df.dtypes.astype(str)) == EXPECTED_SCHEMA
+
+
+def test_no_duplicate_customers(df):
+    assert df["customer_id"].is_unique, "duplicate customers inflate training weight"
+
+
+def test_label_is_binary_and_not_degenerate(df):
+    assert set(df["churned"].unique()) <= {0, 1}
+    churn_rate = df["churned"].mean()
+    assert 0.05 <= churn_rate <= 0.60, (
+        f"churn rate {churn_rate:.2%} outside sane band — "
+        "upstream export probably broke"
+    )
+
+
+def test_value_ranges(df):
+    assert (df["tenure_months"] >= 0).all()
+    assert (df["monthly_charges"] > 0).all()
+    # total should never be less than one month's charge (allowing rounding)
+    paying = df[df["tenure_months"] >= 1]
+    assert (paying["total_charges"] >= paying["monthly_charges"] * 0.99).all()
+
+
+def test_no_leakage_columns(df):
+    LEAKY = {"churn_date", "cancellation_reason", "exit_survey_score"}
+    assert not (LEAKY & set(df.columns)), (
+        "columns that only exist AFTER churn leaked into training data"
+    )
+```
+
+Walk through the two tests people underestimate:
+
+- **The degenerate-label band.** A broken upstream export that produces 0.4% churners will still train "successfully" and even produce a plausible-looking AUC on an equally broken holdout. The band `0.05–0.60` encodes domain knowledge: churn rates outside it mean *the data is wrong*, not that the world changed overnight. When this fires, you want the pipeline red, not a model shipped.
+- **The leakage denylist.** `cancellation_reason` is only populated for customers who already churned. A model trained with it gets AUC ≈ 0.99 in CI — it would *pass* the quality gate spectacularly — and be useless in production, where the column is empty at prediction time. This is the one failure mode where a *higher* metric is the alarm. The quality gate cannot catch it; only the data test can. This is why data tests run before training, and why the gate alone is not enough.
+
+The internal-consistency check (`total_charges >= monthly_charges`) is a cheap cross-field invariant. Every dataset has two or three of these; write them down while you still remember why they hold.
+
+## The model quality gate: min AUC on holdout
+
+Now the centerpiece. The gate trains (or loads) the model, evaluates it on a **holdout the model never saw**, and fails the build if AUC falls below a floor. Structurally it's just a pytest — which means it composes with everything else for free: same runner, same reporting, same red X.
+
+```python
+# tests/model/test_quality_gate.py
+"""Model quality gate — CI fails if the candidate model is below the floor.
+
+Runs AFTER data tests, BEFORE the Docker build. The thresholds below are
+the contract between the ML team and production.
+"""
+import json
+import pathlib
+
+import joblib
+import pandas as pd
+import pytest
+from sklearn.metrics import roc_auc_score
+from sklearn.model_selection import train_test_split
+
+from src.features import build_features
+from src.train import train_model  # Day 2: seeded, deterministic
+
+# ---- The contract -----------------------------------------------------------
+MIN_AUC = 0.80            # absolute floor on holdout
+MAX_AUC = 0.97            # suspiciously-good ceiling → probable leakage
+MAX_REGRESSION = 0.02     # candidate may trail current prod model by at most this
+SEED = 42
+# -----------------------------------------------------------------------------
+
+METRICS_OUT = pathlib.Path("metrics.json")
+
+
+@pytest.fixture(scope="module")
+def holdout_eval():
+    df = pd.read_csv("data/churn.csv")
+    X, y = build_features(df)
+    # Same split protocol as Day 2 training — stratified, seeded.
+    X_tr, X_ho, y_tr, y_ho = train_test_split(
+        X, y, test_size=0.2, stratify=y, random_state=SEED
+    )
+    model = train_model(X_tr, y_tr, seed=SEED)
+    auc = roc_auc_score(y_ho, model.predict_proba(X_ho)[:, 1])
+
+    # Persist for the workflow to publish in the job summary.
+    METRICS_OUT.write_text(json.dumps({"holdout_auc": round(auc, 4)}))
+    joblib.dump(model, "model_candidate.joblib")   # artifact for the image
+    return auc
+
+
+def test_auc_above_floor(holdout_eval):
+    assert holdout_eval >= MIN_AUC, (
+        f"holdout AUC {holdout_eval:.4f} < floor {MIN_AUC} — "
+        "model not good enough to ship"
+    )
+
+
+def test_auc_below_leakage_ceiling(holdout_eval):
+    assert holdout_eval <= MAX_AUC, (
+        f"holdout AUC {holdout_eval:.4f} > {MAX_AUC} — "
+        "too good to be true; check for label leakage before celebrating"
+    )
+
+
+def test_no_regression_vs_production(holdout_eval):
+    """Compare against the AUC of the model currently in production.
+
+    prod_metrics.json is committed when a model is promoted (see rollout
+    section). First deployment: file absent, test skips.
+    """
+    prod_file = pathlib.Path("prod_metrics.json")
+    if not prod_file.exists():
+        pytest.skip("no production baseline yet")
+    prod_auc = json.loads(prod_file.read_text())["holdout_auc"]
+    assert holdout_eval >= prod_auc - MAX_REGRESSION, (
+        f"candidate AUC {holdout_eval:.4f} regresses production "
+        f"({prod_auc:.4f}) by more than {MAX_REGRESSION}"
+    )
+```
+
+The methodology, block by block:
+
+- **`scope="module"` fixture.** Training runs *once*, and all three gate tests assert against the same run. Without the module scope, pytest would retrain per test — 3× the CI time for zero benefit, and (if anything nondeterministic slipped in) three *different* models being tested.
+- **The split protocol must match Day 2's exactly** — same `test_size`, same `stratify`, same `random_state`. If the gate uses a different split than training development did, the gate measures a different quantity than the one you tuned against, and you'll get flaky, unexplainable failures. Reproducibility (Day 2) is not an aesthetic preference; it is what makes this gate meaningful.
+- **A floor *and* a ceiling.** Everyone writes the floor. The ceiling (`MAX_AUC = 0.97`) is the underrated one: for a churn problem, holdout AUC above ~0.97 is almost never skill — it's leakage, a duplicated row spanning both splits, or the label sneaking into a feature. Making "too good" a hard failure forces a human to look *before* the miracle ships.
+- **The regression test compares against production, not against history.** An absolute floor of 0.80 is fine until your prod model reaches 0.88 — at which point shipping a 0.81 model "passes" while degrading the product. The `prod_metrics.json` baseline (written at promote time — see the rollout section) turns the gate from "is it okay?" into "is it at least as good as what users have now?", with a small `MAX_REGRESSION` tolerance because holdout AUC has noise.
+- **Artifacts are side effects of the gate.** The gate writes `model_candidate.joblib` and `metrics.json`. The Docker build consumes the *exact* model object that passed the gate — not a re-trained one. If the build job retrained independently, you would be shipping a sibling of the tested model, not the tested model. Shapes: `predict_proba` returns `(n, 2)`; column `[:, 1]` is $P(\text{churn})$ — grabbing `[:, 0]` gives you AUC ≈ $1 - \text{AUC}$, a classic and hilarious CI failure.
+
+What does the gate optimize, formally? We're thresholding
+
+$$\text{AUC} = P\big(s(x^+) > s(x^-)\big)$$
+
+— the probability the model scores a random churner above a random non-churner. It's threshold-free and insensitive to class imbalance, which is exactly what you want for a *gate* (business-threshold tuning happens elsewhere). If your product cares about the top-decile, gate on precision@k instead — the pattern is identical.
+
+## The full GitHub Actions workflow
+
+Now we wire the gates into `.github/workflows/ci.yml`. Two jobs: `gates` (everything that can fail cheaply) and `build-push` (which exists only if `gates` succeeded, and only on `main`). PRs get the full gauntlet but never push images.
+
+```yaml
+# .github/workflows/ci.yml
+name: ml-ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+env:
+  IMAGE: ghcr.io/${{ github.repository }}/churn-service
+  PYTHON_VERSION: "3.12"
+
+jobs:
+  gates:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip                      # keyed on requirements.txt hash
+
+      - name: Install pinned dependencies
+        run: pip install -r requirements.txt -r requirements-dev.txt
+
+      # ---- Gate 1: lint (seconds) ------------------------------------
+      - name: Lint
+        run: |
+          ruff check src/ app/ tests/
+          ruff format --check src/ app/ tests/
+
+      # ---- Gate 2: unit tests (seconds) ------------------------------
+      - name: Unit tests
+        run: pytest tests/unit -q
+
+      # ---- Gate 3: data tests ----------------------------------------
+      - name: Data quality tests
+        run: pytest tests/data -q
+
+      # ---- Gate 4: train + model quality gate ------------------------
+      - name: Model quality gate
+        run: pytest tests/model -q -s
+
+      - name: Publish metrics to job summary
+        if: always()
+        run: |
+          echo "### Model quality gate" >> "$GITHUB_STEP_SUMMARY"
+          if [ -f metrics.json ]; then
+            echo '```json' >> "$GITHUB_STEP_SUMMARY"
+            cat metrics.json >> "$GITHUB_STEP_SUMMARY"
+            echo '```' >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "_gate failed before producing metrics_" >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      # Hand the gated model to the build job — never retrain there.
+      - name: Upload gated model artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: gated-model
+          path: |
+            model_candidate.joblib
+            metrics.json
+          retention-days: 7
+
+  build-push:
+    needs: gates                          # hard dependency: no green, no image
+    if: github.ref == 'refs/heads/main'   # PRs are tested, never shipped
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write                     # push to GHCR with the built-in token
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download gated model
+        uses: actions/download-artifact@v4
+        with:
+          name: gated-model
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: |
+            ${{ env.IMAGE }}:${{ github.sha }}
+            ${{ env.IMAGE }}:latest
+          labels: |
+            org.opencontainers.image.revision=${{ github.sha }}
+            churn.holdout-auc=${{ hashFiles('metrics.json') && 'see-metrics-artifact' }}
+```
+
+Design decisions worth internalizing:
+
+- **One `gates` job, ordered steps — not four parallel jobs.** Parallel jobs would each pay the checkout + pip install tax (~1–2 min), and you *want* the cheap gates to short-circuit the expensive ones. Lint failing in 15 seconds should prevent a training run, not race it.
+- **`needs: gates` is the entire security model of the pipeline.** The build job cannot run unless the gate job succeeded. Combined with branch protection on `main` (require the `gates` check to pass before merge), there is no path — human or automated — that produces a production image from an ungated model.
+- **`if: github.ref == 'refs/heads/main'`** — PRs run every gate (so reviewers see the candidate AUC in the job summary before merging) but never publish. The moment of image creation coincides with the moment of merge, which makes the SHA tag meaningful.
+- **The model travels as an artifact, not a rebuild.** `upload-artifact` → `download-artifact` moves the *exact* `model_candidate.joblib` that passed the gate into the Docker build context. The Dockerfile from Day 5 needs one line: `COPY model_candidate.joblib /app/model.joblib`.
+- **Tag with the SHA, not just `latest`.** `latest` is for humans poking around; the SHA tag is what deployment manifests reference. When Day 9's monitoring pages you at 3am, `image: churn-service:9f8e2ab` tells you the exact code, data snapshot, and gate output behind the misbehaving model. `latest` tells you nothing.
+- **`$GITHUB_STEP_SUMMARY`** puts the holdout AUC on the PR's checks page. This tiny step changes team behavior: reviewers start commenting on metric movements the way they comment on code.
+
+Expected output on a healthy run:
+
+```
+gates
+  ✓ Lint                        (14s)
+  ✓ Unit tests                  (6s)   3 passed
+  ✓ Data quality tests          (4s)   5 passed
+  ✓ Model quality gate          (41s)  2 passed, 1 skipped (no production baseline yet)
+build-push
+  ✓ Build and push              (1m 12s)
+     → ghcr.io/you/churn-service:e4d1c9a
+```
+
+And on a bad model:
+
+```
+FAILED tests/model/test_quality_gate.py::test_auc_above_floor
+  AssertionError: holdout AUC 0.7712 < floor 0.8 — model not good enough to ship
+build-push: skipped (dependency failed)
+```
+
+No image. Nothing to roll back later, because nothing bad ever left CI.
+
+## From image to traffic: shadow → canary → promote
+
+Passing the gate proves the model is good *on the holdout*. Production traffic is not the holdout: request distributions differ, feature pipelines have live quirks, latency behaves differently under load. So we never move traffic to a new model in one step. Three stages, each answering one question:
+
+```{mermaid}
+flowchart TD
+    A[Image :sha pushed<br/>gate passed ✅] --> B[SHADOW<br/>new model receives a COPY of traffic<br/>responses logged, never returned]
+    B --> C{Compare vs prod<br/>error rate · latency · score dist}
+    C -- mismatch --> R1[Abort — fix offline]
+    C -- clean --> D[CANARY<br/>5% of real users served by new model]
+    D --> E{Live metrics healthy?<br/>errors · p99 · business KPI}
+    E -- degradation --> R2[Instant rollback<br/>weight to 0%]
+    E -- healthy 24-48h --> F[PROMOTE<br/>100% traffic · old model kept warm]
+    F --> G[Commit prod_metrics.json<br/>new baseline for the CI gate]
+    style B fill:#38bdf855,stroke:#38bdf8
+    style D fill:#f59e0b55,stroke:#f59e0b
+    style F fill:#22c55e55,stroke:#22c55e
+    style R1 fill:#ec489955,stroke:#ec4899
+    style R2 fill:#ec489955,stroke:#ec4899
+```
+
+**Shadow** answers: *does it behave?* The new container receives a mirrored copy of live requests; its predictions are logged and thrown away. Users are mathematically unaffected — shadow risk is zero (minus the compute bill). What you're looking for: does it 500 on real payloads the holdout never contained? Is p99 latency acceptable? Does the *score distribution* resemble prod's, or is it predicting churn for 60% of users when prod predicts 20%? A big distribution shift with identical inputs means a feature-pipeline discrepancy between training and serving — the single most common production ML bug, and shadow mode is the cheapest place ever to catch it.
+
+**Canary** answers: *does it help (or at least not hurt) real users?* Now 5% of users get real responses from the new model. This is the first moment of real risk, which is why it comes after shadow, and why the slice is small. Watch three tiers, in escalation order: system metrics (error rate, latency — degrade in minutes), model metrics (score distribution vs shadow baseline — hours), business metrics (retention-offer acceptance — days). Any tier degrading → set canary weight to 0. Rollback is a routing change, not a deploy: seconds, not minutes.
+
+**Promote** answers: nothing — it's the reward. 100% of traffic, old model kept warm for a week as the instant-rollback target. And one crucial closing-the-loop step: commit the new model's holdout AUC to `prod_metrics.json`. That's the file the CI gate's regression test reads — so the *next* candidate is measured against *this* model. The bar ratchets upward automatically.
+
+Here's the traffic geometry at each stage:
+
+<svg viewBox="0 0 720 260" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Traffic split across shadow, canary, promote stages">
+  <style>text{font-family:system-ui,sans-serif;fill:currentColor}</style>
+  <!-- SHADOW -->
+  <text x="110" y="24" font-size="14" font-weight="700" text-anchor="middle">SHADOW</text>
+  <rect x="30" y="40" width="160" height="34" rx="6" fill="#38bdf855" stroke="currentColor" stroke-opacity="0.5"/>
+  <text x="110" y="62" font-size="12" text-anchor="middle">100% → prod model v1</text>
+  <rect x="30" y="92" width="160" height="34" rx="6" fill="#6366f155" stroke="currentColor" stroke-opacity="0.5" stroke-dasharray="5 4"/>
+  <text x="110" y="114" font-size="12" text-anchor="middle">copy → v2 (logged)</text>
+  <text x="110" y="150" font-size="11" text-anchor="middle" opacity="0.75">user risk: 0%</text>
+  <!-- CANARY -->
+  <text x="360" y="24" font-size="14" font-weight="700" text-anchor="middle">CANARY</text>
+  <rect x="280" y="40" width="152" height="34" rx="6" fill="#38bdf855" stroke="currentColor" stroke-opacity="0.5"/>
+  <text x="356" y="62" font-size="12" text-anchor="middle">95% → v1</text>
+  <rect x="280" y="92" width="24" height="34" rx="6" fill="#f59e0b88" stroke="currentColor" stroke-opacity="0.5"/>
+  <text x="316" y="114" font-size="12" text-anchor="start">5% → v2 (live)</text>
+  <text x="360" y="150" font-size="11" text-anchor="middle" opacity="0.75">user risk: 5%, reversible in seconds</text>
+  <!-- PROMOTE -->
+  <text x="610" y="24" font-size="14" font-weight="700" text-anchor="middle">PROMOTE</text>
+  <rect x="530" y="40" width="160" height="34" rx="6" fill="#22c55e66" stroke="currentColor" stroke-opacity="0.5"/>
+  <text x="610" y="62" font-size="12" text-anchor="middle">100% → v2</text>
+  <rect x="530" y="92" width="160" height="34" rx="6" fill="#6366f133" stroke="currentColor" stroke-opacity="0.4" stroke-dasharray="5 4"/>
+  <text x="610" y="114" font-size="12" text-anchor="middle" opacity="0.8">v1 warm standby</text>
+  <text x="610" y="150" font-size="11" text-anchor="middle" opacity="0.75">rollback target kept 7 days</text>
+  <!-- timeline arrow -->
+  <line x1="40" y1="200" x2="680" y2="200" stroke="currentColor" stroke-opacity="0.5" stroke-width="1.5" marker-end="url(#arr)"/>
+  <defs><marker id="arr" markerWidth="10" markerHeight="8" refX="8" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 z" fill="currentColor" fill-opacity="0.5"/></marker></defs>
+  <text x="110" y="222" font-size="11" text-anchor="middle" opacity="0.75">hours–days</text>
+  <text x="360" y="222" font-size="11" text-anchor="middle" opacity="0.75">24–48 h</text>
+  <text x="610" y="222" font-size="11" text-anchor="middle" opacity="0.75">steady state</text>
+</svg>
+
+For our single-container setup, the plumbing doesn't need a service mesh. Shadow is ~20 lines of async fan-out in front of the two containers; canary is a weighted upstream — nginx has it built in:
+
+```nginx
+# canary: 5% of requests to v2
+split_clients "${request_id}" $backend {
+    5%      churn_v2:8000;
+    *       churn_v1:8000;
+}
+server {
+    location /predict { proxy_pass http://$backend; }
+}
+```
+
+One subtlety: `split_clients` hashes `$request_id`, so a user can bounce between models across requests. For churn scoring that's fine (predictions are stateless); for anything where consistency matters, hash on a user ID instead so each user sticks to one model. Kubernetes users get the same semantics from Istio/Flagger with automated promotion; the *concepts* — mirrored traffic, weighted split, instant weight-zero rollback — are identical at every scale.
+
+How much canary evidence is enough? Rough sanity check: to detect a change in a rate metric of size $\delta$ against baseline $p$, you need on the order of $n \approx p(1-p)\left(\frac{z_{\alpha/2}+z_{\beta}}{\delta}\right)^2$ observations in the canary slice. With a 5% slice of modest traffic, detecting a 1-point shift in a 20% rate takes tens of thousands of canary requests — that's *why* canaries run for 24–48 hours, not 20 minutes. System metrics (errors, latency) need far less; business metrics need the most. Structure the wait accordingly.
+
+## 🧪 Your task
+
+Your CI gate currently checks discrimination (AUC) but not **calibration** — and Day 6's API returns raw probabilities to downstream consumers who treat "0.7" as meaning 70%. A model can have great AUC and terrible calibration. Add a calibration gate to `tests/model/test_quality_gate.py`: compute the **Expected Calibration Error (ECE)** on the holdout with 10 equal-width bins, and fail the build if ECE > 0.08. Reuse the existing `holdout_eval` machinery — but note it currently returns only the AUC, so you'll need to restructure what the fixture exposes (without training twice!).
+
+*Hint:* change the fixture to return a dict (or the model plus the holdout arrays) so both gates share one training run. ECE with equal-width bins: partition $[0,1]$ into 10 bins by predicted probability; for each bin $b$, compare the mean predicted probability to the observed churn rate; weight by bin size:
+$$\mathrm{ECE} = \sum_{b} \frac{|n_b|}{N}\,\big|\,\overline{p}_b - \overline{y}_b\,\big|$$
+`np.digitize` (or `pd.cut`) does the binning in one line.
+
+<details><summary>Solution</summary>
+
+```python
+# tests/model/test_quality_gate.py  (restructured)
+import json
+import pathlib
+
+import joblib
+import numpy as np
+import pandas as pd
+import pytest
+from sklearn.metrics import roc_auc_score
+from sklearn.model_selection import train_test_split
+
+from src.features import build_features
+from src.train import train_model
+
+MIN_AUC = 0.80
+MAX_AUC = 0.97
+MAX_REGRESSION = 0.02
+MAX_ECE = 0.08
+SEED = 42
+
+
+@pytest.fixture(scope="module")
+def gate():
+    """Train once; expose everything each gate test needs."""
+    df = pd.read_csv("data/churn.csv")
+    X, y = build_features(df)
+    X_tr, X_ho, y_tr, y_ho = train_test_split(
+        X, y, test_size=0.2, stratify=y, random_state=SEED
+    )
+    model = train_model(X_tr, y_tr, seed=SEED)
+    proba = model.predict_proba(X_ho)[:, 1]
+    auc = roc_auc_score(y_ho, proba)
+    ece = expected_calibration_error(np.asarray(y_ho), proba, n_bins=10)
+
+    pathlib.Path("metrics.json").write_text(
+        json.dumps({"holdout_auc": round(auc, 4), "holdout_ece": round(ece, 4)})
+    )
+    joblib.dump(model, "model_candidate.joblib")
+    return {"auc": auc, "ece": ece}
+
+
+def expected_calibration_error(y_true, y_prob, n_bins=10):
+    edges = np.linspace(0.0, 1.0, n_bins + 1)
+    # right edge of last bin must include p == 1.0
+    bin_ids = np.clip(np.digitize(y_prob, edges[1:-1]), 0, n_bins - 1)
+    ece, n = 0.0, len(y_true)
+    for b in range(n_bins):
+        mask = bin_ids == b
+        if not mask.any():
+            continue                      # empty bin contributes nothing
+        conf = y_prob[mask].mean()        # mean predicted probability
+        acc = y_true[mask].mean()         # observed positive rate
+        ece += (mask.sum() / n) * abs(conf - acc)
+    return ece
+
+
+def test_auc_above_floor(gate):
+    assert gate["auc"] >= MIN_AUC, f"AUC {gate['auc']:.4f} < {MIN_AUC}"
+
+
+def test_auc_below_leakage_ceiling(gate):
+    assert gate["auc"] <= MAX_AUC, f"AUC {gate['auc']:.4f} suspiciously high"
+
+
+def test_calibration(gate):
+    assert gate["ece"] <= MAX_ECE, (
+        f"ECE {gate['ece']:.4f} > {MAX_ECE} — probabilities are not trustworthy; "
+        "consider CalibratedClassifierCV(method='isotonic') in train_model"
+    )
+
+
+def test_no_regression_vs_production(gate):
+    prod_file = pathlib.Path("prod_metrics.json")
+    if not prod_file.exists():
+        pytest.skip("no production baseline yet")
+    prod_auc = json.loads(prod_file.read_text())["holdout_auc"]
+    assert gate["auc"] >= prod_auc - MAX_REGRESSION
+
+
+# Quick self-check of the ECE implementation itself:
+def test_ece_is_zero_for_perfectly_calibrated_bins():
+    rng = np.random.default_rng(0)
+    p = rng.uniform(0, 1, 200_000)
+    y = (rng.uniform(0, 1, 200_000) < p).astype(int)  # labels drawn AT p
+    assert expected_calibration_error(y, p) < 0.01
+```
+
+Key points: the fixture now returns a dict, so all four gate tests share **one** training run; the `np.digitize(..., edges[1:-1])` trick with `np.clip` keeps `p == 1.0` in the last bin instead of creating an eleventh; and the final test is a property test of the metric itself — perfectly calibrated synthetic data must score ≈ 0, which catches sign errors and off-by-one binning bugs in your ECE code before it starts gating real models. No workflow YAML change needed: the new test lives in `tests/model/`, and `pytest tests/model -q` already runs it.
+
+</details>
+
+## Key takeaways
+
+- ML CI has three test surfaces — code, data, model — and a green build must mean all three passed, in cheapest-first order: lint → unit → data → quality gate.
+- The Docker image is built **last** and **only** from the exact model artifact that passed the gate; `needs:` + branch protection makes ungated images structurally impossible.
+- The quality gate is just a pytest: min AUC floor, a "too good to be true" leakage ceiling, and a regression check against the current production baseline that ratchets upward on every promote.
+- Data tests catch what the quality gate cannot — leakage makes metrics *better*, so a high score is sometimes the alarm.
+- Ship traffic in three stages: shadow (zero risk, catches train/serve skew), canary (5%, instant weight-zero rollback), promote (100%, old model warm, commit the new baseline).
+- Tag images with the git SHA; when production misbehaves, the tag is your provenance chain back through gate output, data snapshot, and code.
+
+Tomorrow: the pipeline shipped a model — now we watch it live. Monitoring in production: drift, data quality in-flight, and the dashboards that page you before your users do.
+
+------------------------------------------------------------------------
+
+[🏠 🚢 Course home](index.html)  &nbsp;|&nbsp;  [← Day 07](day07.html)  &nbsp;|&nbsp;  [Day 09 →](day09.html)  &nbsp;|&nbsp;  [📚 All mini-courses](../../mini-courses.html)

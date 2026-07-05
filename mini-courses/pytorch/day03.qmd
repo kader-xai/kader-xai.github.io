@@ -1,0 +1,478 @@
+---
+title: "🔥 Deep Learning with PyTorch · Day 3 — Feeding the Model: Dataset & DataLoader"
+page-layout: full
+toc: true
+toc-location: left
+toc-title: "On this day"
+toc-depth: 2
+---
+
+[🏠 🔥 Course home](index.html)  &nbsp;|&nbsp;  [← Day 02](day02.html)  &nbsp;|&nbsp;  [Day 04 →](day04.html)  &nbsp;|&nbsp;  [📚 All mini-courses](../../mini-courses.html)
+
+------------------------------------------------------------------------
+
+# Day 3 — Feeding the Model: Dataset & DataLoader
+
+Yesterday you built an `nn.Module` and called it on tensors you created by hand. That works for a demo, but real training data doesn't arrive as one convenient tensor sitting in memory — it lives in CSV files, image folders, databases, and it's usually too big, too messy, or too slow to load all at once. Today you build the pipe that connects raw data on disk to the `forward()` you wrote yesterday: PyTorch's `Dataset` and `DataLoader`. By the end you'll have a complete tabular pipeline — CSV file → custom `Dataset` → train/val split → shuffled, batched, GPU-ready mini-batches — which is exactly what Day 4's training loop will consume.
+
+::: {.callout-note appearance="simple"}
+🎯 **Today you will:** write a custom `Dataset` with `__len__` and `__getitem__`, apply transforms without leaking validation statistics, split data with `random_split`, configure a `DataLoader` (batching, shuffling, `num_workers`, `pin_memory`), and assemble an end-to-end tabular pipeline that feeds yesterday's model.
+:::
+
+## Why two classes? The division of labor
+
+PyTorch splits data loading into two responsibilities, and the split is the whole design:
+
+- **`Dataset`** answers exactly two questions: *how many samples do you have?* and *give me sample number `i`.* It knows nothing about batching, shuffling, or parallelism.
+- **`DataLoader`** takes any `Dataset` and handles everything else: drawing indices (shuffled or not), fetching samples (possibly in parallel worker processes), stacking them into batches, and staging them for the GPU.
+
+This separation is why the same `DataLoader` machinery works for images, text, audio, and tabular rows — your job is only ever to implement the two-method `Dataset` contract, and you get batching, shuffling, and multiprocessing for free.
+
+```{mermaid}
+flowchart LR
+    A[("Raw data<br/>CSV / images / DB")] --> B["Dataset<br/>__len__ · __getitem__<br/>(one sample at a time)"]
+    B --> C["Sampler<br/>draws indices<br/>(shuffled each epoch)"]
+    C --> D["Worker processes<br/>num_workers × __getitem__"]
+    D --> E["collate_fn<br/>stack samples → batch tensors"]
+    E --> F["pin_memory<br/>page-locked staging"]
+    F --> G[["Training loop<br/>for xb, yb in loader"]]
+```
+
+Keep this picture in mind: everything in today's lesson is one box in that diagram.
+
+## The Dataset contract: `__len__` and `__getitem__`
+
+A `Dataset` is any class that subclasses `torch.utils.data.Dataset` and implements two dunder methods. Here is the smallest one that could possibly work:
+
+```python
+import torch
+from torch.utils.data import Dataset
+
+class SquaresDataset(Dataset):
+    """Maps i -> (i, i**2). Deliberately trivial to expose the contract."""
+
+    def __init__(self, n: int):
+        self.n = n
+
+    def __len__(self) -> int:
+        return self.n
+
+    def __getitem__(self, idx: int):
+        x = torch.tensor([float(idx)])
+        y = torch.tensor([float(idx) ** 2])
+        return x, y
+
+ds = SquaresDataset(5)
+print(len(ds))    # 5
+print(ds[3])      # (tensor([3.]), tensor([9.]))
+```
+
+Three rules govern `__getitem__`, and violating any of them is a classic source of silent bugs:
+
+1. **It must be a pure function of `idx`.** Calling `ds[3]` twice must return the same thing (random augmentation is the sanctioned exception — more below). If `__getitem__` mutates state, parallel workers will each mutate their *own copy* of that state and you'll get inconsistent, unreproducible behavior.
+2. **It returns *one* sample, not a batch.** The `DataLoader` stacks samples for you. If you return shape `(1, 8)` "to be safe", your batches come out `(batch, 1, 8)` instead of `(batch, 8)` and yesterday's `nn.Linear(8, ...)` will either crash or — worse — broadcast in a way that trains garbage.
+3. **Return tensors (or things collatable into tensors).** Floats, ints, numpy arrays, and tensors all collate fine; arbitrary Python objects need a custom `collate_fn`.
+
+The index-based contract is called a **map-style** dataset. (There is also `IterableDataset` for streaming sources with no known length — you won't need it for anything in this course.)
+
+## A real pipeline: tabular data from CSV
+
+Time to build the real thing. We'll manufacture a realistic tabular regression problem — predicting a house price from 8 numeric features — write it to a CSV so the pipeline starts from disk like it would in practice, and then load it properly.
+
+### Stage 1: create the raw data file
+
+```python
+import numpy as np
+import pandas as pd
+
+rng = np.random.default_rng(42)
+N = 5_000
+
+# 8 features on wildly different scales -- on purpose.
+df = pd.DataFrame({
+    "sqft":        rng.normal(1800, 600, N).clip(300),
+    "bedrooms":    rng.integers(1, 6, N).astype(float),
+    "bathrooms":   rng.integers(1, 4, N).astype(float),
+    "age_years":   rng.uniform(0, 90, N),
+    "lot_sqft":    rng.normal(9000, 3000, N).clip(500),
+    "garage":      rng.integers(0, 3, N).astype(float),
+    "dist_center": rng.exponential(8.0, N),          # km to city center
+    "crime_idx":   rng.uniform(0, 100, N),
+})
+
+# Ground-truth relationship + noise (the model must rediscover this)
+price = (
+    150 * df["sqft"] + 12_000 * df["bathrooms"] + 8_000 * df["bedrooms"]
+    - 900 * df["age_years"] + 2.5 * df["lot_sqft"] + 15_000 * df["garage"]
+    - 4_000 * df["dist_center"] - 700 * df["crime_idx"]
+    + rng.normal(0, 25_000, N)
+)
+df["price"] = price.clip(20_000)
+
+df.to_csv("houses.csv", index=False)
+print(df.head(3).round(1))
+```
+
+```text
+     sqft  bedrooms  bathrooms  age_years  lot_sqft  garage  dist_center  crime_idx     price
+0  1982.9       4.0        1.0       67.9   10464.7     1.0          3.5       76.2  310509.4
+1  1176.0       2.0        3.0       25.3    8532.7     2.0          6.6       54.9  270527.1
+2  2250.3       5.0        2.0       48.2    5310.6     0.0          1.5       41.6  345254.6
+```
+
+Note the scales: `sqft` lives around 1800, `crime_idx` around 50, `garage` around 1. Feed these raw into a network and gradient descent has a miserable time — the loss surface is a stretched-out ravine because a weight on `sqft` gets gradients ~1800× larger than a weight on `garage`. The fix is **standardization**:
+
+$$
+z = \frac{x - \mu}{\sigma}
+$$
+
+Every feature ends up with mean 0 and standard deviation 1, so all weights see gradients of comparable magnitude. We'll standardize the target too (its values are in the hundreds of thousands, which would make the MSE loss astronomically large and the early gradients explosive).
+
+### Stage 2: the custom Dataset
+
+```python
+import torch
+from torch.utils.data import Dataset
+
+class HousesDataset(Dataset):
+    """Tabular dataset backed by a CSV. Holds raw tensors; normalization
+    stats are injected AFTER the train/val split (see next section)."""
+
+    def __init__(self, csv_path: str):
+        df = pd.read_csv(csv_path)
+        # float32, not float64: nn.Linear weights are float32 by default,
+        # and float64 inputs would raise a dtype mismatch in forward().
+        self.X = torch.tensor(df.drop(columns="price").values, dtype=torch.float32)
+        self.y = torch.tensor(df["price"].values, dtype=torch.float32).unsqueeze(1)
+
+        self.feature_names = list(df.columns[:-1])
+        self.x_mean = self.x_std = None   # set later, from TRAIN data only
+        self.y_mean = self.y_std = None
+
+    def set_stats(self, x_mean, x_std, y_mean, y_std):
+        self.x_mean, self.x_std = x_mean, x_std
+        self.y_mean, self.y_std = y_mean, y_std
+
+    def __len__(self) -> int:
+        return self.X.shape[0]
+
+    def __getitem__(self, idx: int):
+        x, y = self.X[idx], self.y[idx]
+        if self.x_mean is not None:                     # transform-on-read
+            x = (x - self.x_mean) / self.x_std
+            y = (y - self.y_mean) / self.y_std
+        return x, y
+
+ds = HousesDataset("houses.csv")
+x0, y0 = ds[0]
+print(len(ds), x0.shape, x0.dtype, y0.shape)   # 5000 torch.Size([8]) torch.float32 torch.Size([1])
+```
+
+Design decisions worth pausing on:
+
+- **Load once, index cheaply.** 5,000 × 9 floats is ~180 KB — it fits in RAM thousands of times over, so we parse the CSV once in `__init__` and `__getitem__` is just tensor indexing. If your table had 500 million rows you'd instead memory-map or read chunks lazily in `__getitem__`; the contract doesn't change, only where the I/O happens.
+- **`unsqueeze(1)` on the target.** `df["price"].values` gives shape `(N,)`; the model's output will be `(batch, 1)`. If you leave the target as `(batch,)`, MSE loss will broadcast `(batch,1)` against `(batch,)` into a `(batch, batch)` matrix and quietly compute nonsense. This is the single most common tabular-PyTorch bug; PyTorch even warns about it — don't ignore that warning.
+- **Normalization applied in `__getitem__`, not baked into `self.X`.** This "transform-on-read" pattern is exactly how torchvision transforms work for images, and it lets us set the stats *after* splitting — which brings us to the leak.
+
+### Stage 3: `random_split` — and the data leak everyone commits once
+
+We need a validation set the model never trains on, so we can detect overfitting on Day 4. `random_split` partitions a dataset into random, non-overlapping `Subset`s:
+
+```python
+from torch.utils.data import random_split
+
+train_ds, val_ds = random_split(
+    ds, [0.8, 0.2],                                   # fractions work directly
+    generator=torch.Generator().manual_seed(42),      # reproducible split
+)
+print(len(train_ds), len(val_ds))   # 4000 1000
+```
+
+A `Subset` is a thin view: it stores a reference to the parent dataset plus a list of indices, and `train_ds[i]` simply calls `ds[train_ds.indices[i]]`. No data is copied.
+
+Now the subtle part. Where do the normalization statistics $\mu, \sigma$ come from? If you compute them over *all 5,000 rows*, information about the validation set leaks into the training pipeline — the train samples get scaled using numbers that partially describe validation data. For standardization the damage is usually small, but the *habit* is deadly (do the same with, say, target encoding and your validation score becomes fiction). The rule is absolute: **fit statistics on train, apply everywhere.**
+
+```python
+train_idx = torch.tensor(train_ds.indices)
+X_train_raw = ds.X[train_idx]        # raw train features only
+y_train_raw = ds.y[train_idx]
+
+ds.set_stats(
+    x_mean=X_train_raw.mean(dim=0),                 # shape (8,)
+    x_std=X_train_raw.std(dim=0).clamp_min(1e-8),   # guard: constant column -> std 0 -> div by zero -> NaN
+    y_mean=y_train_raw.mean(),
+    y_std=y_train_raw.std(),
+)
+
+x0, y0 = train_ds[0]
+print(x0)   # values now roughly in [-3, 3]
+```
+
+```text
+tensor([ 0.3521, -1.1032,  1.2270, -0.6721,  0.4816,  1.1741, -0.2698,  0.1523])
+```
+
+Because both `Subset`s point at the same parent `ds`, setting stats once normalizes both — train stats applied to val samples, which is exactly what will happen at inference time with real unseen data. The `clamp_min(1e-8)` guard matters: one constant feature column gives $\sigma = 0$, division produces `inf`/`nan`, and the first `loss.backward()` poisons every weight in the network. NaNs in the data pipeline are far more common than NaNs from the math.
+
+What about **random augmentation** — the sanctioned impurity mentioned earlier? For tabular data a common trick is adding small Gaussian noise to training inputs. The clean pattern is a wrapper dataset, so augmentation touches *only* the train subset:
+
+```python
+class NoisyDataset(Dataset):
+    """Adds N(0, sigma) noise to features. Wrap the TRAIN subset only --
+    augmenting validation data would corrupt your measurement."""
+
+    def __init__(self, base: Dataset, sigma: float = 0.05):
+        self.base, self.sigma = base, sigma
+
+    def __len__(self):
+        return len(self.base)
+
+    def __getitem__(self, idx):
+        x, y = self.base[idx]
+        return x + torch.randn_like(x) * self.sigma, y
+
+train_aug = NoisyDataset(train_ds, sigma=0.05)
+```
+
+Composition over modification: `NoisyDataset` works on *any* dataset that returns `(x, y)`, and the validation path is untouched.
+
+## DataLoader: from samples to mini-batches
+
+The `DataLoader` is where single samples become the `(batch, features)` tensors your model actually consumes:
+
+```python
+from torch.utils.data import DataLoader
+
+train_loader = DataLoader(
+    train_aug,
+    batch_size=64,
+    shuffle=True,       # reshuffle indices every epoch -- train only!
+    drop_last=True,     # discard the final short batch
+)
+val_loader = DataLoader(
+    val_ds,
+    batch_size=256,     # no backward pass -> no activation memory -> go bigger
+    shuffle=False,      # order doesn't matter for evaluation; keep it deterministic
+)
+
+xb, yb = next(iter(train_loader))
+print(xb.shape, yb.shape)   # torch.Size([64, 8]) torch.Size([1])... no:
+```
+
+```text
+torch.Size([64, 8]) torch.Size([64, 1])
+```
+
+Under the hood, one batch is produced like this: the *sampler* draws 64 indices (a fresh permutation each epoch because `shuffle=True`), `__getitem__` is called 64 times yielding 64 `(x, y)` pairs, and the default *collate function* stacks them — 64 tensors of shape `(8,)` become one tensor of shape `(64, 8)`, and 64 targets of shape `(1,)` become `(64, 1)`:
+
+<svg viewBox="0 0 720 240" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif" font-size="13">
+  <text x="90" y="24" fill="currentColor" text-anchor="middle" font-weight="bold">Sampler picks indices</text>
+  <g>
+    <rect x="30" y="40" width="120" height="26" rx="4" fill="#f59e0b" fill-opacity="0.35" stroke="currentColor"/>
+    <text x="90" y="58" fill="currentColor" text-anchor="middle">idx = 4017</text>
+    <rect x="30" y="76" width="120" height="26" rx="4" fill="#f59e0b" fill-opacity="0.35" stroke="currentColor"/>
+    <text x="90" y="94" fill="currentColor" text-anchor="middle">idx = 231</text>
+    <rect x="30" y="112" width="120" height="26" rx="4" fill="#f59e0b" fill-opacity="0.35" stroke="currentColor"/>
+    <text x="90" y="130" fill="currentColor" text-anchor="middle">idx = 1888</text>
+    <text x="90" y="160" fill="currentColor" text-anchor="middle">⋮ (64 total)</text>
+  </g>
+  <text x="200" y="95" fill="currentColor" font-size="20">→</text>
+  <text x="330" y="24" fill="currentColor" text-anchor="middle" font-weight="bold">__getitem__ × 64</text>
+  <g>
+    <rect x="240" y="40" width="180" height="26" rx="4" fill="#6366f1" fill-opacity="0.35" stroke="currentColor"/>
+    <text x="330" y="58" fill="currentColor" text-anchor="middle">x: (8,)   y: (1,)</text>
+    <rect x="240" y="76" width="180" height="26" rx="4" fill="#6366f1" fill-opacity="0.35" stroke="currentColor"/>
+    <text x="330" y="94" fill="currentColor" text-anchor="middle">x: (8,)   y: (1,)</text>
+    <rect x="240" y="112" width="180" height="26" rx="4" fill="#6366f1" fill-opacity="0.35" stroke="currentColor"/>
+    <text x="330" y="130" fill="currentColor" text-anchor="middle">x: (8,)   y: (1,)</text>
+    <text x="330" y="160" fill="currentColor" text-anchor="middle">⋮</text>
+  </g>
+  <text x="455" y="95" fill="currentColor" font-size="20">→</text>
+  <text x="595" y="24" fill="currentColor" text-anchor="middle" font-weight="bold">collate: stack on dim 0</text>
+  <g>
+    <rect x="500" y="40" width="190" height="110" rx="6" fill="#22c55e" fill-opacity="0.30" stroke="currentColor" stroke-width="1.5"/>
+    <text x="595" y="88" fill="currentColor" text-anchor="middle" font-weight="bold">xb: (64, 8)</text>
+    <text x="595" y="115" fill="currentColor" text-anchor="middle" font-weight="bold">yb: (64, 1)</text>
+  </g>
+  <text x="360" y="205" fill="currentColor" text-anchor="middle" font-style="italic">One extra leading dimension appears — the batch dimension. Every nn layer expects it.</text>
+</svg>
+
+The number of batches per epoch is $\lceil N/B \rceil$ normally, or $\lfloor N/B \rfloor$ with `drop_last=True`:
+
+```python
+print(len(train_loader))   # 62  (floor(4000/64); last 32 samples dropped this epoch)
+print(len(val_loader))     # 4   (ceil(1000/256); short final batch kept)
+```
+
+Why the different settings per loader?
+
+| Setting | Train loader | Val loader | Why |
+|---|---|---|---|
+| `shuffle` | `True` | `False` | SGD needs a different sample order each epoch to decorrelate consecutive gradient steps; evaluation is order-independent, and determinism aids debugging |
+| `batch_size` | 64 | 256 | Training stores activations for backward; eval under `no_grad` doesn't, so memory allows much larger batches |
+| `drop_last` | `True` | `False` | A tiny trailing batch (e.g. 3 samples) gives a noisy gradient — and crashes BatchNorm on Day 7 if it's size 1. In eval, dropping samples would bias your metric |
+
+Note that the shuffled samples are still *dropped-in-different-epochs* random: with `shuffle=True` the permutation changes every epoch, so the "last 32" discarded by `drop_last` are different rows each time — no sample is systematically excluded.
+
+### Feeding the GPU: `num_workers` and `pin_memory`
+
+Two flags exist purely for throughput, and they matter once your GPU is fast enough to starve:
+
+```python
+train_loader = DataLoader(
+    train_aug,
+    batch_size=64,
+    shuffle=True,
+    drop_last=True,
+    num_workers=4,       # 4 subprocesses call __getitem__ in parallel
+    pin_memory=True,     # allocate batches in page-locked RAM
+    persistent_workers=True,  # keep workers alive across epochs
+)
+```
+
+- **`num_workers=0`** (the default) means the *main process* fetches every sample: the GPU sits idle while Python decodes the next batch, then Python sits idle while the GPU computes. **`num_workers=4`** forks four worker processes that prefetch batches ahead of consumption, overlapping data prep with GPU compute. For our in-RAM tabular data the gain is negligible (indexing a tensor is already nanoseconds — here `num_workers=0` is genuinely the right choice); for image datasets doing JPEG decode + augmentation per sample it's routinely a 3–5× epoch speedup. Start at 4, tune by watching GPU utilization.
+- **`pin_memory=True`** allocates batch tensors in page-locked ("pinned") host RAM. CUDA can DMA from pinned memory asynchronously, which unlocks `xb.to(device, non_blocking=True)` — the copy overlaps with computation instead of blocking it. It does nothing useful on CPU-only runs.
+- **`persistent_workers=True`** avoids paying worker startup cost at every epoch boundary — noticeable when epochs are short.
+
+Two platform gotchas that *will* bite you if unmentioned: on **macOS and Windows**, workers start via `spawn`, which re-imports your script — so any script using `num_workers > 0` must guard its entry point with `if __name__ == "__main__":` or it will fork-bomb itself. And each worker holds its own copy of the dataset object, so a dataset that loads 10 GB into RAM in `__init__` costs 10 GB *per worker* — another reason big datasets read lazily in `__getitem__`.
+
+## End to end: the pipeline meets yesterday's model
+
+Everything assembled, plus a minimal consumption loop proving the pipe delivers. (The *proper* training loop — metrics, checkpointing, schedulers — is Day 4's whole agenda; this is deliberately bare.)
+
+```python
+import torch
+from torch import nn
+from torch.utils.data import DataLoader, random_split
+
+def build_pipeline(csv_path: str, batch_size: int = 64, seed: int = 42):
+    ds = HousesDataset(csv_path)
+    train_ds, val_ds = random_split(
+        ds, [0.8, 0.2], generator=torch.Generator().manual_seed(seed)
+    )
+    # Fit normalization on train rows only, apply globally.
+    idx = torch.tensor(train_ds.indices)
+    ds.set_stats(
+        ds.X[idx].mean(0), ds.X[idx].std(0).clamp_min(1e-8),
+        ds.y[idx].mean(),  ds.y[idx].std(),
+    )
+    train_loader = DataLoader(train_ds, batch_size=batch_size,
+                              shuffle=True, drop_last=True)
+    val_loader = DataLoader(val_ds, batch_size=4 * batch_size, shuffle=False)
+    return train_loader, val_loader, ds
+
+if __name__ == "__main__":          # required if you ever set num_workers > 0
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    train_loader, val_loader, ds = build_pipeline("houses.csv")
+
+    model = nn.Sequential(           # Day 2's MLP, sized for 8 features
+        nn.Linear(8, 64), nn.ReLU(),
+        nn.Linear(64, 64), nn.ReLU(),
+        nn.Linear(64, 1),
+    ).to(device)
+    opt = torch.optim.Adam(model.parameters(), lr=1e-3)
+    loss_fn = nn.MSELoss()
+
+    for epoch in range(3):
+        model.train()
+        for xb, yb in train_loader:                    # <- the pipeline, consumed
+            xb = xb.to(device, non_blocking=True)
+            yb = yb.to(device, non_blocking=True)
+            loss = loss_fn(model(xb), yb)
+            opt.zero_grad()
+            loss.backward()
+            opt.step()
+
+        model.eval()
+        with torch.no_grad():
+            val_loss = sum(
+                loss_fn(model(xb.to(device)), yb.to(device)).item() * len(xb)
+                for xb, yb in val_loader
+            ) / len(val_loader.dataset)
+        print(f"epoch {epoch}: train_loss={loss.item():.4f}  val_loss={val_loss:.4f}")
+```
+
+```text
+epoch 0: train_loss=0.0511  val_loss=0.0623
+epoch 1: train_loss=0.0343  val_loss=0.0489
+epoch 2: train_loss=0.0338  val_loss=0.0462
+```
+
+Read the losses knowing the target is standardized: an MSE of 0.046 in $z$-space means the RMSE is $\sqrt{0.046} \approx 0.21$ standard deviations of price — multiply back by `ds.y_std` (~$95k) and the model predicts within roughly ±$20k after three epochs. The pipeline works; the model learns.
+
+One last structural point: notice that the training loop never mentions CSVs, normalization, splits, or shuffling. It sees only `for xb, yb in loader`. Swap `HousesDataset` for an image dataset tomorrow and the loop doesn't change a character. That interface stability is the payoff of today's work.
+
+## 🧪 Your task
+
+Time-series data breaks the "one row = one sample" assumption: a sample is a *window* of consecutive rows, and windows overlap. Write `WindowDataset`, a map-style dataset that wraps a 1-D tensor `series` and, for a window length `w`, returns `(series[i : i+w], series[i+w])` — the window as input, the next value as the target. Concretely:
+
+- `WindowDataset(torch.arange(10.0), w=3)` must have `len == 7`
+- `ds[0]` returns `(tensor([0., 1., 2.]), tensor(3.))`
+- `ds[6]` returns `(tensor([6., 7., 8.]), tensor(9.))`, and `ds[7]` raises `IndexError`
+
+Then batch it with a `DataLoader(batch_size=4)` and confirm the batch shapes are `(4, 3)` and `(4,)`.
+
+**Hint:** the entire exercise is getting `__len__` right. A series of length $N$ with window $w$ yields $N - w$ valid windows — the target for the last window must still exist inside the series. Off-by-one here is invisible until `ds[len(ds)-1]` reads past the end.
+
+<details><summary>Solution</summary>
+
+```python
+import torch
+from torch.utils.data import Dataset, DataLoader
+
+class WindowDataset(Dataset):
+    def __init__(self, series: torch.Tensor, w: int):
+        assert series.ndim == 1, "expected a 1-D series"
+        assert len(series) > w, "series too short for even one window"
+        self.series, self.w = series, w
+
+    def __len__(self) -> int:
+        # N - w windows: window i covers [i, i+w), target at i+w,
+        # so the largest valid i is N - w - 1.
+        return len(self.series) - self.w
+
+    def __getitem__(self, idx: int):
+        if not 0 <= idx < len(self):
+            raise IndexError(idx)
+        x = self.series[idx : idx + self.w]      # shape (w,)
+        y = self.series[idx + self.w]            # scalar tensor, shape ()
+        return x, y
+
+# --- checks ---
+ds = WindowDataset(torch.arange(10.0), w=3)
+assert len(ds) == 7
+x, y = ds[0]
+assert torch.equal(x, torch.tensor([0., 1., 2.])) and y.item() == 3.0
+x, y = ds[6]
+assert torch.equal(x, torch.tensor([6., 7., 8.])) and y.item() == 9.0
+try:
+    ds[7]
+    raise AssertionError("ds[7] should have raised IndexError")
+except IndexError:
+    pass
+
+loader = DataLoader(ds, batch_size=4, shuffle=True)
+xb, yb = next(iter(loader))
+print(xb.shape, yb.shape)   # torch.Size([4, 3]) torch.Size([4])
+assert xb.shape == (4, 3) and yb.shape == (4,)
+print("all checks passed")
+```
+
+Note that the default collate turned 4 scalar targets of shape `()` into a batch of shape `(4,)` — for training you'd `unsqueeze` to `(4, 1)` to match a model's `(batch, 1)` output, exactly as we did with `price` above. Also note what we *didn't* do: no copies. Each `__getitem__` returns a view into the original series, so 100,000 overlapping windows cost no more memory than the series itself.
+
+</details>
+
+## Key takeaways
+
+- A `Dataset` is just `__len__` + `__getitem__` returning **one sample**; the `DataLoader` owns batching, shuffling, parallel fetching, and memory pinning.
+- `random_split` gives cheap index-based `Subset` views; seed the generator for a reproducible split.
+- **Fit normalization statistics on the train split only** — computing $\mu, \sigma$ over all data leaks validation information; and clamp $\sigma$ to dodge division-by-zero NaNs.
+- Shapes are the contract: samples `(8,)` collate to batches `(64, 8)`; a target of `(batch,)` vs `(batch, 1)` silently broadcasts MSE into nonsense — `unsqueeze(1)` and heed the warning.
+- Train loader: `shuffle=True, drop_last=True`; val loader: `shuffle=False`, bigger batches. `num_workers` overlaps data prep with compute; `pin_memory=True` + `non_blocking=True` overlaps the host→GPU copy — and `num_workers > 0` demands an `if __name__ == "__main__"` guard on macOS/Windows.
+- Random augmentation belongs in a wrapper around the **train subset only**, never the validation path.
+
+Tomorrow: the training loop, properly — train/eval modes, gradient accumulation, metric tracking, early stopping, and turning today's three-line loop into machinery you can trust.
+
+------------------------------------------------------------------------
+
+[🏠 🔥 Course home](index.html)  &nbsp;|&nbsp;  [← Day 02](day02.html)  &nbsp;|&nbsp;  [Day 04 →](day04.html)  &nbsp;|&nbsp;  [📚 All mini-courses](../../mini-courses.html)

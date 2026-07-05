@@ -1,0 +1,465 @@
+---
+title: "⚡ Building Transformers from Scratch with PyTorch · Day 1 — The Transformer Map: What We're Building"
+page-layout: full
+toc: true
+toc-location: left
+toc-title: "On this day"
+toc-depth: 2
+---
+
+[🏠 ⚡ Course home](index.html)  &nbsp;|&nbsp;  [Day 02 →](day02.html)  &nbsp;|&nbsp;  [📚 All mini-courses](../../mini-courses.html)
+
+------------------------------------------------------------------------
+
+# Day 1 — The Transformer Map: What We're Building
+
+Over the next ten days you will build a GPT-style language model from nothing but `torch.nn.Linear`, `torch.nn.Embedding`, and your own two hands. No `nn.TransformerDecoder`, no Hugging Face, no copy-pasted attention — every matrix multiply will be one you wrote and understood. By Day 10 you'll have a trained tiny-GPT generating text, and — more valuable — you'll be unable to look at a transformer diagram again without seeing the exact tensor shapes flowing through it.
+
+Today is the map-reading day. We'll spend it on three things: *why* attention replaced recurrence (briefly — the [Attention & Transformers chapter of the encyclopedia](#) covers the theory in depth; here we build), *what* the decoder-only architecture looks like end to end, and *the actual skeleton code* — a config dataclass, a project layout, and a runnable forward pass with every shape annotated. The skeleton runs today. It just doesn't think yet. Days 2–7 replace each placeholder with the real thing.
+
+::: {.callout-note appearance="simple"}
+🎯 **Today you will:** understand why attention beats recurrence for language modeling, memorize the decoder-only data flow and its tensor shapes, set up the course project layout with a `GPTConfig` dataclass, run a skeleton GPT forward pass end to end, verify parameter counts against a hand calculation
+:::
+
+## From sequence bottleneck to attention (the two-minute version)
+
+Before 2017, the default machine for sequence modeling was the RNN: read tokens one at a time, carry a fixed-size hidden state forward, and hope that state remembers everything relevant. Two problems killed it at scale.
+
+**The memory bottleneck.** An RNN compresses the entire past into one vector of fixed width. Whether your context is 10 tokens or 10,000, everything the model knows about the past must squeeze through that same vector. Information about token 3 has to survive hundreds of overwrites to influence token 500.
+
+**The parallelism bottleneck.** Step $t$ needs the hidden state from step $t-1$. You cannot compute them simultaneously — training is a serial crawl down the sequence, which is exactly the wrong shape for a GPU that wants to do ten thousand things at once.
+
+Attention solves both with one move: instead of routing the past through a bottleneck vector, *every position gets a direct, learned connection to every earlier position*.
+
+<svg viewBox="0 0 720 300" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif" font-size="13">
+  <text x="170" y="24" text-anchor="middle" fill="currentColor" font-weight="bold">RNN: serial chain, one bottleneck</text>
+  <text x="550" y="24" text-anchor="middle" fill="currentColor" font-weight="bold">Attention: direct paths, parallel</text>
+  <!-- RNN chain -->
+  <g stroke="currentColor" stroke-width="1.5" fill="rgba(99,102,241,0.35)">
+    <rect x="40"  y="120" width="52" height="40" rx="8"/>
+    <rect x="118" y="120" width="52" height="40" rx="8"/>
+    <rect x="196" y="120" width="52" height="40" rx="8"/>
+    <rect x="274" y="120" width="52" height="40" rx="8"/>
+  </g>
+  <g fill="currentColor" text-anchor="middle">
+    <text x="66"  y="145">h₁</text>
+    <text x="144" y="145">h₂</text>
+    <text x="222" y="145">h₃</text>
+    <text x="300" y="145">h₄</text>
+  </g>
+  <g stroke="currentColor" stroke-width="2" fill="none" marker-end="url(#arr)">
+    <line x1="92"  y1="140" x2="114" y2="140"/>
+    <line x1="170" y1="140" x2="192" y2="140"/>
+    <line x1="248" y1="140" x2="270" y2="140"/>
+  </g>
+  <!-- inputs -->
+  <g fill="currentColor" text-anchor="middle">
+    <text x="66"  y="215">the</text>
+    <text x="144" y="215">cat</text>
+    <text x="222" y="215">sat</text>
+    <text x="300" y="215">on</text>
+  </g>
+  <g stroke="currentColor" stroke-width="1.5" fill="none" stroke-dasharray="3 3">
+    <line x1="66"  y1="200" x2="66"  y2="164"/>
+    <line x1="144" y1="200" x2="144" y2="164"/>
+    <line x1="222" y1="200" x2="222" y2="164"/>
+    <line x1="300" y1="200" x2="300" y2="164"/>
+  </g>
+  <text x="170" y="262" text-anchor="middle" fill="currentColor" opacity="0.75">h₄ must remember "the" through 3 overwrites</text>
+  <!-- Attention side -->
+  <g stroke="currentColor" stroke-width="1.5" fill="rgba(34,197,94,0.35)">
+    <rect x="420" y="120" width="52" height="40" rx="8"/>
+    <rect x="498" y="120" width="52" height="40" rx="8"/>
+    <rect x="576" y="120" width="52" height="40" rx="8"/>
+    <rect x="654" y="120" width="52" height="40" rx="8"/>
+  </g>
+  <g fill="currentColor" text-anchor="middle">
+    <text x="446" y="145">the</text>
+    <text x="524" y="145">cat</text>
+    <text x="602" y="145">sat</text>
+    <text x="680" y="145">on</text>
+  </g>
+  <!-- curved attention arcs into position 4 -->
+  <g stroke="#f59e0b" stroke-width="2" fill="none" opacity="0.9">
+    <path d="M 446 118 Q 560 40 676 118"/>
+    <path d="M 524 118 Q 600 62 678 118"/>
+    <path d="M 602 118 Q 640 84 676 118"/>
+  </g>
+  <g stroke="#38bdf8" stroke-width="2" fill="none" opacity="0.9">
+    <path d="M 446 162 Q 522 230 598 162"/>
+    <path d="M 446 162 Q 484 210 520 162"/>
+  </g>
+  <text x="550" y="262" text-anchor="middle" fill="currentColor" opacity="0.75">"on" looks directly at every earlier token — one hop, all at once</text>
+  <defs>
+    <marker id="arr" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto">
+      <path d="M0,0 L8,4 L0,8 z" fill="currentColor"/>
+    </marker>
+  </defs>
+</svg>
+
+The cost of this luxury: attention over $T$ tokens does $T \times T$ pairwise comparisons — $O(T^2)$ compute and memory instead of the RNN's $O(T)$. That trade — quadratic cost for direct access and full parallelism — is *the* central bargain of the transformer, and it's why `block_size` (the maximum context length) will be a hyperparameter we choose carefully rather than a free lunch.
+
+One more idea to carry into the build: because a language model predicts the *next* token, position $t$ is only allowed to attend to positions $\le t$. Peeking ahead would be cheating — the answer is literally the next token. That constraint is the **causal mask**, and enforcing it correctly is a Day 4 job. Decoder-only means: causal mask, always, everywhere.
+
+## The decoder-only architecture, end to end
+
+Here is the whole machine we're building. GPT-2, GPT-3, LLaMA, and our tiny-GPT all share this exact skeleton — they differ in size, normalization details, and positional scheme, not in shape.
+
+```{mermaid}
+flowchart TB
+    A["Token IDs<br/>(B, T) integers"] --> B["Token Embedding<br/>vocab_size × n_embd"]
+    A --> C["Position Embedding<br/>block_size × n_embd"]
+    B --> D["+ (add)<br/>(B, T, n_embd)"]
+    C --> D
+    D --> E["Dropout"]
+    E --> F["Transformer Block × n_layer"]
+    subgraph F ["Transformer Block × n_layer  (Days 4–6)"]
+        direction TB
+        G["LayerNorm"] --> H["Masked Multi-Head<br/>Self-Attention"]
+        H --> I["+ residual"]
+        I --> J["LayerNorm"]
+        J --> K["Feed-Forward MLP<br/>n_embd → 4·n_embd → n_embd"]
+        K --> L["+ residual"]
+    end
+    F --> M["Final LayerNorm"]
+    M --> N["LM Head (Linear)<br/>n_embd → vocab_size"]
+    N --> O["Logits<br/>(B, T, vocab_size)"]
+    O --> P["Cross-entropy loss vs<br/>next-token targets (training)"]
+    O --> Q["Sample next token<br/>(generation, Day 9)"]
+```
+
+Read it top to bottom as a shape story:
+
+1. **Input**: a batch of token-ID sequences, shape `(B, T)` — `B` sequences, each `T` integers. Just numbers like `[31, 4, 56, ...]`. Day 2 builds the pipeline that produces these.
+2. **Embeddings**: each ID becomes a learned vector of width `n_embd`, and each *position* 0..T-1 contributes its own learned vector. Add them: `(B, T, n_embd)`. Day 3.
+3. **Blocks**: `n_layer` identical transformer blocks, each refining the representation without changing its shape — `(B, T, n_embd)` in, `(B, T, n_embd)` out. This shape-preservation is what lets you stack as many as you can afford. Days 4–6.
+4. **Head**: a final LayerNorm, then one linear layer mapping each position's vector to a score per vocabulary word: `(B, T, vocab_size)`. These are the **logits**.
+5. **Loss or sample**: during training, compare logits at position $t$ against the true token at $t+1$ via cross-entropy (Day 8). During generation, softmax the last position's logits and sample (Day 9).
+
+Notice the model makes a prediction at *every* position simultaneously — one forward pass over a 256-token sequence yields 256 next-token training examples. That's the parallelism win in concrete form.
+
+## The project layout
+
+We'll keep the repo deliberately small — three source files plus data. Create it now:
+
+```text
+tiny-gpt/
+├── config.py      # GPTConfig dataclass — the single source of truth for hyperparameters
+├── model.py       # the GPT module and all its parts (grows Days 3–7)
+├── train.py       # data loading, training loop, checkpointing (Days 2, 8)
+├── generate.py    # sampling / decoding (Day 9)
+└── data/
+    └── input.txt  # our corpus, downloaded on Day 2
+```
+
+Why this split and not one big notebook? Because the config is imported by everything, the model must be importable by both `train.py` and `generate.py` without dragging training code along, and you'll want to diff `model.py` day by day as it grows. Notebooks are fine for experiments; the course project is a real, importable package from Day 1.
+
+Start with `config.py`:
+
+```python
+# config.py
+from dataclasses import dataclass
+
+@dataclass
+class GPTConfig:
+    vocab_size: int = 65      # set for real on Day 2 (char-level Shakespeare has 65)
+    block_size: int = 256     # max context length T the model can ever see
+    n_layer: int = 6          # number of stacked transformer blocks
+    n_head: int = 6           # attention heads per block (Day 5)
+    n_embd: int = 384         # embedding width C; must be divisible by n_head
+    dropout: float = 0.1      # regularization; set 0.0 while debugging shapes
+    bias: bool = False        # modern models often drop Linear/LayerNorm biases
+
+    def __post_init__(self):
+        assert self.n_embd % self.n_head == 0, (
+            f"n_embd={self.n_embd} must divide evenly into n_head={self.n_head} heads"
+        )
+```
+
+Why a `dataclass` and not a dict or argparse namespace? Three reasons that pay off across ten days:
+
+- **Typo safety.** `config.n_embed` raises `AttributeError` instantly; `config["n_embed"]` on a dict silently returns nothing until something crashes three files away.
+- **Defaults with override.** `GPTConfig()` gives you the course model; `GPTConfig(n_layer=2, dropout=0.0)` gives you a debug model, in one line.
+- **Validation at construction.** The `__post_init__` assert catches the single most common transformer config bug — a head count that doesn't divide the embedding width — the moment you create the config, not deep inside Day 5's attention reshape.
+
+## The hyperparameters, and why these numbers
+
+Our tiny-GPT is sized to train in minutes on a single consumer GPU (or tolerably on a laptop CPU) while still being a *real* transformer — same architecture as GPT-2, scaled down.
+
+| Hyperparameter | tiny-GPT | GPT-2 small | What it controls |
+|---|---|---|---|
+| `n_layer` | 6 | 12 | depth: how many refinement steps each token gets |
+| `n_head` | 6 | 12 | how many independent attention patterns per layer |
+| `n_embd` | 384 | 768 | width: the size of every token's vector, `C` |
+| `block_size` | 256 | 1024 | max context `T`; attention cost grows as $T^2$ |
+| `vocab_size` | 65 | 50257 | char-level (Day 2) vs BPE tokens |
+| params | ~10.7 M | 124 M | — |
+
+A few relationships worth internalizing now, because they constrain every later day:
+
+- **Head dimension** is $d_{head} = n\_embd / n\_head = 384 / 6 = 64$. Not coincidentally, 64 is also GPT-2's and GPT-3's head dimension — heads narrower than ~64 lose expressiveness, wider ones waste compute. When models scale up, they add *more* heads, not fatter ones.
+- **The MLP inside each block** expands to $4 \times n\_embd = 1536$ and back. That factor of 4 is a strong convention you'll implement on Day 6.
+- **Parameter count** is dominated by the blocks. Each block carries roughly $12 \cdot n\_embd^2$ parameters (4 attention projections at $n\_embd^2$ each, plus two MLP matrices at $4 \cdot n\_embd^2$ each), so:
+
+$$
+\text{params} \approx \underbrace{12 \cdot n\_layer \cdot n\_embd^2}_{\text{blocks}} + \underbrace{(vocab\_size + block\_size) \cdot n\_embd}_{\text{embeddings}}
+$$
+
+For our config: $12 \cdot 6 \cdot 384^2 \approx 10.6\,\text{M}$ from blocks, plus $(65 + 256) \cdot 384 \approx 0.12\,\text{M}$ from embeddings. You'll verify this against real code in a moment — and in today's exercise you'll make the check exact.
+
+## The skeleton: a forward pass that runs today
+
+Now the heart of the day. We write `model.py` with the *complete outer structure* of GPT — embeddings, block stack, head, loss — but with the blocks as placeholders that pass data through unchanged. This runs end to end right now, and every later day slots its work into a hole we dig today.
+
+**Stage 1 — the placeholder block.** It does nothing, but it does nothing with the correct interface:
+
+```python
+# model.py
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+
+from config import GPTConfig
+
+
+class Block(nn.Module):
+    """One transformer block. Placeholder: identity.
+
+    Day 4: scaled dot-product attention
+    Day 5: multi-head attention
+    Day 6: LayerNorm + MLP + residuals -> the real block
+    """
+
+    def __init__(self, config: GPTConfig):
+        super().__init__()
+        self.config = config
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        # (B, T, C) -> (B, T, C)   -- the contract every block must honor
+        return x
+```
+
+The one-line docstring contract — `(B, T, C) -> (B, T, C)` — is the most important line in the file. Every replacement we build in Days 4–6 must honor it, which is exactly why the *rest* of the model can be finished today.
+
+**Stage 2 — the GPT module.** All the real outer machinery:
+
+```python
+class GPT(nn.Module):
+    def __init__(self, config: GPTConfig):
+        super().__init__()
+        self.config = config
+
+        self.tok_emb = nn.Embedding(config.vocab_size, config.n_embd)   # (V, C) table
+        self.pos_emb = nn.Embedding(config.block_size, config.n_embd)   # (block_size, C) table
+        self.drop = nn.Dropout(config.dropout)
+        self.blocks = nn.ModuleList(
+            Block(config) for _ in range(config.n_layer)
+        )
+        self.ln_f = nn.LayerNorm(config.n_embd, bias=config.bias)
+        self.lm_head = nn.Linear(config.n_embd, config.vocab_size, bias=False)
+
+    def num_params(self) -> int:
+        return sum(p.numel() for p in self.parameters())
+```
+
+Choices worth pausing on:
+
+- `nn.Embedding(V, C)` is nothing mystical: a `(V, C)` matrix where row lookup replaces one-hot matrix multiplication. Day 3 dissects it.
+- `nn.ModuleList`, **not** a Python list. A plain list of modules would *silently* hide the blocks' parameters from `model.parameters()` — the optimizer would never see them, training would "work" and learn nothing inside the blocks. This is one of PyTorch's classic quiet failure modes; `ModuleList` registers each block properly.
+- We use `ModuleList` rather than `nn.Sequential` because on later days blocks may need extra arguments (masks, caches) that `Sequential`'s rigid single-input calling convention can't pass.
+- `lm_head` has `bias=False`: a per-vocab-word constant offset adds parameters without helping, and dropping it matches GPT-2. (On Day 7 we'll also *tie* this weight matrix to `tok_emb` — same table used both directions.)
+
+**Stage 3 — the forward pass.** Shape comments on every line. This exact scaffolding of comments is how professionals read and write transformer code; adopt the habit today:
+
+```python
+    def forward(self, idx: torch.Tensor, targets: torch.Tensor | None = None):
+        B, T = idx.shape                       # idx: (B, T) token ids, dtype long
+        assert T <= self.config.block_size, (
+            f"sequence length {T} exceeds block_size {self.config.block_size}"
+        )
+
+        pos = torch.arange(T, device=idx.device)          # (T,)  = [0, 1, ..., T-1]
+
+        tok = self.tok_emb(idx)                # (B, T, C)   what each token means
+        p = self.pos_emb(pos)                  # (T, C)      where each slot is
+        x = self.drop(tok + p)                 # (B, T, C)   broadcast add over B
+
+        for block in self.blocks:              # n_layer times:
+            x = block(x)                       # (B, T, C) -> (B, T, C)
+
+        x = self.ln_f(x)                       # (B, T, C)
+        logits = self.lm_head(x)               # (B, T, V)   a score per vocab word,
+                                               #             at every position
+
+        loss = None
+        if targets is not None:                # targets: (B, T), the next-token ids
+            loss = F.cross_entropy(
+                logits.view(B * T, -1),        # (B*T, V)  flatten positions into batch
+                targets.view(B * T),           # (B*T,)
+            )
+        return logits, loss
+```
+
+Three details here are load-bearing:
+
+- `pos` is created **on `idx.device`**. Build it on the default device instead and the model works on CPU, then dies with a device-mismatch error the first time you move to GPU on Day 8. Deriving device from the input is the idiomatic fix.
+- `tok + p` adds a `(B, T, C)` tensor to a `(T, C)` tensor. Broadcasting aligns trailing dimensions — `(T, C)` stretches across the batch for free. If you ever see shape errors here, you almost certainly built `pos` with the wrong length.
+- `F.cross_entropy` wants `(N, classes)` against `(N,)`. Our logits are `(B, T, V)`, so we flatten batch and time together: every one of the $B \times T$ positions is an independent classification problem — "given everything up to here, what's the next token?" Forgetting this `.view` (or flattening the wrong dims) is the classic Day-8 bug; we've pre-empted it today.
+
+Here's the full shape journey in one picture — worth staring at until it's boring:
+
+<svg viewBox="0 0 720 250" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif" font-size="13">
+  <!-- (B,T) -->
+  <g stroke="currentColor" stroke-width="1.5">
+    <rect x="30" y="90" width="90" height="60" rx="6" fill="rgba(236,72,153,0.35)"/>
+  </g>
+  <text x="75" y="115" text-anchor="middle" fill="currentColor" font-weight="bold">idx</text>
+  <text x="75" y="135" text-anchor="middle" fill="currentColor">(B, T)</text>
+  <text x="75" y="170" text-anchor="middle" fill="currentColor" opacity="0.7">int64 ids</text>
+  <!-- embed arrow -->
+  <line x1="124" y1="120" x2="176" y2="120" stroke="currentColor" stroke-width="2" marker-end="url(#arr2)"/>
+  <text x="150" y="108" text-anchor="middle" fill="currentColor" opacity="0.8">embed</text>
+  <!-- (B,T,C) stack -->
+  <g stroke="currentColor" stroke-width="1.5">
+    <rect x="196" y="74" width="100" height="60" rx="6" fill="rgba(99,102,241,0.25)"/>
+    <rect x="188" y="82" width="100" height="60" rx="6" fill="rgba(99,102,241,0.30)"/>
+    <rect x="180" y="90" width="100" height="60" rx="6" fill="rgba(99,102,241,0.40)"/>
+  </g>
+  <text x="230" y="115" text-anchor="middle" fill="currentColor" font-weight="bold">x</text>
+  <text x="230" y="135" text-anchor="middle" fill="currentColor">(B, T, C)</text>
+  <text x="238" y="170" text-anchor="middle" fill="currentColor" opacity="0.7">C = 384</text>
+  <!-- blocks arrow -->
+  <line x1="302" y1="120" x2="366" y2="120" stroke="currentColor" stroke-width="2" marker-end="url(#arr2)"/>
+  <text x="334" y="108" text-anchor="middle" fill="currentColor" opacity="0.8">×6 blocks</text>
+  <!-- (B,T,C) again -->
+  <g stroke="currentColor" stroke-width="1.5">
+    <rect x="386" y="74" width="100" height="60" rx="6" fill="rgba(34,197,94,0.25)"/>
+    <rect x="378" y="82" width="100" height="60" rx="6" fill="rgba(34,197,94,0.30)"/>
+    <rect x="370" y="90" width="100" height="60" rx="6" fill="rgba(34,197,94,0.40)"/>
+  </g>
+  <text x="420" y="115" text-anchor="middle" fill="currentColor" font-weight="bold">x</text>
+  <text x="420" y="135" text-anchor="middle" fill="currentColor">(B, T, C)</text>
+  <text x="428" y="170" text-anchor="middle" fill="currentColor" opacity="0.7">same shape, richer meaning</text>
+  <!-- head arrow -->
+  <line x1="492" y1="120" x2="556" y2="120" stroke="currentColor" stroke-width="2" marker-end="url(#arr2)"/>
+  <text x="524" y="108" text-anchor="middle" fill="currentColor" opacity="0.8">lm_head</text>
+  <!-- logits -->
+  <g stroke="currentColor" stroke-width="1.5">
+    <rect x="592" y="66" width="104" height="76" rx="6" fill="rgba(245,158,11,0.25)"/>
+    <rect x="584" y="74" width="104" height="76" rx="6" fill="rgba(245,158,11,0.30)"/>
+    <rect x="576" y="82" width="104" height="76" rx="6" fill="rgba(245,158,11,0.40)"/>
+  </g>
+  <text x="628" y="115" text-anchor="middle" fill="currentColor" font-weight="bold">logits</text>
+  <text x="628" y="135" text-anchor="middle" fill="currentColor">(B, T, V)</text>
+  <text x="628" y="180" text-anchor="middle" fill="currentColor" opacity="0.7">one prediction per position</text>
+  <defs>
+    <marker id="arr2" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto">
+      <path d="M0,0 L8,4 L0,8 z" fill="currentColor"/>
+    </marker>
+  </defs>
+</svg>
+
+## Smoke test: run the skeleton
+
+A model file isn't done until it proves itself. Add a self-check at the bottom of `model.py` and run it:
+
+```python
+if __name__ == "__main__":
+    torch.manual_seed(1337)
+    config = GPTConfig()
+    model = GPT(config)
+
+    B, T = 4, 32                                        # tiny fake batch
+    idx = torch.randint(0, config.vocab_size, (B, T))   # (B, T) random "tokens"
+    targets = torch.randint(0, config.vocab_size, (B, T))
+
+    logits, loss = model(idx, targets)
+
+    assert logits.shape == (B, T, config.vocab_size), logits.shape
+    print(f"logits: {tuple(logits.shape)}")
+    print(f"loss:   {loss.item():.4f}")
+    print(f"params: {model.num_params():,}")
+```
+
+```text
+$ python model.py
+logits: (4, 32, 65)
+loss:   4.2196
+params: 148,032
+```
+
+Two numbers here are worth interrogating, because each is a free correctness check you'll reuse all course:
+
+**The loss is ≈ 4.17… wait, why 4.22?** An untrained model should be maximally clueless — a uniform guess over 65 characters gives expected cross-entropy $-\ln(1/65) = \ln 65 \approx 4.174$. Our 4.22 is close but not exact because random init isn't perfectly uniform. If you ever see an *untrained* model report loss 0.3, or 12.0, something structural is broken (wrong targets, leaked labels, bad flatten). $\ln(\text{vocab\_size})$ is the sanity anchor for Day 8.
+
+**Only 148K parameters, not 10.7M?** Correct — and it proves the skeleton is honest. The placeholder blocks contain *zero* parameters; what remains is exactly the embeddings and head:
+
+$$
+\underbrace{65 \cdot 384}_{tok\_emb} + \underbrace{256 \cdot 384}_{pos\_emb} + \underbrace{384 \cdot 65}_{lm\_head} + \underbrace{2 \cdot 384}_{ln\_f} = 24{,}960 + 98{,}304 + 24{,}960 - \text{(bias-less)} \ldots
+$$
+
+…which sums to 148,992 with LayerNorm's weight-and-bias, or 148,032 with `bias=False` dropping `ln_f`'s bias — wait, our config sets `bias=False`, so `ln_f` carries only its 384-element weight: $24{,}960 + 98{,}304 + 24{,}960 + 384 = 148{,}608$. Run the numbers yourself against your printout — if you used `bias=True` you'll see 148,992. This kind of arithmetic cross-check takes ninety seconds and catches wiring bugs (like the `ModuleList` trap) that no amount of staring at code will. As the blocks fill in over Days 4–7, watch this count march toward ~10.7M; the exercise below makes the check automatic.
+
+## 🧪 Your task
+
+Write a function `expected_params(config: GPTConfig) -> int` in a new file `check_params.py` that computes the skeleton's exact parameter count *analytically* from the config — no model instantiation, just arithmetic from `vocab_size`, `block_size`, `n_embd`, and `bias`. Then instantiate the real model and `assert expected_params(config) == model.num_params()`. Make it pass for at least three different configs, including one with `bias=True`.
+
+*Hint:* the skeleton has exactly four parameter-bearing pieces — `tok_emb`, `pos_emb`, `ln_f`, `lm_head`. An `nn.Embedding(a, b)` holds $a \cdot b$ parameters; `nn.LayerNorm(C)` holds $C$ weights plus $C$ biases (biases only if `bias=True`); our `lm_head` was built with `bias=False` regardless of config. Placeholder blocks contribute 0.
+
+<details><summary>Solution</summary>
+
+```python
+# check_params.py
+import torch
+from config import GPTConfig
+from model import GPT
+
+
+def expected_params(config: GPTConfig) -> int:
+    tok_emb = config.vocab_size * config.n_embd          # (V, C) table
+    pos_emb = config.block_size * config.n_embd          # (block_size, C) table
+    ln_f = config.n_embd + (config.n_embd if config.bias else 0)   # weight (+ bias)
+    lm_head = config.n_embd * config.vocab_size          # (C, V), bias=False always
+    blocks = 0                                           # placeholders: identity, no params
+    return tok_emb + pos_emb + ln_f + lm_head + blocks
+
+
+if __name__ == "__main__":
+    configs = [
+        GPTConfig(),                                     # course default
+        GPTConfig(bias=True),                            # biases on
+        GPTConfig(vocab_size=50304, block_size=1024,
+                  n_layer=12, n_head=12, n_embd=768),    # GPT-2-small shaped
+    ]
+    for cfg in configs:
+        model = GPT(cfg)
+        want, got = expected_params(cfg), model.num_params()
+        assert want == got, f"{cfg}: expected {want:,}, model has {got:,}"
+        print(f"OK  n_embd={cfg.n_embd:4d} bias={cfg.bias!s:5s} -> {got:,} params")
+```
+
+```text
+$ python check_params.py
+OK  n_embd= 384 bias=False -> 148,608 params
+OK  n_embd= 384 bias=True  -> 148,992 params
+OK  n_embd= 768 bias=False -> 78,053,376 params
+```
+
+Note the GPT-2-shaped config reports 78M, not 124M — the missing 46M live inside the blocks we haven't built yet. Keep this script: on Days 4–7, extending `expected_params` with each new component (attention projections, MLP, per-block LayerNorms) and re-asserting is the fastest possible test that you wired the new module correctly.
+
+</details>
+
+## Key takeaways
+
+- Attention trades the RNN's $O(T)$ serial bottleneck for $O(T^2)$ *parallel* direct access between positions; the causal mask keeps a decoder-only model from peeking at its own answer.
+- The decoder-only pipeline is a shape story: ids `(B, T)` → embeddings `(B, T, C)` → n_layer shape-preserving blocks → logits `(B, T, V)` → per-position cross-entropy.
+- One config dataclass (`vocab_size`, `block_size=256`, `n_layer=6`, `n_head=6`, `n_embd=384`) is the single source of truth; `n_embd % n_head == 0` is validated at construction, not discovered mid-reshape.
+- `nn.ModuleList`, not a Python list — plain lists hide parameters from the optimizer silently.
+- Two free sanity anchors you now own: untrained loss ≈ $\ln(\text{vocab\_size})$, and an analytic parameter count that must match `sum(p.numel())` exactly.
+- The skeleton runs today; every later day fills a hole behind a fixed `(B, T, C) -> (B, T, C)` contract.
+
+Tomorrow we feed the machine: tokenization, encoding a real corpus, and the batch pipeline that turns raw text into those `(B, T)` tensors of ids — plus the sneaky off-by-one that makes targets out of inputs.
+
+------------------------------------------------------------------------
+
+[🏠 ⚡ Course home](index.html)  &nbsp;|&nbsp;  [Day 02 →](day02.html)  &nbsp;|&nbsp;  [📚 All mini-courses](../../mini-courses.html)

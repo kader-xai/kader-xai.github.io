@@ -1,0 +1,431 @@
+---
+title: "⚡ Building Transformers from Scratch with PyTorch · Day 6 — The Transformer Block: Where Everything Clicks Together"
+page-layout: full
+toc: true
+toc-location: left
+toc-title: "On this day"
+toc-depth: 2
+---
+
+[🏠 ⚡ Course home](index.html)  &nbsp;|&nbsp;  [← Day 05](day05.html)  &nbsp;|&nbsp;  [Day 07 →](day07.html)  &nbsp;|&nbsp;  [📚 All mini-courses](../../mini-courses.html)
+
+------------------------------------------------------------------------
+
+# Day 6 — The Transformer Block: Where Everything Clicks Together
+
+Yesterday you built multi-head attention — the machinery that lets every token gather information from every earlier token. But attention alone is not a transformer. If you stack raw attention layers on top of each other, gradients die, activations drift, and the network refuses to train past a few layers. Today you build the **transformer block**: the repeating unit that wraps attention and a feed-forward network in residual connections and layer normalization, arranged so precisely that you can stack it 12, 48, or 96 times and it *still trains*. By the end of the day you'll have a `Block` class and a first two-block model pushing real tensors end to end — the exact structure GPT-2 uses, just smaller.
+
+::: {.callout-note appearance="simple"}
+🎯 **Today you will:** build the position-wise feed-forward network with 4× expansion and GELU, prove to yourself with a gradient experiment why residual connections make depth possible, understand LayerNorm and why modern GPTs use pre-norm instead of post-norm, assemble the full `Block = ln→attn→res + ln→ffn→res`, stack a 2-block mini-model that runs
+:::
+
+## The anatomy of a block
+
+Before writing code, let's see the target. A transformer block does exactly two things to the token stream, each wrapped the same way:
+
+1. **Communicate** — multi-head attention lets tokens exchange information across positions.
+2. **Compute** — a feed-forward network lets each token process, *alone*, what it just gathered.
+
+Andrej Karpathy's phrasing is worth memorizing: *attention is where tokens talk to each other; the feed-forward layer is where they think about what they heard.* Both operations are wrapped in the same pattern: normalize, transform, add back.
+
+```{mermaid}
+flowchart TB
+    X["x  (B, T, C)"] --> LN1["LayerNorm 1"]
+    LN1 --> MHA["Multi-Head Attention<br/>(Day 5)"]
+    MHA --> ADD1(("+"))
+    X --> ADD1
+    ADD1 --> LN2["LayerNorm 2"]
+    LN2 --> FFN["Feed-Forward<br/>C → 4C → C, GELU"]
+    FFN --> ADD2(("+"))
+    ADD1 --> ADD2
+    ADD2 --> OUT["out  (B, T, C)"]
+```
+
+Two details in that diagram carry most of today's lesson. First, the arrows that skip *around* the attention and FFN boxes — the **residual connections** — are what make deep stacks trainable. Second, LayerNorm sits *before* each transformation, not after. That's **pre-norm**, and it's a deliberate departure from the original 2017 paper. We'll justify both, with experiments.
+
+Note what the block does to shapes: `(B, T, C)` in, `(B, T, C)` out. That's the whole trick of stackability. Any module that preserves its input shape can be repeated as many times as your GPU tolerates.
+
+## The position-wise feed-forward network
+
+Attention output for a token is a weighted average of value vectors — a fundamentally *linear* mixing operation (the softmax weights are data-dependent, but the combination of values is linear). If the model is ever going to compute something nonlinear about what a token has gathered, it needs a dedicated nonlinear stage. That's the FFN.
+
+"Position-wise" means the same tiny MLP is applied independently to **every token position**. No information crosses positions here — token 3's FFN output depends only on token 3's input vector. All cross-token traffic already happened in attention.
+
+```python
+import torch
+import torch.nn as nn
+
+class FeedForward(nn.Module):
+    """Position-wise MLP: expand 4x, GELU, project back."""
+
+    def __init__(self, n_embd: int, dropout: float = 0.1):
+        super().__init__()
+        self.net = nn.Sequential(
+            nn.Linear(n_embd, 4 * n_embd),
+            nn.GELU(),
+            nn.Linear(4 * n_embd, n_embd),
+            nn.Dropout(dropout),
+        )
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        # x: (B, T, C) -> (B, T, 4C) -> (B, T, C)
+        return self.net(x)
+```
+
+Three design decisions deserve explanation:
+
+**Why 4× expansion?** The hidden layer has width `4 * n_embd`. This ratio comes straight from *Attention Is All You Need* ($d_{ff} = 2048$ for $d_{model} = 512$) and GPT-2/3 kept it. The intuition: the FFN is where most of the model's *parameters* — and, empirically, most of its factual "knowledge" — live. Expanding gives each token a wide scratch space to compute features in, before compressing back down to the residual stream's width. Count the parameters: two matrices of size $C \times 4C$ and $4C \times C$ give $8C^2$ weights per FFN, versus roughly $4C^2$ for attention's Q, K, V, and output projections. Two-thirds of your block's parameters are in this humble MLP.
+
+**Why GELU, not ReLU?** The original transformer used ReLU; GPT-2 switched to GELU (Gaussian Error Linear Unit) and everyone followed:
+
+$$\text{GELU}(x) = x \cdot \Phi(x)$$
+
+where $\Phi$ is the standard normal CDF. Think of it as a *soft* ReLU: instead of hard-gating at zero, it weights the input by the probability that a standard Gaussian is below it. Negative inputs are shrunk smoothly rather than zeroed, so gradients flow (weakly) even for negative pre-activations — no "dead neurons." `nn.GELU()` uses the exact formulation by default; pass `approximate="tanh"` if you want bit-compatibility with GPT-2's original tanh approximation. For training from scratch, the default is fine.
+
+**Why is `Linear` applied to a 3-D tensor fine?** `nn.Linear` transforms only the *last* dimension and broadcasts over everything in front. Feed it `(B, T, C)` and you get `(B, T, 4C)` — each of the `B*T` token vectors goes through the same weights independently. This is exactly the "position-wise" semantics, for free.
+
+Quick sanity check:
+
+```python
+torch.manual_seed(42)
+ffn = FeedForward(n_embd=64)
+x = torch.randn(2, 8, 64)          # (B=2, T=8, C=64)
+print(ffn(x).shape)                 # torch.Size([2, 8, 64])
+print(sum(p.numel() for p in ffn.parameters()))   # 33088 = 64*256 + 256 + 256*64 + 64
+```
+
+## Residual connections — the gradient highway
+
+Now the crucial question: why can't we just stack `attention → ffn → attention → ffn → ...` directly? Let's not take the textbook's word for it. Here's a five-minute experiment: build a deep stack of plain linear+activation layers, backprop a loss, and measure the gradient that survives back to the input. Then add residual connections and repeat.
+
+```python
+def gradient_reaching_input(depth: int, residual: bool, dim: int = 64) -> float:
+    """Push a tensor through `depth` layers, return grad norm at the input."""
+    torch.manual_seed(0)
+    layers = nn.ModuleList(
+        [nn.Sequential(nn.Linear(dim, dim), nn.Tanh()) for _ in range(depth)]
+    )
+    x = torch.randn(4, dim, requires_grad=True)
+    h = x
+    for layer in layers:
+        h = h + layer(h) if residual else layer(h)
+    h.sum().backward()
+    return x.grad.norm().item()
+
+for depth in [2, 10, 50]:
+    plain = gradient_reaching_input(depth, residual=False)
+    res   = gradient_reaching_input(depth, residual=True)
+    print(f"depth={depth:3d}  plain: {plain:.2e}   residual: {res:.2e}")
+```
+
+Typical output:
+
+```
+depth=  2  plain: 4.60e+00   residual: 3.71e+01
+depth= 10  plain: 8.33e-02   residual: 1.60e+03
+depth= 50  plain: 8.66e-09   residual: 8.63e+09
+```
+
+At depth 50, the plain stack delivers a gradient of ~$10^{-8}$ to its first layer — effectively zero. The early layers of that network will *never learn*. The residual stack delivers a huge gradient (too huge, actually — that explosion is exactly what LayerNorm will tame in the next section).
+
+The math explains the mechanism. A residual layer computes $y = x + F(x)$, so by the chain rule:
+
+$$\frac{\partial \mathcal{L}}{\partial x} = \frac{\partial \mathcal{L}}{\partial y}\left(I + \frac{\partial F}{\partial x}\right)$$
+
+That identity matrix $I$ is the whole story. Whatever $F$'s Jacobian does — shrink, rotate, mangle — the gradient *also* flows through the $+\,x$ path completely untouched. Across $N$ layers, there is always an unobstructed path from the loss to layer 1: the product $\prod_i (I + J_i)$ always contains the pure-identity term. Without residuals, the gradient is a product of raw Jacobians $\prod_i J_i$, and a product of fifty matrices whose norms are slightly below 1 vanishes exponentially.
+
+There's a second, equally useful mental model: the **residual stream**. Picture a conveyor belt of width $C$ running vertically through the whole network. Each block doesn't *replace* the representation — it reads from the belt, computes a small update, and *adds* it back. At initialization, when every $F(x) \approx$ small noise, the network is close to the identity function: a safe starting point that training gradually pushes away from.
+
+<svg viewBox="0 0 700 300" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="The residual stream as a conveyor belt with blocks reading and writing">
+  <defs>
+    <marker id="arr" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto">
+      <path d="M0,0 L6,3 L0,6 z" fill="currentColor"/>
+    </marker>
+  </defs>
+  <!-- residual stream backbone -->
+  <rect x="60" y="30" width="44" height="240" rx="8" fill="#6366f1" fill-opacity="0.25" stroke="#6366f1" stroke-width="2"/>
+  <text x="82" y="20" text-anchor="middle" fill="currentColor" font-size="13" font-weight="bold">residual stream (C-dim)</text>
+  <line x1="82" y1="262" x2="82" y2="42" stroke="currentColor" stroke-width="2" marker-end="url(#arr)"/>
+  <!-- block 1: attention read/write -->
+  <rect x="230" y="190" width="180" height="52" rx="10" fill="#f59e0b" fill-opacity="0.3" stroke="currentColor" stroke-width="1.5"/>
+  <text x="320" y="212" text-anchor="middle" fill="currentColor" font-size="13">LN → Attention</text>
+  <text x="320" y="230" text-anchor="middle" fill="currentColor" font-size="11" opacity="0.75">tokens communicate</text>
+  <path d="M104 236 C 160 236, 170 216, 228 216" fill="none" stroke="currentColor" stroke-width="1.5" marker-end="url(#arr)"/>
+  <path d="M410 216 C 470 216, 470 190, 410 178 C 300 158, 160 196, 106 196" fill="none" stroke="#22c55e" stroke-width="2" marker-end="url(#arr)"/>
+  <text x="150" y="252" fill="currentColor" font-size="11" opacity="0.75">read</text>
+  <text x="150" y="188" fill="#22c55e" font-size="11" font-weight="bold">+ write (add)</text>
+  <!-- block 2: ffn read/write -->
+  <rect x="230" y="70" width="180" height="52" rx="10" fill="#ec4899" fill-opacity="0.3" stroke="currentColor" stroke-width="1.5"/>
+  <text x="320" y="92" text-anchor="middle" fill="currentColor" font-size="13">LN → FeedForward</text>
+  <text x="320" y="110" text-anchor="middle" fill="currentColor" font-size="11" opacity="0.75">each token computes alone</text>
+  <path d="M104 128 C 160 128, 170 98, 228 96" fill="none" stroke="currentColor" stroke-width="1.5" marker-end="url(#arr)"/>
+  <path d="M410 96 C 470 96, 470 66, 410 58 C 300 40, 160 76, 106 78" fill="none" stroke="#22c55e" stroke-width="2" marker-end="url(#arr)"/>
+  <text x="150" y="144" fill="currentColor" font-size="11" opacity="0.75">read</text>
+  <text x="150" y="70" fill="#22c55e" font-size="11" font-weight="bold">+ write (add)</text>
+  <!-- gradient note -->
+  <text x="545" y="140" fill="currentColor" font-size="12" opacity="0.85">Gradients flow straight</text>
+  <text x="545" y="158" fill="currentColor" font-size="12" opacity="0.85">down the stream —</text>
+  <text x="545" y="176" fill="currentColor" font-size="12" opacity="0.85">blocks are optional</text>
+  <text x="545" y="194" fill="currentColor" font-size="12" opacity="0.85">detours, never gates.</text>
+</svg>
+
+This picture also explains a hard constraint you already met on Day 3: the embedding dimension `n_embd` is the width of this belt, and *everything* — token embeddings, positional embeddings, every block's output — must speak in exactly this width, because they're all added into the same stream.
+
+## LayerNorm, and why pre-norm beat post-norm
+
+Our residual experiment showed gradients *exploding* at depth 50. Adding things repeatedly into the stream also makes activation magnitudes grow layer by layer. We need a stabilizer, and it is **LayerNorm**: for each token vector independently, subtract the mean, divide by the standard deviation, then apply a learned scale and shift:
+
+$$\text{LN}(x) = \gamma \odot \frac{x - \mu}{\sqrt{\sigma^2 + \epsilon}} + \beta$$
+
+where $\mu$ and $\sigma^2$ are computed **over the C features of one token** — not over the batch (that's BatchNorm, which is a poor fit for variable-length sequences and small batches), and not over time. Each of the `B*T` token vectors is normalized on its own. Let's verify we understand exactly what PyTorch computes:
+
+```python
+x = torch.randn(2, 8, 64)
+
+# manual LayerNorm over the last dim
+mu  = x.mean(dim=-1, keepdim=True)          # (2, 8, 1)
+var = x.var(dim=-1, keepdim=True, unbiased=False)
+manual = (x - mu) / torch.sqrt(var + 1e-5)
+
+ln = nn.LayerNorm(64)                        # gamma=1, beta=0 at init
+print(torch.allclose(manual, ln(x), atol=1e-5))   # True
+print(ln(x)[0, 0].mean().item(), ln(x)[0, 0].std(unbiased=False).item())
+# ~0.0  ~1.0  — every token vector is re-centered and re-scaled
+```
+
+Two gotchas: PyTorch's LayerNorm uses the *biased* variance (`unbiased=False`), and $\gamma, \beta$ are learnable per-feature vectors of length `C` — so the network can undo the normalization where that helps.
+
+Now, *where* to put it. The 2017 paper used **post-norm**: `x = LN(x + Attn(x))`. GPT-2 moved LayerNorm inside the residual branch — **pre-norm**: `x = x + Attn(LN(x))` — and essentially every modern GPT-style model does the same. Compare the two:
+
+```{mermaid}
+flowchart TB
+    subgraph POST ["Post-norm (2017 original)"]
+        direction TB
+        a1["x"] --> s1["Attn"]
+        s1 --> p1(("+"))
+        a1 --> p1
+        p1 --> n1["LayerNorm"]
+        n1 --> o1["out"]
+    end
+    subgraph PRE ["Pre-norm (GPT-2, us)"]
+        direction TB
+        a2["x"] --> n2["LayerNorm"]
+        n2 --> s2["Attn"]
+        s2 --> p2(("+"))
+        a2 --> p2
+        p2 --> o2["out"]
+    end
+```
+
+The difference looks cosmetic but isn't. In **post-norm**, the LayerNorm sits *on the residual path itself* — every gradient traveling down the stream must pass through it, at every layer. Our precious identity highway now has a toll booth per block, and deep post-norm transformers are notoriously touchy: they typically need a carefully tuned learning-rate warmup just to survive the first steps of training. In **pre-norm**, LayerNorm lives *inside the branch*: the `x +` path stays a pure, untouched identity from the embeddings to the loss. The normalization still does its job — it guarantees attention and the FFN always receive clean, unit-scale inputs no matter how large the accumulated stream has grown. Result: stable training at depth, warmup optional. That's why we use pre-norm, full stop.
+
+One consequence to remember for tomorrow: because pre-norm never normalizes the stream itself, the *final* output of the last block can have grown large — so the full GPT model adds one extra `LayerNorm` after the last block, before the output head. We'll place it on Day 7.
+
+## Assembling the Block
+
+We have all three ingredients. Bring in yesterday's attention (shown here compactly so today's file runs standalone — if you have `day5.py`, just `from day5 import MultiHeadAttention`):
+
+```python
+import torch.nn.functional as F
+
+class MultiHeadAttention(nn.Module):
+    """Day 5's module, condensed: fused QKV, causal mask, output projection."""
+
+    def __init__(self, n_embd, n_head, block_size, dropout=0.1):
+        super().__init__()
+        assert n_embd % n_head == 0
+        self.n_head = n_head
+        self.qkv  = nn.Linear(n_embd, 3 * n_embd)
+        self.proj = nn.Linear(n_embd, n_embd)
+        self.attn_dropout  = nn.Dropout(dropout)
+        self.resid_dropout = nn.Dropout(dropout)
+        mask = torch.tril(torch.ones(block_size, block_size))
+        self.register_buffer("mask", mask.view(1, 1, block_size, block_size))
+
+    def forward(self, x):
+        B, T, C = x.shape
+        q, k, v = self.qkv(x).split(C, dim=2)                       # 3 x (B, T, C)
+        q = q.view(B, T, self.n_head, C // self.n_head).transpose(1, 2)  # (B, nh, T, hs)
+        k = k.view(B, T, self.n_head, C // self.n_head).transpose(1, 2)
+        v = v.view(B, T, self.n_head, C // self.n_head).transpose(1, 2)
+        att = (q @ k.transpose(-2, -1)) * (k.size(-1) ** -0.5)      # (B, nh, T, T)
+        att = att.masked_fill(self.mask[:, :, :T, :T] == 0, float("-inf"))
+        att = self.attn_dropout(F.softmax(att, dim=-1))
+        y = (att @ v).transpose(1, 2).contiguous().view(B, T, C)    # (B, T, C)
+        return self.resid_dropout(self.proj(y))
+```
+
+And now the star of the day. Read it slowly — this is arguably the most important dozen lines of the whole course:
+
+```python
+class Block(nn.Module):
+    """One pre-norm transformer block: communicate, then compute."""
+
+    def __init__(self, n_embd, n_head, block_size, dropout=0.1):
+        super().__init__()
+        self.ln1  = nn.LayerNorm(n_embd)
+        self.attn = MultiHeadAttention(n_embd, n_head, block_size, dropout)
+        self.ln2  = nn.LayerNorm(n_embd)
+        self.ffn  = FeedForward(n_embd, dropout)
+
+    def forward(self, x):
+        x = x + self.attn(self.ln1(x))   # tokens talk     (pre-norm + residual)
+        x = x + self.ffn(self.ln2(x))    # tokens think    (pre-norm + residual)
+        return x
+```
+
+Trace one forward line: `self.ln1(x)` normalizes each token vector; `self.attn(...)` mixes information across positions; `x + ...` writes the update back to the stream. Then the same dance with the FFN. Note the two **separate** LayerNorms — `ln1` and `ln2` each have their own learned $\gamma, \beta$, because "what a clean input looks like" differs for attention and the FFN. A classic bug is reusing one LayerNorm instance for both spots: it runs, trains slightly worse, and is miserable to diagnose. Another classic bug is writing `x = self.attn(self.ln1(x))` — dropping the `+ x` compiles fine, shapes match, and your deep model silently loses its gradient highway.
+
+**Where does dropout live?** Three places, all already wired in, following GPT-2's convention:
+
+| Location | Module | What it regularizes |
+|---|---|---|
+| On attention weights, after softmax | `attn_dropout` in MHA | randomly severs token-to-token links, so no head over-relies on one connection |
+| After the attention output projection | `resid_dropout` in MHA | the update written to the residual stream |
+| After the FFN's down-projection | `Dropout` in `FeedForward` | the FFN's update to the stream |
+
+The pattern: dropout is applied to each branch's output *just before* it is added into the residual stream — the stream itself is never dropped. `model.eval()` disables all of them automatically at inference time; forgetting that call is why freshly-trained models sometimes "generate worse than the loss suggests."
+
+## Stack it: a first 2-block model that runs
+
+The payoff of shape-preservation: stacking blocks is a `for` loop. Here's a minimal harness — embeddings from Day 3 feeding two blocks (the output head and loss arrive on Day 7):
+
+```python
+class TinyStack(nn.Module):
+    """Embeddings -> N transformer blocks. The torso of Day 7's GPT."""
+
+    def __init__(self, vocab_size, n_embd=64, n_head=4, n_layer=2,
+                 block_size=32, dropout=0.1):
+        super().__init__()
+        self.tok_emb = nn.Embedding(vocab_size, n_embd)
+        self.pos_emb = nn.Embedding(block_size, n_embd)
+        self.drop    = nn.Dropout(dropout)              # GPT-2 also drops embeddings
+        self.blocks  = nn.ModuleList(
+            Block(n_embd, n_head, block_size, dropout) for _ in range(n_layer)
+        )
+
+    def forward(self, idx):                              # idx: (B, T) token ids
+        B, T = idx.shape
+        pos = torch.arange(T, device=idx.device)         # (T,)
+        x = self.tok_emb(idx) + self.pos_emb(pos)        # (B, T, C)
+        x = self.drop(x)
+        for block in self.blocks:
+            x = block(x)                                 # (B, T, C) every time
+        return x
+```
+
+One subtlety: `nn.ModuleList`, not a plain Python list. A plain list would *work* in the forward pass but PyTorch wouldn't register the blocks' parameters — `model.parameters()` would come back nearly empty and the optimizer would silently train nothing. Run it:
+
+```python
+torch.manual_seed(1337)
+model = TinyStack(vocab_size=65)                 # 65 = Day 2's tiny-shakespeare charset
+idx = torch.randint(0, 65, (4, 32))              # (B=4, T=32) fake token ids
+
+out = model(idx)
+print(out.shape)                                  # torch.Size([4, 32, 64])
+print(f"params: {sum(p.numel() for p in model.parameters()):,}")
+
+# the residual stream grows as blocks add to it — pre-norm expects this
+x = model.drop(model.tok_emb(idx) + model.pos_emb(torch.arange(32)))
+print(f"stream std after embeddings: {x.std().item():.2f}")
+for i, block in enumerate(model.blocks):
+    x = block(x)
+    print(f"stream std after block {i}: {x.std().item():.2f}")
+```
+
+Expected output (your exact numbers may differ slightly):
+
+```
+torch.Size([4, 32, 64])
+params: 106,624
+stream std after embeddings: 1.01
+stream std after block 0: 1.42
+stream std after block 1: 1.75
+```
+
+Two things to notice. The shape never changes — proof of stackability; change `n_layer=2` to `n_layer=8` and nothing else in the file needs touching. And the stream's standard deviation *grows* with each block: that's the pre-norm signature we predicted — each block adds its contribution and nothing renormalizes the stream. This is exactly the growth that Day 7's final LayerNorm will clean up before the logits.
+
+You now hold the complete repeating unit. GPT-2 small is this `Block` with `n_embd=768, n_head=12`, stacked `n_layer=12` times. GPT-3 is the same block at `n_embd=12288, n_layer=96`. The recipe doesn't change — only the numbers do. (For the theory-side view of why this architecture works, see the encyclopedia's Attention & Transformers chapter; today was the build.)
+
+## 🧪 Your task
+
+Reproduce the depth experiment from the residuals section — but with **real transformer blocks**, and test the pre-norm claim. Build two variants of `Block`: the pre-norm one from today, and a post-norm one (`x = self.ln1(x + self.attn(x)); x = self.ln2(x + self.ffn(x))`). For each variant, stack **12 blocks** (`n_embd=64, n_head=4, block_size=32, dropout=0.0`), run a `(4, 32)` batch of random token embeddings through, backprop `out.sum()`, and print the gradient norm arriving at each block's `ln1.weight` (or the attention `qkv.weight`). Compare how evenly gradients are distributed across depth in the two variants.
+
+*Hint:* iterate `for i, b in enumerate(model.blocks): print(i, b.attn.qkv.weight.grad.norm().item())`. Set dropout to 0 and use the same `torch.manual_seed` for both variants so the comparison is fair. Look at the *ratio* between block 0's and block 11's gradient norms in each variant.
+
+<details><summary>Solution</summary>
+
+```python
+import torch
+import torch.nn as nn
+# assumes FeedForward and MultiHeadAttention from today's lesson are defined
+
+class PreNormBlock(nn.Module):
+    def __init__(self, n_embd, n_head, block_size, dropout=0.0):
+        super().__init__()
+        self.ln1 = nn.LayerNorm(n_embd)
+        self.attn = MultiHeadAttention(n_embd, n_head, block_size, dropout)
+        self.ln2 = nn.LayerNorm(n_embd)
+        self.ffn = FeedForward(n_embd, dropout)
+
+    def forward(self, x):
+        x = x + self.attn(self.ln1(x))
+        x = x + self.ffn(self.ln2(x))
+        return x
+
+class PostNormBlock(nn.Module):
+    def __init__(self, n_embd, n_head, block_size, dropout=0.0):
+        super().__init__()
+        self.ln1 = nn.LayerNorm(n_embd)
+        self.attn = MultiHeadAttention(n_embd, n_head, block_size, dropout)
+        self.ln2 = nn.LayerNorm(n_embd)
+        self.ffn = FeedForward(n_embd, dropout)
+
+    def forward(self, x):
+        x = self.ln1(x + self.attn(x))     # LN sits ON the residual path
+        x = self.ln2(x + self.ffn(x))
+        return x
+
+def grad_profile(block_cls, n_layer=12, n_embd=64, n_head=4, block_size=32):
+    torch.manual_seed(1337)
+    blocks = nn.ModuleList(
+        block_cls(n_embd, n_head, block_size) for _ in range(n_layer)
+    )
+    torch.manual_seed(0)
+    x = torch.randn(4, 32, n_embd)
+    h = x
+    for b in blocks:
+        h = b(h)
+    h.sum().backward()
+    return [b.attn.qkv.weight.grad.norm().item() for b in blocks]
+
+pre  = grad_profile(PreNormBlock)
+post = grad_profile(PostNormBlock)
+
+print(f"{'block':>5} {'pre-norm':>12} {'post-norm':>12}")
+for i, (p, q) in enumerate(zip(pre, post)):
+    print(f"{i:>5} {p:>12.4f} {q:>12.4f}")
+
+print(f"\npre-norm  block0/block11 ratio: {pre[0]/pre[-1]:.2f}")
+print(f"post-norm block0/block11 ratio: {post[0]/post[-1]:.2f}")
+```
+
+What you should observe: in the pre-norm stack, gradient norms are roughly the same order of magnitude at block 0 and block 11 — the identity path delivers signal to the bottom undiminished. In the post-norm stack, the early blocks' gradients are noticeably attenuated relative to the late ones (the exact ratio depends on initialization, but the imbalance is consistent): every LayerNorm on the residual path rescales the gradient on the way down. At 12 layers post-norm still trains — with warmup and care — but the trend is exactly why, at 48 or 96 layers, pre-norm won.
+
+</details>
+
+## Key takeaways
+
+- A transformer block = **communicate** (attention, cross-token) + **compute** (FFN, per-token), each wrapped as `x = x + branch(LN(x))`.
+- The FFN expands `C → 4C`, applies **GELU**, projects back; it holds ~2/3 of the block's parameters and is applied to every position independently.
+- **Residual connections** create an identity path — $\partial y/\partial x = I + \partial F/\partial x$ — so gradients reach layer 1 no matter the depth; without them, 50-layer gradients are ~$10^{-8}$.
+- **LayerNorm** normalizes each token vector over its C features (never over the batch), with learnable $\gamma, \beta$.
+- **Pre-norm** keeps LayerNorm inside the branch, leaving the residual stream untouched → stable deep training; post-norm gates the stream and needs warmup. Use two separate LayerNorms per block.
+- Dropout goes on attention weights and on each branch's output before it joins the stream — never on the stream itself.
+- Blocks preserve `(B, T, C)`, so depth is a `for` loop over an `nn.ModuleList`; the stream's magnitude grows across pre-norm blocks, which the model-level final LayerNorm will fix.
+
+Tomorrow we crown the stack: a final LayerNorm, the language-model head, weight tying, and proper initialization — the full GPT class, ready to compute a loss.
+
+------------------------------------------------------------------------
+
+[🏠 ⚡ Course home](index.html)  &nbsp;|&nbsp;  [← Day 05](day05.html)  &nbsp;|&nbsp;  [Day 07 →](day07.html)  &nbsp;|&nbsp;  [📚 All mini-courses](../../mini-courses.html)

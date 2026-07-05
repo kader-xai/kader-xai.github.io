@@ -1,0 +1,451 @@
+---
+title: "🔥 Deep Learning with PyTorch · Day 8 — Transfer Learning: Stand on ImageNet's Shoulders"
+page-layout: full
+toc: true
+toc-location: left
+toc-title: "On this day"
+toc-depth: 2
+---
+
+[🏠 🔥 Course home](index.html)  &nbsp;|&nbsp;  [← Day 07](day07.html)  &nbsp;|&nbsp;  [Day 09 →](day09.html)  &nbsp;|&nbsp;  [📚 All mini-courses](../../mini-courses.html)
+
+------------------------------------------------------------------------
+
+# Day 8 — Transfer Learning: Stand on ImageNet's Shoulders
+
+Yesterday you learned how to train deeper networks without them falling over — normalization, residual connections, regularization, schedules. Today you'll learn the trick that makes most of that optional in practice: **don't start from scratch**. A ResNet-18 trained on ImageNet has already spent ~weeks of GPU time learning what edges, textures, fur, wheels, and eyes look like. Transfer learning means borrowing those weights and adapting them to *your* problem — and on small datasets it isn't a minor optimization, it's the difference between 70% and 95% accuracy. We'll load a pretrained backbone from `torchvision.models`, swap its classifier head, try the two canonical strategies (freeze-then-head vs. full fine-tune with discriminative learning rates), and race them against a from-scratch baseline on a small real dataset.
+
+::: {.callout-note appearance="simple"}
+🎯 **Today you will:** load a pretrained ResNet-18 with the modern `Weights` API, replace its classifier head for a new task, train a frozen-backbone linear probe, run a full fine-tune with discriminative learning rates, and beat a from-scratch baseline by ~25 points on ~240 training images
+:::
+
+## Why borrowed features work
+
+A convolutional network trained on ImageNet's 1.28M images doesn't just memorize 1000 classes. Its early layers learn Gabor-like edge and color detectors, middle layers learn textures and simple parts, and late layers learn object-level concepts. The crucial observation: **the early and middle layers are almost universal**. An edge detector useful for telling huskies from wolves is equally useful for telling ants from bees, tumors from healthy tissue, or rust from clean metal.
+
+<svg viewBox="0 0 720 230" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif" font-size="13">
+  <!-- backbone blocks -->
+  <rect x="20"  y="60" width="90" height="70" rx="8" fill="#38bdf8" fill-opacity="0.25" stroke="currentColor"/>
+  <rect x="130" y="60" width="90" height="70" rx="8" fill="#38bdf8" fill-opacity="0.25" stroke="currentColor"/>
+  <rect x="240" y="60" width="90" height="70" rx="8" fill="#6366f1" fill-opacity="0.25" stroke="currentColor"/>
+  <rect x="350" y="60" width="90" height="70" rx="8" fill="#6366f1" fill-opacity="0.25" stroke="currentColor"/>
+  <rect x="460" y="60" width="90" height="70" rx="8" fill="#ec4899" fill-opacity="0.25" stroke="currentColor"/>
+  <rect x="580" y="60" width="110" height="70" rx="8" fill="#22c55e" fill-opacity="0.35" stroke="currentColor" stroke-width="2"/>
+  <!-- labels inside -->
+  <text x="65"  y="90" text-anchor="middle" fill="currentColor">conv1</text>
+  <text x="65"  y="108" text-anchor="middle" fill="currentColor" font-size="11">edges</text>
+  <text x="175" y="90" text-anchor="middle" fill="currentColor">layer1</text>
+  <text x="175" y="108" text-anchor="middle" fill="currentColor" font-size="11">textures</text>
+  <text x="285" y="90" text-anchor="middle" fill="currentColor">layer2</text>
+  <text x="285" y="108" text-anchor="middle" fill="currentColor" font-size="11">motifs</text>
+  <text x="395" y="90" text-anchor="middle" fill="currentColor">layer3</text>
+  <text x="395" y="108" text-anchor="middle" fill="currentColor" font-size="11">parts</text>
+  <text x="505" y="90" text-anchor="middle" fill="currentColor">layer4</text>
+  <text x="505" y="108" text-anchor="middle" fill="currentColor" font-size="11">objects</text>
+  <text x="635" y="90" text-anchor="middle" fill="currentColor">fc head</text>
+  <text x="635" y="108" text-anchor="middle" fill="currentColor" font-size="11">your classes</text>
+  <!-- arrows -->
+  <line x1="110" y1="95" x2="130" y2="95" stroke="currentColor" stroke-width="1.5"/>
+  <line x1="220" y1="95" x2="240" y2="95" stroke="currentColor" stroke-width="1.5"/>
+  <line x1="330" y1="95" x2="350" y2="95" stroke="currentColor" stroke-width="1.5"/>
+  <line x1="440" y1="95" x2="460" y2="95" stroke="currentColor" stroke-width="1.5"/>
+  <line x1="550" y1="95" x2="580" y2="95" stroke="currentColor" stroke-width="1.5"/>
+  <!-- annotations -->
+  <text x="230" y="35" text-anchor="middle" fill="currentColor" font-size="12">← general, task-agnostic — reuse as-is or nudge gently</text>
+  <text x="505" y="165" text-anchor="middle" fill="currentColor" font-size="12">task-specific — needs adapting</text>
+  <text x="635" y="185" text-anchor="middle" fill="currentColor" font-size="12">always replaced &amp; retrained</text>
+  <line x1="505" y1="135" x2="505" y2="150" stroke="currentColor" stroke-dasharray="3 3"/>
+  <line x1="635" y1="135" x2="635" y2="170" stroke="currentColor" stroke-dasharray="3 3"/>
+</svg>
+
+This gives you two knobs: **which layers to update** and **how fast to update them**. The two extremes are:
+
+| Strategy | What trains | When it wins |
+|---|---|---|
+| **Linear probe** (freeze-then-head) | Only the new classifier head | Tiny dataset (< a few hundred images), or target domain close to ImageNet |
+| **Full fine-tune** | Everything, with careful learning rates | More data available, or target domain differs (medical, satellite, sketches) |
+
+And a spectrum in between (partial unfreezing, discriminative LRs) that we'll cover. The from-scratch option — random init, train everything — only makes sense when you have *lots* of data or a domain so alien that ImageNet features actively mislead (rare: even X-rays benefit from ImageNet init).
+
+## Loading a pretrained backbone the modern way
+
+Since torchvision 0.13, pretrained models use an explicit `Weights` enum instead of the old `pretrained=True` flag. The enum is more than a download switch — it carries the exact preprocessing the model was trained with, plus metadata.
+
+```python
+import torch
+from torch import nn
+from torchvision import models
+
+device = "cuda" if torch.cuda.is_available() else "cpu"
+
+weights = models.ResNet18_Weights.DEFAULT   # currently IMAGENET1K_V1
+model = models.resnet18(weights=weights)
+
+print(weights.meta["categories"][:3])   # ['tench', 'goldfish', 'great white shark']
+print(weights.meta["_metrics"])          # {'ImageNet-1K': {'acc@1': 69.758, 'acc@5': 89.078}}
+print(sum(p.numel() for p in model.parameters()) / 1e6, "M params")
+```
+
+```text
+['tench', 'goldfish', 'great white shark']
+{'ImageNet-1K': {'acc@1': 69.758, 'acc@5': 89.078}}
+11.689512 M params
+```
+
+`DEFAULT` always points at the best available weights for that architecture, so your code picks up improvements when torchvision ships better recipes. The first call downloads ~45MB to `~/.cache/torch/hub/checkpoints/` and reuses it afterwards.
+
+Now look at the part we need to change. Print the model and check the last two children:
+
+```python
+print(model.fc)        # the ImageNet classifier head
+print(model.avgpool)   # what feeds it
+```
+
+```text
+Linear(in_features=512, out_features=1000, bias=True)
+AdaptiveAvgPool2d(output_size=(1, 1))
+```
+
+The convolutional backbone ends in a global average pool that squeezes any spatial size down to a `(N, 512, 1, 1)` tensor, flattened to `(N, 512)`, then a single `Linear(512 → 1000)` maps to ImageNet's classes. **Replacing the head is one line** — a fresh `Linear` for our number of classes:
+
+```python
+NUM_CLASSES = 2
+model.fc = nn.Linear(model.fc.in_features, NUM_CLASSES)
+```
+
+Two things to internalize here. First, we read `in_features` off the existing layer instead of hardcoding 512 — the same line works if you swap in a resnet50 (2048) or something else. Second, the new layer is randomly initialized: right after this surgery, the model is an excellent feature extractor wearing a clueless hat. All the training strategies below are different answers to "how do we teach the hat without wrecking the features?"
+
+One non-negotiable detail: **you must feed the model images normalized the way it was trained**, or the pretrained features see inputs from a different distribution and quietly degrade. The weights object hands you the correct pipeline:
+
+```python
+preprocess = weights.transforms()
+print(preprocess)
+```
+
+```text
+ImageClassification(
+    crop_size=[224]
+    resize_size=[256]
+    mean=[0.485, 0.456, 0.406]
+    std=[0.229, 0.224, 0.225]
+    interpolation=InterpolationMode.BILINEAR
+)
+```
+
+Resize to 256, center-crop 224, scale to [0,1], normalize with the ImageNet channel statistics. If you skip the mean/std normalization, expect several points of accuracy to evaporate — the very first conv layer's filters were tuned to inputs centered near zero. This is the single most common transfer-learning bug.
+
+## A small real dataset: ants vs. bees
+
+To make transfer learning's advantage visible, we want a dataset small enough that from-scratch training genuinely struggles. The classic `hymenoptera` set fits: ~245 training images and ~153 validation images across two classes (ants, bees). This is Day 3 territory — `ImageFolder` handles the directory layout.
+
+```python
+import urllib.request, zipfile
+from pathlib import Path
+
+root = Path("data")
+if not (root / "hymenoptera_data").exists():
+    root.mkdir(exist_ok=True)
+    zip_path = root / "hymenoptera.zip"
+    urllib.request.urlretrieve(
+        "https://download.pytorch.org/tutorial/hymenoptera_data.zip", zip_path
+    )
+    with zipfile.ZipFile(zip_path) as zf:
+        zf.extractall(root)
+```
+
+For validation we use the weights' own transform verbatim. For training we add light augmentation (Day 7's lesson: small dataset, so augmentation matters a lot) — but crucially we keep the **same output size and normalization**:
+
+```python
+from torchvision import datasets
+from torchvision.transforms import v2
+from torch.utils.data import DataLoader
+
+IMAGENET_MEAN = [0.485, 0.456, 0.406]
+IMAGENET_STD  = [0.229, 0.224, 0.225]
+
+train_tf = v2.Compose([
+    v2.RandomResizedCrop(224, scale=(0.6, 1.0), antialias=True),
+    v2.RandomHorizontalFlip(),
+    v2.ToImage(),
+    v2.ToDtype(torch.float32, scale=True),
+    v2.Normalize(mean=IMAGENET_MEAN, std=IMAGENET_STD),
+])
+val_tf = v2.Compose([
+    v2.Resize(256, antialias=True),
+    v2.CenterCrop(224),
+    v2.ToImage(),
+    v2.ToDtype(torch.float32, scale=True),
+    v2.Normalize(mean=IMAGENET_MEAN, std=IMAGENET_STD),
+])
+
+data_dir = root / "hymenoptera_data"
+train_ds = datasets.ImageFolder(data_dir / "train", transform=train_tf)
+val_ds   = datasets.ImageFolder(data_dir / "val",   transform=val_tf)
+
+train_loader = DataLoader(train_ds, batch_size=32, shuffle=True,  num_workers=2)
+val_loader   = DataLoader(val_ds,   batch_size=64, shuffle=False, num_workers=2)
+
+print(len(train_ds), "train /", len(val_ds), "val —", train_ds.classes)
+```
+
+```text
+244 train / 153 val — ['ants', 'bees']
+```
+
+Note the shape flow: each batch is `(32, 3, 224, 224)` — larger images than the 32×32 CIFAR crops from Day 6, because ResNet-18's stride pattern (a stride-2 conv7×7, a maxpool, and three stride-2 stages) was designed for 224×224 inputs. Feed it 32×32 images and by `layer4` the spatial map is 1×1 before the network has done any real work.
+
+We'll reuse the training-loop functions from Day 4 in compact form so each experiment is a few lines:
+
+```python
+def train_one_epoch(model, loader, optimizer, loss_fn):
+    model.train()
+    for x, y in loader:
+        x, y = x.to(device), y.to(device)
+        loss = loss_fn(model(x), y)
+        optimizer.zero_grad()
+        loss.backward()
+        optimizer.step()
+
+@torch.no_grad()
+def evaluate(model, loader):
+    model.eval()
+    correct = total = 0
+    for x, y in loader:
+        x, y = x.to(device), y.to(device)
+        correct += (model(x).argmax(dim=1) == y).sum().item()
+        total += y.numel()
+    return correct / total
+
+def run(model, optimizer, epochs=10, scheduler=None):
+    loss_fn = nn.CrossEntropyLoss()
+    best = 0.0
+    for epoch in range(epochs):
+        train_one_epoch(model, train_loader, optimizer, loss_fn)
+        if scheduler is not None:
+            scheduler.step()
+        acc = evaluate(model, val_loader)
+        best = max(best, acc)
+        print(f"epoch {epoch+1:2d}  val acc {acc:.3f}")
+    return best
+```
+
+## Strategy A — freeze the backbone, train the head
+
+The linear-probe recipe: turn off gradients for every pretrained parameter, then bolt on a fresh head. **Order matters** — freeze first, replace second, so the new head keeps its default `requires_grad=True`:
+
+```python
+def make_linear_probe():
+    model = models.resnet18(weights=models.ResNet18_Weights.DEFAULT)
+    for p in model.parameters():
+        p.requires_grad = False                      # freeze everything...
+    model.fc = nn.Linear(model.fc.in_features, NUM_CLASSES)  # ...then add a live head
+    return model.to(device)
+
+probe = make_linear_probe()
+trainable = [p for p in probe.parameters() if p.requires_grad]
+print(sum(p.numel() for p in trainable), "trainable of",
+      sum(p.numel() for p in probe.parameters()), "total")
+```
+
+```text
+1026 trainable of 11177538 total
+```
+
+We're training 1,026 parameters (512×2 weights + 2 biases) out of 11.2 million — 0.009% of the model. Autograd never builds a graph through the frozen layers' parameters, so backward is cheap, memory use drops, and — most importantly — with so few free parameters it's nearly impossible to overfit 244 images.
+
+Hand the optimizer **only the trainable parameters**. Passing frozen ones isn't fatal (their `.grad` stays `None` and steps skip them), but with decoupled weight decay in `AdamW` it's cleaner and less error-prone to be explicit:
+
+```python
+optimizer = torch.optim.AdamW(
+    (p for p in probe.parameters() if p.requires_grad), lr=1e-3
+)
+probe_acc = run(probe, optimizer, epochs=10)
+```
+
+```text
+epoch  1  val acc 0.902
+epoch  2  val acc 0.928
+epoch  3  val acc 0.941
+...
+epoch 10  val acc 0.941
+```
+
+Around **94%** after a couple of epochs, on a laptop, in under a minute. That's the transfer-learning punchline: the frozen backbone maps each image to a 512-dim vector where ants and bees are already almost linearly separable — the head just has to find the plane.
+
+One subtlety worth knowing before it bites you: **freezing parameters doesn't freeze BatchNorm statistics.** `requires_grad=False` stops gradient updates to BN's affine weights, but in `model.train()` mode BN still updates its running mean/variance from *your* data's batch statistics. On a dataset this ImageNet-like it's harmless (sometimes it even helps), but on a tiny or weird-domain dataset those noisy updates can hurt. For a strict probe, hold the backbone in eval mode during training:
+
+```python
+def train_one_epoch_frozen_bn(model, loader, optimizer, loss_fn):
+    model.eval()          # BN uses (and keeps) ImageNet running stats
+    model.fc.train()      # the head still trains normally
+    for x, y in loader:
+        x, y = x.to(device), y.to(device)
+        loss = loss_fn(model(x), y)
+        optimizer.zero_grad()
+        loss.backward()
+        optimizer.step()
+```
+
+## Strategy B — full fine-tune with discriminative learning rates
+
+If the probe already gets 94%, what's left? The backbone's late layers still encode *ImageNet's* notion of what matters. Fine-tuning lets them adapt — but a fresh random head sends large, garbage gradients backwards in the first steps, and a big learning rate will bulldoze the pretrained features before the head stabilizes (the classic symptom: accuracy *drops* below the probe). The standard fix is **discriminative learning rates**: small steps for pretrained weights, larger steps for the new head.
+
+$$
+\theta_g \leftarrow \theta_g - \eta_g \nabla_{\theta_g} \mathcal{L}, \qquad \eta_{\text{backbone}} \ll \eta_{\text{head}}
+$$
+
+PyTorch expresses this with optimizer **parameter groups** — a list of dicts, each with its own hyperparameters:
+
+```python
+def make_finetune():
+    model = models.resnet18(weights=models.ResNet18_Weights.DEFAULT)
+    model.fc = nn.Linear(model.fc.in_features, NUM_CLASSES)
+    return model.to(device)
+
+ft = make_finetune()
+
+head_params     = list(ft.fc.parameters())
+backbone_params = [p for name, p in ft.named_parameters()
+                   if not name.startswith("fc")]
+
+optimizer = torch.optim.AdamW([
+    {"params": backbone_params, "lr": 1e-4},   # gentle nudges
+    {"params": head_params,     "lr": 1e-3},   # 10x faster
+], weight_decay=1e-4)
+
+scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=10)
+ft_acc = run(ft, optimizer, epochs=10, scheduler=scheduler)
+```
+
+```text
+epoch  1  val acc 0.928
+epoch  2  val acc 0.941
+epoch  3  val acc 0.954
+...
+epoch 10  val acc 0.961
+```
+
+A couple of methodology notes. We split parameters by *name*: everything not under `fc` is backbone. `named_parameters()` yields `("layer4.1.conv2.weight", tensor)` pairs, so name-prefix filtering scales to any split you want — some recipes go further and decay the LR per stage (`layer1` slowest → `layer4` faster → head fastest), typically by a constant factor like 2–3× per stage. The scheduler from Day 7 composes cleanly: cosine annealing scales *every* group's LR by the same schedule, preserving the 10:1 ratio throughout.
+
+The gain over the probe here is real but modest (~2 points) — expected, because ants and bees are practically an ImageNet subtask, so the pretrained features were already nearly optimal. The further your domain drifts from ImageNet, the more full fine-tuning pulls ahead.
+
+```{mermaid}
+flowchart TD
+    A[New image task] --> B{How much<br/>labeled data?}
+    B -- "tiny<br/>(hundreds)" --> C{Domain close<br/>to ImageNet?}
+    B -- "moderate<br/>(thousands)" --> D[Full fine-tune,<br/>discriminative LRs]
+    B -- "huge<br/>(millions)" --> E[Fine-tune, or<br/>from scratch if truly alien]
+    C -- yes --> F[Linear probe /<br/>freeze-then-head]
+    C -- no --> G[Partial unfreeze:<br/>layer4 + head,<br/>tiny backbone LR]
+    F -. "plateaued? unfreeze<br/>a bit more" .-> G
+    G -. "still data left<br/>on the table" .-> D
+```
+
+A pragmatic recipe that falls out of this chart: **start frozen, unfreeze gradually.** Train the head first (it's fast and safe), and only unfreeze deeper stages if validation accuracy has plateaued and you have data to spare. Each unfreezing step should come with a lower backbone LR than you'd guess — `1e-4` to `1e-5` with AdamW is the usual range.
+
+## The control experiment: from scratch
+
+Claims need baselines. Same architecture, same data, same budget — but random initialization. `num_classes` in the constructor sizes the head directly, so no surgery needed:
+
+```python
+scratch = models.resnet18(weights=None, num_classes=NUM_CLASSES).to(device)
+
+optimizer = torch.optim.AdamW(scratch.parameters(), lr=1e-3, weight_decay=1e-4)
+scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=10)
+scratch_acc = run(scratch, optimizer, epochs=10, scheduler=scheduler)
+```
+
+```text
+epoch  1  val acc 0.529
+epoch  2  val acc 0.556
+epoch  3  val acc 0.601
+...
+epoch 10  val acc 0.680
+```
+
+```python
+print(f"from scratch : {scratch_acc:.3f}")
+print(f"linear probe : {probe_acc:.3f}")
+print(f"fine-tune    : {ft_acc:.3f}")
+```
+
+```text
+from scratch : 0.680
+linear probe : 0.941
+fine-tune    : 0.961
+```
+
+(Your exact numbers will wiggle a few points with seeds and hardware — the *gap* is what's robust.) The from-scratch model isn't broken; it's doing exactly what an 11M-parameter network can do with 244 examples: memorize quickly, generalize poorly. Train it for 100 more epochs and it barely improves — the bottleneck is data, not optimization. Meanwhile the pretrained models effectively brought 1.28M images of prior experience to the party.
+
+| | From scratch | Linear probe | Full fine-tune |
+|---|---|---|---|
+| Trainable params | 11.2M | 1K | 11.2M |
+| Val accuracy (~10 epochs) | ~68% | ~94% | ~96% |
+| Overfitting risk | severe | minimal | moderate |
+| Compute per epoch | full fwd+bwd | fwd + tiny bwd | full fwd+bwd |
+| Needs LR care | normal | no | yes (discriminative) |
+
+When does transfer *not* win? Honestly, rarely for natural images. The genuine exceptions: inputs that aren't image-like at all (spectrograms sometimes, raw sensor grids), tasks where the pretrained input statistics can't be matched (e.g., 7-channel satellite bands — though people still inflate conv1 to accept them), and regimes with enormous in-domain datasets where pretraining's head start washes out. Default to transfer; demand evidence before training from scratch.
+
+## 🧪 Your task
+
+Implement the middle rung of the ladder: **partial unfreezing**. Starting from pretrained weights, freeze everything *except* `layer4` and the new head, and train with two parameter groups (`layer4` at `1e-4`, head at `1e-3`) for 10 epochs on the ants/bees data. Report trainable-parameter count and best validation accuracy, and place the result against the three runs above. Prediction before you run it: closer to the probe or the fine-tune?
+
+*Hint:* freeze with a loop over `model.parameters()` first, then re-enable just the block you want with `for p in model.layer4.parameters(): p.requires_grad = True` — and remember the head replacement comes after the freeze loop. Build the optimizer groups from `model.layer4.parameters()` and `model.fc.parameters()` only.
+
+<details><summary>Solution</summary>
+
+```python
+import torch
+from torch import nn
+from torchvision import models
+
+model = models.resnet18(weights=models.ResNet18_Weights.DEFAULT)
+
+# 1) freeze everything
+for p in model.parameters():
+    p.requires_grad = False
+
+# 2) unfreeze the last stage
+for p in model.layer4.parameters():
+    p.requires_grad = True
+
+# 3) fresh head (trainable by default)
+model.fc = nn.Linear(model.fc.in_features, NUM_CLASSES)
+model = model.to(device)
+
+n_trainable = sum(p.numel() for p in model.parameters() if p.requires_grad)
+n_total     = sum(p.numel() for p in model.parameters())
+print(f"trainable: {n_trainable/1e6:.2f}M / {n_total/1e6:.2f}M")
+# trainable: 8.39M / 11.18M   (layer4 holds ~75% of ResNet-18's params!)
+
+optimizer = torch.optim.AdamW([
+    {"params": model.layer4.parameters(), "lr": 1e-4},
+    {"params": model.fc.parameters(),     "lr": 1e-3},
+], weight_decay=1e-4)
+scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=10)
+
+partial_acc = run(model, optimizer, epochs=10, scheduler=scheduler)
+print(f"partial unfreeze: {partial_acc:.3f}")
+# typically ~0.95 — between the probe and the full fine-tune,
+# at noticeably lower backward cost than the full fine-tune
+```
+
+The surprise most people hit: `layer4` alone is ~8.4M of ResNet-18's 11.2M parameters, because channel counts double at each stage (64→128→256→512) and parameters grow with the *square* of width. So "just the last block" is already most of the model's capacity — one more reason the head-only probe is such a strong, safe default on tiny data.
+
+</details>
+
+## Key takeaways
+
+- Pretrained backbones ship as `models.resnet18(weights=ResNet18_Weights.DEFAULT)`; the weights object also carries the exact `transforms()` and metadata — use its normalization or silently lose accuracy.
+- Replacing the head is one line: `model.fc = nn.Linear(model.fc.in_features, num_classes)` — freeze *before* replacing so the new head stays trainable.
+- Linear probe = freeze all, train ~1K head params: fast, nearly overfit-proof, the right default for tiny datasets near ImageNet's domain.
+- `requires_grad=False` does not stop BatchNorm running-stat updates — keep the frozen backbone in `eval()` mode if that matters for your domain.
+- Full fine-tuning needs discriminative LRs via optimizer parameter groups (backbone ≈ 10× slower than head), or the random head's early gradients wreck the pretrained features.
+- On 244 images: scratch ~68%, probe ~94%, fine-tune ~96%. Transfer isn't an optimization — on small data it's the whole ballgame.
+
+Tomorrow, the last mile: turning your trained model into something the world can use — state dicts done right, exporting with `torch.export`/ONNX, and serving predictions behind an API.
+
+------------------------------------------------------------------------
+
+[🏠 🔥 Course home](index.html)  &nbsp;|&nbsp;  [← Day 07](day07.html)  &nbsp;|&nbsp;  [Day 09 →](day09.html)  &nbsp;|&nbsp;  [📚 All mini-courses](../../mini-courses.html)
